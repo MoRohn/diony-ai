@@ -1,0 +1,107 @@
+# Diony AI cluster profile — lease-gpu-v1
+# Same product as spark-4x-v1 on leased GPU. Not Dashscope. Not a failover.
+# Wizard Site must record a named human exception before this profile is active.
+# Spark recipes are not GB300/H100 recipes. Pin serving flags per Blueprint 04.
+
+apiVersion: diony.ai/v1
+kind: ClusterProfile
+metadata:
+  name: lease-gpu-v1
+  sku: "Diony AI Cluster lease-gpu-v1"
+  version: "1.0.0"
+
+spec:
+  nodes:
+    - hostname: node-01
+      role: primary
+      tp_rank_brain: 0
+      split: brain
+    - hostname: node-02
+      role: peer
+      tp_rank_brain: 1
+      split: brain
+    - hostname: node-03
+      role: peer
+      tp_rank_brain: 2
+      split: wan_a
+    - hostname: node-04
+      role: peer
+      tp_rank_brain: 3
+      split: wan_b
+
+  networks:
+    fabric:
+      nic: provider
+      spark_port: null
+      mtu: 9000
+      speed_gbps: 200
+      roce: v2
+      allowed: [InfiniBand, RoCE, NVLink]
+      ip_plan_example:
+        cidr: 10.0.0.0/24
+        node-01: 10.0.0.11
+        node-02: 10.0.0.12
+        node-03: 10.0.0.13
+        node-04: 10.0.0.14
+      notes: "Wizard records the provider IP plan. Public NIC is not NCCL."
+    management:
+      nic: provider_mgmt
+      mtu: 1500
+      purpose: ["wizard", "producer", "orchestrator", "vault"]
+
+  switch:
+    allowed_skus:
+      - InfiniBand
+      - RoCE
+      - NVLink
+    autoneg: false
+    force_speed: advertised_class
+    fail_if: ["50G", "public_nic_nccl"]
+    snippets:
+      - infra/switch/lease-interconnect.md
+
+  storage:
+    models: /models
+    scratch: /scratch
+    vault: /diony/vault
+    vault_fstab: infra/storage/vault.fstab.example
+    vault_min_free_percent: 15
+    scratch_max_used_percent: 70
+
+  models:
+    manifest: infra/models/manifest.yaml
+
+  fleet:
+    default_mode: SPLIT
+    modes:
+      BRAIN:
+        compose: infra/compose/brain.yml
+        parallel: tp4
+        services: [brain]
+      SPLIT:
+        compose: infra/compose/split.yml
+        services: [brain, wan]
+      FARM:
+        compose: infra/compose/wan.yml
+        services: [wan]
+      FINISH:
+        compose: infra/compose/finish.yml
+        services: [finish]
+    transition: [drain, unload, load, healthgate]
+
+  health:
+    script: infra/health/check_cluster.py
+    brain_path: /v1/models
+    wan_path: /health
+    finish_path: /health
+
+  software:
+    wizard_bind: "0.0.0.0:8787"
+    producer_bind: "0.0.0.0:8788"
+    conductor_bind: "127.0.0.1:8789"
+    dry_run_default: true
+
+status:
+  mode: SPLIT
+  dry_run: true
+  updated_at: null

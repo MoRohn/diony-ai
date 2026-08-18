@@ -1,0 +1,414 @@
+{
+  "id": "ep-pilot-night-press",
+  "status": "shooting",
+  "customer_kind": "series",
+  "brief": {
+    "idea": "A late-shift typesetter discovers tomorrow's edition already printed.",
+    "customer_kind": "series",
+    "target_minutes": 8.0,
+    "audience": "broadcast drama",
+    "title_hint": "Pilot \u2014 The Night Press",
+    "attachment_ids": []
+  },
+  "bible": {
+    "title": "Pilot \u2014 The Night Press",
+    "logline": "A late-shift typesetter discovers tomorrow's edition already printed.",
+    "fps": 23.976,
+    "width": 1920,
+    "height": 1080,
+    "color_space": "rec709",
+    "grain": "fine",
+    "loudness": "broadcast",
+    "true_peak_dbtp": -1.0,
+    "visual_grammar": "Tungsten practicals, 35mm spherical, wet asphalt, restrained camera, ink and brass, no daylight interiors.",
+    "world": "1962 metropolitan daily. Linotype, rain, one newsroom, one alley.",
+    "characters": [
+      {
+        "id": "char-mara",
+        "name": "Mara Chen",
+        "still_asset_ids": [
+          "still-mara-wide",
+          "still-mara-close"
+        ],
+        "wardrobe": "Ink-stained oxford, dark wool vest, hair pinned",
+        "notes": ""
+      }
+    ],
+    "lut_asset_id": null,
+    "locked": true,
+    "locked_at": null
+  },
+  "shots": [
+    {
+      "id": "sh-010",
+      "scene": "1",
+      "slug": "INT NEWSROOM \u2014 MARA AT THE CASE",
+      "duration_frames": 120,
+      "fps": 23.976,
+      "size_native": "1280x720",
+      "focal_mm": 40.0,
+      "t_stop": 2.8,
+      "lighting_ratio": "4:1 key/fill, tungsten practical",
+      "camera_move": "dolly_in",
+      "prompt": "Mara Chen, 32, ink-stained oxford, stands at a California job case. Slow dolly in, 40mm, T2.8, warm practicals, shallow depth, lead type glints. Continuity locked to still-mara-wide.",
+      "negative_prompt": "morphing face, extra fingers, daylight, modern screens",
+      "seed": 10401,
+      "character_ref_ids": [
+        "char-mara"
+      ],
+      "keyframe_asset_ids": [
+        "still-mara-wide"
+      ],
+      "engine": "i2v-A14B",
+      "finish": "deliverable",
+      "audio_line": "They're running tomorrow's obit tonight.",
+      "overlap_frames": 8,
+      "max_takes": 4,
+      "selected_take_id": "sh-010-t2"
+    },
+    {
+      "id": "sh-020",
+      "scene": "1",
+      "slug": "INSERT \u2014 TOMORROW'S FRONT PAGE",
+      "duration_frames": 72,
+      "fps": 23.976,
+      "size_native": "1280x720",
+      "focal_mm": 90.0,
+      "t_stop": 4.0,
+      "lighting_ratio": "hard top, paper white held",
+      "camera_move": "static",
+      "prompt": "Macro of wet newsprint. Headline already set for tomorrow. 90mm.",
+      "negative_prompt": "",
+      "seed": 10420,
+      "character_ref_ids": [],
+      "keyframe_asset_ids": [],
+      "engine": "t2v-A14B",
+      "finish": "deliverable",
+      "audio_line": null,
+      "overlap_frames": 8,
+      "max_takes": 4,
+      "selected_take_id": null
+    },
+    {
+      "id": "sh-030",
+      "scene": "2",
+      "slug": "EXT ALLEY \u2014 MARA IN RAIN",
+      "duration_frames": 168,
+      "fps": 23.976,
+      "size_native": "1280x720",
+      "focal_mm": 35.0,
+      "t_stop": 2.0,
+      "lighting_ratio": "1:8, sodium vs tungsten spill",
+      "camera_move": "steadicam",
+      "prompt": "Mara exits to a rain alley. Steadicam follow, 35mm, T2.0, sodium vapor vs newsroom spill. Face locked to still-mara-close.",
+      "negative_prompt": "",
+      "seed": 10430,
+      "character_ref_ids": [
+        "char-mara"
+      ],
+      "keyframe_asset_ids": [
+        "still-mara-close"
+      ],
+      "engine": "i2v-A14B",
+      "finish": "deliverable",
+      "audio_line": "If it's printed, someone already died.",
+      "overlap_frames": 8,
+      "max_takes": 4,
+      "selected_take_id": null
+    }
+  ],
+  "takes": [
+    {
+      "id": "sh-010-t1",
+      "shot_id": "sh-010",
+      "attempt": 1,
+      "engine": "i2v-A14B",
+      "seed": 10401,
+      "asset_720p_id": "neg-sh-010-t1",
+      "asset_1080p_id": null,
+      "qc": {
+        "id": "qc-sh-010-t1",
+        "take_id": "sh-010-t1",
+        "shot_id": "sh-010",
+        "verdict": "fail",
+        "identity_ok": false,
+        "morph_ok": true,
+        "flicker_ok": true,
+        "duration_ok": true,
+        "legal_ok": true,
+        "lipsync_ok": null,
+        "loudness_ok": null,
+        "notes": "Identity drift vs still-mara-wide. Retake.",
+        "created_at": "2026-08-18T22:11:04.811531Z"
+      },
+      "created_at": "2026-08-18T22:11:04.811536Z",
+      "parent_take_id": null,
+      "version": 1,
+      "lineage": [],
+      "edit_id": null,
+      "origin": "generation",
+      "label": "hold",
+      "artifacts": [
+        {
+          "id": "art-sh-010-t1-720",
+          "take_id": "sh-010-t1",
+          "kind": "negative_720",
+          "path": "takes/sh-010-t1/negative_720.txt",
+          "sha256": "",
+          "bytes": 0,
+          "width": 1280,
+          "height": 720,
+          "fps": 23.976,
+          "duration_frames": 120,
+          "created_at": "2026-08-18T22:11:04.811460Z"
+        }
+      ]
+    },
+    {
+      "id": "sh-010-t2",
+      "shot_id": "sh-010",
+      "attempt": 2,
+      "engine": "i2v-A14B",
+      "seed": 10411,
+      "asset_720p_id": "neg-sh-010-t2",
+      "asset_1080p_id": "fin-sh-010-t2",
+      "qc": {
+        "id": "qc-sh-010-t2",
+        "take_id": "sh-010-t2",
+        "shot_id": "sh-010",
+        "verdict": "pass",
+        "identity_ok": true,
+        "morph_ok": true,
+        "flicker_ok": true,
+        "duration_ok": true,
+        "legal_ok": true,
+        "lipsync_ok": true,
+        "loudness_ok": null,
+        "notes": "",
+        "created_at": "2026-08-18T22:11:04.811542Z"
+      },
+      "created_at": "2026-08-18T22:11:04.811544Z",
+      "parent_take_id": null,
+      "version": 1,
+      "lineage": [],
+      "edit_id": null,
+      "origin": "generation",
+      "label": "print",
+      "artifacts": [
+        {
+          "id": "art-sh-010-t2-720",
+          "take_id": "sh-010-t2",
+          "kind": "negative_720",
+          "path": "takes/sh-010-t2/negative_720.txt",
+          "sha256": "",
+          "bytes": 0,
+          "width": 1280,
+          "height": 720,
+          "fps": 23.976,
+          "duration_frames": 120,
+          "created_at": "2026-08-18T22:11:04.811539Z"
+        },
+        {
+          "id": "art-sh-010-t2-1080",
+          "take_id": "sh-010-t2",
+          "kind": "finish_1080",
+          "path": "takes/sh-010-t2/finish_1080.txt",
+          "sha256": "",
+          "bytes": 0,
+          "width": 1920,
+          "height": 1080,
+          "fps": 23.976,
+          "duration_frames": 120,
+          "created_at": "2026-08-18T22:11:04.811540Z"
+        }
+      ]
+    },
+    {
+      "id": "sh-020-t1",
+      "shot_id": "sh-020",
+      "attempt": 1,
+      "engine": "t2v-A14B",
+      "seed": 10420,
+      "asset_720p_id": "neg-sh-020-t1",
+      "asset_1080p_id": null,
+      "qc": {
+        "id": "qc-sh-020-t1",
+        "take_id": "sh-020-t1",
+        "shot_id": "sh-020",
+        "verdict": "warn",
+        "identity_ok": true,
+        "morph_ok": true,
+        "flicker_ok": true,
+        "duration_ok": true,
+        "legal_ok": true,
+        "lipsync_ok": null,
+        "loudness_ok": null,
+        "notes": "Paper stock slightly modern. Usable.",
+        "created_at": "2026-08-18T22:11:04.811548Z"
+      },
+      "created_at": "2026-08-18T22:11:04.811549Z",
+      "parent_take_id": null,
+      "version": 1,
+      "lineage": [],
+      "edit_id": null,
+      "origin": "generation",
+      "label": "",
+      "artifacts": [
+        {
+          "id": "art-sh-020-t1-720",
+          "take_id": "sh-020-t1",
+          "kind": "negative_720",
+          "path": "takes/sh-020-t1/negative_720.txt",
+          "sha256": "",
+          "bytes": 0,
+          "width": 1280,
+          "height": 720,
+          "fps": 23.976,
+          "duration_frames": 72,
+          "created_at": "2026-08-18T22:11:04.811546Z"
+        }
+      ]
+    },
+    {
+      "id": "sh-030-t1",
+      "shot_id": "sh-030",
+      "attempt": 1,
+      "engine": "i2v-A14B",
+      "seed": 10430,
+      "asset_720p_id": "neg-sh-030-t1",
+      "asset_1080p_id": null,
+      "qc": {
+        "id": "qc-sh-030-t1",
+        "take_id": "sh-030-t1",
+        "shot_id": "sh-030",
+        "verdict": "pass",
+        "identity_ok": true,
+        "morph_ok": true,
+        "flicker_ok": true,
+        "duration_ok": true,
+        "legal_ok": true,
+        "lipsync_ok": true,
+        "loudness_ok": null,
+        "notes": "",
+        "created_at": "2026-08-18T22:11:04.811552Z"
+      },
+      "created_at": "2026-08-18T22:11:04.811554Z",
+      "parent_take_id": null,
+      "version": 1,
+      "lineage": [],
+      "edit_id": null,
+      "origin": "generation",
+      "label": "",
+      "artifacts": [
+        {
+          "id": "art-sh-030-t1-720",
+          "take_id": "sh-030-t1",
+          "kind": "negative_720",
+          "path": "takes/sh-030-t1/negative_720.txt",
+          "sha256": "",
+          "bytes": 0,
+          "width": 1280,
+          "height": 720,
+          "fps": 23.976,
+          "duration_frames": 168,
+          "created_at": "2026-08-18T22:11:04.811551Z"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "id": "n-human-010",
+      "author": "human",
+      "body": "Hold her eyes on the nick in the case. Don't blink off it.",
+      "created_at": "2026-08-18T22:11:04.811560Z",
+      "shot_id": "sh-010",
+      "take_id": null
+    }
+  ],
+  "assets": [],
+  "edits": [],
+  "timeline": {
+    "id": "tl-pilot",
+    "events": [
+      {
+        "shot_id": "sh-010",
+        "start_frame": 0,
+        "handle_in": 8,
+        "handle_out": 8,
+        "take_id": null,
+        "overlap_frames": 8,
+        "keyframe_from_take_id": null
+      },
+      {
+        "shot_id": "sh-020",
+        "start_frame": 120,
+        "handle_in": 4,
+        "handle_out": 4,
+        "take_id": null,
+        "overlap_frames": 8,
+        "keyframe_from_take_id": null
+      },
+      {
+        "shot_id": "sh-030",
+        "start_frame": 192,
+        "handle_in": 8,
+        "handle_out": 8,
+        "take_id": null,
+        "overlap_frames": 8,
+        "keyframe_from_take_id": null
+      }
+    ],
+    "picture_lock": "open",
+    "total_frames": 0,
+    "fps": 23.976,
+    "preview_path": "",
+    "stitched": false
+  },
+  "mix": {
+    "id": "mix-pilot",
+    "state": "open",
+    "loudness": "broadcast",
+    "measured_lufs": null,
+    "true_peak_dbtp": null,
+    "stem_asset_ids": [],
+    "picture_lock_timeline_id": "tl-pilot"
+  },
+  "deliverables": [],
+  "gates": [
+    {
+      "name": "bible",
+      "open": false,
+      "locked_by": "showrunner",
+      "locked_at": null
+    },
+    {
+      "name": "picture",
+      "open": true,
+      "locked_by": null,
+      "locked_at": null
+    },
+    {
+      "name": "mix",
+      "open": true,
+      "locked_by": null,
+      "locked_at": null
+    },
+    {
+      "name": "distribution",
+      "open": true,
+      "locked_by": null,
+      "locked_at": null
+    }
+  ],
+  "fleet_mode": "SPLIT",
+  "compute": {
+    "path": "local",
+    "profile": "spark-4x-v1",
+    "provider": "",
+    "gpu_class": "",
+    "exception_by": "",
+    "exception_at": null
+  },
+  "created_at": "2026-08-18T22:11:04.811576Z"
+}

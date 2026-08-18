@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+.env
+.env.local
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# Node (if frontends grow a bundler later)
+node_modules/
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# Local cluster / secrets / weights
+infra/local/
+*.pem
+*.key
+secrets/
+models/
+weights/
+checkpoints/
+*.safetensors
+*.gguf
+
+# Runtime data
+data/
+apps/*/data/
+*.db
+*.sqlite
+
+# Media vault (NAS mounts, dailies)
+vault/
+dailies/
+masters/
+*.mov
+*.mxf
+*.prores
+
+# Logs
+*.log
+logs/

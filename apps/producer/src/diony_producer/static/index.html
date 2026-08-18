@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Diony AI Producer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,16..72,400;0,16..72,500;1,16..72,300;1,16..72,400&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/app.css?v=program8" />
+  </head>
+  <body>
+    <header class="mast">
+      <p class="brand">Diony AI</p>
+      <p id="site-line" class="site-line">Unsigned</p>
+      <nav class="bays" aria-label="Pages">
+        <button type="button" data-bay="idea" class="on">Idea</button>
+        <button type="button" data-bay="dailies">Dailies</button>
+        <button type="button" data-bay="program">Program</button>
+        <button type="button" data-bay="lock">Lock</button>
+      </nav>
+    </header>
+
+    <div class="studio">
+      <div class="sheet" id="page" tabindex="0">
+        <span class="stack" aria-hidden="true"></span>
+        <span class="tooth" aria-hidden="true"></span>
+
+        <p id="title" class="sr">Untitled</p>
+        <p id="logline" class="sr"></p>
+        <span id="hired" class="sr"></span>
+        <span id="trt" class="sr"></span>
+        <span id="fleet" class="sr"></span>
+        <input id="titleHint" type="text" class="sr" tabindex="-1" />
+        <div id="customers" hidden></div>
+
+        <section id="bay-idea" class="bay">
+          <label class="write" for="idea">
+            <span class="sr">The idea, in words</span>
+            <textarea id="idea" rows="10" placeholder="Write the picture."></textarea>
+          </label>
+          <div id="refs" class="frames"></div>
+          <p id="bench-empty" class="hint">A still, a clip, or a page can land here.</p>
+          <fieldset id="allotment" class="allotment">
+            <legend>Length</legend>
+            <p class="allotment-note">A goal for the finished show. Not a stopwatch.</p>
+            <div id="allotment-picks" class="allotment-picks" role="listbox" aria-label="Goal length" aria-orientation="horizontal"></div>
+          </fieldset>
+          <p id="idea-err" class="err" role="alert"></p>
+          <p id="hint-keys" class="graphite">⌘↩ Produce</p>
+          <input
+            id="ref-files"
+            type="file"
+            hidden
+            multiple
+            accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm,.pdf,.txt,.md,.docx"
+          />
+          <div class="idea-tools">
+            <button type="button" id="lay-ref" class="word">Attach</button>
+            <button type="button" id="nightpress" class="word">Sample</button>
+          </div>
+          <div id="bible-sheet" class="manuscript hidden">
+            <label class="sr" for="bible-title">Title</label>
+            <input id="bible-title" />
+            <label class="sr" for="bible-logline">Logline</label>
+            <textarea id="bible-logline" rows="3"></textarea>
+            <label class="sr" for="bible-world">World</label>
+            <textarea id="bible-world" rows="4"></textarea>
+            <label class="sr" for="bible-grammar">Look</label>
+            <textarea id="bible-grammar" rows="3"></textarea>
+            <div id="characters" class="chars"></div>
+            <div id="bible-refs" class="frames"></div>
+            <button type="button" id="save-bible" class="word">Hold</button>
+          </div>
+          <button type="button" id="cast" class="clap" aria-label="Produce">
+            <span class="clap-stick" aria-hidden="true"></span>
+            <span class="clap-slate">Produce</span>
+          </button>
+        </section>
+
+        <section id="bay-dailies" class="bay hidden">
+          <div class="screening">
+            <nav id="dailies" class="shot-index" aria-label="Shots"></nav>
+            <div class="well">
+              <p id="desk-meta" class="meta"></p>
+              <h2 id="desk-slug">—</h2>
+              <p id="well-grammar" class="grammar"></p>
+              <button type="button" id="roll" class="word">Roll</button>
+              <button type="button" id="retake" class="word">Retake</button>
+              <button type="button" id="tighten" class="word hidden">Tighten</button>
+              <ol id="ladder" class="ladder" aria-label="Version ladder"></ol>
+              <div id="cans" class="cans"></div>
+              <aside id="print-desk">
+                <p class="meta">Prompt to edit</p>
+                <textarea
+                  id="edit-instruction"
+                  rows="2"
+                  placeholder="What should change on this print?"
+                ></textarea>
+                <div class="more-edit">
+                  <label class="frame-mark">In
+                    <input id="edit-in" type="number" min="0" placeholder="0" />
+                  </label>
+                  <label class="frame-mark">Out
+                    <input id="edit-out" type="number" min="0" placeholder="out" />
+                  </label>
+                  <input id="edit-still" type="file" hidden accept="image/jpeg,image/png,image/webp" />
+                  <button type="button" id="lay-edit-still" class="word">Still</button>
+                  <span id="edit-still-name"></span>
+                  <button type="button" id="cut-print" class="word cut">Cut</button>
+                </div>
+                <p class="hint">Optional in/out frames. Parent print stays on the ladder.</p>
+                <p id="edit-err" class="err" role="alert"></p>
+              </aside>
+            </div>
+          </div>
+        </section>
+
+        <section id="bay-program" class="bay hidden">
+          <div class="screening program-floor">
+            <nav id="reel" class="shot-index" aria-label="Cut"></nav>
+            <div class="well">
+              <p id="program-meta" class="meta"></p>
+              <div id="stage" class="stage" aria-label="Screening">
+                <video id="stage-video" hidden playsinline controls></video>
+                <div id="stage-card">
+                  <p id="stage-slug" class="stage-slug">—</p>
+                  <p id="stage-note" class="stage-note"></p>
+                </div>
+              </div>
+              <p id="program-trt" class="grammar"></p>
+              <p id="program-stitch" class="hint"></p>
+              <button type="button" id="assemble" class="word">Assemble</button>
+              <p id="program-err" class="err" role="alert"></p>
+            </div>
+          </div>
+        </section>
+
+        <section id="bay-lock" class="bay hidden">
+          <ul id="cues" class="cues" aria-label="Human gates"></ul>
+          <div class="note-form">
+            <select id="shotPick"></select>
+            <input id="noteBody" type="text" placeholder="A note on this shot." />
+            <button type="button" id="pinNote" class="word">Pin</button>
+          </div>
+          <ul id="notes" class="notes"></ul>
+        </section>
+      </div>
+    </div>
+    <script src="/static/app.js?v=program8"></script>
+  </body>
+</html>

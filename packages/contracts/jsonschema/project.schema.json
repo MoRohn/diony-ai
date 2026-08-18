@@ -1,0 +1,1344 @@
+{
+  "$defs": {
+    "Artifact": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "take_id": {
+          "title": "Take Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ArtifactKind"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "default": "",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "bytes": {
+          "default": 0,
+          "title": "Bytes",
+          "type": "integer"
+        },
+        "width": {
+          "default": 1280,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "default": 720,
+          "title": "Height",
+          "type": "integer"
+        },
+        "fps": {
+          "default": 23.976,
+          "title": "Fps",
+          "type": "number"
+        },
+        "duration_frames": {
+          "default": 0,
+          "title": "Duration Frames",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "take_id",
+        "kind",
+        "path"
+      ],
+      "title": "Artifact",
+      "type": "object"
+    },
+    "ArtifactKind": {
+      "enum": [
+        "negative_720",
+        "finish_1080",
+        "proxy"
+      ],
+      "title": "ArtifactKind",
+      "type": "string"
+    },
+    "Asset": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/AssetKind"
+        },
+        "filename": {
+          "title": "Filename",
+          "type": "string"
+        },
+        "mime": {
+          "title": "Mime",
+          "type": "string"
+        },
+        "bytes": {
+          "title": "Bytes",
+          "type": "integer"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "default": "",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "extracted_text": {
+          "default": "",
+          "title": "Extracted Text",
+          "type": "string"
+        },
+        "role": {
+          "default": "idea_ref",
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "filename",
+        "mime",
+        "bytes",
+        "path"
+      ],
+      "title": "Asset",
+      "type": "object"
+    },
+    "AssetKind": {
+      "enum": [
+        "image",
+        "video",
+        "document"
+      ],
+      "title": "AssetKind",
+      "type": "string"
+    },
+    "Bible": {
+      "properties": {
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "logline": {
+          "title": "Logline",
+          "type": "string"
+        },
+        "fps": {
+          "default": 23.976,
+          "title": "Fps",
+          "type": "number"
+        },
+        "width": {
+          "default": 1920,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "default": 1080,
+          "title": "Height",
+          "type": "integer"
+        },
+        "color_space": {
+          "default": "rec709",
+          "title": "Color Space",
+          "type": "string"
+        },
+        "grain": {
+          "$ref": "#/$defs/Grain",
+          "default": "fine"
+        },
+        "loudness": {
+          "$ref": "#/$defs/LoudnessTarget",
+          "default": "broadcast"
+        },
+        "true_peak_dbtp": {
+          "default": -1.0,
+          "title": "True Peak Dbtp",
+          "type": "number"
+        },
+        "visual_grammar": {
+          "title": "Visual Grammar",
+          "type": "string"
+        },
+        "world": {
+          "title": "World",
+          "type": "string"
+        },
+        "characters": {
+          "items": {
+            "$ref": "#/$defs/Character"
+          },
+          "title": "Characters",
+          "type": "array"
+        },
+        "lut_asset_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lut Asset Id"
+        },
+        "locked": {
+          "default": false,
+          "title": "Locked",
+          "type": "boolean"
+        },
+        "locked_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Locked At"
+        }
+      },
+      "required": [
+        "title",
+        "logline",
+        "visual_grammar",
+        "world"
+      ],
+      "title": "Bible",
+      "type": "object"
+    },
+    "Brief": {
+      "properties": {
+        "idea": {
+          "default": "",
+          "title": "Idea",
+          "type": "string"
+        },
+        "customer_kind": {
+          "$ref": "#/$defs/CustomerKind"
+        },
+        "target_minutes": {
+          "default": 5.0,
+          "title": "Target Minutes",
+          "type": "number"
+        },
+        "audience": {
+          "default": "",
+          "title": "Audience",
+          "type": "string"
+        },
+        "title_hint": {
+          "default": "",
+          "title": "Title Hint",
+          "type": "string"
+        },
+        "attachment_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Attachment Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "customer_kind"
+      ],
+      "title": "Brief",
+      "type": "object"
+    },
+    "CameraMove": {
+      "enum": [
+        "static",
+        "pan",
+        "tilt",
+        "dolly_in",
+        "dolly_out",
+        "track",
+        "crane",
+        "handheld",
+        "steadicam",
+        "zoom"
+      ],
+      "title": "CameraMove",
+      "type": "string"
+    },
+    "Character": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "still_asset_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Still Asset Ids",
+          "type": "array"
+        },
+        "wardrobe": {
+          "default": "",
+          "title": "Wardrobe",
+          "type": "string"
+        },
+        "notes": {
+          "default": "",
+          "title": "Notes",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "Character",
+      "type": "object"
+    },
+    "ClipEdit": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "shot_id": {
+          "title": "Shot Id",
+          "type": "string"
+        },
+        "source_take_id": {
+          "title": "Source Take Id",
+          "type": "string"
+        },
+        "result_take_id": {
+          "title": "Result Take Id",
+          "type": "string"
+        },
+        "instruction": {
+          "title": "Instruction",
+          "type": "string"
+        },
+        "vace_prompt": {
+          "title": "Vace Prompt",
+          "type": "string"
+        },
+        "preserve": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Preserve",
+          "type": "array"
+        },
+        "t_in_frames": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "T In Frames"
+        },
+        "t_out_frames": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "T Out Frames"
+        },
+        "attachment_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Attachment Ids",
+          "type": "array"
+        },
+        "engine": {
+          "$ref": "#/$defs/Engine",
+          "default": "vace-fun-A14B"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "shot_id",
+        "source_take_id",
+        "result_take_id",
+        "instruction",
+        "vace_prompt"
+      ],
+      "title": "ClipEdit",
+      "type": "object"
+    },
+    "ClusterSite": {
+      "description": "Where Diony compute lives. Local Quad-Spark is the SKU. Dual-Spark and B300 are signed lease exceptions.",
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/ComputePath",
+          "default": "local"
+        },
+        "profile": {
+          "default": "spark-4x-v1",
+          "title": "Profile",
+          "type": "string"
+        },
+        "provider": {
+          "default": "",
+          "title": "Provider",
+          "type": "string"
+        },
+        "gpu_class": {
+          "default": "",
+          "title": "Gpu Class",
+          "type": "string"
+        },
+        "exception_by": {
+          "default": "",
+          "title": "Exception By",
+          "type": "string"
+        },
+        "exception_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exception At"
+        }
+      },
+      "title": "ClusterSite",
+      "type": "object"
+    },
+    "ComputePath": {
+      "enum": [
+        "local",
+        "dual",
+        "lease",
+        "b300"
+      ],
+      "title": "ComputePath",
+      "type": "string"
+    },
+    "CustomerKind": {
+      "enum": [
+        "feature",
+        "series",
+        "commercial",
+        "music_video",
+        "education",
+        "social"
+      ],
+      "title": "CustomerKind",
+      "type": "string"
+    },
+    "Deliverable": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/DeliverableKind"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        },
+        "finish": {
+          "$ref": "#/$defs/FinishIntent",
+          "default": "deliverable"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "path"
+      ],
+      "title": "Deliverable",
+      "type": "object"
+    },
+    "DeliverableKind": {
+      "enum": [
+        "prores_hq",
+        "dnxhr_hq",
+        "h265_proxy",
+        "stems",
+        "qc_packet"
+      ],
+      "title": "DeliverableKind",
+      "type": "string"
+    },
+    "Engine": {
+      "enum": [
+        "t2v-A14B",
+        "i2v-A14B",
+        "ti2v-5B",
+        "s2v-14B",
+        "animate-14B",
+        "vace-fun-A14B"
+      ],
+      "title": "Engine",
+      "type": "string"
+    },
+    "FinishIntent": {
+      "enum": [
+        "previz",
+        "proxy",
+        "deliverable"
+      ],
+      "title": "FinishIntent",
+      "type": "string"
+    },
+    "Gate": {
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/GateName"
+        },
+        "open": {
+          "default": true,
+          "title": "Open",
+          "type": "boolean"
+        },
+        "locked_by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Locked By"
+        },
+        "locked_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Locked At"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Gate",
+      "type": "object"
+    },
+    "GateName": {
+      "enum": [
+        "bible",
+        "picture",
+        "mix",
+        "distribution"
+      ],
+      "title": "GateName",
+      "type": "string"
+    },
+    "Grain": {
+      "enum": [
+        "none",
+        "fine",
+        "35mm"
+      ],
+      "title": "Grain",
+      "type": "string"
+    },
+    "LoudnessTarget": {
+      "enum": [
+        "broadcast",
+        "streaming"
+      ],
+      "title": "LoudnessTarget",
+      "type": "string"
+    },
+    "MixLock": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/MixLockState",
+          "default": "open"
+        },
+        "loudness": {
+          "$ref": "#/$defs/LoudnessTarget",
+          "default": "broadcast"
+        },
+        "measured_lufs": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Measured Lufs"
+        },
+        "true_peak_dbtp": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "True Peak Dbtp"
+        },
+        "stem_asset_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Stem Asset Ids",
+          "type": "array"
+        },
+        "picture_lock_timeline_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Picture Lock Timeline Id"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "MixLock",
+      "type": "object"
+    },
+    "MixLockState": {
+      "enum": [
+        "open",
+        "locked"
+      ],
+      "title": "MixLockState",
+      "type": "string"
+    },
+    "Note": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "author": {
+          "$ref": "#/$defs/NoteAuthor"
+        },
+        "body": {
+          "title": "Body",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "shot_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shot Id"
+        },
+        "take_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Take Id"
+        }
+      },
+      "required": [
+        "id",
+        "author",
+        "body"
+      ],
+      "title": "Note",
+      "type": "object"
+    },
+    "NoteAuthor": {
+      "enum": [
+        "human",
+        "conductor",
+        "qc"
+      ],
+      "title": "NoteAuthor",
+      "type": "string"
+    },
+    "PictureLockState": {
+      "enum": [
+        "open",
+        "locked"
+      ],
+      "title": "PictureLockState",
+      "type": "string"
+    },
+    "ProjectStatus": {
+      "enum": [
+        "draft",
+        "bible_pending",
+        "bible_locked",
+        "shooting",
+        "picture_pending",
+        "picture_locked",
+        "mix_pending",
+        "mix_locked",
+        "mastered",
+        "distributed"
+      ],
+      "title": "ProjectStatus",
+      "type": "string"
+    },
+    "QCReport": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "take_id": {
+          "title": "Take Id",
+          "type": "string"
+        },
+        "shot_id": {
+          "title": "Shot Id",
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/QCVerdict"
+        },
+        "identity_ok": {
+          "title": "Identity Ok",
+          "type": "boolean"
+        },
+        "morph_ok": {
+          "title": "Morph Ok",
+          "type": "boolean"
+        },
+        "flicker_ok": {
+          "title": "Flicker Ok",
+          "type": "boolean"
+        },
+        "duration_ok": {
+          "title": "Duration Ok",
+          "type": "boolean"
+        },
+        "legal_ok": {
+          "title": "Legal Ok",
+          "type": "boolean"
+        },
+        "lipsync_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lipsync Ok"
+        },
+        "loudness_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Loudness Ok"
+        },
+        "notes": {
+          "default": "",
+          "title": "Notes",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "take_id",
+        "shot_id",
+        "verdict",
+        "identity_ok",
+        "morph_ok",
+        "flicker_ok",
+        "duration_ok",
+        "legal_ok"
+      ],
+      "title": "QCReport",
+      "type": "object"
+    },
+    "QCVerdict": {
+      "enum": [
+        "pass",
+        "fail",
+        "warn"
+      ],
+      "title": "QCVerdict",
+      "type": "string"
+    },
+    "Shot": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "scene": {
+          "title": "Scene",
+          "type": "string"
+        },
+        "slug": {
+          "title": "Slug",
+          "type": "string"
+        },
+        "duration_frames": {
+          "title": "Duration Frames",
+          "type": "integer"
+        },
+        "fps": {
+          "title": "Fps",
+          "type": "number"
+        },
+        "size_native": {
+          "default": "1280x720",
+          "title": "Size Native",
+          "type": "string"
+        },
+        "focal_mm": {
+          "title": "Focal Mm",
+          "type": "number"
+        },
+        "t_stop": {
+          "title": "T Stop",
+          "type": "number"
+        },
+        "lighting_ratio": {
+          "title": "Lighting Ratio",
+          "type": "string"
+        },
+        "camera_move": {
+          "$ref": "#/$defs/CameraMove"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "negative_prompt": {
+          "default": "",
+          "title": "Negative Prompt",
+          "type": "string"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "character_ref_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Character Ref Ids",
+          "type": "array"
+        },
+        "keyframe_asset_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Keyframe Asset Ids",
+          "type": "array"
+        },
+        "engine": {
+          "$ref": "#/$defs/Engine"
+        },
+        "finish": {
+          "$ref": "#/$defs/FinishIntent"
+        },
+        "audio_line": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audio Line"
+        },
+        "overlap_frames": {
+          "default": 8,
+          "title": "Overlap Frames",
+          "type": "integer"
+        },
+        "max_takes": {
+          "default": 4,
+          "title": "Max Takes",
+          "type": "integer"
+        },
+        "selected_take_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Selected Take Id"
+        }
+      },
+      "required": [
+        "id",
+        "scene",
+        "slug",
+        "duration_frames",
+        "fps",
+        "focal_mm",
+        "t_stop",
+        "lighting_ratio",
+        "camera_move",
+        "prompt",
+        "seed",
+        "engine",
+        "finish"
+      ],
+      "title": "Shot",
+      "type": "object"
+    },
+    "Take": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "shot_id": {
+          "title": "Shot Id",
+          "type": "string"
+        },
+        "attempt": {
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "engine": {
+          "$ref": "#/$defs/Engine"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "asset_720p_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset 720P Id"
+        },
+        "asset_1080p_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Asset 1080P Id"
+        },
+        "qc": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QCReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "parent_take_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Take Id"
+        },
+        "version": {
+          "default": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "lineage": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Lineage",
+          "type": "array"
+        },
+        "edit_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Edit Id"
+        },
+        "origin": {
+          "$ref": "#/$defs/TakeOrigin",
+          "default": "generation"
+        },
+        "label": {
+          "default": "",
+          "title": "Label",
+          "type": "string"
+        },
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          },
+          "title": "Artifacts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "shot_id",
+        "attempt",
+        "engine",
+        "seed"
+      ],
+      "title": "Take",
+      "type": "object"
+    },
+    "TakeOrigin": {
+      "enum": [
+        "generation",
+        "edit"
+      ],
+      "title": "TakeOrigin",
+      "type": "string"
+    },
+    "Timeline": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "events": {
+          "items": {
+            "$ref": "#/$defs/TimelineEvent"
+          },
+          "title": "Events",
+          "type": "array"
+        },
+        "picture_lock": {
+          "$ref": "#/$defs/PictureLockState",
+          "default": "open"
+        },
+        "total_frames": {
+          "default": 0,
+          "title": "Total Frames",
+          "type": "integer"
+        },
+        "fps": {
+          "default": 23.976,
+          "title": "Fps",
+          "type": "number"
+        },
+        "preview_path": {
+          "default": "",
+          "title": "Preview Path",
+          "type": "string"
+        },
+        "stitched": {
+          "default": false,
+          "title": "Stitched",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "Timeline",
+      "type": "object"
+    },
+    "TimelineEvent": {
+      "properties": {
+        "shot_id": {
+          "title": "Shot Id",
+          "type": "string"
+        },
+        "start_frame": {
+          "title": "Start Frame",
+          "type": "integer"
+        },
+        "handle_in": {
+          "default": 0,
+          "title": "Handle In",
+          "type": "integer"
+        },
+        "handle_out": {
+          "default": 0,
+          "title": "Handle Out",
+          "type": "integer"
+        },
+        "take_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Take Id"
+        },
+        "overlap_frames": {
+          "default": 8,
+          "title": "Overlap Frames",
+          "type": "integer"
+        },
+        "keyframe_from_take_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Keyframe From Take Id"
+        }
+      },
+      "required": [
+        "shot_id",
+        "start_frame"
+      ],
+      "title": "TimelineEvent",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/ProjectStatus",
+      "default": "draft"
+    },
+    "customer_kind": {
+      "$ref": "#/$defs/CustomerKind",
+      "default": "series"
+    },
+    "brief": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Brief"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "bible": {
+      "$ref": "#/$defs/Bible"
+    },
+    "shots": {
+      "items": {
+        "$ref": "#/$defs/Shot"
+      },
+      "title": "Shots",
+      "type": "array"
+    },
+    "takes": {
+      "items": {
+        "$ref": "#/$defs/Take"
+      },
+      "title": "Takes",
+      "type": "array"
+    },
+    "notes": {
+      "items": {
+        "$ref": "#/$defs/Note"
+      },
+      "title": "Notes",
+      "type": "array"
+    },
+    "assets": {
+      "items": {
+        "$ref": "#/$defs/Asset"
+      },
+      "title": "Assets",
+      "type": "array"
+    },
+    "edits": {
+      "items": {
+        "$ref": "#/$defs/ClipEdit"
+      },
+      "title": "Edits",
+      "type": "array"
+    },
+    "timeline": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Timeline"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "mix": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MixLock"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "deliverables": {
+      "items": {
+        "$ref": "#/$defs/Deliverable"
+      },
+      "title": "Deliverables",
+      "type": "array"
+    },
+    "gates": {
+      "items": {
+        "$ref": "#/$defs/Gate"
+      },
+      "title": "Gates",
+      "type": "array"
+    },
+    "fleet_mode": {
+      "default": "SPLIT",
+      "title": "Fleet Mode",
+      "type": "string"
+    },
+    "compute": {
+      "$ref": "#/$defs/ClusterSite"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "bible"
+  ],
+  "title": "Project",
+  "type": "object"
+}

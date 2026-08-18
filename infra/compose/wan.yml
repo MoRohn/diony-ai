@@ -1,0 +1,28 @@
+# Wan workers — FARM (all four) or the wan half of SPLIT.
+# Official Wan generate.py / diony-wan wrapped by this service.
+
+services:
+  wan:
+    image: diony/wan22-worker:spark-gb10-pinned
+    environment:
+      WAN_CKPT_T2V: /models/wan/Wan2.2-T2V-A14B
+      WAN_CKPT_I2V: /models/wan/Wan2.2-I2V-A14B
+      WAN_CKPT_TI2V: /models/wan/Wan2.2-TI2V-5B
+      WAN_CKPT_S2V: /models/wan/Wan2.2-S2V-14B
+      WAN_CKPT_ANIMATE: /models/wan/Wan2.2-Animate-14B
+      WAN_CKPT_VACE: /models/wan/Wan2.2-VACE-Fun-A14B
+      DIONY_WAN_REPO: /opt/wan22
+      DASH_API_KEY: ""
+    command: ["diony-wan"]
+    volumes:
+      - /models/wan:/models/wan:ro
+      - /scratch:/scratch
+      - /diony/vault:/diony/vault
+    ports:
+      - "8010:8010"
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8010/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5

@@ -1,0 +1,16 @@
+---
+description: Infrastructure as a Product — spark-4x-v1 profiles, compose stubs, 200G switch, health
+globs: infra/**/*
+alwaysApply: false
+---
+
+# Infra as product
+
+Desired state lives in `infra/profiles/spark-4x-v1.yaml`.
+
+- Force fabric **200G**, autoneg off, MTU 9000. 50G is a fail.
+- Spark **port 2** is fabric. 10GbE is management and NAS. Never NCCL on 10GbE. Never NAS on RoCE.
+- Compose images are aarch64 GB10 pins (Week 2+). Do not paste x86 CUDA images.
+- `DASH_API_KEY` must stay empty on Wan workers.
+- Health: `python3 infra/health/check_cluster.py` dry-run on laptops; `--live` on cluster.
+- Fill `infra/models/manifest.yaml` sha256 on first pull. Never commit weight files.

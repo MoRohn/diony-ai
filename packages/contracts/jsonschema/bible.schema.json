@@ -1,0 +1,152 @@
+{
+  "$defs": {
+    "Character": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "still_asset_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Still Asset Ids",
+          "type": "array"
+        },
+        "wardrobe": {
+          "default": "",
+          "title": "Wardrobe",
+          "type": "string"
+        },
+        "notes": {
+          "default": "",
+          "title": "Notes",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "Character",
+      "type": "object"
+    },
+    "Grain": {
+      "enum": [
+        "none",
+        "fine",
+        "35mm"
+      ],
+      "title": "Grain",
+      "type": "string"
+    },
+    "LoudnessTarget": {
+      "enum": [
+        "broadcast",
+        "streaming"
+      ],
+      "title": "LoudnessTarget",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "logline": {
+      "title": "Logline",
+      "type": "string"
+    },
+    "fps": {
+      "default": 23.976,
+      "title": "Fps",
+      "type": "number"
+    },
+    "width": {
+      "default": 1920,
+      "title": "Width",
+      "type": "integer"
+    },
+    "height": {
+      "default": 1080,
+      "title": "Height",
+      "type": "integer"
+    },
+    "color_space": {
+      "default": "rec709",
+      "title": "Color Space",
+      "type": "string"
+    },
+    "grain": {
+      "$ref": "#/$defs/Grain",
+      "default": "fine"
+    },
+    "loudness": {
+      "$ref": "#/$defs/LoudnessTarget",
+      "default": "broadcast"
+    },
+    "true_peak_dbtp": {
+      "default": -1.0,
+      "title": "True Peak Dbtp",
+      "type": "number"
+    },
+    "visual_grammar": {
+      "title": "Visual Grammar",
+      "type": "string"
+    },
+    "world": {
+      "title": "World",
+      "type": "string"
+    },
+    "characters": {
+      "items": {
+        "$ref": "#/$defs/Character"
+      },
+      "title": "Characters",
+      "type": "array"
+    },
+    "lut_asset_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Lut Asset Id"
+    },
+    "locked": {
+      "default": false,
+      "title": "Locked",
+      "type": "boolean"
+    },
+    "locked_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Locked At"
+    }
+  },
+  "required": [
+    "title",
+    "logline",
+    "visual_grammar",
+    "world"
+  ],
+  "title": "Bible",
+  "type": "object"
+}

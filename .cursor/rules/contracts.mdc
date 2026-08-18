@@ -1,0 +1,18 @@
+---
+description: Producer machine API — Pydantic contracts, JSON Schema, notes on Shot/Take IDs
+globs: packages/contracts/**/*.py
+alwaysApply: false
+---
+
+# Contracts
+
+`packages/contracts` is the Producer API.
+
+- Pydantic v2 models are canonical. Export JSON Schema with `diony-export-schemas` after field changes.
+- Notes must attach to `shot_id` or `take_id`.
+- Brief needs 8+ characters of idea **or** at least one `attachment_id`.
+- Clip feedback is a `ClipEdit` that mints a child Take (`origin=edit`). Never overwrite a parent artifact.
+- Masters (`prores_hq`, `dnxhr_hq`) require `finish=deliverable`.
+- QC `pass` cannot coexist with a hard fail (identity, morph, flicker, duration, legal).
+- Bible canvas is 1920×1080, fps 23.976 or 24.000.
+- Fixture `demo_project()` must stay valid; Producer and Conductor shells load it.

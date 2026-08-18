@@ -1,0 +1,21 @@
+# FINISH mode — 720→1080 SR, conform, NVENC proxy, loudness bounce.
+
+services:
+  finish:
+    image: diony/finish:spark-gb10-pinned
+    environment:
+      DIONY_SR: /models/diony/diony_sr_v1
+      VAULT: /diony/vault
+    volumes:
+      - /models/diony:/models/diony:ro
+      - /scratch:/scratch
+      - /diony/vault:/diony/vault
+    ports:
+      - "8020:8020"
+    command: ["diony-finish"]
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8020/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5

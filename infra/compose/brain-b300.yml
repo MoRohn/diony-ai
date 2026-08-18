@@ -1,0 +1,32 @@
+# BRAIN mode — DeepSeek-V4-Flash-0731 TP=1 on a leased B300.
+# Week 2+: pin a Blackwell vLLM digest. Day 2: desired process only.
+# Do not copy Spark TP=4 flags. Do not copy 4×GB300 data-parallel-size 4.
+
+services:
+  brain:
+    image: diony/vllm-blackwell:b300-pinned
+    profiles: ["BRAIN"]
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      VLLM_HOST: 0.0.0.0
+    command:
+      - vllm
+      - serve
+      - /models/deepseek/DeepSeek-V4-Flash-0731
+      - --trust-remote-code
+      - --tensor-parallel-size
+      - "1"
+      - --max-model-len
+      - "1048576"
+      - --gpu-memory-utilization
+      - "0.90"
+    volumes:
+      - /models/deepseek/DeepSeek-V4-Flash-0731:/models/deepseek/DeepSeek-V4-Flash-0731:ro
+    ports:
+      - "8000:8000"
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/v1/models"]
+      interval: 30s
+      timeout: 5s
+      retries: 10

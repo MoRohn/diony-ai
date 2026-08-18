@@ -1,0 +1,63 @@
+{
+  "$defs": {
+    "AssetKind": {
+      "enum": [
+        "image",
+        "video",
+        "document"
+      ],
+      "title": "AssetKind",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/AssetKind"
+    },
+    "filename": {
+      "title": "Filename",
+      "type": "string"
+    },
+    "mime": {
+      "title": "Mime",
+      "type": "string"
+    },
+    "bytes": {
+      "title": "Bytes",
+      "type": "integer"
+    },
+    "path": {
+      "title": "Path",
+      "type": "string"
+    },
+    "sha256": {
+      "default": "",
+      "title": "Sha256",
+      "type": "string"
+    },
+    "extracted_text": {
+      "default": "",
+      "title": "Extracted Text",
+      "type": "string"
+    },
+    "role": {
+      "default": "idea_ref",
+      "title": "Role",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "filename",
+    "mime",
+    "bytes",
+    "path"
+  ],
+  "title": "Asset",
+  "type": "object"
+}

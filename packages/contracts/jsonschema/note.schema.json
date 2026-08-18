@@ -1,0 +1,62 @@
+{
+  "$defs": {
+    "NoteAuthor": {
+      "enum": [
+        "human",
+        "conductor",
+        "qc"
+      ],
+      "title": "NoteAuthor",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "author": {
+      "$ref": "#/$defs/NoteAuthor"
+    },
+    "body": {
+      "title": "Body",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "shot_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Shot Id"
+    },
+    "take_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Take Id"
+    }
+  },
+  "required": [
+    "id",
+    "author",
+    "body"
+  ],
+  "title": "Note",
+  "type": "object"
+}

@@ -1,0 +1,82 @@
+{
+  "$defs": {
+    "LoudnessTarget": {
+      "enum": [
+        "broadcast",
+        "streaming"
+      ],
+      "title": "LoudnessTarget",
+      "type": "string"
+    },
+    "MixLockState": {
+      "enum": [
+        "open",
+        "locked"
+      ],
+      "title": "MixLockState",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/MixLockState",
+      "default": "open"
+    },
+    "loudness": {
+      "$ref": "#/$defs/LoudnessTarget",
+      "default": "broadcast"
+    },
+    "measured_lufs": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Measured Lufs"
+    },
+    "true_peak_dbtp": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "True Peak Dbtp"
+    },
+    "stem_asset_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Stem Asset Ids",
+      "type": "array"
+    },
+    "picture_lock_timeline_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Picture Lock Timeline Id"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "title": "MixLock",
+  "type": "object"
+}

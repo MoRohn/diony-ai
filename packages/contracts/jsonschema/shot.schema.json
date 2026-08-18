@@ -1,0 +1,167 @@
+{
+  "$defs": {
+    "CameraMove": {
+      "enum": [
+        "static",
+        "pan",
+        "tilt",
+        "dolly_in",
+        "dolly_out",
+        "track",
+        "crane",
+        "handheld",
+        "steadicam",
+        "zoom"
+      ],
+      "title": "CameraMove",
+      "type": "string"
+    },
+    "Engine": {
+      "enum": [
+        "t2v-A14B",
+        "i2v-A14B",
+        "ti2v-5B",
+        "s2v-14B",
+        "animate-14B",
+        "vace-fun-A14B"
+      ],
+      "title": "Engine",
+      "type": "string"
+    },
+    "FinishIntent": {
+      "enum": [
+        "previz",
+        "proxy",
+        "deliverable"
+      ],
+      "title": "FinishIntent",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "scene": {
+      "title": "Scene",
+      "type": "string"
+    },
+    "slug": {
+      "title": "Slug",
+      "type": "string"
+    },
+    "duration_frames": {
+      "title": "Duration Frames",
+      "type": "integer"
+    },
+    "fps": {
+      "title": "Fps",
+      "type": "number"
+    },
+    "size_native": {
+      "default": "1280x720",
+      "title": "Size Native",
+      "type": "string"
+    },
+    "focal_mm": {
+      "title": "Focal Mm",
+      "type": "number"
+    },
+    "t_stop": {
+      "title": "T Stop",
+      "type": "number"
+    },
+    "lighting_ratio": {
+      "title": "Lighting Ratio",
+      "type": "string"
+    },
+    "camera_move": {
+      "$ref": "#/$defs/CameraMove"
+    },
+    "prompt": {
+      "title": "Prompt",
+      "type": "string"
+    },
+    "negative_prompt": {
+      "default": "",
+      "title": "Negative Prompt",
+      "type": "string"
+    },
+    "seed": {
+      "title": "Seed",
+      "type": "integer"
+    },
+    "character_ref_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Character Ref Ids",
+      "type": "array"
+    },
+    "keyframe_asset_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Keyframe Asset Ids",
+      "type": "array"
+    },
+    "engine": {
+      "$ref": "#/$defs/Engine"
+    },
+    "finish": {
+      "$ref": "#/$defs/FinishIntent"
+    },
+    "audio_line": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Audio Line"
+    },
+    "overlap_frames": {
+      "default": 8,
+      "title": "Overlap Frames",
+      "type": "integer"
+    },
+    "max_takes": {
+      "default": 4,
+      "title": "Max Takes",
+      "type": "integer"
+    },
+    "selected_take_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Selected Take Id"
+    }
+  },
+  "required": [
+    "id",
+    "scene",
+    "slug",
+    "duration_frames",
+    "fps",
+    "focal_mm",
+    "t_stop",
+    "lighting_ratio",
+    "camera_move",
+    "prompt",
+    "seed",
+    "engine",
+    "finish"
+  ],
+  "title": "Shot",
+  "type": "object"
+}

@@ -1,0 +1,44 @@
+# BRAIN mode — DeepSeek-V4-Flash-0731 TP=4 across Spark Cluster (4).
+# Week 2+: replace image with a pinned aarch64 vLLM digest that supports DSpark.
+# Day 1: documents desired process; do not expect this to boot on a laptop.
+
+services:
+  brain:
+    image: diony/vllm-dspark:spark-gb10-pinned
+    profiles: ["BRAIN"]
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NCCL_NET: IB
+      NCCL_IB_HCA: mlx5
+      # NCCL_IB_GID_INDEX set after first measure
+      VLLM_HOST: 0.0.0.0
+    command:
+      - vllm
+      - serve
+      - /models/deepseek/DeepSeek-V4-Flash-0731
+      - --trust-remote-code
+      - --kv-cache-dtype
+      - nvfp4_ds_mla
+      - --block-size
+      - "256"
+      - --tensor-parallel-size
+      - "4"
+      - --nnodes
+      - "4"
+      - --enable-expert-parallel
+      - --max-model-len
+      - "1048576"
+      - --gpu-memory-utilization
+      - "0.85"
+      - --speculative-config
+      - '{"method":"dspark","num_speculative_tokens":3,"draft_sample_method":"probabilistic"}'
+    volumes:
+      - /models/deepseek/DeepSeek-V4-Flash-0731:/models/deepseek/DeepSeek-V4-Flash-0731:ro
+    ports:
+      - "8000:8000"
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/v1/models"]
+      interval: 30s
+      timeout: 5s
+      retries: 10

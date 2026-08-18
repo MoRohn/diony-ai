@@ -1,0 +1,53 @@
+{
+  "$defs": {
+    "CustomerKind": {
+      "enum": [
+        "feature",
+        "series",
+        "commercial",
+        "music_video",
+        "education",
+        "social"
+      ],
+      "title": "CustomerKind",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "idea": {
+      "default": "",
+      "title": "Idea",
+      "type": "string"
+    },
+    "customer_kind": {
+      "$ref": "#/$defs/CustomerKind"
+    },
+    "target_minutes": {
+      "default": 5.0,
+      "title": "Target Minutes",
+      "type": "number"
+    },
+    "audience": {
+      "default": "",
+      "title": "Audience",
+      "type": "string"
+    },
+    "title_hint": {
+      "default": "",
+      "title": "Title Hint",
+      "type": "string"
+    },
+    "attachment_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Attachment Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "customer_kind"
+  ],
+  "title": "Brief",
+  "type": "object"
+}
