@@ -584,6 +584,7 @@ body[data-scene-direction="back"].studio-scene-transition .cue-workspace > *:not
 
 .diony-mark {
   display: block;
+  overflow: visible;
   width: auto;
   height: clamp(1.6rem, 2.2vw, 2rem);
 }
@@ -774,6 +775,7 @@ body[data-entry="intro"] .sheet.production-folio {
 
 .studio-intro-mark {
   display: block;
+  overflow: visible;
   width: 100%;
   max-height: min(58vh, 30rem);
   height: auto;
@@ -952,6 +954,13 @@ body[data-entry="start"] #studio-entry {
   opacity: 0.58;
   mix-blend-mode: normal;
   clip-path: inset(2px);
+}
+
+/* Re-ink the sketch clips and stills for the dark stage: the baked light
+   canvas inverts to charcoal and the red line work brightens. */
+.entry-portrait .entry-motion-still,
+.entry-portrait .entry-motion-video {
+  filter: invert(1) hue-rotate(180deg) saturate(1.7) contrast(1.45) brightness(1.08);
 }
 
 .entry-motion-video {
