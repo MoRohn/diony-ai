@@ -11,11 +11,11 @@ Non-negotiable:
 
 - Wan2.2 is native **720p**. Deliverables go through Diony 1080 finish (`blueprints/06` and `10`). Never ship previz as a master.
 - DeepSeek-V4-Flash-0731 is the on-cluster brain. Spark recipes are not GB300 recipes (`blueprints/04`).
-- Never cloud-by-default. No Dashscope, no hosted prompt extend. Local crate is the default. Leased Dual-Spark and Leased B300 are signed Wizard Site exceptions (`blueprints/14`), still DeepSeek on that site — not a hosted LLM and not a failover. `lease-gpu-v1` is not a Wizard Site.
-- Human gates: bible, picture lock, mix lock, distribution. Do not automate them away.
+- Never cloud-by-default. No Dashscope, no hosted prompt extend. Local crate is the default. Leased Dual-Spark, Leased B300, and Leased B200 are signed Wizard Site exceptions (`blueprints/14`), still DeepSeek on that site — not a hosted LLM and not a failover. `lease-gpu-v1` is not a Wizard Site.
+- Human gates: bible, distribution. Picture and mix run inside Production. Do not skip bible or distribution.
 - Fleet modes: BRAIN, SPLIT, FARM, FINISH. Drain → unload → load → healthgate. Do not co-resident DeepSeek and Wan A14B on one Spark.
 - Contracts first: if it is not on a Project/Shot/Take/QC object, it does not exist for production. Notes attach to Shot/Take IDs.
 - Blueprints are source of truth. Update the numbered Blueprint in the same change as code that affects BOM, serving, SLA, or quality.
 - NVIDIA Sync owns fabric. Diony wraps it.
 
-1-hour programs take **2–5 wall-clock days** on `spark-4x-v1`. Do not quote that SLA on Dual-Spark or B300. Do not promise real-time or degrade quality to fake speed.
+1-hour programs take **2–5 wall-clock days** on `spark-4x-v1`. Do not quote that SLA on Dual-Spark, B300, or B200. Do not promise real-time or degrade quality to fake speed.

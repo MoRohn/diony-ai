@@ -1,7 +1,7 @@
 Diony AI
 Copyright (c) 2026 Diony AI. All rights reserved.
 See LICENSE for the proprietary terms covering Diony AI software, Blueprints,
-cluster profiles, Wizard, Producer, and Conductor.
+cluster profiles, Studio, Producer, and Conductor.
 
 This product includes or invokes third-party open-source components. Those
 components remain under their original licenses. Diony AI claims no ownership
@@ -78,7 +78,7 @@ NVIDIA software (not redistributed here)
 NVIDIA DGX OS, NVIDIA Sync, Cluster Assistant, CUDA, NCCL, and related
 NVIDIA software remain NVIDIA's property and are used under NVIDIA's own
 license terms on DGX Spark hardware. Diony AI does not replace or
-redistribute those components. The Wizard wraps NVIDIA Sync Cluster
+redistribute those components. The Studio wraps NVIDIA Sync Cluster
 Assistant; it does not reimplement it.
 
 ==============================================================================
@@ -123,3 +123,19 @@ Diony finish (`diony-finish`, tiled temporal SR, Rec.709 legalizer, program
 stitch) is proprietary Diony AI software. The upstream x2 checkpoint is a
 bootstrap until the proprietary `diony_sr_v1` net is pulled. Lanczos scale
 is not a deliverable.
+
+==============================================================================
+Launch control-plane runtime libraries
+==============================================================================
+
+`cryptography` (Python Cryptographic Authority) is used for AES-256-GCM BYOK
+envelopes and is distributed under the Apache License 2.0 or BSD 3-Clause
+License. Source: https://github.com/pyca/cryptography
+
+`boto3` and `botocore` (Amazon Web Services) are optional runtime clients for
+AWS S3-compatible object storage, including an explicitly configured
+Cloudflare R2 endpoint. They are distributed under the Apache License 2.0.
+Source: https://github.com/boto/boto3 and https://github.com/boto/botocore
+
+These libraries do not change Diony's proprietary software license. Their own
+license and notice files remain controlling for the upstream components.

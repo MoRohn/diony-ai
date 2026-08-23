@@ -2,6 +2,85 @@
 
 All notable changes to Diony AI are documented here.
 
+## Unreleased
+
+### Added
+
+- Producer Sample is now a real 5s/10s Idea action. It uses the current words and references, runs bounded Wan2.2 A14B camera takes through AutoQC, exact time-frame assembly, mandatory `diony_sr_v1` 1080 finish and mix, and enters Gallery only with the normal checksum-verified master lineage. The prior Night Press fixture shortcut is no longer wired to the Idea page.
+- Subject-defining image references are now binding production locks: singular characters and plural character teams keep every Shot on Wan I2V, same-world shots hold one uninterrupted composition, the negative prompt reaches Wan's true `n_prompt` conditioning, five-point clip evidence is recorded (with a strict same-background floor), and I2V cannot silently downgrade to T2V. Adjacent locked Shots condition on the prior selected print's last frame, must pass boundary QC, and assemble through an eight-frame temporal blend while preserving requested Sample TRT. Picture conforms to the exact timeline frame count and the padded mix rail cannot trim locked picture frames. Retakes refresh the strict direction, and a landed-but-failed negative remains a visible QC hold instead of appearing to enter finish.
+- Retake now repairs persisted pre-reference-detector Projects in place: the full Shot chain is promoted to I2V, reference keys, strict negatives, prior-frame continuity, and overlap before a new Take rolls. Binding I2V uses style-neutral technical negatives rather than the generic live-action `cartoon` exclusion, so illustrated references are not told to abandon their own medium. Finish rejects legacy or stale `PASS` receipts unless their engine, reference ids, five checkpoints, and prior-Take boundary evidence match the current Shot contract. Any retake invalidates and hides the old Gallery master until a newly verified finish succeeds; failed bytes remain in the vault for audit. Producer restart adoption resumes only currently selected missing Takes, never obsolete aborted/rejected rows.
+- Gallery program playback, poster, and download URLs are now versioned by the verified program checksum. Re-finishing the same Project therefore displays the new master immediately instead of letting Safari replay the prior invalid video and thumbnail from cache.
+- Gallery Details Copy Prompt now keeps one accessible overlapping-squares icon and copies synchronously from the visible prompt selection before any async browser boundary, fixing Safari on Mac while retaining the modern Clipboard API fallback for Windows and Mac. The modal shows visible success, or leaves the prompt selected with Command-C/Ctrl-C guidance if browser policy blocks both paths.
+- Gallery is now an independent persistent library. It remains navigable when Producer reopens on a blank/new Idea, loads finished programs from the vault rather than the active Project, and shows explicit loading or failure status instead of disabling the floor.
+
+### Changed
+
+- The Production Shots ledger now expands through the unused desktop folio height, scrolls within that lane, and keeps bottom safe-area breathing room instead of stopping at a fixed `18rem` cap.
+- Producer now has three pages: **Idea → Production → Gallery**. The non-working Edit page, its navigation/state, cutting-room DOM/JavaScript/CSS, Wizard promises, catalog entry, and prompt-to-edit API route were removed. Historical `ClipEdit` lineage remains readable so existing Project records are not corrupted. Producer UI stamp is `run60`; Studio UI stamp is `ready55`.
+
+## 0.22.0 — 2026-08-20
+
+### Added
+
+- Wizard `ready31` replaces the undersized navigation and floating 3D notebook treatment with a 112px stage mast, 288px desktop cue rail, and integrated production-folio workspace; the exact B200 form and 390px mobile layout remain unclipped while Wizard objectives and site choices are unchanged.
+- Repository-root `Build Diony AI.command` creates or reuses a deterministic native Mac development app, selects the stable `dist/desktop/{version}/development/Diony AI.app` path in Finder, and emits explicit non-publishable local proof without confusing it with Developer ID/notarization.
+- Self-contained desktop release path for the future two-button webpage: notarized/stapled/Gatekeeper-verified Universal Mac DMG and Authenticode-signed/timestamped Windows installer, deterministic secret-free payload staging, and a stable manifest that refuses incomplete platform proof.
+- Installed-app startup hardening: bundled service dispatch with no system Python or first-run `pip`, standard per-user state directories, immediate Desk feedback, semantic Wizard/Producer health and UI-stamp checks, safe unknown-port handling, persistent logs, and downloadable secret-free diagnostics. Blueprint 17 defines the acquisition, install, startup, trust, and publish gates.
+
+- Launch control-plane contracts for users, workspaces, teams, departments, Cost Centers, governed rate cards, memberships, durable workflow runs, generation jobs, provider configuration, immutable usage/cost-allocation/audit records, render lineage, and replayable progress.
+- Transactional local-first SQLite controller with WAL, strict workspace isolation, role and cost-admin gates, soft-delete support, fixed-point internal-credit and cost allocation, exact reconciliation, monitor-only budgets, scoped and organization rollups, metrics, and correlation IDs.
+- Provider-neutral local registry preserving DeepSeek-V4-Flash-0731, Wan2.2 native 720p, assembly, mandatory `diony_sr_v1` finish, and creator-owned packaging. No hosted provider is registered by default.
+- Retryable, resumable one-stage-at-a-time workflow orchestration with exponential backoff, cross-process dispatch leases, a `diony-control-worker`, signed-site engine checkpoint proof, explicit optional-stage skips, fallbacks, pause/cancel/retry controls, SSE progress, and actionable errors. Required stages stay `waiting_provider` until an engine proves output; no asset is invented.
+- AES-256-GCM BYOK storage, optional AWS S3/Cloudflare R2 media adapter, and verifiable `.diony.zip` project export that excludes secrets while preserving project cost lineage and dimension snapshots.
+- Workspace project inventory, team/membership administration, input/output safety checkpoints, JSON correlation logs, success/latency/cost-per-video-minute metrics, and confirmed project erasure across controller lineage, unshared vault media, exports, and configured object mirrors.
+- Blueprint 16 defines the Open Source Content Producer philosophy, operational boundaries, API, failure modes, and proof layers. The repository license and Wizard/Producer objectives are unchanged.
+
+## 0.21.0 — 2026-08-20
+
+### Changed
+
+- Desk, Wizard, and Producer now share the Diony Chorus creative system: Deep Void / Parchment / Diony Crimson / Stage Amber, Archivo Black display type, IBM Plex work and machine type, an original surface-specific stage spirit, a single crimson workflow ribbon, visible keyboard focus, responsive layouts, and reduced-motion fallbacks. Workflow gates, site truth, and Producer behavior are unchanged. Wizard UI stamp is `ready30`; Producer UI stamp is `run13`; Desk is `desk4`.
+- Blueprint 15 is the source of truth for brand, motion, accessibility, surface density, and the originality boundary.
+
+## 0.20.0 — 2026-08-19
+
+### Changed
+
+- Lease Wizard is **Site → Connect → App → Ready → Producer**. Ready is **Test GPU**: SSH over the Connect line, `nvidia-smi` must match the Site (B200 / B300 / Dual-Spark). **Pack red** means App did not pull (desk `DIONY_DRY_RUN=1`). **Pull pack** on Ready SSHes the same line. Pytest records the same rows and never opens a socket. A real IP requires a green Test GPU before Continue.
+- Desk restarts Wizard when `:8787` is healthy but still serving an old HTML stamp (`app.js?v=`). Open Diony AI is enough to pick up UI. Hard-refresh `http://wizard.diony.local` once after restart.
+- Wizard UI stamp is `ready29`. Producer UI stamp is `run12`. Floors are **Idea → Production → Edit → Gallery**. Produce opens Production immediately; open/roll continue in the background. If Wan is already farming, Produce does not start a second show. Production is a **live monitor** (tally, denoise step/40, elapsed/total clock, per-shot clips, camera-report activity — WAN / GPU / QC / SR — not uvicorn access logs). After Wan 720p, Production runs **1080 finish and mix** with no picture-lock or mix-lock click. Human gates stay bible and distribution. Edit and Gallery stay empty until a real clip exists. On a signed Dual-Spark / B300 / B200, desk Producer farms Wan **and** `diony_sr_v1` through the Connect SSH line onto GPU Producer. After a **pod restart** Producer prefers live Wizard Connect over a stale `site.json` IP/`-p`, drops a dead tunnel, health-checks GPU `:8788` (not `pgrep`), rsyncs Producer/Wan onto `/opt/diony-ai`, and adopts a live `generate.py` instead of auto-farming leftover takes. `generate.py` uses the host Python that has torch (`DIONY_PYTHON`), not the Diony FastAPI venv. Official `generate.py` still `import dashscope` at load — that is a host pip stub, not a Dashscope API call; keys stay empty and `--use_prompt_extend` is never passed. Farm proves `generate.py --help` on the farm thread, once, before N clips. Leased B200 / B300 farm with `--offload_model False` (upstream defaults True on one GPU). Spark keeps offload + dtype convert. Official Wan `flash_attention` asserts FlashAttention-2; lease host pip skips that wheel, so Diony applies Wan’s own SDPA path on `[B, L, N, C]` before FA2 flatten (SDPA after flatten is a `self.o` shape crash, not a clip QC fail). Activity never treats tqdm `Loading checkpoint` / `0/40` / the float32 `to()` warning as a clip QC fail. A QC fail is **failed**, not “next.” **Refresh** on Production (and **Start over** in the mast) posts `/api/studio/new` and aborts the farm-owned `generate.py`; it does not load Night Press. Wizard Sign + Test GPU is the pack lock — the laptop is not the camera and not the finish box. A signed lease with Test GPU is not a stub camera. Edit is optional coverage after the farm. Gallery is the clip inventory.
+- Producer sheet uses IBM Plex Sans (same as Wizard) and fills the window.
+- Length goal uses the Wan **5s quality lane**. Shot-count scales so stitched TRT is near 30s–5m. Do not lengthen a take past 5s. >15m is still first reel.
+- Ready shows **Pack pull in progress** (moving bar + latest apply line + elapsed) while Hugging Face is on the GPU. Continue stays off until the pull finishes. Landing on Ready resumes the poll.
+- **Refresh** on Site clears this Wizard and reloads the page (walk, apply log, Connect SSH user/port, local `site.json`). **Start over** in the mast does the same. Browser refresh does not. HF_TOKEN stays.
+- App and Ready have **HF_TOKEN**. Open https://huggingface.co/settings/tokens, Create new token +, paste it. The token is not written to site.json or Wizard state.
+- RunPod `Connection refused` on Ready means the pod is down or the TCP IP/`-p` changed. Connect stays editable after pass. Pull pack uses the Connect Host, not a stale inventory copy.
+- Lease App Continue starts the pack pull and opens Ready. It does not wait on Hugging Face. A second Continue no longer deadlocks the Wizard.
+- Lease App on RunPod: if `mount --bind /workspace /diony/vault` is denied, symlink `/workspace` so the product path stays `/diony/vault`. Python install uses `$DIONY_REPO/.venv`, then `pip --break-system-packages` (PEP 668). Apply skips `pip install -U pip` when `huggingface_hub` is already in the GPU venv (that listing was a false FAIL). Apply errors stay on App / Ready, not Connect.
+
+## 0.19.0 — 2026-08-19
+
+### Changed
+
+- Wizard Site is four choices: **Local Quad-Spark Cluster**, **Leased Dual-Spark Cluster**, **Leased B300**, **Leased B200**. Three leases stay separate. Local is never pre-selected. `lease-gpu-v1` is still not a Wizard Site.
+- Runpod → Wizard Connect map for B200 and B300: the Connect page lists the RunPod Connect headings in order (**HTTP services** skip, **SSH** skip, **SSH over exposed TCP** use, **Web terminal** skip, **Direct TCP ports** same). Host / SSH user / SSH port come from `ssh root@IP -p PORT`. Vault is Details → Pod volume Mount path `/workspace`. Blueprint 14.
+- Leased B200 (`b200-v1`) is TP=1, 180 GB, `max_model_len 16384`, `gpu-memory-utilization 0.95`. Not a drop-in B300. Do not paste `1048576`.
+- START HERE names hardware first: local crate, or a lease from Runpod (`https://www.runpod.io/`) then Enverge (`https://enverge.ai/`). Dual-Spark still uses a shared Network Volume. B200/B300 skip Network Volume unless it is already in that GPU’s data center.
+- Connect SSH user: GPU login (word before `@` on RunPod Connect). Prefer the TCP line (`root`). Wizard refuses a pasted `ssh user@host -p PORT` line. Optional SSH port on B200/B300 (`DIONY_SSH_PORT`) for rsync.
+- Open Producer and Continue use the product URLs `http://wizard.diony.local` and `http://producer.diony.local` on every site. Day 2 still binds `:8787` / `:8788`. Open Diony AI runs `python -m diony_wizard.gateway ensure` after Wizard/Producer start (hosts + `:80` Host router). First-open and Continue open those names, not `127.0.0.1:8787`. The Mac password helper runs `gateway install` in the foreground (it detaches `serve`); it does not `nohup` inside AppleScript. If names are not live, the lobby stays up (`need_names`) instead of opening a URL that does not resolve.
+
+## 0.18.0 — 2026-08-18
+
+### Added
+
+- First open without a terminal: **START HERE.txt**, then double-click **Open Diony AI**. A lobby page lays `.venv` once and starts Wizard + Producer. Continue is Wizard.
+
+## 0.17.0 — 2026-08-18
+
+### Changed
+
+- Wizard 0.17. Sign writes `site.json` with vault mount `/diony/vault` and copies it onto the GPU vault when live. App Continue mounts the recorded NFS share. Local How installs `diony-finish`. Open Producer uses host:8788 when live (laptop dry-run stays `127.0.0.1:8788`). Retry pack on a failed App apply.
+
 ## 0.16.0 — 2026-08-18
 
 ### Added

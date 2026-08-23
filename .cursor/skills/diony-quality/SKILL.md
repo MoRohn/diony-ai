@@ -13,7 +13,7 @@ Read `blueprints/10-quality-mandate.md` and apply it verbatim in spirit.
 2. Require Shot grammar before dispatch: focal_mm, t_stop, lighting_ratio, camera_move, duration, seed, refs.
 3. Identity drift, morph, flicker, illegal levels, lipsync >40 ms = QC fail. Do not finish failed takes.
 4. Cap retakes (default 4) then stop for a human.
-5. Prompt expansion is DeepSeek on the signed site only (Local Quad-Spark, Dual-Spark, or leased B300). Never Dashscope.
+5. Prompt expansion is DeepSeek on the signed site only (Local Quad-Spark, Dual-Spark, leased B300, or leased B200). Never Dashscope.
 6. UI copy must not say "native 1080 Wan" or "instant hour movie".
 
 ## Examples

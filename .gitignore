@@ -55,3 +55,9 @@ masters/
 # Logs
 *.log
 logs/
+
+# Local agent/session state
+.claude/
+
+# Local vault runtime state
+.diony-vault/
