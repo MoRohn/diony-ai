@@ -3,62 +3,296 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Diony AI Wizard — Crate to system</title>
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <title>Diony AI Studio — Crate to system</title>
+    <link rel="icon" type="image/png" href="/static/diony-ai-app-icon.png?v=brand3" />
+    <link rel="apple-touch-icon" href="/static/diony-ai-app-icon.png?v=brand3" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/app.css?v=polish10" />
+    <link rel="stylesheet" href="/static/app.css?v=brand3" />
+    <link rel="stylesheet" href="/static/folio.css?v=brand3" />
   </head>
-  <body>
-    <header class="mast">
-      <p class="brand">Diony AI</p>
-      <p id="site-line" class="site-line">Unsigned</p>
-      <nav class="bays" aria-label="Surface">
-        <span class="on">Wizard</span>
-      </nav>
+  <body data-product-surface="studio" data-step="path" data-entry="loading">
+    <div class="studio-intro-stage-copy" aria-hidden="true">
+      <span>Idea in.</span>
+      <strong>Show out.</strong>
+    </div>
+    <header class="mast stage-header">
+      <p class="brand diony-brand">
+        <svg class="diony-mark" viewBox="0 0 480 460" aria-hidden="true" focusable="false">
+          <defs>
+            <linearGradient id="wm-bar1" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#FF7A2F" /><stop offset="1" stop-color="#E43B4B" />
+            </linearGradient>
+            <linearGradient id="wm-bar2" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#FF9A35" /><stop offset="1" stop-color="#FF402F" />
+            </linearGradient>
+            <linearGradient id="wm-bar3" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#FFA23A" /><stop offset=".55" stop-color="#FF7A2F" /><stop offset="1" stop-color="#E43B4B" />
+            </linearGradient>
+          </defs>
+          <rect x="0" y="184" width="26" height="92" rx="13" fill="url(#wm-bar1)" />
+          <rect x="54" y="125" width="28" height="210" rx="14" fill="url(#wm-bar2)" />
+          <rect x="110" y="30" width="32" height="400" rx="16" fill="url(#wm-bar3)" />
+          <rect x="172" y="65" width="50" height="330" rx="9" fill="currentColor" />
+          <rect x="248" y="82" width="50" height="296" rx="9" fill="currentColor" />
+          <path d="M324 99h24a131 131 0 0 1 0 262h-24z" fill="currentColor" />
+        </svg>
+        <span class="diony-word">Diony</span>
+        <span class="sr">AI</span>
+      </p>
+      <p class="studio-intro-motto" aria-label="Own Your Studio, Produce at Cost">
+        <span>OWN YOUR STUDIO</span>
+        <strong>PRODUCE AT COST</strong>
+      </p>
+      <p id="site-line" class="site-line"></p>
+      <button type="button" id="start-over" class="word mast-reset">Start over</button>
     </header>
 
     <div class="studio">
-      <div class="sheet">
-        <span class="stack" aria-hidden="true"></span>
-        <span class="tooth" aria-hidden="true"></span>
+      <div class="sheet production-folio">
+        <svg class="diony-spirit spirit-wizard" viewBox="0 0 190 170" aria-hidden="true">
+          <path class="spirit-orbit" d="M27 123c34 27 82 24 112-7 22-23 28-55 16-82" />
+          <path class="spirit-body" d="M57 53c13-22 48-27 68-9 22 20 20 58-2 78-24 21-63 13-75-16-7-18-3-39 9-53Z" />
+          <path class="spirit-horn" d="M69 52 58 25l27 18M117 44l22-20-7 30" />
+          <circle class="spirit-eye" cx="82" cy="74" r="5" />
+          <circle class="spirit-eye" cx="111" cy="71" r="5" />
+          <path class="spirit-mouth" d="M79 96h34M96 96v13" />
+          <path class="spirit-spark" d="m155 42 3 10 10 3-10 4-3 10-4-10-10-4 10-3Z" />
+        </svg>
 
         <p class="sr">Crate to system</p>
         <p id="mode-line" class="sr">Dry-run. No fabric mutation.</p>
 
-        <div id="prep" class="screening">
-          <ol id="rail" class="shot-index" aria-label="Crate lines"></ol>
+        <section id="studio-intro" class="studio-intro" aria-labelledby="studio-intro-title" hidden>
+          <p class="studio-intro-kicker">FIRST ACT · 01</p>
+          <div class="studio-intro-grid">
+            <div class="studio-intro-copyblock">
+              <h1 id="studio-intro-title" tabindex="-1"><span>From idea</span><span>to moving</span><span>image.</span></h1>
+              <p class="studio-intro-copy">Create with control.</p>
+              <p class="studio-intro-hint">Enter to Start New or Join Studio</p>
+              <details class="disclose studio-intro-details">
+                <summary>Details</summary>
+                <p>Start a new Studio or join one you were invited to.</p>
+              </details>
+            </div>
+            <svg class="studio-intro-mark" viewBox="0 0 480 460" aria-hidden="true" focusable="false">
+              <defs>
+                <linearGradient id="wi-bar1" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#FF7A2F" /><stop offset="1" stop-color="#E43B4B" />
+                </linearGradient>
+                <linearGradient id="wi-bar2" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#FF9A35" /><stop offset="1" stop-color="#FF402F" />
+                </linearGradient>
+                <linearGradient id="wi-bar3" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#FFA23A" /><stop offset=".55" stop-color="#FF7A2F" /><stop offset="1" stop-color="#E43B4B" />
+                </linearGradient>
+              </defs>
+              <rect x="0" y="184" width="26" height="92" rx="13" fill="url(#wi-bar1)" />
+              <rect x="54" y="125" width="28" height="210" rx="14" fill="url(#wi-bar2)" />
+              <rect x="110" y="30" width="32" height="400" rx="16" fill="url(#wi-bar3)" />
+              <rect x="172" y="65" width="50" height="330" rx="9" fill="#F6F6F6" />
+              <rect x="248" y="82" width="50" height="296" rx="9" fill="#F6F6F6" />
+              <path d="M324 99h24a131 131 0 0 1 0 262h-24z" fill="#F6F6F6" />
+            </svg>
+          </div>
+          <button type="button" id="enter-studio" class="studio-intro-enter">
+            <span aria-hidden="true">›</span>
+            <strong>ENTER</strong>
+          </button>
+        </section>
 
-          <div class="well">
+        <section id="studio-entry" class="studio-entry" aria-labelledby="studio-entry-title" hidden>
+          <p class="entry-kicker">DIONY STUDIO</p>
+          <p class="entry-motto" aria-label="Own your studio. Produce at cost.">
+            <span>OWN YOUR STUDIO</span><strong>PRODUCE AT COST</strong>
+          </p>
+          <h1 id="studio-entry-title" tabindex="-1"><span>START YOUR OWN</span><span>JOIN A TEAM</span></h1>
+          <p class="entry-intro">Set up the production system, or enter a Studio that already has one.</p>
+          <div class="entry-paths">
+            <article class="entry-path">
+              <p class="entry-label">START NEW</p>
+              <div class="entry-portrait entry-motion" data-motion-state="still" aria-hidden="true">
+                <img
+                  class="entry-motion-still"
+                  src="/static/studio-maker-motion-first.jpg?v=entrymotion3"
+                  width="1080"
+                  height="1136"
+                  alt=""
+                />
+                <video
+                  class="entry-motion-video"
+                  muted
+                  playsinline
+                  preload="auto"
+                  poster="/static/studio-maker-motion-first.jpg?v=entrymotion3"
+                  tabindex="-1"
+                >
+                  <source src="/static/studio-maker-motion.mp4?v=entrymotion3" type="video/mp4" />
+                </video>
+              </div>
+              <p>Name the Studio. Sign its production site. You become the first owner and Cost/Budgetary Admin.</p>
+              <button type="button" id="start-studio" class="entry-action"><span class="entry-action-label">Start a Studio</span><b class="entry-action-arrow" aria-hidden="true">→</b></button>
+            </article>
+            <span class="studio-seam" aria-hidden="true"><i></i></span>
+            <article class="entry-path">
+              <p class="entry-label">JOIN</p>
+              <div class="entry-portrait entry-portrait-team entry-motion" data-motion-state="still" aria-hidden="true">
+                <img
+                  class="entry-motion-still"
+                  src="/static/studio-team-motion-first.jpg?v=entrymotion3"
+                  width="1080"
+                  height="1050"
+                  alt=""
+                />
+                <video
+                  class="entry-motion-video"
+                  muted
+                  playsinline
+                  preload="auto"
+                  poster="/static/studio-team-motion-first.jpg?v=entrymotion3"
+                  tabindex="-1"
+                >
+                  <source src="/static/studio-team-motion.mp4?v=entrymotion3" type="video/mp4" />
+                </video>
+              </div>
+              <p>Use an invite from a Studio you trust. Your Profile Name and personal Cost Center travel with your work.</p>
+              <button type="button" id="join-existing-studio" class="entry-action"><span class="entry-action-label">Join a Studio</span><b class="entry-action-arrow" aria-hidden="true">→</b></button>
+            </article>
+          </div>
+          <p class="entry-truth">Your work stays on the Studio's signed production system.</p>
+        </section>
+
+        <div id="prep" class="screening">
+          <ol id="rail" class="shot-index cue-navigation" aria-label="Crate lines"></ol>
+
+          <div class="well cue-workspace">
             <section class="learn" aria-label="Lesson">
               <p id="line-index" class="meta">01</p>
-              <h2 id="learn-title">Site</h2>
-              <p id="learn-why" class="grammar">Pick where this production will run. One place. Stay there.</p>
-              <dl id="plan-card" class="plan hidden" hidden></dl>
+              <h2 id="learn-title">COMPUTE</h2>
+              <p id="learn-why" class="grammar">Choose where Diony AI will run. Agent will take it from here.</p>
+              <details id="about" class="disclose">
+                <summary>Details</summary>
+                <div class="disclose-panel">
+                  <dl id="plan-card" class="plan hidden" hidden></dl>
+                  <div id="connect-guide" class="guide hidden" hidden></div>
+                  <div id="about-body">
+                    <p>Runpod first: <a href="https://www.runpod.io/">RunPod</a>. Enverge second: <a href="https://enverge.ai/">Enverge</a>.</p>
+                  </div>
+                </div>
+              </details>
             </section>
 
             <section class="do" aria-label="Report">
               <p id="review-banner" class="review hidden">Recorded. Read-only.</p>
               <div id="loom" class="loom hidden" hidden></div>
               <form id="form" class="fields">
-                <div class="field">
-                  <span>Where?</span>
+                <div class="field compute-field">
                   <input type="hidden" name="site" value="" />
-                  <div class="choice">
-                    <button type="button" data-site="local">Local Quad-Spark Cluster</button>
-                    <button type="button" data-site="dual">Leased Dual-Spark Cluster</button>
-                    <button type="button" data-site="b300">Leased B300</button>
+                  <div class="compute-groups">
+                    <section class="compute-group" aria-labelledby="compute-local-label">
+                      <p id="compute-local-label" class="compute-group-label">LOCAL</p>
+                      <div class="choice">
+                        <button type="button" data-site="local">DGX Quad-Spark Cluster</button>
+                      </div>
+                      <div class="local-cluster-sketches" aria-label="Local DGX Spark cluster setup sketches">
+                        <figure class="cluster-sketch">
+                          <figcaption><span>01</span> CLUSTER FABRIC</figcaption>
+                          <svg class="cluster-map" viewBox="0 0 620 238" role="img" aria-label="Four DGX Sparks connected from CX-7 port 2 to a MikroTik 200 gigabit fabric switch">
+                            <g class="cluster-cable cluster-cable-fabric">
+                              <path d="M140 55 H248 L286 103" />
+                              <path d="M480 55 H372 L334 103" />
+                              <path d="M140 183 H248 L286 135" />
+                              <path d="M480 183 H372 L334 135" />
+                            </g>
+                            <g class="spark-box" transform="translate(18 24)"><rect width="122" height="62" /><text x="12" y="25">SPARK 01</text><text class="spark-port" x="12" y="45">CX-7 PORT 2</text></g>
+                            <g class="spark-box" transform="translate(480 24)"><rect width="122" height="62" /><text x="12" y="25">SPARK 02</text><text class="spark-port" x="12" y="45">CX-7 PORT 2</text></g>
+                            <g class="spark-box" transform="translate(18 152)"><rect width="122" height="62" /><text x="12" y="25">SPARK 03</text><text class="spark-port" x="12" y="45">CX-7 PORT 2</text></g>
+                            <g class="spark-box" transform="translate(480 152)"><rect width="122" height="62" /><text x="12" y="25">SPARK 04</text><text class="spark-port" x="12" y="45">CX-7 PORT 2</text></g>
+                            <g class="fabric-box" transform="translate(248 86)"><rect width="124" height="66" /><text x="62" y="27">MIKROTIK FABRIC</text><text class="spark-port" x="62" y="47">4 × 200G · ROCE</text></g>
+                            <text class="cable-label" x="310" y="72">QSFP 200G</text>
+                          </svg>
+                        </figure>
+                        <figure class="cluster-sketch cluster-sketch-wiring">
+                          <figcaption><span>02</span> TWO SEPARATE NETWORKS</figcaption>
+                          <div class="connector-map" role="img" aria-label="Each Spark uses CX-7 port 2 for the 200 gigabit fabric and RJ-45 Cat6 for management and vault traffic">
+                            <div class="connector-source"><strong>EACH SPARK</strong><span aria-label="CX-7 PORT 2"><b>CX-7</b><small>PORT 2</small></span><span aria-label="RJ-45 10G"><b>RJ-45</b><small>10G</small></span></div>
+                            <div class="connector-runs" aria-hidden="true"><span class="cluster-cable fabric-run"></span><span class="cluster-cable management-run"></span></div>
+                            <div class="connector-destinations"><span><b>MIKROTIK FABRIC</b><small>QSFP 200G</small></span><span><b>10GBE MANAGEMENT + VAULT</b><small>RJ-45 · CAT6</small></span></div>
+                          </div>
+                          <p class="cluster-rule"><b>Never cross the networks.</b> RoCE carries GPU traffic. RJ-45 carries Studio, Sync, and NAS.</p>
+                        </figure>
+                      </div>
+                      <button type="button" class="existing-compute-action" data-existing-scope="local" aria-label="Launch autonomous setup for existing compute">
+                        <span class="existing-compute-status" aria-hidden="true"><i></i><small>AGENT READY</small></span>
+                        <span class="existing-compute-copy"><em>AUTONOMOUS SETUP</em><strong>Connect to Existing Compute</strong><small>Discover · Validate · Open Producer</small></span>
+                        <b class="existing-compute-arrow" aria-hidden="true">↗</b>
+                      </button>
+                    </section>
+                    <section class="compute-group" aria-labelledby="compute-lease-label">
+                      <p id="compute-lease-label" class="compute-group-label">LEASE</p>
+                      <div class="choice">
+                        <button type="button" data-site="dual">Enverge DGX Dual-Spark Cluster</button>
+                        <button type="button" data-site="b300">Runpod NVIDIA B300</button>
+                        <button type="button" data-site="b200">Runpod NVIDIA B200</button>
+                      </div>
+                      <button type="button" class="existing-compute-action" data-existing-scope="lease" aria-label="Launch autonomous setup for existing compute">
+                        <span class="existing-compute-status" aria-hidden="true"><i></i><small>AGENT READY</small></span>
+                        <span class="existing-compute-copy"><em>AUTONOMOUS SETUP</em><strong>Connect to Existing Compute</strong><small>Discover · Validate · Open Producer</small></span>
+                        <b class="existing-compute-arrow" aria-hidden="true">↗</b>
+                      </button>
+                    </section>
                   </div>
-                  <p class="live-hint">Choose one. You cannot move the production later without starting over.</p>
                 </div>
               </form>
-              <details id="about" class="disclose">
-                <summary>Details</summary>
-                <div id="about-body" class="disclose-panel"></div>
+              <section id="provision-panel" class="provision-panel hidden" hidden aria-live="polite">
+                <div class="provision-head">
+                  <p class="provision-kicker">SETUP AGENT</p>
+                  <p id="provision-provider" class="provision-provider"></p>
+                </div>
+                <h3 id="provision-title">Preparing compute</h3>
+                <p id="provision-detail" class="provision-detail"></p>
+                <ol id="provision-timeline" class="provision-timeline"></ol>
+                <form id="provision-form" class="provision-form"></form>
+                <p id="provision-error" class="err" role="alert"></p>
+                <div class="provision-actions">
+                  <a id="provision-provider-link" class="word" href="#" target="_blank" rel="noopener noreferrer">Open provider</a>
+                  <div id="provision-progress" class="provision-progress hidden" hidden role="progressbar" aria-label="Setup in progress" aria-valuetext="Diony is completing this site">
+                    <span class="provision-progress-turn" aria-hidden="true"></span>
+                    <span class="provision-progress-copy"><strong>SETUP IN PROGRESS</strong><small id="provision-progress-detail">Diony is completing this site.</small></span>
+                  </div>
+                  <button type="button" id="provision-continue" class="agent-continue">Continue</button>
+                </div>
+                <p class="provision-security">Secrets stay in this Studio process. They are never shown in Activity or written to the signed report.</p>
+              </section>
+              <div id="site-refresh-row" class="site-refresh hidden" hidden>
+                <button type="button" id="site-refresh" class="word">Refresh</button>
+                <p class="live-hint">Clear this setup.</p>
+              </div>
+              <p id="confirm-line" class="confirm hidden" hidden></p>
+              <div id="pack-progress" class="pack-progress hidden" hidden aria-live="polite">
+                <p class="pack-progress-label">Pack pull in progress</p>
+                <div class="pack-progress-track" role="progressbar" aria-valuetext="Pulling pack">
+                  <span class="pack-progress-bar"></span>
+                </div>
+                <p id="pack-progress-detail" class="pack-progress-detail"></p>
+              </div>
+              <div id="prove-card" class="prove hidden" hidden></div>
+              <p id="ready-hint" class="live-hint hidden" hidden></p>
+              <details id="activity" class="disclose hidden" hidden>
+                <summary>Activity</summary>
+                <div class="disclose-panel">
+                  <pre id="apply-log" class="snippet hidden" hidden></pre>
+                </div>
               </details>
+              <div id="ready-actions" class="ready-actions hidden" hidden>
+                <button type="button" id="retry-apply" class="word hidden" hidden>Pull pack</button>
+                <button type="button" id="test-gpu" class="word hidden" hidden>Test GPU</button>
+              </div>
               <details id="notes" class="disclose hidden">
                 <summary id="notes-summary">Files</summary>
                 <div class="disclose-panel">
@@ -68,8 +302,8 @@
                 </div>
               </details>
               <p id="form-error" class="err" role="alert"></p>
+              <button type="button" id="retry-state" class="word hidden" hidden>Retry</button>
               <p id="status" class="hint"></p>
-              <pre id="apply-log" class="snippet hidden" hidden></pre>
               <p id="producer-line" class="hint"></p>
             </section>
           </div>
@@ -82,6 +316,7 @@
           <p id="done-meta" class="hint"></p>
           <dl id="done-sheet" class="plan"></dl>
           <p id="done-producer"></p>
+          <p id="done-open-note" class="hint"></p>
           <details id="done-workbook" class="disclose">
             <summary>Workbook</summary>
             <div class="disclose-panel">
@@ -98,6 +333,19 @@
         </button>
       </div>
     </div>
-    <script src="/static/app.js?v=polish10"></script>
+    <dialog id="compute-confirm" class="compute-confirm" aria-labelledby="compute-confirm-title">
+      <form method="dialog" class="compute-confirm-card">
+        <p class="compute-confirm-kicker">COMPUTE</p>
+        <h2 id="compute-confirm-title">Confirm option?</h2>
+        <p id="compute-confirm-choice" class="compute-confirm-choice"></p>
+        <dl id="compute-confirm-facts" class="compute-confirm-facts"></dl>
+        <p id="compute-confirm-note" class="compute-confirm-note"></p>
+        <div class="compute-confirm-actions">
+          <button type="button" id="compute-confirm-cancel" class="word">Go back</button>
+          <button type="button" id="compute-confirm-continue" class="agent-continue">Continue</button>
+        </div>
+      </form>
+    </dialog>
+    <script src="/static/app.js?v=brand3"></script>
   </body>
 </html>

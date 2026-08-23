@@ -1,0 +1,105 @@
+/* Ready 31 cascade boundary. Loaded after legacy Studio styles. */
+.mast.stage-header {
+  min-height: 7rem;
+  display: grid;
+  grid-template-columns: auto minmax(8rem, 1fr) auto auto;
+  align-items: center;
+  gap: clamp(1.25rem, 2.4vw, 2.75rem);
+  padding: 0 clamp(1.5rem, 4vw, 5rem);
+  border-bottom: 1px solid rgba(246, 246, 246, 0.16);
+  background: rgba(13, 13, 13, 0.92);
+}
+
+.stage-header + .studio {
+  height: calc(100vh - 7rem);
+  padding: clamp(1.35rem, 2.6vh, 2.4rem) clamp(1.5rem, 4.5vw, 5.5rem) clamp(2rem, 4vh, 3.5rem);
+}
+
+@media (max-width: 1050px) {
+  .mast.stage-header {
+    min-height: 6.25rem;
+    padding-inline: 1.5rem;
+  }
+
+  .stage-header + .studio {
+    height: calc(100vh - 6.25rem);
+  }
+}
+
+@media (max-width: 760px) {
+  .mast.stage-header {
+    min-height: auto;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+    padding: 1.15rem 1.5rem;
+  }
+
+  .stage-header + .studio {
+    height: auto;
+    min-height: calc(100vh - 9rem);
+    padding: 1rem 0 0;
+  }
+}
+
+/* Ready 36 responsive authority. This file loads after the legacy cascade. */
+@media (max-width: 900px) {
+  .stage-header + .studio {
+    height: auto;
+    min-height: calc(100vh - 7rem);
+    padding: 1rem;
+  }
+
+  .sheet.production-folio {
+    min-height: calc(100vh - 8rem);
+    max-height: none;
+    padding: 0;
+  }
+
+  .production-folio .screening {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .production-folio .cue-navigation {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
+    padding: 1rem;
+    overflow: visible;
+  }
+
+  .production-folio .cue-navigation::before {
+    grid-column: 1 / -1;
+    margin: 0 0 0.35rem;
+    padding-bottom: 0.55rem;
+  }
+
+  .production-folio .cue-navigation li + li {
+    margin: 0;
+  }
+
+  .production-folio .cue-navigation button {
+    min-height: 2.6rem;
+    padding: 0.55rem;
+    border-bottom-color: transparent;
+    font-size: 0.68rem;
+  }
+
+  .production-folio .cue-workspace {
+    min-height: 37rem;
+    padding: 1.6rem 1.35rem 6.5rem;
+  }
+
+  .production-folio .learn,
+  .production-folio .do {
+    padding-right: 0;
+  }
+
+  .production-folio #pass.continue {
+    position: fixed;
+    z-index: 12;
+    right: 1.35rem;
+    left: 1.35rem;
+    bottom: 1.35rem;
+    width: auto;
+    min-width: 0;
+  }
+}
