@@ -16,7 +16,7 @@
 
 <br />
 
-[Open Diony AI](#open-diony-ai-no-terminal) · [Surfaces](#the-surfaces) · [Capabilities](#what-diony-does-today) · [Hardware](#hardware--compute-paths) · [Models](#models-local-never-cloud-by-default) · [Engineers](#run-the-shells-engineers) · [Blueprints](blueprints/)
+[Open Diony AI](#open-diony-ai) · [Surfaces](#the-surfaces) · [Capabilities](#what-diony-does-today) · [Hardware](#hardware--compute-paths) · [Models](#models-local-never-cloud-by-default) · [Engineers](#run-the-shells-engineers) · [Blueprints](blueprints/)
 
 </div>
 
@@ -39,7 +39,7 @@ This is not a notebook, a loose ComfyUI graph, or a cloud API wrapper. It is **I
 
 | Surface | Who | Job |
 |---|---|---|
-| **Desk** | Everyone, first open | Double-click **Open Diony AI**; the desk lays itself and opens the Studio |
+| **Desk** | Everyone, first open | Open **Diony AI.app** (Mac) — or the script launcher on Windows/Linux; the desk lays itself and opens the Studio |
 | **Studio** | Technician / owner | Site first: Local Quad-Spark, Leased Dual-Spark, Leased B300, or Leased B200. Local: crate-to-system. Leases: Connect → App → Ready → Producer. Sign locks the last line. Owners invite makers, name Cost Centers, and govern access |
 | **Producer** | Director / showrunner / agency / artist / creator | Idea → Production (the live run) → Gallery. Sample a 5–10s finished clip before committing to a show |
 | **Conductor** | Autonomous (DeepSeek) | Shot planning, dispatch, QC, retakes, fleet mode, disk pressure |
@@ -73,21 +73,29 @@ North Star deliverable: **one hour of TV/movie-ready audiovisual**, 1920×1080, 
 
 **A real desktop product**
 - Customer distribution is two downloads: **Mac** (`.dmg`, notarized) and **Windows** (`Setup.exe`, Authenticode) — self-contained apps, no Python or terminal. Signed release builders and the `downloads.json` contract live under [`packaging/`](packaging/) and [`scripts/release/`](scripts/release/). ([Blueprint 17](blueprints/17-desktop-distribution.md))
-- On a Mac developer checkout, **Build Diony AI.command** produces the real local app at `dist/desktop/{version}/development/Diony AI.app` — ad-hoc signed, never represented as publishable.
+- On a Mac checkout, **Build Diony AI.command** produces the real local app at `dist/desktop/{version}/development/Diony AI.app` — the primary way to open and use Diony today ([Open Diony AI](#open-diony-ai)). It is ad-hoc signed and local-only, never represented as publishable.
 
-## Open Diony AI (no terminal)
+## Open Diony AI
 
-Until the signed installers are published, the source-checkout path is: open **START HERE.txt**, then double-click **Open Diony AI**.
+**Mac — `Diony AI.app` is the primary way to open and use Diony.** From a checkout, double-click **Build Diony AI.command** in Finder: it builds the real self-contained desktop app and opens it. The app lands at a stable path you can keep in your Dock:
+
+```
+dist/desktop/{version}/development/Diony AI.app
+```
+
+From then on, open Diony from the Dock or Finder like any Mac app — no Python, no terminal, no first-run `pip`; the app bundles its own runtime and opens straight into the Desk, then Studio at `http://studio.diony.local` (Producer waits until you Sign, at `http://producer.diony.local`). Re-run the builder to pick up repo changes; it skips with "already current" when nothing changed. If macOS says the file cannot be opened: right-click it, choose Open, then Open.
+
+Signed customer installers — **Mac** `.dmg` and **Windows** `Setup.exe` — ship the same product and replace this path once published ([Blueprint 17](blueprints/17-desktop-distribution.md)).
+
+**Windows / Linux — script launchers (until the signed installers ship).** Open **START HERE.txt**, then double-click:
 
 | You are on | Open this |
 |---|---|
-| Mac | `Open Diony AI.command` |
 | Windows | `Open Diony AI.bat` |
 | Linux / DGX OS | `open-diony.sh` |
+| Mac (fallback, no app build) | `Open Diony AI.command` |
 
-A page opens. First time it lays the desk (Python 3.11, a private environment, Studio and Producer) — once. **Continue** is Studio at `http://studio.diony.local`; Producer waits until you Sign (`http://producer.diony.local`).
-
-If macOS says the file cannot be opened: right-click it, choose Open, then Open. If it asks for Python 3.11, install that, then double-click again. Leave the small Terminal window open until it says you can close it.
+A page opens. First time it lays the desk (Python 3.11, a private environment, Studio and Producer) — once. **Continue** is Studio; if it asks for Python 3.11, install that, then double-click again. Leave the small Terminal window open until it says you can close it.
 
 ## Hardware & compute paths
 
@@ -125,7 +133,7 @@ A 1-hour episode is **~2–5 wall-clock days** on this desk cluster, including r
 
 ## Run the shells (engineers)
 
-Studio and Producer are Day 1 dry-run apps on a laptop (`DIONY_DRY_RUN=1`); they do not mutate fabric. Requires **Python 3.11+**. Prefer **Open Diony AI** above if you do not want this.
+Studio and Producer are Day 1 dry-run apps on a laptop (`DIONY_DRY_RUN=1`); they do not mutate fabric. Requires **Python 3.11+**. Prefer **Diony AI.app** ([Open Diony AI](#open-diony-ai)) unless you specifically need editable installs.
 
 ```bash
 python3.11 -m venv .venv
@@ -142,17 +150,11 @@ Open Studio at `http://studio.diony.local` and Producer at `http://producer.dion
 
 ### App development and testing (Mac): use Diony AI.app
 
-For app development and application testing, validate against the real self-contained desktop app — not the editable-install shells. Build it from the current checkout:
+For app development and application testing, validate against the same **Diony AI.app** you open every day ([Open Diony AI](#open-diony-ai)) — not the editable-install shells. Build it from the current checkout:
 
 ```bash
 # double-click "Build Diony AI.command" in Finder (builds, then opens the app), or:
 ./scripts/release/build-local-macos.sh
-```
-
-The build lands at a **stable path** you can keep in your Dock during development:
-
-```
-dist/desktop/{version}/development/Diony AI.app
 ```
 
 How to use it:
@@ -170,7 +172,7 @@ blueprints/               Numbered operational constitution (00–21)
 infra/                    Cluster profiles, compose stubs, switch snippets
 docs/brand/               Brand assets: banner, mark, UI captures
 START HERE.txt            First open for people who should not see pip
-apps/desk                 First open (double-click Open Diony AI)
+apps/desk                 First open (Diony AI.app / script launchers)
 apps/wizard               Crate-to-system Studio (Site → signed report)
 apps/producer             Idea-to-Studio (Idea, Production, Gallery, governance)
 apps/wan                  Wan2.2 native / validated ComfyUI worker (:8010)
