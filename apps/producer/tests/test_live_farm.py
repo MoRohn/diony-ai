@@ -3,6 +3,11 @@ import time
 from fastapi.testclient import TestClient
 
 from diony_producer.app import app
+from diony_contracts.fixture import demo_project
+from diony_contracts.enums import AssetKind, QCVerdict
+from diony_contracts.models import Asset, Brief, QCReport, Take
+from diony_contracts.studio import expand_idea
+from diony_producer.farm import list_generate_jobs, reclaim_landed_negatives
 
 
 FAKE_GENERATE = """#!/usr/bin/env python3
@@ -16,6 +21,39 @@ save.parent.mkdir(parents=True, exist_ok=True)
 save.write_bytes(b"\\x00\\x00\\x00\\x18ftypmp42" + b"\\x00" * 200)
 """
 
+
+def test_reference_and_boundary_quality_floor_cannot_be_weakened(monkeypatch) -> None:
+    from diony_producer.farm import _quality_ssim_floor
+
+    monkeypatch.setenv("DIONY_REFERENCE_SSIM_MIN", "0.20")
+    monkeypatch.setenv("DIONY_CONTINUITY_SSIM_MIN", "not-a-number")
+
+    assert _quality_ssim_floor("DIONY_REFERENCE_SSIM_MIN") == 0.75
+    assert _quality_ssim_floor("DIONY_CONTINUITY_SSIM_MIN") == 0.75
+
+
+def test_camera_disk_floor_blocks_before_overlay_exhaustion(tmp_path, monkeypatch) -> None:
+    from collections import namedtuple
+
+    from diony_producer import farm
+
+    Usage = namedtuple("Usage", "total used free")
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("DIONY_OVERLAY_MIN_FREE_GB", "15")
+    monkeypatch.setattr(
+        farm.shutil,
+        "disk_usage",
+        lambda path: Usage(600 * 1024**3, 586 * 1024**3, 14 * 1024**3)
+        if str(path) == "/"
+        else Usage(100 * 1024**3, 20 * 1024**3, 80 * 1024**3),
+    )
+
+    message = farm.camera_disk_block()
+
+    assert "overlay" in message.casefold()
+    assert "15 GB" in message
+
 SLOW_GENERATE = """#!/usr/bin/env python3
 import sys, time
 from pathlib import Path
@@ -26,6 +64,23 @@ save.write_bytes(b"\\x00\\x00\\x00\\x18ftypmp42" + b"\\x00" * 200)
 """
 
 
+def test_generate_process_scan_ignores_shell_commands_that_only_quote_the_camera(monkeypatch) -> None:
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    process_table = """
+101 00:03 /bin/zsh -c echo '/usr/bin/python3 /opt/wan22/generate.py --task t2v-A14B'
+202 00:02 /usr/bin/python3 /opt/wan22/generate.py --task t2v-A14B --base_seed 42 --save_file /diony/vault/projects/p/takes/sh-010-t1/negative_720.mp4
+"""
+    monkeypatch.setattr(
+        "diony_producer.farm.subprocess.check_output",
+        lambda *args, **kwargs: process_table,
+    )
+
+    jobs = list_generate_jobs()
+
+    assert [job["pid"] for job in jobs] == [202]
+    assert jobs[0]["take_id"] == "sh-010-t1"
+
+
 def _live_env(tmp_path, monkeypatch, script: str) -> None:
     monkeypatch.delenv("DIONY_DRY_RUN", raising=False)
     monkeypatch.delenv("DIONY_WAN_URL", raising=False)
@@ -34,7 +89,7 @@ def _live_env(tmp_path, monkeypatch, script: str) -> None:
     gen.write_text(script)
     gen.chmod(0o755)
     ckpt = tmp_path / "t2v"
-    ckpt.mkdir()
+    ckpt.mkdir(exist_ok=True)
     (ckpt / "w.json").write_text("{}")
     monkeypatch.setenv("DIONY_WAN_GENERATE", str(gen))
     monkeypatch.setenv("WAN_CKPT_T2V", str(ckpt))
@@ -42,6 +97,60 @@ def _live_env(tmp_path, monkeypatch, script: str) -> None:
     monkeypatch.setenv("DIONY_WAN_REPO", str(tmp_path))
     monkeypatch.setenv("DIONY_VAULT", str(tmp_path / "vault"))
     monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
+
+
+def test_b200_farm_rebinds_operator_proof_to_one_project_canary(tmp_path, monkeypatch) -> None:
+    import json
+
+    from diony_contracts.cluster import write_site_lock
+    from diony_producer import farm
+    from diony_wan.attention_qualification import build_operator_receipt
+
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
+    write_site_lock(
+        {
+            "sku": "b200-v1",
+            "compute_path": "b200",
+            "gpu_ready": True,
+            "compute": {"path": "b200", "profile": "b200-v1"},
+        }
+    )
+    evidence = {
+        "gpu_name": "NVIDIA B200",
+        "compute_capability": "10.0",
+        "shape": [1, 40, 75600, 128],
+        "dtype": "bfloat16",
+        "candidate_backend": "cudnn_sdpa",
+        "baseline_ms": [285.85, 285.39, 285.37],
+        "candidate_ms": [92.08, 91.19, 91.18],
+        "finite": True,
+        "max_abs_delta": 0.000244140625,
+        "mean_abs_delta": 0.0000111,
+    }
+    receipt_path = tmp_path / "vault" / "qualification" / "wan-cudnn-sdpa-validation.json"
+    receipt_path.parent.mkdir(parents=True)
+    receipt_path.write_text(
+        json.dumps(
+            build_operator_receipt(
+                evidence,
+                scope_project_id="studio-prior",
+                approved_by="Diony B200 qualification",
+            )
+        )
+    )
+    project = demo_project()
+    take = project.takes[0]
+
+    backend, canary, selected_receipt = farm._attention_plan(project, take)
+
+    rebound = json.loads(receipt_path.read_text())
+    assert backend == "cudnn_sdpa"
+    assert canary is True
+    assert selected_receipt == receipt_path
+    assert rebound["scope_project_id"] == project.id
+    assert rebound["quality_canary_take_id"] == take.id
+    assert (receipt_path.parent / "projects" / "studio-prior" / receipt_path.name).is_file()
 
 
 def test_live_roll_writes_mp4(tmp_path, monkeypatch) -> None:
@@ -116,3 +225,495 @@ def test_farm_busy_before_clip_lands(tmp_path, monkeypatch) -> None:
         if not client.get("/api/farm").json()["busy"]:
             return
         time.sleep(0.2)
+
+
+def test_studio_new_aborts_a_slow_farm(tmp_path, monkeypatch) -> None:
+    _live_env(tmp_path, monkeypatch, SLOW_GENERATE)
+    client = TestClient(app)
+    client.post("/api/reset")
+    client.post(
+        "/api/studio/open",
+        json={
+            "idea": "A tungsten newsroom at 2 a.m., rain on the glass.",
+            "customer_kind": "series",
+            "target_minutes": 1,
+        },
+    )
+    rolled = client.post("/api/studio/roll")
+    assert rolled.status_code == 200
+    assert client.get("/api/farm").json()["busy"] is True
+    fresh = client.post("/api/studio/new")
+    assert fresh.status_code == 200
+    body = fresh.json()
+    assert body["shots"] == []
+    assert body["bible"]["title"] == "Untitled"
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        if not client.get("/api/farm").json()["busy"]:
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("Refresh left the farm busy")
+    assert client.get("/api/farm").json()["queued"] == 0
+    assert client.get("/api/project").json()["id"] != "ep-pilot-night-press"
+
+
+def test_farm_prove_fail_stamps_every_take_once(tmp_path, monkeypatch) -> None:
+    _live_env(tmp_path, monkeypatch, FAKE_GENERATE)
+
+    def boom() -> None:
+        raise RuntimeError("No module named 'dashscope'")
+
+    monkeypatch.setattr("diony_wan.runner.prove_generate", boom)
+    client = TestClient(app)
+    client.post("/api/reset")
+    client.post(
+        "/api/studio/open",
+        json={
+            "idea": "A night game under tungsten towers, crowd in the rain.",
+            "customer_kind": "feature",
+            "target_minutes": 1,
+        },
+    )
+    rolled = client.post("/api/studio/roll")
+    assert rolled.status_code == 200
+    deadline = time.time() + 5
+    farm = {}
+    while time.time() < deadline:
+        farm = client.get("/api/farm").json()
+        if not farm["busy"] and "dashscope" in (farm.get("error") or ""):
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError(f"prove fail never landed: {farm}")
+    assert farm["busy"] is False
+    assert "dashscope" in (farm.get("error") or "")
+    project = client.get("/api/project").json()
+    takes = project["takes"]
+    assert takes
+    for take in takes:
+        assert take["qc"]["verdict"] == "fail"
+        assert "dashscope" in (take["qc"].get("notes") or "")
+
+
+def test_resume_camera_does_not_spawn_a_farm(monkeypatch) -> None:
+    started: list[int] = []
+    monkeypatch.setattr("diony_producer.farm.start_farm", lambda *a, **k: started.append(1))
+    monkeypatch.setattr("diony_producer.farm.adopt_live_farm", lambda p: None)
+    monkeypatch.setattr("diony_producer.farm.reclaim_landed_negatives", lambda p: 0)
+    monkeypatch.setattr("diony_producer.farm.project_matching_generate", lambda p: None)
+    from diony_contracts.models import Bible, Character, Project
+    from diony_producer.farm import resume_camera
+
+    project = Project(
+        id="studio-resume",
+        bible=Bible(
+            title="Resume",
+            logline="A show that already has a camera.",
+            visual_grammar="35mm.",
+            world="One room.",
+            characters=[Character(id="char-a", name="A")],
+        ),
+    )
+    out = resume_camera(project)
+    assert out.id == "studio-resume"
+    assert started == []
+
+
+def test_camera_disk_block_when_vault_is_full(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from diony_producer.farm import camera_disk_block
+
+    monkeypatch.setattr(
+        "diony_producer.farm.shutil.disk_usage",
+        lambda path: SimpleNamespace(free=100),
+    )
+    assert "Vault" in camera_disk_block()
+
+
+def test_camera_lock_roundtrip() -> None:
+    from diony_producer.farm import clear_camera_lock, read_camera_lock, write_camera_lock
+
+    write_camera_lock({"take_id": "sh-010-t1", "save": "/tmp/neg.mp4"})
+    assert read_camera_lock()["take_id"] == "sh-010-t1"
+    clear_camera_lock()
+    assert read_camera_lock() == {}
+
+
+def test_adopted_output_is_not_final_until_generate_exits(tmp_path, monkeypatch) -> None:
+    from diony_producer.farm import generate_output_finalized
+
+    output = tmp_path / "negative_720.mp4"
+    output.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"writing" * 64)
+    monkeypatch.setattr("diony_producer.farm.os.kill", lambda pid, signal: None)
+
+    assert generate_output_finalized(1234, output) is False
+
+    def exited(pid, signal):
+        raise ProcessLookupError(pid)
+
+    monkeypatch.setattr("diony_producer.farm.os.kill", exited)
+    assert generate_output_finalized(1234, output) is True
+
+
+def test_adopted_camera_job_auto_retakes_failed_continuity(tmp_path, monkeypatch) -> None:
+    from diony_producer import farm as farm_module
+
+    project = demo_project()
+    shot = project.shots[0]
+    take = project.takes_for(shot.id)[0]
+    project.takes = [item for item in project.takes if item.shot_id != shot.id]
+    project.takes.insert(0, take)
+    shot.selected_take_id = take.id
+    output = tmp_path / "projects" / project.id / "takes" / take.id / "negative_720.mp4"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"landed" * 64)
+    job = {"pid": 1234, "save": str(output), "take_id": take.id}
+    queued: list[list[str]] = []
+
+    def attach_failed(_project, current, *args, **kwargs) -> None:
+        current.qc = QCReport(
+            id=f"qc-{current.id}",
+            take_id=current.id,
+            shot_id=current.shot_id,
+            verdict=QCVerdict.FAIL,
+            identity_ok=True,
+            morph_ok=True,
+            flicker_ok=True,
+            duration_ok=True,
+            legal_ok=True,
+            continuity_from_take_id="prior-take",
+            continuity_similarity=0.6778,
+            continuity_verified=False,
+            notes="Shot boundary continuity failed (first/last SSIM 0.6778; required 0.75).",
+        )
+
+    monkeypatch.setattr(farm_module, "list_generate_jobs", lambda: [job])
+    monkeypatch.setattr(farm_module, "generate_process_alive", lambda pid: False)
+    monkeypatch.setattr(farm_module, "attach_negative", attach_failed)
+    monkeypatch.setattr(farm_module.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        farm_module,
+        "start_farm",
+        lambda current, takes: queued.append([item.id for item in takes]),
+    )
+
+    farm_module.adopt_live_farm(project)
+
+    deadline = time.time() + 2
+    while not queued and time.time() < deadline:
+        time.sleep(0.01)
+
+    assert queued[0][0] == f"{shot.id}-t2"
+    assert shot.selected_take_id == f"{shot.id}-t2"
+
+
+def test_adoption_never_resurrects_an_unselected_missing_take(monkeypatch) -> None:
+    from diony_producer import farm as farm_module
+
+    project = demo_project()
+    selected = project.takes[0]
+    project.shot(selected.shot_id).selected_take_id = selected.id
+    stale = selected.model_copy(deep=True)
+    stale.id = f"{selected.shot_id}-aborted"
+    stale.attempt = selected.attempt + 1
+    stale.artifacts = []
+    stale.qc = None
+    project.takes.append(stale)
+    monkeypatch.setattr(farm_module, "take_has_live_negative", lambda take, project: False)
+
+    missing = farm_module._selected_missing_takes(project, exclude_ids=set())
+
+    assert selected in missing
+    assert stale not in missing
+
+
+def test_reclaim_never_adopts_a_legacy_cross_project_negative(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
+    project = demo_project()
+    take = project.takes[0]
+    take.artifacts = []
+    take.qc = None
+    legacy = tmp_path / "vault" / "takes" / take.id / "negative_720.mp4"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"old-run" * 32)
+
+    assert reclaim_landed_negatives(project) == 0
+    assert take.artifacts == []
+
+
+def test_reclaim_does_not_probe_an_inflight_generate_output(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
+    project = demo_project()
+    take = project.takes[0]
+    take.artifacts = []
+    take.qc = None
+    output = tmp_path / "vault" / "projects" / project.id / "takes" / take.id / "negative_720.mp4"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"still-writing" * 32)
+    monkeypatch.setattr(
+        "diony_producer.farm.list_generate_jobs",
+        lambda: [{"pid": 1234, "save": str(output), "take_id": take.id}],
+    )
+
+    assert reclaim_landed_negatives(project) == 0
+    assert take.artifacts == []
+    assert take.qc is None
+
+
+def test_farm_auto_retakes_failed_continuity_and_continues_rundown(monkeypatch) -> None:
+    from diony_producer import farm as farm_module
+
+    project = demo_project()
+    calls: list[str] = []
+    first_shot_id = project.shots[0].id
+    first_take = project.takes_for(first_shot_id)[0]
+    project.takes = [take for take in project.takes if take.shot_id != first_shot_id]
+    project.takes.insert(0, first_take)
+    project.shot(first_shot_id).selected_take_id = first_take.id
+
+    def fail_once_then_pass(_project, take, **_kwargs) -> None:
+        calls.append(take.id)
+        if take.shot_id == first_shot_id and take.attempt == 1:
+            take.qc = QCReport(
+                id=f"qc-{take.id}",
+                take_id=take.id,
+                shot_id=take.shot_id,
+                verdict=QCVerdict.FAIL,
+                identity_ok=True,
+                morph_ok=True,
+                flicker_ok=True,
+                duration_ok=True,
+                legal_ok=True,
+                continuity_from_take_id="prior-take",
+                continuity_similarity=0.6778,
+                continuity_verified=False,
+                notes="Shot boundary continuity failed (first/last SSIM 0.6778; required 0.75).",
+            )
+            return
+        take.qc = QCReport(
+            id=f"qc-{take.id}",
+            take_id=take.id,
+            shot_id=take.shot_id,
+            verdict=QCVerdict.PASS,
+            identity_ok=True,
+            morph_ok=True,
+            flicker_ok=True,
+            duration_ok=True,
+            legal_ok=True,
+            notes="AutoQC passed.",
+        )
+
+    farm_module.reset_farm()
+    monkeypatch.setattr("diony_wan.runner.prove_generate", lambda: None)
+    monkeypatch.setattr(farm_module, "run_one", fail_once_then_pass)
+    monkeypatch.setattr("diony_producer.advance.maybe_advance_run", lambda project: None)
+    farm_module.start_farm(project, list(project.takes))
+
+    deadline = time.time() + 5
+    status = farm_module.farm_status()
+    while status["busy"] and time.time() < deadline:
+        time.sleep(0.01)
+        status = farm_module.farm_status()
+
+    first_shot_takes = project.takes_for(first_shot_id)
+    assert calls[:2] == [f"{first_shot_id}-t1", f"{first_shot_id}-t2"]
+    assert calls[2:] == [take.id for take in project.takes if take.shot_id != first_shot_id]
+    assert len(first_shot_takes) == 2
+    assert first_shot_takes[0].qc.verdict == QCVerdict.FAIL
+    assert first_shot_takes[1].qc.verdict == QCVerdict.PASS
+    assert project.shot(first_shot_id).selected_take_id == first_shot_takes[1].id
+    assert status["queued"] == 0
+    assert status["error"] == ""
+
+
+def test_farm_preserves_rundown_when_pre_dispatch_raises(monkeypatch) -> None:
+    """An input/preflight exception must not pop every waiting Take and report idle."""
+    from diony_producer import farm as farm_module
+
+    project = demo_project()
+    takes = list(project.takes[:3])
+    calls: list[str] = []
+
+    def fail_preflight(_project, take, **_kwargs) -> None:
+        calls.append(take.id)
+        raise RuntimeError("I2V reference lock requires a readable still image")
+
+    farm_module.reset_farm()
+    monkeypatch.setattr("diony_wan.runner.prove_generate", lambda: None)
+    monkeypatch.setattr(farm_module, "_attention_plan", lambda *_args: (None, False, None))
+    monkeypatch.setattr(farm_module, "run_one", fail_preflight)
+    monkeypatch.setattr("diony_producer.advance.maybe_advance_run", lambda project: None)
+    farm_module.start_farm(project, takes)
+
+    deadline = time.time() + 5
+    status = farm_module.farm_status()
+    while status["busy"] and time.time() < deadline:
+        time.sleep(0.01)
+        status = farm_module.farm_status()
+
+    assert calls == [takes[0].id]
+    assert status["busy"] is False
+    assert status["queued"] == len(takes)
+    assert "readable still image" in status["error"]
+
+
+def test_farm_stops_for_human_only_after_four_failed_auto_retakes(monkeypatch) -> None:
+    from diony_producer import farm as farm_module
+
+    project = demo_project()
+    shot = project.shots[0]
+    first_take = project.takes_for(shot.id)[0]
+    project.takes = [take for take in project.takes if take.shot_id != shot.id]
+    project.takes.insert(0, first_take)
+    shot.selected_take_id = first_take.id
+    calls: list[str] = []
+
+    def fail_continuity(_project, take, **_kwargs) -> None:
+        calls.append(take.id)
+        take.qc = QCReport(
+            id=f"qc-{take.id}",
+            take_id=take.id,
+            shot_id=take.shot_id,
+            verdict=QCVerdict.FAIL,
+            identity_ok=True,
+            morph_ok=True,
+            flicker_ok=True,
+            duration_ok=True,
+            legal_ok=True,
+            continuity_from_take_id="prior-take",
+            continuity_similarity=0.6778,
+            continuity_verified=False,
+            notes="Shot boundary continuity failed (first/last SSIM 0.6778; required 0.75).",
+        )
+
+    farm_module.reset_farm()
+    monkeypatch.setattr("diony_wan.runner.prove_generate", lambda: None)
+    monkeypatch.setattr(farm_module, "run_one", fail_continuity)
+    monkeypatch.setattr("diony_producer.advance.maybe_advance_run", lambda project: None)
+    farm_module.start_farm(project, [first_take])
+
+    deadline = time.time() + 5
+    status = farm_module.farm_status()
+    while status["busy"] and time.time() < deadline:
+        time.sleep(0.01)
+        status = farm_module.farm_status()
+
+    assert calls == [f"{shot.id}-t{attempt}" for attempt in range(1, 5)]
+    assert len(project.takes_for(shot.id)) == 4
+    assert project.shot(shot.id).selected_take_id == f"{shot.id}-t4"
+    assert status["queued"] == 0
+    assert status["error"] == "Shot boundary continuity failed (first/last SSIM 0.6778; required 0.75)."
+    assert project.production_ended_at is not None
+
+
+def test_resume_camera_auto_retries_a_persisted_selected_quality_failure(monkeypatch) -> None:
+    from diony_producer import farm as farm_module
+
+    project = demo_project()
+    shot = project.shots[0]
+    failed = project.takes_for(shot.id)[0]
+    project.takes = [take for take in project.takes if take.shot_id != shot.id]
+    project.takes.insert(0, failed)
+    shot.selected_take_id = failed.id
+    failed.qc = QCReport(
+        id=f"qc-{failed.id}",
+        take_id=failed.id,
+        shot_id=failed.shot_id,
+        verdict=QCVerdict.FAIL,
+        identity_ok=True,
+        morph_ok=True,
+        flicker_ok=True,
+        duration_ok=True,
+        legal_ok=True,
+        continuity_from_take_id="prior-take",
+        continuity_similarity=0.6778,
+        continuity_verified=False,
+        notes="Shot boundary continuity failed (first/last SSIM 0.6778; required 0.75).",
+    )
+    queued: list[list[str]] = []
+    monkeypatch.setattr(farm_module, "project_matching_generate", lambda current: None)
+    monkeypatch.setattr(farm_module, "adopt_live_farm", lambda current: None)
+    monkeypatch.setattr(farm_module, "reclaim_landed_negatives", lambda current: 0)
+    monkeypatch.setattr(farm_module, "list_generate_jobs", lambda: [])
+    monkeypatch.setattr(farm_module, "live_camera", lambda: True)
+    monkeypatch.setattr(
+        farm_module,
+        "start_farm",
+        lambda current, takes: queued.append([take.id for take in takes]),
+    )
+
+    resumed = farm_module.resume_camera(project)
+
+    assert resumed.shot(shot.id).selected_take_id == f"{shot.id}-t2"
+    expected_waiting = [
+        take.id
+        for take in resumed.takes
+        if take.shot_id != shot.id and take.id == resumed.shot(take.shot_id).selected_take_id
+    ]
+    assert queued == [[f"{shot.id}-t2", *expected_waiting]]
+    assert failed.qc.verdict == QCVerdict.FAIL
+
+
+def test_same_background_lock_rejects_late_reference_drift(tmp_path, monkeypatch) -> None:
+    """A matching cream canvas must not hide a changed character or inserted text card."""
+    from diony_producer import farm as farm_module
+
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
+    reference = Asset(
+        id="ast-character",
+        kind=AssetKind.IMAGE,
+        filename="character.png",
+        mime="image/png",
+        bytes=64,
+        path="assets/ast-character/character.png",
+        sha256="reference-sha",
+    )
+    project = expand_idea(
+        Brief(
+            idea="Using this attached character and same background, animate the character directly.",
+            customer_kind="series",
+            production_kind="sample",
+            sample_seconds=5,
+            attachment_ids=[reference.id],
+        ),
+        assets=[reference],
+    )
+    shot = project.shots[0]
+    take = Take(id="sh-010-t1", shot_id=shot.id, attempt=1, engine=shot.engine, seed=shot.seed)
+    project.takes = [take]
+    relative = f"projects/{project.id}/takes/{take.id}/negative_720.mp4"
+    negative = tmp_path / "vault" / relative
+    negative.parent.mkdir(parents=True)
+    negative.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"drift" * 32)
+    monkeypatch.setattr(
+        farm_module,
+        "probe_media",
+        lambda *args, **kwargs: {
+            "width": 1280,
+            "height": 720,
+            "fps": 23.976,
+            "frames": 120,
+        },
+    )
+    monkeypatch.setattr(
+        farm_module,
+        "_reference_similarities",
+        lambda *args, **kwargs: {
+            "first": 0.99,
+            "quarter": 0.84,
+            "middle": 0.79,
+            "three_quarter": 0.76,
+            "last": 0.71,
+        },
+    )
+
+    farm_module.attach_negative(project, take, relative, shot.duration_frames, live=True)
+
+    assert take.qc is not None
+    assert take.qc.verdict == QCVerdict.FAIL
+    assert "required 0.75" in take.qc.notes

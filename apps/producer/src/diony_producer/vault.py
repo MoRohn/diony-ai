@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 from diony_contracts.cluster import cluster_root
@@ -24,6 +25,10 @@ ALLOWED: dict[str, tuple[AssetKind, str]] = {
     ".mp4": (AssetKind.VIDEO, "video/mp4"),
     ".mov": (AssetKind.VIDEO, "video/quicktime"),
     ".webm": (AssetKind.VIDEO, "video/webm"),
+    ".wav": (AssetKind.AUDIO, "audio/wav"),
+    ".flac": (AssetKind.AUDIO, "audio/flac"),
+    ".m4a": (AssetKind.AUDIO, "audio/mp4"),
+    ".mp3": (AssetKind.AUDIO, "audio/mpeg"),
     ".pdf": (AssetKind.DOCUMENT, "application/pdf"),
     ".txt": (AssetKind.DOCUMENT, "text/plain"),
     ".md": (AssetKind.DOCUMENT, "text/markdown"),
@@ -37,7 +42,7 @@ _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def vault_root() -> Path:
-    """Same root as Wizard site lock: DIONY_VAULT, then DIONY_PRODUCER_VAULT, then laptop data."""
+    """Same root as Studio site lock: DIONY_VAULT, then DIONY_PRODUCER_VAULT, then laptop data."""
     return cluster_root()
 
 
@@ -165,15 +170,33 @@ def materialize_project(project: Project) -> None:
         materialize_take(take)
 
 
-def persist_project(project: Project) -> Path:
-    """Write `{vault}/projects/{id}/project.json` and `.cluster/current.json`."""
+def list_vault_projects() -> list[Project]:
+    """Every `projects/{id}/project.json` in this vault. Skip broken files."""
+    root = vault_root() / "projects"
+    if not root.is_dir():
+        return []
+    found: list[Project] = []
+    for folder in sorted(root.iterdir()):
+        path = folder / "project.json"
+        if not path.is_file():
+            continue
+        try:
+            found.append(Project.model_validate_json(path.read_text()))
+        except (OSError, ValueError):
+            continue
+    return found
+
+
+def persist_project(project: Project, *, set_current: bool = True) -> Path:
+    """Write a project snapshot and optionally make it the current project."""
     root = vault_root()
     dest = root / "projects" / project.id / "project.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(project.model_dump_json(indent=2) + "\n")
-    pointer = root / ".cluster" / "current.json"
-    pointer.parent.mkdir(parents=True, exist_ok=True)
-    pointer.write_text(json.dumps({"project_id": project.id}) + "\n")
+    if set_current:
+        pointer = root / ".cluster" / "current.json"
+        pointer.parent.mkdir(parents=True, exist_ok=True)
+        pointer.write_text(json.dumps({"project_id": project.id}) + "\n")
     return dest
 
 
@@ -192,3 +215,37 @@ def load_current_project() -> Project | None:
     if not path.is_file():
         return None
     return Project.model_validate_json(path.read_text())
+
+
+def record_activity(src: str, text: str, *, level: str = "info", shot_id: str = "") -> None:
+    """Append one camera-report line. Never uvicorn access logs."""
+    msg = (text or "").strip()
+    if not msg:
+        return
+    path = vault_root() / ".cluster" / "activity.jsonl"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        row = {
+            "at": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+            "src": src,
+            "level": level,
+            "text": msg[:400],
+            "shot_id": shot_id,
+        }
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        raw = path.read_text(encoding="utf-8").splitlines()
+        if len(raw) > 240:
+            path.write_text("\n".join(raw[-160:]) + "\n", encoding="utf-8")
+    except OSError:
+        return
+
+
+def clear_activity() -> None:
+    """Drop camera-report lines so a new Idea does not inherit the last show."""
+    path = vault_root() / ".cluster" / "activity.jsonl"
+    try:
+        if path.is_file():
+            path.write_text("")
+    except OSError:
+        return
