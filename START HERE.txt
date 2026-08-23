@@ -1,0 +1,383 @@
+Diony AI — first open
+
+Pick one hardware site. Stay there. Then open the software.
+
+The default is the local cluster on this floor.
+
+Leases (not the default): Runpod first, Enverge second.
+
+  Primary     https://www.runpod.io/
+  Secondary   https://enverge.ai/
+
+
+------------------------------------------------------------------------
+1. Pick the hardware (one site)
+------------------------------------------------------------------------
+
+  A. Local Quad-Spark Cluster
+     Four NVIDIA DGX Spark (GB10) on this floor, plus the fabric
+     switch and the NAS. This is the Diony crate. Default.
+
+  B. Leased Dual-Spark Cluster
+     Two GB10 with interconnect between them.
+       1. Runpod — Instant Clusters, 2 nodes, fabric between them.
+          Do not launch two separate Pods with no cluster fabric.
+       2. Enverge — Cloud GPU Options → **2× DGX Spark GB10**.
+          Do not launch a single DGX Spark GB10.
+
+  C. Leased B300
+     One Blackwell B300.
+       1. Runpod — Deploy one GPU Pod. GPU **B300**
+          (console name: NVIDIA B300 SXM6 AC / B300). GPU count 1.
+       2. Enverge — Cloud GPU Options → **NVIDIA B300**.
+
+  D. Leased B200
+     One Blackwell B200 (180 GB VRAM).
+       1. Runpod — Deploy one GPU Pod. GPU **B200**
+          (console name: NVIDIA B200). GPU count 1.
+       2. Enverge — Cloud GPU Options → **NVIDIA B200**.
+
+Do not pick RTX Pro 6000, H100, H200, or a single GB10 as a Diony site.
+Studio has no site for those cards. B200 is not B300. Dual-Spark is
+not a B200 Instant Cluster.
+
+
+------------------------------------------------------------------------
+2. If you picked A — Local Quad-Spark Cluster
+------------------------------------------------------------------------
+
+Do this before you power the Sparks.
+
+  - Four matched DGX Spark (or matched GB10 OEM), 4 TB NVMe each
+  - Four 240 W bricks seated; UPS / PDU in the 1.5–2.0 kW class
+  - Fabric switch: MikroTik CRS804-4DDQ-HRM or CRS812-8DS-2DQ-2DDQ
+  - Each Spark ConnectX-7 **port 2** to the fabric switch (QSFP)
+  - Each Spark RJ-45 to the 10GbE management switch (Cat6)
+  - NAS on that 10GbE switch, export that will mount at /diony/vault
+  - One display on spark-01, or NVIDIA Sync from this laptop
+  - Label cables both ends (S1-P2, S2-P2, …)
+
+Do not power the four Sparks until Studio Unbox is done.
+
+Cable map:
+
+  spark-01 CX7 port2  ----QSFP----  switch fabric port A
+  spark-02 CX7 port2  ----QSFP----  switch fabric port B
+  spark-03 CX7 port2  ----QSFP----  switch fabric port C
+  spark-04 CX7 port2  ----QSFP----  switch fabric port D
+
+  spark-01..04 RJ-45  ----Cat6----  mgmt switch
+  NAS 10GbE           ----Cat6----  mgmt switch
+  this laptop         ----Cat6----  mgmt switch
+
+
+------------------------------------------------------------------------
+3. Runpod prep (if you picked B, C, or D on Runpod)
+------------------------------------------------------------------------
+
+Once per account, on the laptop.
+
+  1. Sign in
+       https://www.runpod.io/  →  https://www.console.runpod.io/
+       Add credits if the console asks.
+
+  2. SSH public key (never the private key)
+       Laptop:     ssh-keygen -t ed25519
+                   cat ~/.ssh/id_ed25519.pub
+       Windows:    C:\Users\YOUR_USER\.ssh\id_ed25519.pub
+       Console:    Settings → SSH Public Keys
+                   https://www.console.runpod.io/user/settings
+       Paste the line that starts with ssh-ed25519.
+
+  3. Vault on Runpod
+       B300 or B200: skip Network Volume. Use Volume disk on Deploy
+       (section 5 or 6). It does not care which data center the GPU is in.
+       Dual-Spark: you still need a Network Volume both nodes can
+       mount. Create it in the cluster’s data center.
+       Size 1000 GB (recommended). Not the 10 GB start size.
+       https://www.console.runpod.io/user/storage
+
+
+------------------------------------------------------------------------
+4. If you picked B — Leased Dual-Spark
+------------------------------------------------------------------------
+
+Primary — Runpod Instant Cluster (two Pods with fabric)
+
+  Do not Deploy two separate Pods. That is not Dual-Spark.
+
+  1. Finish section 3.
+
+  2. Instant Clusters → Create Cluster
+       https://www.console.runpod.io/cluster
+       Pod Count             2
+       GPU                   GB10 / DGX Spark if listed.
+                             Not H100, H200, B200, or RTX.
+                             If there is no Spark pair, use Enverge.
+       Network Volume        the volume from section 3
+       Container disk        400 GB
+       Template              Runpod PyTorch (official)
+       Deploy Cluster
+
+  3. When both nodes are Running, Connect on pod-0 and pod-1.
+     SSH user is the word before @ (often root).
+     Studio names: spark-01 = pod-0, spark-02 = pod-1.
+     Vault: that Network Volume name (or nfs://HOST/export).
+
+Secondary — Enverge
+
+  1. https://enverge.ai/  →  Cloud GPU Options
+  2. Pick **2× DGX Spark GB10**. Launch.
+  3. Copy SSH (word before @) and the two nodes.
+     node0 = spark-01, node1 = spark-02.
+
+Then open the software (step 7). Studio Site: **Leased Dual-Spark
+Cluster**. Provider: Runpod (or Enverge). Your name is required.
+
+
+------------------------------------------------------------------------
+5. If you picked C — Leased B300
+------------------------------------------------------------------------
+
+Primary — Runpod: Deploy one Pod
+
+  1. Finish section 3 (account + SSH key).
+
+  2. Pods → Deploy
+       https://www.console.runpod.io/pods
+       (or + New → Pod)
+
+  3. GPU
+       Search B300. Click **NVIDIA B300 SXM6 AC**.
+       GPU count 1. On-Demand.
+       Template: Runpod PyTorch. SSH terminal access ON.
+       Do not click RTX, H100, H200, or B200.
+
+  4. Storage (bottom of the page)
+       Container disk        400 GB
+                             (weights at /models; erased on Stop)
+       Persistent storage    Volume disk, 1000 GB
+                             (vault at /workspace)
+                             2000 GB is fine. Not 30 GB / 50 GB.
+                             Stop keeps this. Terminate deletes it.
+
+       Skip Network volume unless it is already in this B300’s
+       exact data center. If the console errors that the volume
+       is not at this GPU’s data center, stay on Volume disk.
+
+  5. Summary: 1x B300, Runpod Pytorch. Click **Deploy Pod**.
+
+  6. Wait until Running. Open **Connect** and **Details**.
+
+     Ignore Jupyter (8888 Initializing). That is not a Diony step.
+     Web terminal can stay off. Studio uses SSH BatchMode.
+
+     Connect has two SSH lines. Studio can take the complete supported
+     command in Runpod quick connect.
+
+     A. SSH (proxy — does not support SCP/SFTP)
+          ssh LOGIN@ssh.runpod.io -i ~/.ssh/id_ed25519
+        LOGIN is the word before @. It is often NOT root.
+        Do not use ssh.runpod.io as Studio Host (App Continue rsyncs).
+
+     B. SSH over exposed TCP (supports SCP and SFTP) — use this
+          ssh root@198.13.252.68 -p 28231 -i ~/.ssh/id_ed25519
+        Worked example. Your IP and -p will differ.
+        Paste this full line into Studio Runpod quick connect.
+        Studio separates Host, SSH user, SSH port, and identity.
+
+     Or type into the manual Studio Connect fields:
+          Host        the IP before -p          example 198.13.252.68
+                      (or b300-01 if Studio is already on this GPU)
+          SSH user    root                      (TCP line, word before @)
+                      Never the account email. One value only.
+          SSH port    the -p number             example 28231
+                      (22 if that line has no -p)
+          Vault       /workspace
+                      (Details → Pod volume Mount path)
+
+     Details check:
+          GPU         1x B300  (must match Studio Site Leased B300)
+          Template    Runpod PyTorch
+          Container disk  ≥400 GB  (/models; wiped on Stop)
+          Volume disk     ≥1000 GB, Mount path /workspace
+          Location / cost are not Studio fields.
+
+     Identity is ~/.ssh/id_ed25519 (the public key from section 3).
+     Container disk /models is weights. Stop wipes it.
+     Volume disk survives Stop. Terminate deletes Volume disk.
+
+  Do not Stop until Studio App Continue has pulled the pack
+  (Stop wipes container disk / models).
+
+Secondary — Enverge
+
+  1. https://enverge.ai/  →  Cloud GPU Options
+  2. Pick **NVIDIA B300**. Launch.
+  3. Copy SSH (word before @) and the GPU name.
+
+Then open the software (step 7). Studio Site: **Leased B300**.
+Provider: Runpod (or Enverge). Your name is required.
+
+
+------------------------------------------------------------------------
+6. If you picked D — Leased B200
+------------------------------------------------------------------------
+
+Primary — Runpod: Deploy one Pod
+
+  1. Finish section 3 (account + SSH key).
+
+  2. Pods → Deploy
+       https://www.console.runpod.io/pods
+       (or + New → Pod)
+
+  3. GPU
+       Search B200. Click **NVIDIA B200** (180 GB).
+       GPU count 1. On-Demand.
+       Template: Runpod PyTorch. SSH terminal access ON.
+       Do not click RTX, H100, H200, or B300 on this line.
+       This site is one B200, not a B200 Instant Cluster.
+
+  4. Storage (bottom of the page)
+       Container disk        400 GB
+                             (weights at /models; erased on Stop)
+       Persistent storage    Volume disk, 1000 GB
+                             (vault at /workspace)
+                             2000 GB is fine. Not 30 GB / 50 GB.
+                             Stop keeps this. Terminate deletes it.
+
+       Skip Network volume unless it is already in this B200’s
+       exact data center. If the console errors that the volume
+       is not at this GPU’s data center, stay on Volume disk.
+
+  5. Summary: 1x B200, Runpod Pytorch. Click **Deploy Pod**.
+
+  6. Wait until Running. Open **Connect** and **Details**.
+
+     Ignore Jupyter (8888 Initializing). That is not a Diony step.
+     Web terminal can stay off. Studio uses SSH BatchMode.
+
+     Connect has two SSH lines. Studio can take the complete supported
+     command in Runpod quick connect.
+
+     A. SSH (proxy — does not support SCP/SFTP)
+          ssh LOGIN@ssh.runpod.io -i ~/.ssh/id_ed25519
+        LOGIN is the word before @. It is often NOT root.
+        Do not use ssh.runpod.io as Studio Host (App Continue rsyncs).
+
+     B. SSH over exposed TCP (supports SCP and SFTP) — use this
+          ssh root@198.13.252.68 -p 28231 -i ~/.ssh/id_ed25519
+        Worked example. Your IP and -p will differ.
+        Paste this full line into Studio Runpod quick connect.
+        Studio separates Host, SSH user, SSH port, and identity.
+
+     Or type into the manual Studio Connect fields:
+          Host        the IP before -p          example 198.13.252.68
+                      (or b200-01 if Studio is already on this GPU)
+          SSH user    root                      (TCP line, word before @)
+                      Never the account email. One value only.
+          SSH port    the -p number             example 28231
+                      (22 if that line has no -p)
+          Vault       /workspace
+                      (Details → Pod volume Mount path)
+
+     Details check:
+          GPU         1x B200  (must match Studio Site Leased B200)
+          Template    Runpod PyTorch
+          Container disk  ≥400 GB  (/models; wiped on Stop)
+          Volume disk     ≥1000 GB, Mount path /workspace
+          Location / cost are not Studio fields.
+
+     Identity is ~/.ssh/id_ed25519 (the public key from section 3).
+     Container disk /models is weights. Stop wipes it.
+     Volume disk survives Stop. Terminate deletes Volume disk.
+
+  Do not Stop until Studio App Continue has pulled the pack
+  (Stop wipes container disk / models).
+
+  DeepSeek weights are ~155.4 GiB. This card is 180 GB. Studio pins
+  brain max_model_len 16384. Do not paste the B300 1M command here.
+
+Secondary — Enverge
+
+  1. https://enverge.ai/  →  Cloud GPU Options
+  2. Pick **NVIDIA B200**. Launch.
+  3. Copy SSH (word before @) and the GPU name.
+
+Then open the software (step 7). Studio Site: **Leased B200**.
+Provider: Runpod (or Enverge). Your name is required.
+
+
+------------------------------------------------------------------------
+7. Open the software (this folder)
+------------------------------------------------------------------------
+
+Do this on the laptop (or on spark-01). Same for every site.
+
+When the Diony webpage is live, choose **Download for Mac** or
+**Download for Windows**, install Diony AI normally, and open the app.
+The installed app includes its own runtime: no Python, pip, Terminal, or
+source folder is required. The steps below are the current source-folder
+fallback for engineers and pre-release systems.
+
+  1. Double-click the Open Diony AI file:
+       Mac          Open Diony AI.command
+       Windows      Open Diony AI.bat
+       Linux/DGX    open-diony.sh
+
+  2. If a Mac warning says the file cannot be opened: right-click
+     it, choose Open, then Open.
+
+  3. A browser page opens. Wait until Continue. Click Continue.
+     That is Studio (http://studio.diony.local). The first open may
+     ask for this computer’s password once — that lays the names.
+     Approve it. If you cancelled, Continue on the lobby retries.
+
+  4. Leave the small Terminal window open until it says you can
+     close it. Closing it during the first setup stops the install.
+
+  5. If the page says you need Python 3.11: install it from
+     python.org, then double-click Open Diony AI again.
+
+
+------------------------------------------------------------------------
+8. In Studio — match the hardware you prepared
+------------------------------------------------------------------------
+
+Line 01 is Site. Pick the same choice as step 1. Field map: Blueprint 14.
+
+  Local Quad-Spark Cluster
+      Then Unbox (before power), Nodes, Cables, Switch, Sync,
+      Fabric, Vault, Producer. Sign is last. Then open Producer
+      (http://producer.diony.local).
+
+  Leased Dual-Spark Cluster
+      Then Connect, App, Producer. App Continue pulls the pack
+      and starts Producer. Sign is last. Then open Producer.
+
+  Leased B300  (must be the B300 you Deployed — not a B200 pod)
+      Connect (SSH over exposed TCP, not the proxy line):
+        Provider     Runpod
+        Your name    required
+        Host         IP before -p (example 198.13.252.68)
+                     or b300-01 if Studio is already on this GPU
+        SSH user     root (TCP line, word before @)
+        SSH port     the -p number (example 28231; 22 if none)
+        Vault        /workspace
+      Then App Continue pulls DeepSeek + Wan A14B + diony_sr_v1
+      (SSH BatchMode + rsync on that port; Hugging Face token
+      HF_TOKEN). How is the log. Brain is TP=1. App does not start
+      vLLM. Sequential: never brain + Wan together. Sign last.
+      Open http://producer.diony.local
+
+  Leased B200  (must be the B200 you Deployed — not a B300 pod)
+      Connect: same four boxes as B300. Host default b200-01 only
+      if already on this GPU; otherwise the TCP IP. SSH user root.
+      SSH port from -p. Vault /workspace. App Continue is the same
+      pull. Brain is TP=1, max_model_len 16384, 180 GB. Do not
+      paste B300 1048576. Sign last. Open
+      http://producer.diony.local
+
+Producer waits until you Sign. Wan output is 720p camera negative.
+The 1080 master is Diony finish after picture lock.

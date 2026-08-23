@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "product": "Diony AI",
+  "version": "0.22.0",
+  "bundle_id": "ai.diony.desktop",
+  "mac_artifact": "DionyAI-0.22.0-macOS-universal.dmg",
+  "windows_artifact": "DionyAI-Setup-0.22.0-windows-x64.exe"
+}
