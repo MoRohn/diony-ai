@@ -1,4 +1,4 @@
-"""Finish worker. Health on :8020. Dual-Spark FINISH after picture lock."""
+"""Finish worker. Health on :8020. Dual-Spark FINISH during Production after the Wan farm."""
 
 from __future__ import annotations
 

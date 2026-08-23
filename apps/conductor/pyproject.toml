@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "diony-conductor"
 version = "0.2.0"
-description = "Diony AI Conductor stub — DeepSeek tool loop; reads Wizard site lock"
+description = "Diony AI Conductor stub — DeepSeek tool loop; reads Studio site lock"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
 dependencies = [

@@ -52,21 +52,35 @@ class RRDBNet(nn.Module):
     ) -> None:
         super().__init__()
         self.scale = scale
-        self.conv_first = nn.Conv2d(num_in_ch, num_feat, 3, 1, 1)
+        # BasicSR's x2/x1 RRDB keeps the original x4 trunk. Pixel-unshuffle
+        # reduces spatial size before the trunk and expands RGB to 12/48
+        # channels, respectively. The released x2 checkpoint therefore has a
+        # [64, 12, 3, 3] conv_first weight.
+        trunk_in_ch = num_in_ch
+        if scale == 2:
+            trunk_in_ch *= 4
+        elif scale == 1:
+            trunk_in_ch *= 16
+        self.conv_first = nn.Conv2d(trunk_in_ch, num_feat, 3, 1, 1)
         self.body = nn.Sequential(*[RRDB(num_feat, num_grow_ch) for _ in range(num_block)])
         self.conv_body = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
         self.conv_up1 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
-        self.conv_up2 = nn.Conv2d(num_feat, num_feat, 3, 1, 1) if scale == 4 else None
+        self.conv_up2 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
         self.conv_hr = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
         self.conv_last = nn.Conv2d(num_feat, num_out_ch, 3, 1, 1)
         self.lrelu = nn.LeakyReLU(0.2, inplace=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        feat = self.conv_first(x)
+        if self.scale == 2:
+            feat = F.pixel_unshuffle(x, downscale_factor=2)
+        elif self.scale == 1:
+            feat = F.pixel_unshuffle(x, downscale_factor=4)
+        else:
+            feat = x
+        feat = self.conv_first(feat)
         body = self.conv_body(self.body(feat))
         feat = feat + body
         feat = self.lrelu(self.conv_up1(F.interpolate(feat, scale_factor=2, mode="nearest")))
-        if self.conv_up2 is not None:
-            feat = self.lrelu(self.conv_up2(F.interpolate(feat, scale_factor=2, mode="nearest")))
+        feat = self.lrelu(self.conv_up2(F.interpolate(feat, scale_factor=2, mode="nearest")))
         feat = self.lrelu(self.conv_hr(feat))
         return self.conv_last(feat)

@@ -1,6 +1,6 @@
 """Conductor: DeepSeek tool loop. Live Wan is Producer FARM. Dual-Spark sequential.
 
-Reads the Wizard site lock. Dual-Spark and B300 refuse concurrent brain+Wan.
+Reads the Studio site lock. Dual-Spark, B300, and B200 refuse concurrent brain+Wan.
 """
 
 from __future__ import annotations
@@ -91,7 +91,7 @@ def tick() -> TickOut:
     if not _queue:
         return TickOut(
             action="idle",
-            detail="No queued shots. FARM would wait. Do not skip picture lock.",
+            detail="No queued shots. FARM idle. Production runs 1080 finish and mix.",
             project_id=_project.id,
             fleet_mode=_project.fleet_mode,
         )
