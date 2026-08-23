@@ -140,6 +140,28 @@ diony-producer     # :8788
 
 Open Studio at `http://studio.diony.local` and Producer at `http://producer.diony.local`. Day 2 laptop binds are `:8787` and `:8788`. Tests: `python -m pytest packages/contracts apps`.
 
+### App development and testing (Mac): use Diony AI.app
+
+For app development and application testing, validate against the real self-contained desktop app — not the editable-install shells. Build it from the current checkout:
+
+```bash
+# double-click "Build Diony AI.command" in Finder (builds, then opens the app), or:
+./scripts/release/build-local-macos.sh
+```
+
+The build lands at a **stable path** you can keep in your Dock during development:
+
+```
+dist/desktop/{version}/development/Diony AI.app
+```
+
+How to use it:
+
+- **Rebuild after every change you want to test.** The builder stages a fresh secret-free payload from the repo, hashes it, and skips with "already current" when nothing changed — so re-running is cheap and always safe.
+- The stable `Diony AI.app` path is a symlink that atomically flips to the newest build (hashed under `dist/desktop/{version}/development/builds/`), and the running Desk replaces an older local build and its services automatically — **testing can never silently fall back to stale bundled UI**.
+- The app bundles its own runtime (no system Python, no first-run `pip`) and runs the exact staged payload, so what you test is what the installed product will do. `development-build.json` next to the app records the version, architecture, and payload SHA-256 you tested against.
+- This artifact is **ad-hoc signed and local-only**: never notarized, never publishable. Shipping builds come from the signed release builders in [`scripts/release/`](scripts/release/) ([Blueprint 17](blueprints/17-desktop-distribution.md)).
+
 ## Repo map
 
 ```
