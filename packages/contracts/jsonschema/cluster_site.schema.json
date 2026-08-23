@@ -5,13 +5,14 @@
         "local",
         "dual",
         "lease",
-        "b300"
+        "b300",
+        "b200"
       ],
       "title": "ComputePath",
       "type": "string"
     }
   },
-  "description": "Where Diony compute lives. Local Quad-Spark is the SKU. Dual-Spark and B300 are signed lease exceptions.",
+  "description": "Where Diony compute lives. Local Quad-Spark is the SKU. Dual-Spark, B300, and B200 are signed lease exceptions.",
   "properties": {
     "path": {
       "$ref": "#/$defs/ComputePath",

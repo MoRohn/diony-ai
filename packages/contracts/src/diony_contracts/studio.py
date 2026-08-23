@@ -8,18 +8,22 @@ from __future__ import annotations
 
 import hashlib
 import re
+import uuid
 from dataclasses import dataclass
 
 from diony_contracts.enums import (
     AssetKind,
     CameraMove,
+    ContinuityMode,
     CustomerKind,
     Engine,
     FinishIntent,
     GateName,
     Grain,
     LoudnessTarget,
+    ProductionKind,
     ProjectStatus,
+    ReferenceLock,
 )
 from diony_contracts.models import (
     Asset,
@@ -35,13 +39,11 @@ from diony_contracts.models import (
     Timeline,
 )
 from diony_contracts.stitch import stitch_events
-
-NEGATIVE = (
-    "morphing face, melting hands, extra fingers, identity drift, "
-    "modern UI chrome, illegible signage, cartoon, watermark, "
-    "720p as finished look, crushed blacks illegal for broadcast"
+from diony_contracts.wan_prompt import (
+    compile_wan_prompt_plan,
+    render_negative_prompt,
+    render_wan_prompt,
 )
-
 
 @dataclass(frozen=True)
 class Playbook:
@@ -53,6 +55,15 @@ class Playbook:
     lead_name: str
     lead_wardrobe: str
     world_prefix: str
+
+
+@dataclass(frozen=True)
+class ScriptScene:
+    number: int
+    title: str
+    visual: str
+    narration: str
+    weight: int
 
 
 PLAYBOOKS: dict[CustomerKind, Playbook] = {
@@ -169,17 +180,51 @@ def _title(idea: str, hint: str) -> str:
     return core[:1].upper() + core[1:]
 
 
+# Wan2.2 A14B quality lane is a ~5s 720p take (Blueprint 07, 10). Longer takes
+# are not higher quality. Cap 60 shots so a 5m goal can stitch near TRT without
+# faking an hour (Blueprint 12). >15m stays first reel.
+WAN_QUALITY_SECONDS = 5.0
+MAX_QUALITY_SHOTS = 60
+FIRST_REEL_SHOTS = 12
+
 def _shot_count(minutes: float) -> int:
-    """Coverage size for a length goal. Not TRT. Cap 12 — do not fake an hour."""
-    if minutes <= 0.5:
-        return 4
-    if minutes <= 1:
-        return 6
-    if minutes <= 3:
-        return 8
-    if minutes <= 5:
-        return 10
-    return 12
+    """How many 5s quality-lane takes the length goal needs. Not wall-clock."""
+    if minutes > 15:
+        return FIRST_REEL_SHOTS
+    n = int(round((minutes * 60.0) / WAN_QUALITY_SECONDS))
+    return max(4, min(MAX_QUALITY_SHOTS, n))
+
+
+def _coverage_recipes(kind: CustomerKind, n: int) -> list[dict]:
+    """Cycle cinematic patterns. Every take stays on the 5s quality lane."""
+    pool = _recipes(kind)
+    out: list[dict] = []
+    for i in range(n):
+        rec = dict(pool[i % len(pool)])
+        cycle = i // len(pool)
+        if cycle:
+            rec["slug"] = f"{rec['slug']} · {cycle + 1}"
+        rec["seconds"] = WAN_QUALITY_SECONDS
+        out.append(rec)
+    return out
+
+
+def _sample_recipes(kind: CustomerKind, seconds: int) -> list[dict]:
+    """A Sample is an exact 5–10s cut made from one or two bounded Wan takes."""
+    remaining = seconds
+    durations: list[int] = []
+    while remaining:
+        duration = min(int(WAN_QUALITY_SECONDS), remaining)
+        durations.append(duration)
+        remaining -= duration
+    labels = ("SAMPLE — DEFINING IMAGE", "SAMPLE — PAYOFF")
+    recipes: list[dict] = []
+    for index, duration in enumerate(durations):
+        rec = dict(_recipes(kind)[index])
+        rec["slug"] = labels[index]
+        rec["seconds"] = duration
+        recipes.append(rec)
+    return recipes
 
 
 def _recipes(kind: CustomerKind) -> list[dict]:
@@ -355,8 +400,357 @@ def _idea_body(brief: Brief, assets: list[Asset]) -> str:
     return text
 
 
+def _install_wan_prompt_plan(
+    shot: Shot,
+    *,
+    idea: str,
+    bible: Bible,
+    wardrobe: str,
+    shot_index: int,
+    sample_seconds: int | None,
+) -> None:
+    """Compile and atomically install the dispatchable five-layer prompt."""
+    plan = compile_wan_prompt_plan(
+        idea=idea,
+        world=bible.world,
+        wardrobe=wardrobe,
+        shot_index=shot_index,
+        focal_mm=shot.focal_mm,
+        t_stop=shot.t_stop,
+        lighting_ratio=shot.lighting_ratio,
+        camera_move=shot.camera_move,
+        reference_lock=shot.reference_lock,
+        continuity_mode=shot.continuity_mode,
+        generation_method=shot.engine.value,
+        audio_strategy=(
+            "native_s2v"
+            if shot.engine == Engine.S2V_14B
+            else "post_mix"
+            if shot.audio_line
+            else "silent_plate"
+        ),
+        sample_seconds=sample_seconds,
+    )
+    shot.prompt_plan = plan
+    shot.prompt = render_wan_prompt(plan)
+    shot.negative_prompt = render_negative_prompt(plan)
+
+
+def _asks_for_sound(idea: str) -> bool:
+    """Do not invent dialogue merely because the coverage template has a VO slot."""
+    lowered = idea.casefold()
+    cues = (
+        "dialogue",
+        "voice-over",
+        "voiceover",
+        "narration",
+        "narrator",
+        "speaks",
+        "says ",
+        "singing",
+        "song",
+        "lipsync",
+        "lip sync",
+        "music",
+        "score",
+        "sound",
+        "audio",
+        "welcomes",
+        "explains",
+        "introduces",
+        "motto",
+    )
+    return any(cue in lowered for cue in cues)
+
+
+def _spoken_direction_script(idea: str) -> str:
+    """Turn explicit spoken direction into concise VO without reading stage directions."""
+    lines: list[str] = []
+    welcome = re.search(
+        r"\bwelcomes?\s+(?:people|viewers?|the audience|us)\s+to\s+([^.;,!?'\"]+)",
+        idea,
+        re.IGNORECASE,
+    )
+    if welcome:
+        destination = re.sub(r"\s+", " ", welcome.group(1)).strip()
+        if destination:
+            lines.append(f"Welcome to {destination}.")
+    motto = re.search(
+        r"\bmotto\s*[,;:]?\s*['\"]([^'\"]+)['\"]",
+        idea,
+        re.IGNORECASE,
+    )
+    if motto:
+        text = re.sub(r"\s+", " ", motto.group(1)).strip()
+        if text:
+            lines.append(text.rstrip(".!?") + ".")
+    return " ".join(dict.fromkeys(lines))
+
+
+def _asks_for_synced_performance(idea: str) -> bool:
+    """A recorded performance is S2V; narration and score remain post stems."""
+    lowered = idea.casefold()
+    cues = (
+        "dialogue",
+        "lip sync",
+        "lipsync",
+        "sings",
+        "singing",
+        "speaks to camera",
+        "says to camera",
+        "performs to camera",
+        "recorded chorus",
+        "recorded performance",
+    )
+    return any(cue in lowered for cue in cues)
+
+
+_SCENE_HEADING = re.compile(
+    r"^[ \t]*Scene[ \t]+(?P<number>\d+)[ \t]*"
+    r"(?:[—–:-][ \t]*(?P<title>[^\n(]*?))?[ \t]*"
+    r"(?:\((?P<start>\d+)[ \t]*[—–-][ \t]*(?P<end>\d+)[ \t]*s\+?\))?[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _clean_narration(value: str) -> str:
+    lines = [line.strip().strip('"“”') for line in value.splitlines()]
+    return " ".join(line for line in lines if line).strip()
+
+
+def _script_scenes(idea: str) -> list[ScriptScene]:
+    """Parse an explicitly authored Scene plan without asking a model to rewrite it."""
+    matches = list(_SCENE_HEADING.finditer(idea))
+    scenes: list[ScriptScene] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(idea)
+        body = idea[match.end() : end].strip()
+        narration_match = re.search(r"\bNarration\s*:\s*", body, re.IGNORECASE)
+        if narration_match:
+            visual = body[: narration_match.start()].strip()
+            narration = _clean_narration(body[narration_match.end() :])
+        else:
+            visual = body
+            narration = ""
+        start_s = int(match.group("start") or 0)
+        end_s = int(match.group("end") or 0)
+        weight = max(1, end_s - start_s) if end_s > start_s else 1
+        scenes.append(
+            ScriptScene(
+                number=int(match.group("number")),
+                title=(match.group("title") or f"Scene {match.group('number')}").strip(),
+                visual=re.sub(r"\s+", " ", visual).strip(),
+                narration=narration,
+                weight=weight,
+            )
+        )
+    return scenes
+
+
+def _scene_schedule(scenes: list[ScriptScene], count: int) -> list[ScriptScene | None]:
+    if not scenes or count < 1:
+        return [None] * max(0, count)
+    if count <= len(scenes):
+        return list(scenes[:count])
+    allocation = [1] * len(scenes)
+    remaining = count - len(scenes)
+    total_weight = sum(scene.weight for scene in scenes) or len(scenes)
+    raw = [remaining * scene.weight / total_weight for scene in scenes]
+    for index, value in enumerate(raw):
+        allocation[index] += int(value)
+    leftover = count - sum(allocation)
+    order = sorted(
+        range(len(scenes)),
+        key=lambda index: (raw[index] - int(raw[index]), scenes[index].weight, -index),
+        reverse=True,
+    )
+    for index in order[:leftover]:
+        allocation[index] += 1
+    scheduled: list[ScriptScene | None] = []
+    for scene, slots in zip(scenes, allocation):
+        scheduled.extend([scene] * slots)
+    return scheduled[:count]
+
+
+def _image_defines_subject(idea: str) -> bool:
+    """True when an attached still is the subject, not merely a loose mood reference."""
+    lowered = idea.casefold()
+    cues = (
+        "this character",
+        "attached character",
+        "attached person",
+        "attached figure",
+        "attached subject",
+        "attached product",
+        "attached object",
+        "attached logo",
+        "character from image",
+        "character from the image",
+        "subject from image",
+        "subject from the image",
+        "person from image",
+        "person from the image",
+        "animate this image",
+        "animate the image",
+        "animate this picture",
+        "animate the picture",
+        "illustrate this image",
+        "illustrate the image",
+        "exact illustration provided",
+        "exact image provided",
+        "exact picture provided",
+    )
+    if any(cue in lowered for cue in cues):
+        return True
+    if re.search(r"\b(?:last|first|second|third|fourth|fifth)\s+attached\s+"
+                 r"(?:image|picture|photo|still|illustration)\b", lowered):
+        return bool(re.search(r"\b(character|figure|person|subject|product|object|logo)\b", lowered))
+    subject = re.search(
+        r"\b(characters?|persons?|people|subjects?|figures?|creatures?|products?|objects?|logos?)\b",
+        lowered,
+    )
+    reference = re.search(r"\b(attached|reference|image|picture|photo|still|same|this)\b", lowered)
+    direction = re.search(r"\b(use|using|animate|illustrate|preserve|keep|match|same)\b", lowered)
+    return bool(subject and reference and direction)
+
+
+def _subject_image_ids(idea: str, image_ids: list[str]) -> list[str]:
+    """Resolve an explicitly ordinal subject image before generic attachments."""
+    if not image_ids:
+        return []
+    match = re.search(
+        r"\b(first|second|third|fourth|fifth|last)\s+attached\s+"
+        r"(?:image|picture|photo|still|illustration)\b",
+        idea.casefold(),
+    )
+    if match:
+        ordinal = match.group(1)
+        if ordinal == "last":
+            return [image_ids[-1]]
+        index = {"first": 0, "second": 1, "third": 2, "fourth": 3, "fifth": 4}[ordinal]
+        if index < len(image_ids):
+            return [image_ids[index]]
+    return [image_ids[0]]
+
+
+def _reference_lock(idea: str, *, image_is_subject: bool) -> ReferenceLock:
+    if not image_is_subject:
+        return ReferenceLock.NONE
+    lowered = idea.casefold()
+    if re.search(r"\b(same|preserve|keep|match)\b.{0,32}\b(background|world|setting|canvas|scene)\b", lowered):
+        return ReferenceLock.CHARACTER_AND_BACKGROUND
+    return ReferenceLock.CHARACTER
+
+
+def _upgrade_binding_reference_contract(project: Project) -> None:
+    """Promote persisted pre-detector projects to today's binding reference contract."""
+    brief = project.brief
+    if brief is None or not _image_defines_subject(brief.idea):
+        return
+    attached = set(brief.attachment_ids)
+    image_ids = [
+        asset.id
+        for asset in project.assets
+        if asset.kind == AssetKind.IMAGE and (not attached or asset.id in attached)
+    ]
+    if not image_ids:
+        return
+    subject_image_ids = _subject_image_ids(brief.idea, image_ids)
+    lock = _reference_lock(brief.idea, image_is_subject=True)
+    if lock == ReferenceLock.NONE:
+        return
+    char_id = project.bible.characters[0].id if project.bible.characters else "char-lead"
+    if project.bible.characters:
+        project.bible.characters[0].still_asset_ids = list(subject_image_ids)
+    is_sample = brief.production_kind == ProductionKind.SAMPLE
+    scene_schedule = _scene_schedule(_script_scenes(brief.idea), len(project.shots))
+    narrated_scenes: set[int] = set()
+    spoken_direction = _spoken_direction_script(brief.idea)
+    spoken_direction_assigned = False
+    for index, item in enumerate(project.shots):
+        scene_beat = scene_schedule[index]
+        had_overlap = item.overlap_frames > 0
+        item.engine = Engine.I2V_A14B
+        item.character_ref_ids = [char_id]
+        item.keyframe_asset_ids = list(subject_image_ids)
+        item.reference_lock = lock
+        item.continuity_mode = (
+            ContinuityMode.REFERENCE if index == 0 else ContinuityMode.PREVIOUS_FRAME
+        )
+        item.overlap_frames = 8
+        if is_sample and index > 0 and not had_overlap:
+            item.duration_frames += 8
+        narration = None
+        if scene_beat is not None:
+            item.scene = str(scene_beat.number)
+            item.slug = f"SCENE {scene_beat.number} — {scene_beat.title}"
+            narration = (
+                scene_beat.narration
+                if scene_beat.narration and scene_beat.number not in narrated_scenes
+                else None
+            )
+            narrated_scenes.add(scene_beat.number)
+        if narration:
+            item.audio_line = narration
+        elif spoken_direction and not spoken_direction_assigned:
+            item.audio_line = spoken_direction
+            spoken_direction_assigned = True
+        else:
+            item.audio_line = None
+
+
+def refresh_reference_shot(project: Project, shot: Shot) -> Shot:
+    """Reapply the current binding reference contract before a retake.
+
+    Projects remain recoverable across product upgrades. A retake of an older
+    Project therefore receives today's strict prompt, negative conditioning,
+    and same-world camera lock instead of replaying stale creative direction.
+    """
+    _upgrade_binding_reference_contract(project)
+    if shot.reference_lock == ReferenceLock.NONE:
+        return shot
+    try:
+        index = next(i for i, item in enumerate(project.shots) if item.id == shot.id)
+    except StopIteration:
+        index = 0
+    if shot.reference_lock == ReferenceLock.CHARACTER_AND_BACKGROUND:
+        anchor = project.shots[0] if project.shots else shot
+        shot.focal_mm = anchor.focal_mm
+        shot.t_stop = anchor.t_stop
+        shot.lighting_ratio = anchor.lighting_ratio
+        shot.camera_move = CameraMove.STATIC
+    idea = (
+        _idea_body(project.brief, project.assets)
+        if project.brief is not None
+        else project.bible.logline
+    )
+    if project.brief is not None:
+        scene_schedule = _scene_schedule(
+            _script_scenes(project.brief.idea),
+            len(project.shots),
+        )
+        scene_beat = scene_schedule[index] if index < len(scene_schedule) else None
+        if scene_beat is not None and scene_beat.visual:
+            idea = scene_beat.visual
+    sample_seconds = project.brief.sample_seconds if project.brief is not None else None
+    wardrobe = (
+        project.bible.characters[0].wardrobe
+        if project.bible.characters
+        else "Bible-locked wardrobe"
+    )
+    _install_wan_prompt_plan(
+        shot,
+        idea=idea,
+        bible=project.bible,
+        wardrobe=wardrobe,
+        shot_index=index,
+        sample_seconds=sample_seconds,
+    )
+    return shot
+
+
 def blank_studio(compute: ClusterSite | None = None) -> Project:
-    """Empty Idea page after Wizard Sign. Sample still loads Night Press."""
+    """Empty Idea page after Studio Sign."""
     return Project(
         id="studio-blank",
         status=ProjectStatus.DRAFT,
@@ -381,13 +775,33 @@ def expand_idea(
     idea = _idea_body(brief, held)
     book = PLAYBOOKS[brief.customer_kind]
     title = _title(idea, brief.title_hint)
-    seed = _seed(idea + brief.customer_kind.value)
-    n = _shot_count(brief.target_minutes)
-    recipes = _recipes(brief.customer_kind)[:n]
+    is_sample = brief.production_kind == ProductionKind.SAMPLE
+    sample_seconds = brief.sample_seconds or 5
+    seed = _seed(
+        idea
+        + brief.customer_kind.value
+        + brief.production_kind.value
+        + (str(sample_seconds) if is_sample else "")
+    )
+    if is_sample:
+        recipes = _sample_recipes(brief.customer_kind, sample_seconds)
+    else:
+        recipes = _coverage_recipes(brief.customer_kind, _shot_count(brief.target_minutes))
+    n = len(recipes)
     image_ids = [a.id for a in held if a.kind == AssetKind.IMAGE]
     video_ids = [a.id for a in held if a.kind == AssetKind.VIDEO]
+    audio_ids = [a.id for a in held if a.kind == AssetKind.AUDIO]
+    sound_requested = _asks_for_sound(idea)
+    spoken_direction = _spoken_direction_script(brief.idea)
+    spoken_direction_assigned = False
+    synced_performance = bool(audio_ids) and _asks_for_synced_performance(idea)
+    image_is_subject = bool(image_ids) and _image_defines_subject(brief.idea)
+    reference_lock = _reference_lock(brief.idea, image_is_subject=image_is_subject)
+    subject_image_ids = _subject_image_ids(brief.idea, image_ids) if image_is_subject else []
+    scenes = _script_scenes(brief.idea)
+    scene_schedule = _scene_schedule(scenes, n)
     char_id = "char-lead"
-    stills = image_ids[:2] or ["still-lead-wide", "still-lead-close"]
+    stills = subject_image_ids or image_ids[:2] or ["still-lead-wide", "still-lead-close"]
     character = Character(
         id=char_id,
         name=book.lead_name,
@@ -407,47 +821,104 @@ def expand_idea(
         locked=False,
     )
     shots: list[Shot] = []
+    narrated_scenes: set[int] = set()
     for i, rec in enumerate(recipes):
+        scene_beat = scene_schedule[i]
         frames = max(24, int(round(rec["seconds"] * 23.976)))
+        if is_sample and reference_lock != ReferenceLock.NONE and i > 0:
+            # The temporal blend consumes the incoming handle. Preserve the user's
+            # requested Sample TRT by carrying those frames on the incoming shot.
+            frames += 8
         sid = f"sh-{(i + 1) * 10:03d}"
-        engine: Engine = rec["engine"]
-        refs = [char_id] if engine in (Engine.I2V_A14B, Engine.S2V_14B, Engine.ANIMATE_14B) else []
-        keys = list(image_ids[:2]) if refs else []
-        if engine == Engine.ANIMATE_14B and video_ids:
-            keys = video_ids[:1] + keys
+        engine = Engine.I2V_A14B if image_ids else Engine.T2V_A14B
+        if synced_performance and rec.get("audio") and image_ids:
+            engine = Engine.S2V_14B
+        elif image_ids and video_ids:
+            engine = Engine.ANIMATE_14B
+        elif image_is_subject:
+            engine = Engine.I2V_A14B
+        elif i > 0:
+            # Once a first print exists, its final frame is a stronger identity
+            # and world anchor than a fresh unconditioned text generation.
+            engine = Engine.I2V_A14B
+        refs = [char_id]
+        keys = list(subject_image_ids) if image_is_subject else []
+        if i == 0 and image_ids and not keys:
+            keys = image_ids[:1]
+        if engine in (Engine.S2V_14B, Engine.ANIMATE_14B) and not keys:
+            keys = image_ids[:1]
+        audio_refs = list(audio_ids) if engine == Engine.S2V_14B else []
+        motion_refs = list(video_ids) if engine == Engine.ANIMATE_14B else []
         audio = None
-        if rec.get("audio"):
-            audio = idea[:120]
-        prompt = (
-            f"{rec['slug']}. {idea} "
-            f"{rec['focal_mm']}mm T{rec['t_stop']}, {rec['lighting_ratio']}, "
-            f"{rec['camera_move'].value.replace('_', ' ')}. "
-            f"Continuity with bible '{title}'. Cinematic, 1080 finish-intent. "
-            f"{book.grammar}"
-        )
-        shots.append(
-            Shot(
+        if rec.get("audio") and sound_requested and spoken_direction and not spoken_direction_assigned:
+            audio = spoken_direction
+            spoken_direction_assigned = True
+        if scene_beat and scene_beat.narration and scene_beat.number not in narrated_scenes:
+            audio = scene_beat.narration
+            narrated_scenes.add(scene_beat.number)
+        focal_mm = rec["focal_mm"]
+        t_stop = rec["t_stop"]
+        lighting_ratio = rec["lighting_ratio"]
+        camera_move = rec["camera_move"]
+        if reference_lock == ReferenceLock.CHARACTER_AND_BACKGROUND:
+            anchor = recipes[0]
+            focal_mm = anchor["focal_mm"]
+            t_stop = anchor["t_stop"]
+            lighting_ratio = anchor["lighting_ratio"]
+            camera_move = CameraMove.STATIC
+        continuity_mode = ContinuityMode.REFERENCE if i == 0 and keys else ContinuityMode.INDEPENDENT
+        overlap_frames = 0
+        if reference_lock != ReferenceLock.NONE:
+            continuity_mode = ContinuityMode.REFERENCE if i == 0 else ContinuityMode.PREVIOUS_FRAME
+            overlap_frames = 8
+        elif i > 0 and engine in (Engine.I2V_A14B, Engine.S2V_14B):
+            continuity_mode = ContinuityMode.PREVIOUS_FRAME
+            overlap_frames = 8
+        planned_shot = Shot(
                 id=sid,
-                scene=str(rec["scene"]),
-                slug=rec["slug"],
+                scene=str(scene_beat.number if scene_beat else rec["scene"]),
+                slug=(
+                    f"SCENE {scene_beat.number} — {scene_beat.title}"
+                    if scene_beat
+                    else rec["slug"]
+                ),
                 duration_frames=frames,
                 fps=23.976,
-                focal_mm=rec["focal_mm"],
-                t_stop=rec["t_stop"],
-                lighting_ratio=rec["lighting_ratio"],
-                camera_move=rec["camera_move"],
-                prompt=prompt,
-                negative_prompt=NEGATIVE,
+                focal_mm=focal_mm,
+                t_stop=t_stop,
+                lighting_ratio=lighting_ratio,
+                camera_move=camera_move,
+                prompt="pending Wan2.2 prompt compilation",
+                negative_prompt="",
                 seed=seed + i * 17,
                 character_ref_ids=refs,
                 keyframe_asset_ids=keys,
+                audio_asset_ids=audio_refs,
+                motion_reference_asset_ids=motion_refs,
+                reference_lock=reference_lock,
+                continuity_mode=continuity_mode,
                 engine=engine,
                 finish=FinishIntent.DELIVERABLE,
                 audio_line=audio,
+                overlap_frames=overlap_frames,
             )
+        _install_wan_prompt_plan(
+            planned_shot,
+            idea=(
+                scene_beat.visual
+                if scene_beat and scene_beat.visual
+                else idea
+            ),
+            bible=bible,
+            wardrobe=character.wardrobe,
+            shot_index=i,
+            sample_seconds=sample_seconds if is_sample else None,
         )
-    pid = f"studio-{seed}"
+        shots.append(planned_shot)
+    run_id = f"{seed}-{uuid.uuid4().hex}"
+    pid = f"studio-{run_id}"
     notes = []
+    coverage_sec = n * WAN_QUALITY_SECONDS
     if brief.target_minutes > 15:
         notes.append(
             Note(
@@ -456,6 +927,19 @@ def expand_idea(
                 body=(
                     "First reel only. A full hour rundown is BRAIN-mode work "
                     "(Blueprint 07: days, not minutes)."
+                ),
+                shot_id=shots[0].id,
+            )
+        )
+    elif coverage_sec + 5 < brief.target_minutes * 60:
+        notes.append(
+            Note(
+                id="n-pass-cap",
+                author="conductor",
+                body=(
+                    f"This pass is {int(coverage_sec)}s of 5s Wan quality-lane coverage "
+                    f"toward the {allotment_label(brief.target_minutes)} goal. "
+                    "Do not lengthen a take past 5s to fake TRT."
                 ),
                 shot_id=shots[0].id,
             )
@@ -471,9 +955,9 @@ def expand_idea(
         notes=notes,
         assets=held,
         mix=MixLock(
-            id=f"mix-{seed}",
+            id=f"mix-{run_id}",
             loudness=book.loudness,
-            picture_lock_timeline_id=f"tl-{seed}",
+            picture_lock_timeline_id=f"tl-{run_id}",
         ),
         gates=[
             Gate(name=GateName.BIBLE, open=True),
@@ -486,7 +970,7 @@ def expand_idea(
     )
     events, total = stitch_events(draft)
     draft.timeline = Timeline(
-        id=f"tl-{seed}",
+        id=f"tl-{run_id}",
         events=events,
         total_frames=total,
         fps=bible.fps,
@@ -496,6 +980,8 @@ def expand_idea(
 
 def expand_shot_prompt(shot: Shot, bible: Bible) -> str:
     """Enrich a one-line shot into mandate-grade camera language."""
+    if shot.prompt_plan is not None:
+        return render_wan_prompt(shot.prompt_plan)
     if "mm T" in shot.prompt and "Continuity" in shot.prompt:
         return shot.prompt
     return (

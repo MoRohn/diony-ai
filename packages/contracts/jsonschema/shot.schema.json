@@ -16,6 +16,15 @@
       "title": "CameraMove",
       "type": "string"
     },
+    "ContinuityMode": {
+      "enum": [
+        "independent",
+        "reference",
+        "previous_frame"
+      ],
+      "title": "ContinuityMode",
+      "type": "string"
+    },
     "Engine": {
       "enum": [
         "t2v-A14B",
@@ -36,6 +45,122 @@
       ],
       "title": "FinishIntent",
       "type": "string"
+    },
+    "ReferenceLock": {
+      "enum": [
+        "none",
+        "character",
+        "character_and_background"
+      ],
+      "title": "ReferenceLock",
+      "type": "string"
+    },
+    "WanPromptPlan": {
+      "description": "Typed, inspectable Wan2.2 prompt layers compiled from the Idea.",
+      "properties": {
+        "strategy_version": {
+          "default": "wan22-five-layer-v3",
+          "title": "Strategy Version",
+          "type": "string"
+        },
+        "source_idea_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "title": "Source Idea Sha256",
+          "type": "string"
+        },
+        "subject": {
+          "title": "Subject",
+          "type": "string"
+        },
+        "identity_anchors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Identity Anchors",
+          "type": "array"
+        },
+        "motion": {
+          "title": "Motion",
+          "type": "string"
+        },
+        "camera": {
+          "title": "Camera",
+          "type": "string"
+        },
+        "scene": {
+          "title": "Scene",
+          "type": "string"
+        },
+        "environment_dynamics": {
+          "default": "",
+          "title": "Environment Dynamics",
+          "type": "string"
+        },
+        "high_noise_plan": {
+          "default": "",
+          "title": "High Noise Plan",
+          "type": "string"
+        },
+        "low_noise_plan": {
+          "default": "",
+          "title": "Low Noise Plan",
+          "type": "string"
+        },
+        "generation_method": {
+          "default": "",
+          "title": "Generation Method",
+          "type": "string"
+        },
+        "audio_strategy": {
+          "default": "silent_plate",
+          "title": "Audio Strategy",
+          "type": "string"
+        },
+        "quality_lora_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Quality Lora Ids",
+          "type": "array"
+        },
+        "continuity_risks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Continuity Risks",
+          "type": "array"
+        },
+        "negative_terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Negative Terms",
+          "type": "array"
+        },
+        "word_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Word Count",
+          "type": "integer"
+        },
+        "diagnostics": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Diagnostics",
+          "type": "array"
+        }
+      },
+      "required": [
+        "source_idea_sha256",
+        "subject",
+        "motion",
+        "camera",
+        "scene"
+      ],
+      "title": "WanPromptPlan",
+      "type": "object"
     }
   },
   "properties": {
@@ -88,6 +213,17 @@
       "title": "Negative Prompt",
       "type": "string"
     },
+    "prompt_plan": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WanPromptPlan"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "seed": {
       "title": "Seed",
       "type": "integer"
@@ -105,6 +241,28 @@
       },
       "title": "Keyframe Asset Ids",
       "type": "array"
+    },
+    "audio_asset_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Audio Asset Ids",
+      "type": "array"
+    },
+    "motion_reference_asset_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Motion Reference Asset Ids",
+      "type": "array"
+    },
+    "reference_lock": {
+      "$ref": "#/$defs/ReferenceLock",
+      "default": "none"
+    },
+    "continuity_mode": {
+      "$ref": "#/$defs/ContinuityMode",
+      "default": "independent"
     },
     "engine": {
       "$ref": "#/$defs/Engine"

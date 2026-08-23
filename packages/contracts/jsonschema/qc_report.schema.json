@@ -46,6 +46,66 @@
       "title": "Legal Ok",
       "type": "boolean"
     },
+    "motion_ok": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Motion Ok"
+    },
+    "camera_ok": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Camera Ok"
+    },
+    "lighting_ok": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Lighting Ok"
+    },
+    "production_clean_ok": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Production Clean Ok"
+    },
+    "audio_ready_ok": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Audio Ready Ok"
+    },
     "lipsync_ok": {
       "anyOf": [
         {
@@ -69,6 +129,130 @@
       ],
       "default": null,
       "title": "Loudness Ok"
+    },
+    "reference_asset_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reference Asset Ids",
+      "type": "array"
+    },
+    "reference_similarity": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reference Similarity"
+    },
+    "reference_similarities": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Reference Similarities",
+      "type": "object"
+    },
+    "reference_verified": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reference Verified"
+    },
+    "continuity_from_take_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Continuity From Take Id"
+    },
+    "continuity_similarity": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Continuity Similarity"
+    },
+    "continuity_verified": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Continuity Verified"
+    },
+    "measurement_version": {
+      "default": "",
+      "title": "Measurement Version",
+      "type": "string"
+    },
+    "temporal_delta_p95": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Temporal Delta P95"
+    },
+    "temporal_residual_p95": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Temporal Residual P95"
+    },
+    "flicker_luma_p95": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Flicker Luma P95"
+    },
+    "measured_frame_count": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Measured Frame Count",
+      "type": "integer"
     },
     "notes": {
       "default": "",

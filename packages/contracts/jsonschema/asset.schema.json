@@ -4,6 +4,7 @@
       "enum": [
         "image",
         "video",
+        "audio",
         "document"
       ],
       "title": "AssetKind",
@@ -48,6 +49,81 @@
       "default": "idea_ref",
       "title": "Role",
       "type": "string"
+    },
+    "storage_key": {
+      "default": "",
+      "title": "Storage Key",
+      "type": "string"
+    },
+    "thumbnail_path": {
+      "default": "",
+      "title": "Thumbnail Path",
+      "type": "string"
+    },
+    "proxy_path": {
+      "default": "",
+      "title": "Proxy Path",
+      "type": "string"
+    },
+    "source_job_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Job Id"
+    },
+    "source_asset_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Asset Ids",
+      "type": "array"
+    },
+    "metadata": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "title": "Metadata",
+      "type": "object"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "deleted_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Deleted At"
     }
   },
   "required": [

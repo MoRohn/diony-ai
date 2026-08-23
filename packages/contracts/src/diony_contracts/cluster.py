@@ -1,4 +1,4 @@
-"""Signed cluster site lock. Wizard writes it. Producer and Conductor read it.
+"""Signed cluster site lock. Studio writes it. Producer and Conductor read it.
 
 Lives at `{vault}/.cluster/site.json`. Laptop dry-run uses the Producer data dir
 unless DIONY_VAULT / DIONY_PRODUCER_VAULT is set.
@@ -22,10 +22,17 @@ SITE_LABELS = {
     "local": "Local Quad-Spark Cluster",
     "dual": "Leased Dual-Spark Cluster",
     "b300": "Leased B300",
+    "b200": "Leased B200",
     "lease": "Leased GPU",
 }
 
-SEQUENTIAL_PATHS = frozenset({ComputePath.DUAL.value, ComputePath.B300.value})
+SEQUENTIAL_PATHS = frozenset(
+    {ComputePath.DUAL.value, ComputePath.B300.value, ComputePath.B200.value}
+)
+SINGLE_GPU_PATHS = frozenset({ComputePath.B300.value, ComputePath.B200.value})
+WIZARD_APP_PATHS = frozenset(
+    {ComputePath.DUAL.value, ComputePath.B300.value, ComputePath.B200.value}
+)
 RETAKE_CAP = 4
 ENGINE_FOR_MODE = {
     "BRAIN": "brain",
@@ -62,6 +69,15 @@ def site_lock_path() -> Path:
 
 def mode_lock_path() -> Path:
     return cluster_root() / MODE_LOCK_REL
+
+
+def clear_local_locks() -> None:
+    """Remove this desk's site.json and mode.lock. Does not touch the GPU vault."""
+    for path in (site_lock_path(), mode_lock_path()):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def write_site_lock(payload: dict) -> Path:
@@ -119,6 +135,7 @@ def site_status(lock: dict | None = None) -> dict:
         "local": "spark-4x-v1 TP=4",
         "dual": "spark-2x-v1 TP=2",
         "b300": "b300-v1 TP=1",
+        "b200": "b200-v1 TP=1",
         "lease": "lease-gpu-v1",
     }.get(path, site.profile)
     if lock and lock.get("recipe"):
@@ -129,6 +146,8 @@ def site_status(lock: dict | None = None) -> dict:
             nodes = ["spark-01", "spark-02"]
         elif path == "b300":
             nodes = ["b300-01"]
+        elif path == "b200":
+            nodes = ["b200-01"]
         elif path == "local":
             nodes = ["spark-01", "spark-02", "spark-03", "spark-04"]
     clock = (
@@ -189,7 +208,7 @@ def read_mode_lock() -> dict | None:
 
 
 def refuse_concurrent(mode: str, engine: str) -> str | None:
-    """Dual-Spark and B300 cannot run DeepSeek and Wan together."""
+    """Dual-Spark, B300, and B200 cannot run DeepSeek and Wan together."""
     site = site_from_lock()
     if site.path.value not in SEQUENTIAL_PATHS:
         return None

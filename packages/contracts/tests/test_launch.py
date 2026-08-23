@@ -1,0 +1,286 @@
+from datetime import datetime, timezone
+
+import pytest
+from pydantic import ValidationError
+
+from diony_contracts.enums import CustomerKind
+from diony_contracts.launch import (
+    AdmissionPolicy,
+    AuditEvent,
+    CostAllocationEntry,
+    CostBreakdown,
+    CostCenter,
+    CostGovernance,
+    CostRateCard,
+    Department,
+    EmailDeliveryStatus,
+    GenerationJob,
+    InvitationEmailDelivery,
+    InvitationStatus,
+    JobStatus,
+    JoinRequestStatus,
+    Membership,
+    MembershipRole,
+    MembershipStatus,
+    ProgressEvent,
+    ProviderCapability,
+    RenderVersion,
+    StudioInvitation,
+    StudioJoinRequest,
+    UsageEvent,
+    User,
+    WorkflowRun,
+    WorkflowStage,
+    WorkflowStageState,
+    Workspace,
+)
+from diony_contracts.studio import blank_studio
+
+
+def test_workspace_membership_and_project_ownership_are_explicit() -> None:
+    user = User(id="usr-rohn", email="rohn@example.com", display_name="Rohn")
+    workspace = Workspace(id="ws-studio", name="Night Shift Studio", slug="night-shift")
+    member = Membership(
+        id="mem-rohn",
+        user_id=user.id,
+        workspace_id=workspace.id,
+        role=MembershipRole.OWNER,
+    )
+    project = blank_studio()
+    project.workspace_id = workspace.id
+    project.owner_user_id = user.id
+    assert member.can_manage is True
+    assert project.workspace_id == "ws-studio"
+    assert project.schema_version >= 1
+    assert project.deleted_at is None
+
+
+def test_studio_invitation_membership_and_email_contracts_are_explicit() -> None:
+    workspace = Workspace(
+        id="ws-studio",
+        name="Northlight Pictures",
+        slug="northlight",
+        admission_policy=AdmissionPolicy.INVITE_ADMITS,
+        controller_origin="https://producer.northlight.example",
+        controller_fingerprint="DIONY 7A4F 92C1",
+    )
+    invitation = StudioInvitation(
+        id="invite-one",
+        workspace_id=workspace.id,
+        token_hash="a" * 64,
+        email="maya@example.com",
+        email_key="maya@example.com",
+        role=MembershipRole.CREATOR,
+        proposed_profile_name="Maya Chen",
+        created_by="owner-one",
+        expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+    )
+    delivery = InvitationEmailDelivery(
+        id="delivery-one",
+        workspace_id=workspace.id,
+        invitation_id=invitation.id,
+        recipient_mask="m•••@example.com",
+        subject="Rohn invited you to Northlight Pictures in Diony AI",
+    )
+    request = StudioJoinRequest(
+        id="request-one",
+        workspace_id=workspace.id,
+        invitation_id=invitation.id,
+        user_id="user-maya",
+        email_key=invitation.email_key,
+        requested_profile_name="Maya Chen",
+        requested_profile_name_key="maya chen",
+        requested_role=MembershipRole.CREATOR,
+    )
+    membership = Membership(
+        id="ws-studio:user-maya",
+        user_id="user-maya",
+        workspace_id=workspace.id,
+        role=MembershipRole.CREATOR,
+        profile_name="Maya Chen",
+        profile_name_key="maya chen",
+        personal_cost_center_id="cc-maya",
+        assigned_cost_center_ids=["cc-maya", "cc-show-one"],
+        status=MembershipStatus.ACTIVE,
+    )
+    assert invitation.status == InvitationStatus.ACTIVE
+    assert delivery.status == EmailDeliveryStatus.QUEUED
+    assert request.status == JoinRequestStatus.PENDING
+    assert membership.personal_cost_center_id == "cc-maya"
+    assert membership.assigned_cost_center_ids == ["cc-maya", "cc-show-one"]
+    assert workspace.admission_policy == AdmissionPolicy.INVITE_ADMITS
+
+
+def test_generation_job_carries_cost_forecast_lineage_and_retry_state() -> None:
+    job = GenerationJob(
+        id="job-video-1",
+        run_id="run-1",
+        workspace_id="ws-studio",
+        project_id="project-1",
+        stage=WorkflowStage.VIDEO,
+        capability=ProviderCapability.VIDEO,
+        provider_id="diony.wan22",
+        model="Wan2.2-T2V-A14B",
+        idempotency_key="project-1:shot-10:video:v1",
+        forecast_internal_credits=120,
+        input_lineage=["shot-10", "prompt-v3", "still-lead-v2"],
+    )
+    assert job.status == JobStatus.QUEUED
+    assert job.attempt == 0
+    assert job.max_attempts >= 1
+    assert job.provider_id == "diony.wan22"
+    assert job.forecast_internal_credits == 120
+    assert job.input_lineage[-1] == "still-lead-v2"
+
+
+def test_workflow_requires_one_ordered_state_per_stage() -> None:
+    run = WorkflowRun.production_default(
+        id="run-1",
+        workspace_id="ws-studio",
+        project_id="project-1",
+        created_by="usr-rohn",
+    )
+    assert [state.stage for state in run.stages] == list(WorkflowStage.production_order())
+    assert run.stages[0].status == JobStatus.QUEUED
+    assert all(isinstance(state, WorkflowStageState) for state in run.stages)
+    assert run.progress_percent == 0
+    order = [state.stage for state in run.stages]
+    assert order.index(WorkflowStage.SAFETY_INPUT) < order.index(WorkflowStage.VIDEO)
+    assert order.index(WorkflowStage.SAFETY_OUTPUT) < order.index(WorkflowStage.PACKAGE)
+
+
+def test_progress_percentage_is_bounded_and_errors_are_actionable() -> None:
+    with pytest.raises(ValidationError):
+        ProgressEvent(
+            id="evt-bad",
+            run_id="run-1",
+            workspace_id="ws-studio",
+            project_id="project-1",
+            stage=WorkflowStage.VIDEO,
+            percent=101,
+            message="Too far",
+        )
+    event = ProgressEvent(
+        id="evt-fail",
+        run_id="run-1",
+        workspace_id="ws-studio",
+        project_id="project-1",
+        stage=WorkflowStage.VIDEO,
+        percent=42,
+        message="Wan lost the GPU worker.",
+        level="error",
+        actions=["retry", "edit_prompt", "switch_provider"],
+    )
+    assert "retry" in event.actions
+
+
+def test_usage_cost_allocation_audit_and_render_models_are_immutable_records() -> None:
+    now = datetime.now(timezone.utc)
+    usage = UsageEvent(
+        id="use-1",
+        workspace_id="ws-studio",
+        project_id="project-1",
+        run_id="run-1",
+        job_id="job-video-1",
+        capability=ProviderCapability.VIDEO,
+        provider_id="diony.wan22",
+        model="Wan2.2-T2V-A14B",
+        quantity_microunits=5_000_000,
+        unit="video_second",
+        department_id="dept-picture",
+        team_id="team-camera",
+        cost_center_id="cc-show-1",
+        internal_credits=120,
+        cost_breakdown=CostBreakdown(compute_usd_micros=140_000),
+        occurred_at=now,
+    )
+    allocation = CostAllocationEntry(
+        id="allocation-1",
+        workspace_id="ws-studio",
+        usage_event_id=usage.id,
+        project_id=usage.project_id,
+        job_id=usage.job_id,
+        department_id=usage.department_id,
+        team_id=usage.team_id,
+        cost_center_id=usage.cost_center_id,
+        internal_credits=usage.internal_credits,
+        cost_usd_micros=usage.cost_breakdown.total_usd_micros,
+    )
+    audit = AuditEvent(
+        id="aud-1",
+        workspace_id="ws-studio",
+        actor_user_id="usr-rohn",
+        action="workflow.job.cost_allocated",
+        object_type="generation_job",
+        object_id=usage.job_id,
+        correlation_id="corr-1",
+    )
+    render = RenderVersion(
+        id="render-1",
+        workspace_id="ws-studio",
+        project_id="project-1",
+        version=1,
+        parent_version_id=None,
+        asset_ids=["master-1080"],
+        source_job_ids=[usage.job_id],
+        source_take_ids=["take-1"],
+        sha256="a" * 64,
+    )
+    assert allocation.internal_credits == 120
+    assert allocation.cost_usd_micros == 140_000
+    assert audit.correlation_id == "corr-1"
+    assert render.source_job_ids == ["job-video-1"]
+
+
+def test_cost_governance_models_use_fixed_point_budgets_and_explicit_admin_scope() -> None:
+    department = Department(
+        id="dept-picture",
+        workspace_id="ws-studio",
+        name="Picture",
+        code="PIC",
+        manager_user_ids=["usr-producer"],
+        team_ids=["team-camera"],
+    )
+    center = CostCenter(
+        id="cc-show-1",
+        workspace_id="ws-studio",
+        department_id=department.id,
+        name="Show One",
+        code="SHOW-001",
+        team_ids=["team-camera"],
+        internal_credit_budget=10_000,
+        cost_budget_usd_micros=25_000_000,
+    )
+    governance = CostGovernance(
+        id="cost-governance",
+        workspace_id="ws-studio",
+        admin_user_id="usr-admin",
+        admin_team_id="team-finops",
+        default_cost_center_id=center.id,
+    )
+    rate = CostRateCard(
+        id="rate-wan-v1",
+        workspace_id="ws-studio",
+        capability=ProviderCapability.VIDEO,
+        provider_id="diony.wan22",
+        model="Wan2.2-T2V-A14B",
+        unit="video_second",
+        internal_credits_per_unit=25,
+        cost_usd_micros_per_unit=80_000,
+        source="Leased GPU amortization plus energy",
+    )
+    assert governance.admin_team_id == "team-finops"
+    assert center.monitoring_mode == "monitor_only"
+    assert rate.cost_usd_micros_per_unit == 80_000
+
+
+def test_project_version_fields_round_trip_without_changing_existing_objectives() -> None:
+    project = blank_studio()
+    project.customer_kind = CustomerKind.FEATURE
+    project.workspace_id = "ws-studio"
+    project.owner_user_id = "usr-rohn"
+    again = type(project).model_validate_json(project.model_dump_json())
+    assert again.customer_kind == CustomerKind.FEATURE
+    assert again.workspace_id == "ws-studio"
+    assert again.bible.width == 1920
+    assert again.bible.height == 1080

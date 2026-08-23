@@ -1,0 +1,68 @@
+{
+  "$defs": {
+    "ProductionStopDisposition": {
+      "enum": [
+        "keep",
+        "delete"
+      ],
+      "title": "ProductionStopDisposition",
+      "type": "string"
+    }
+  },
+  "description": "Durable user decision for a manually stopped Production run.",
+  "properties": {
+    "disposition": {
+      "$ref": "#/$defs/ProductionStopDisposition"
+    },
+    "stopped_at": {
+      "format": "date-time",
+      "title": "Stopped At",
+      "type": "string"
+    },
+    "completed_take_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Completed Take Ids",
+      "type": "array"
+    },
+    "result_path": {
+      "default": "",
+      "title": "Result Path",
+      "type": "string"
+    },
+    "result_sha256": {
+      "default": "",
+      "title": "Result Sha256",
+      "type": "string"
+    },
+    "result_width": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Result Width",
+      "type": "integer"
+    },
+    "result_height": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Result Height",
+      "type": "integer"
+    },
+    "deleted_file_count": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Deleted File Count",
+      "type": "integer"
+    },
+    "result_error": {
+      "default": "",
+      "title": "Result Error",
+      "type": "string"
+    }
+  },
+  "required": [
+    "disposition"
+  ],
+  "title": "ProductionStopReceipt",
+  "type": "object"
+}

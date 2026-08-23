@@ -6,6 +6,7 @@ class ComputePath(StrEnum):
     DUAL = "dual"
     LEASE = "lease"
     B300 = "b300"
+    B200 = "b200"
 
 
 class FleetMode(StrEnum):
@@ -22,6 +23,18 @@ class Engine(StrEnum):
     S2V_14B = "s2v-14B"
     ANIMATE_14B = "animate-14B"
     VACE_FUN_A14B = "vace-fun-A14B"
+
+
+class ReferenceLock(StrEnum):
+    NONE = "none"
+    CHARACTER = "character"
+    CHARACTER_AND_BACKGROUND = "character_and_background"
+
+
+class ContinuityMode(StrEnum):
+    INDEPENDENT = "independent"
+    REFERENCE = "reference"
+    PREVIOUS_FRAME = "previous_frame"
 
 
 class FinishIntent(StrEnum):
@@ -71,6 +84,7 @@ class ProjectStatus(StrEnum):
     MIX_LOCKED = "mix_locked"
     MASTERED = "mastered"
     DISTRIBUTED = "distributed"
+    STOPPED = "stopped"
 
 
 class GateName(StrEnum):
@@ -113,9 +127,20 @@ class CustomerKind(StrEnum):
     SOCIAL = "social"
 
 
+class ProductionKind(StrEnum):
+    PROGRAM = "program"
+    SAMPLE = "sample"
+
+
+class ProductionStopDisposition(StrEnum):
+    KEEP = "keep"
+    DELETE = "delete"
+
+
 class AssetKind(StrEnum):
     IMAGE = "image"
     VIDEO = "video"
+    AUDIO = "audio"
     DOCUMENT = "document"
 
 
@@ -128,3 +153,23 @@ class ArtifactKind(StrEnum):
 class TakeOrigin(StrEnum):
     GENERATION = "generation"
     EDIT = "edit"
+
+
+class GalleryTransition(StrEnum):
+    CUT = "cut"
+    CROSS_DISSOLVE = "cross_dissolve"
+    FILM_DISSOLVE = "film_dissolve"
+    FADE_THROUGH_BLACK = "fade_through_black"
+    DIP_TO_WHITE = "dip_to_white"
+    WIPE_LEFT = "wipe_left"
+    WIPE_RIGHT = "wipe_right"
+
+
+class GalleryCompositionStatus(StrEnum):
+    DRAFT = "draft"
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    SUPERSEDED = "superseded"

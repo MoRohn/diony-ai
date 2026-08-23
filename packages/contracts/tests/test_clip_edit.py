@@ -1,5 +1,5 @@
 from diony_contracts.edits import apply_clip_edit, interpret_instruction, version_ladder
-from diony_contracts.enums import Engine, PictureLockState
+from diony_contracts.enums import Engine, GateName, PictureLockState
 from diony_contracts.fixture import demo_project
 
 
@@ -56,16 +56,30 @@ def test_version_ladder_orders_lineage() -> None:
     assert versions == sorted(versions)
 
 
-def test_picture_lock_refuses_clip_edit() -> None:
+def test_picture_lock_allows_clip_edit() -> None:
     project = demo_project()
     assert project.timeline is not None
     project.timeline.picture_lock = PictureLockState.LOCKED
+    child = apply_clip_edit(
+        project,
+        source_take_id="sh-010-t2",
+        instruction="Hold her eyes on the nick.",
+    )
+    assert any(take.parent_take_id == "sh-010-t2" for take in child.takes)
+
+
+def test_distribution_refuses_clip_edit() -> None:
+    project = demo_project()
+    for gate in project.gates:
+        if gate.name == GateName.DISTRIBUTION:
+            gate.open = False
+            break
     try:
         apply_clip_edit(
             project,
             source_take_id="sh-010-t2",
             instruction="Hold her eyes on the nick.",
         )
-        raise AssertionError("expected picture-lock refusal")
+        raise AssertionError("expected distribution refusal")
     except ValueError as exc:
-        assert "locked" in str(exc).lower()
+        assert "distribut" in str(exc).lower()

@@ -11,6 +11,14 @@
       ],
       "title": "CustomerKind",
       "type": "string"
+    },
+    "ProductionKind": {
+      "enum": [
+        "program",
+        "sample"
+      ],
+      "title": "ProductionKind",
+      "type": "string"
     }
   },
   "properties": {
@@ -26,6 +34,22 @@
       "default": 5.0,
       "title": "Target Minutes",
       "type": "number"
+    },
+    "production_kind": {
+      "$ref": "#/$defs/ProductionKind",
+      "default": "program"
+    },
+    "sample_seconds": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sample Seconds"
     },
     "audience": {
       "default": "",

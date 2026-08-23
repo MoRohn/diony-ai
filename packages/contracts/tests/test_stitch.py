@@ -17,7 +17,7 @@ def test_stitch_overlap_shortens_trt() -> None:
     assert events[0].handle_in == 0
     assert events[1].handle_in == 8
     assert total == raw - 8 * (len(project.shots) - 1)
-    assert events[1].start_frame == project.shots[0].duration_frames
+    assert events[1].start_frame == project.shots[0].duration_frames - 8
 
 
 def test_assemble_selects_prints_and_frame_to_clip() -> None:

@@ -20,6 +20,8 @@ FRAME_TO_CLIP_ENGINES = {
 def clamp_overlap(shot: Shot, incoming: bool) -> int:
     if not incoming:
         return 0
+    if shot.overlap_frames == 0:
+        return 0
     room = max(0, shot.duration_frames - 1)
     overlap = shot.overlap_frames if 8 <= shot.overlap_frames <= 16 else 8
     return min(overlap, room)
@@ -45,14 +47,17 @@ def stitch_events(project: Project) -> tuple[list[TimelineEvent], int]:
     for index, shot in enumerate(project.shots):
         take = print_for(project, shot)
         incoming = clamp_overlap(shot, index > 0)
-        outgoing = shot.overlap_frames if 8 <= shot.overlap_frames <= 16 else 8
+        outgoing = 0 if shot.overlap_frames == 0 else (
+            shot.overlap_frames if 8 <= shot.overlap_frames <= 16 else 8
+        )
         keyframe_from = None
         if index and prev_take and shot.engine in FRAME_TO_CLIP_ENGINES:
             keyframe_from = prev_take.id
+        event_start = max(0, start - incoming) if index else start
         events.append(
             TimelineEvent(
                 shot_id=shot.id,
-                start_frame=start,
+                start_frame=event_start,
                 handle_in=incoming,
                 handle_out=outgoing,
                 take_id=take.id if take else None,
@@ -60,7 +65,7 @@ def stitch_events(project: Project) -> tuple[list[TimelineEvent], int]:
                 keyframe_from_take_id=keyframe_from,
             )
         )
-        start += shot.duration_frames - incoming
+        start = event_start + shot.duration_frames
         prev_take = take
     return events, start
 
@@ -77,12 +82,20 @@ def assemble_program(project: Project) -> Project:
         timeline_id = project.timeline.id
         lock = project.timeline.picture_lock
         previous = project.timeline.preview_path
+        gallery_removed_at = project.timeline.gallery_removed_at
+        picture_sha256 = project.timeline.picture_sha256
+        program_sha256 = project.timeline.program_sha256
+        source_artifact_sha256s = list(project.timeline.source_artifact_sha256s)
     else:
         timeline_id = f"tl-{project.id}"
         lock = PictureLockState.OPEN
         previous = ""
-    preview = f"program/{timeline_id}/stitch.txt"
-    master = program_master_rel_for(timeline_id)
+        gallery_removed_at = None
+        picture_sha256 = ""
+        program_sha256 = ""
+        source_artifact_sha256s = []
+    preview = f"projects/{project.id}/program/{timeline_id}/stitch.txt"
+    master = f"projects/{project.id}/{program_master_rel_for(timeline_id)}"
     if previous.endswith("master_1080.mov") or previous.endswith("master_1080.mp4"):
         preview = previous
     elif previous == master:
@@ -94,7 +107,11 @@ def assemble_program(project: Project) -> Project:
         total_frames=total,
         fps=fps,
         preview_path=preview,
+        picture_sha256=picture_sha256,
+        program_sha256=program_sha256,
+        source_artifact_sha256s=source_artifact_sha256s,
         stitched=True,
+        gallery_removed_at=gallery_removed_at,
     )
     return project
 
@@ -105,7 +122,7 @@ def program_master_rel_for(timeline_id: str) -> str:
 
 def program_master_rel(project: Project) -> str:
     tid = project.timeline.id if project.timeline else f"tl-{project.id}"
-    return program_master_rel_for(tid)
+    return f"projects/{project.id}/{program_master_rel_for(tid)}"
 
 
 def reel_label(target_minutes: float) -> str:

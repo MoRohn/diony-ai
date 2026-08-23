@@ -17,9 +17,63 @@
           "title": "Path",
           "type": "string"
         },
+        "project_id": {
+          "default": "",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "shot_id": {
+          "default": "",
+          "title": "Shot Id",
+          "type": "string"
+        },
         "sha256": {
           "default": "",
           "title": "Sha256",
+          "type": "string"
+        },
+        "source_sha256": {
+          "default": "",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "prompt_sha256": {
+          "default": "",
+          "title": "Prompt Sha256",
+          "type": "string"
+        },
+        "reference_asset_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reference Asset Ids",
+          "type": "array"
+        },
+        "reference_sha256": {
+          "default": "",
+          "title": "Reference Sha256",
+          "type": "string"
+        },
+        "continuity_from_take_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Continuity From Take Id"
+        },
+        "continuity_sha256": {
+          "default": "",
+          "title": "Continuity Sha256",
+          "type": "string"
+        },
+        "generation_task": {
+          "default": "",
+          "title": "Generation Task",
           "type": "string"
         },
         "bytes": {
@@ -110,6 +164,81 @@
           "default": "idea_ref",
           "title": "Role",
           "type": "string"
+        },
+        "storage_key": {
+          "default": "",
+          "title": "Storage Key",
+          "type": "string"
+        },
+        "thumbnail_path": {
+          "default": "",
+          "title": "Thumbnail Path",
+          "type": "string"
+        },
+        "proxy_path": {
+          "default": "",
+          "title": "Proxy Path",
+          "type": "string"
+        },
+        "source_job_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Job Id"
+        },
+        "source_asset_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Asset Ids",
+          "type": "array"
+        },
+        "metadata": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Metadata",
+          "type": "object"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "deleted_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deleted At"
         }
       },
       "required": [
@@ -127,6 +256,7 @@
       "enum": [
         "image",
         "video",
+        "audio",
         "document"
       ],
       "title": "AssetKind",
@@ -245,6 +375,22 @@
           "title": "Target Minutes",
           "type": "number"
         },
+        "production_kind": {
+          "$ref": "#/$defs/ProductionKind",
+          "default": "program"
+        },
+        "sample_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Seconds"
+        },
         "audience": {
           "default": "",
           "title": "Audience",
@@ -318,6 +464,151 @@
         "name"
       ],
       "title": "Character",
+      "type": "object"
+    },
+    "ClipComposition": {
+      "description": "Non-destructive Gallery composition and exportable source lineage.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "project_id": {
+          "title": "Project Id",
+          "type": "string"
+        },
+        "version": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "parent_composition_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Composition Id"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/ClipJoinSource"
+          },
+          "maxItems": 32,
+          "minItems": 2,
+          "title": "Sources",
+          "type": "array"
+        },
+        "junctions": {
+          "items": {
+            "$ref": "#/$defs/ClipJoinPoint"
+          },
+          "maxItems": 31,
+          "minItems": 1,
+          "title": "Junctions",
+          "type": "array"
+        },
+        "source_asset_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Asset Ids",
+          "type": "array"
+        },
+        "asset_id": {
+          "default": "",
+          "title": "Asset Id",
+          "type": "string"
+        },
+        "width": {
+          "default": 1920,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "default": 1080,
+          "title": "Height",
+          "type": "integer"
+        },
+        "fps": {
+          "default": 23.976,
+          "title": "Fps",
+          "type": "number"
+        },
+        "color_space": {
+          "default": "rec709",
+          "title": "Color Space",
+          "type": "string"
+        },
+        "total_frames": {
+          "default": 0,
+          "title": "Total Frames",
+          "type": "integer"
+        },
+        "profile_name": {
+          "default": "",
+          "title": "Profile Name",
+          "type": "string"
+        },
+        "cost_center_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Cost Center Ids",
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/GalleryCompositionStatus",
+          "default": "draft"
+        },
+        "output_path": {
+          "default": "",
+          "title": "Output Path",
+          "type": "string"
+        },
+        "proxy_path": {
+          "default": "",
+          "title": "Proxy Path",
+          "type": "string"
+        },
+        "preview_path": {
+          "default": "",
+          "title": "Preview Path",
+          "type": "string"
+        },
+        "manifest_path": {
+          "default": "",
+          "title": "Manifest Path",
+          "type": "string"
+        },
+        "error": {
+          "default": "",
+          "title": "Error",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "sources",
+        "junctions"
+      ],
+      "title": "ClipComposition",
       "type": "object"
     },
     "ClipEdit": {
@@ -405,8 +696,117 @@
       "title": "ClipEdit",
       "type": "object"
     },
+    "ClipJoinPoint": {
+      "properties": {
+        "left_clip_id": {
+          "title": "Left Clip Id",
+          "type": "string"
+        },
+        "right_clip_id": {
+          "title": "Right Clip Id",
+          "type": "string"
+        },
+        "transition": {
+          "$ref": "#/$defs/GalleryTransition",
+          "default": "cut"
+        },
+        "duration_frames": {
+          "default": 0,
+          "maximum": 120,
+          "minimum": 0,
+          "title": "Duration Frames",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "left_clip_id",
+        "right_clip_id"
+      ],
+      "title": "ClipJoinPoint",
+      "type": "object"
+    },
+    "ClipJoinSource": {
+      "description": "One immutable Gallery clip reference with frame-authoritative trims.",
+      "properties": {
+        "clip_id": {
+          "title": "Clip Id",
+          "type": "string"
+        },
+        "project_id": {
+          "title": "Project Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "duration_frames": {
+          "minimum": 2,
+          "title": "Duration Frames",
+          "type": "integer"
+        },
+        "trim_in_frame": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Trim In Frame",
+          "type": "integer"
+        },
+        "trim_out_frame": {
+          "minimum": 1,
+          "title": "Trim Out Frame",
+          "type": "integer"
+        },
+        "fps": {
+          "exclusiveMinimum": 0,
+          "title": "Fps",
+          "type": "number"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "codec": {
+          "default": "unknown",
+          "title": "Codec",
+          "type": "string"
+        },
+        "normalized": {
+          "default": false,
+          "title": "Normalized",
+          "type": "boolean"
+        },
+        "normalization_note": {
+          "default": "",
+          "title": "Normalization Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "clip_id",
+        "project_id",
+        "title",
+        "path",
+        "duration_frames",
+        "trim_out_frame",
+        "fps",
+        "width",
+        "height"
+      ],
+      "title": "ClipJoinSource",
+      "type": "object"
+    },
     "ClusterSite": {
-      "description": "Where Diony compute lives. Local Quad-Spark is the SKU. Dual-Spark and B300 are signed lease exceptions.",
+      "description": "Where Diony compute lives. Local Quad-Spark is the SKU. Dual-Spark, B300, and B200 are signed lease exceptions.",
       "properties": {
         "path": {
           "$ref": "#/$defs/ComputePath",
@@ -454,9 +854,19 @@
         "local",
         "dual",
         "lease",
-        "b300"
+        "b300",
+        "b200"
       ],
       "title": "ComputePath",
+      "type": "string"
+    },
+    "ContinuityMode": {
+      "enum": [
+        "independent",
+        "reference",
+        "previous_frame"
+      ],
+      "title": "ContinuityMode",
       "type": "string"
     },
     "CustomerKind": {
@@ -539,6 +949,32 @@
         "deliverable"
       ],
       "title": "FinishIntent",
+      "type": "string"
+    },
+    "GalleryCompositionStatus": {
+      "enum": [
+        "draft",
+        "queued",
+        "processing",
+        "complete",
+        "failed",
+        "cancelled",
+        "superseded"
+      ],
+      "title": "GalleryCompositionStatus",
+      "type": "string"
+    },
+    "GalleryTransition": {
+      "enum": [
+        "cut",
+        "cross_dissolve",
+        "film_dissolve",
+        "fade_through_black",
+        "dip_to_white",
+        "wipe_left",
+        "wipe_right"
+      ],
+      "title": "GalleryTransition",
       "type": "string"
     },
     "Gate": {
@@ -750,6 +1186,202 @@
       "title": "PictureLockState",
       "type": "string"
     },
+    "ProductionInfrastructureRecovery": {
+      "description": "Audit receipt for resuming the same Takes after a service interruption.",
+      "properties": {
+        "recovered_at": {
+          "format": "date-time",
+          "title": "Recovered At",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "interrupted_stop": {
+          "$ref": "#/$defs/ProductionStopReceipt"
+        },
+        "resumed_take_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Resumed Take Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "reason",
+        "interrupted_stop"
+      ],
+      "title": "ProductionInfrastructureRecovery",
+      "type": "object"
+    },
+    "ProductionKind": {
+      "enum": [
+        "program",
+        "sample"
+      ],
+      "title": "ProductionKind",
+      "type": "string"
+    },
+    "ProductionPauseReceipt": {
+      "description": "Durable drain checkpoint that holds dispatch after one active Take.",
+      "properties": {
+        "requested_at": {
+          "format": "date-time",
+          "title": "Requested At",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "after_take_id": {
+          "title": "After Take Id",
+          "type": "string"
+        },
+        "remaining_take_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Remaining Take Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "reason",
+        "after_take_id"
+      ],
+      "title": "ProductionPauseReceipt",
+      "type": "object"
+    },
+    "ProductionRestartReceipt": {
+      "description": "Audit receipt for a new immutable take set on the same stopped Project.",
+      "properties": {
+        "restarted_at": {
+          "format": "date-time",
+          "title": "Restarted At",
+          "type": "string"
+        },
+        "reason": {
+          "default": "reference_and_performance_recalibration",
+          "title": "Reason",
+          "type": "string"
+        },
+        "previous_project_version": {
+          "minimum": 1,
+          "title": "Previous Project Version",
+          "type": "integer"
+        },
+        "new_project_version": {
+          "minimum": 2,
+          "title": "New Project Version",
+          "type": "integer"
+        },
+        "previous_stop": {
+          "$ref": "#/$defs/ProductionStopReceipt"
+        },
+        "preserved_take_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Preserved Take Ids",
+          "type": "array"
+        },
+        "replacement_take_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Replacement Take Ids",
+          "type": "array"
+        },
+        "prompt_strategy_version": {
+          "title": "Prompt Strategy Version",
+          "type": "string"
+        },
+        "reference_asset_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reference Asset Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "previous_project_version",
+        "new_project_version",
+        "previous_stop",
+        "prompt_strategy_version"
+      ],
+      "title": "ProductionRestartReceipt",
+      "type": "object"
+    },
+    "ProductionStopDisposition": {
+      "enum": [
+        "keep",
+        "delete"
+      ],
+      "title": "ProductionStopDisposition",
+      "type": "string"
+    },
+    "ProductionStopReceipt": {
+      "description": "Durable user decision for a manually stopped Production run.",
+      "properties": {
+        "disposition": {
+          "$ref": "#/$defs/ProductionStopDisposition"
+        },
+        "stopped_at": {
+          "format": "date-time",
+          "title": "Stopped At",
+          "type": "string"
+        },
+        "completed_take_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Completed Take Ids",
+          "type": "array"
+        },
+        "result_path": {
+          "default": "",
+          "title": "Result Path",
+          "type": "string"
+        },
+        "result_sha256": {
+          "default": "",
+          "title": "Result Sha256",
+          "type": "string"
+        },
+        "result_width": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Result Width",
+          "type": "integer"
+        },
+        "result_height": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Result Height",
+          "type": "integer"
+        },
+        "deleted_file_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Deleted File Count",
+          "type": "integer"
+        },
+        "result_error": {
+          "default": "",
+          "title": "Result Error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "disposition"
+      ],
+      "title": "ProductionStopReceipt",
+      "type": "object"
+    },
     "ProjectStatus": {
       "enum": [
         "draft",
@@ -761,7 +1393,8 @@
         "mix_pending",
         "mix_locked",
         "mastered",
-        "distributed"
+        "distributed",
+        "stopped"
       ],
       "title": "ProjectStatus",
       "type": "string"
@@ -803,6 +1436,66 @@
           "title": "Legal Ok",
           "type": "boolean"
         },
+        "motion_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Motion Ok"
+        },
+        "camera_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Camera Ok"
+        },
+        "lighting_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lighting Ok"
+        },
+        "production_clean_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Production Clean Ok"
+        },
+        "audio_ready_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audio Ready Ok"
+        },
         "lipsync_ok": {
           "anyOf": [
             {
@@ -826,6 +1519,130 @@
           ],
           "default": null,
           "title": "Loudness Ok"
+        },
+        "reference_asset_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reference Asset Ids",
+          "type": "array"
+        },
+        "reference_similarity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference Similarity"
+        },
+        "reference_similarities": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Reference Similarities",
+          "type": "object"
+        },
+        "reference_verified": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference Verified"
+        },
+        "continuity_from_take_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Continuity From Take Id"
+        },
+        "continuity_similarity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Continuity Similarity"
+        },
+        "continuity_verified": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Continuity Verified"
+        },
+        "measurement_version": {
+          "default": "",
+          "title": "Measurement Version",
+          "type": "string"
+        },
+        "temporal_delta_p95": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Temporal Delta P95"
+        },
+        "temporal_residual_p95": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Temporal Residual P95"
+        },
+        "flicker_luma_p95": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Flicker Luma P95"
+        },
+        "measured_frame_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Measured Frame Count",
+          "type": "integer"
         },
         "notes": {
           "default": "",
@@ -859,6 +1676,15 @@
         "warn"
       ],
       "title": "QCVerdict",
+      "type": "string"
+    },
+    "ReferenceLock": {
+      "enum": [
+        "none",
+        "character",
+        "character_and_background"
+      ],
+      "title": "ReferenceLock",
       "type": "string"
     },
     "Shot": {
@@ -912,6 +1738,17 @@
           "title": "Negative Prompt",
           "type": "string"
         },
+        "prompt_plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WanPromptPlan"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "seed": {
           "title": "Seed",
           "type": "integer"
@@ -929,6 +1766,28 @@
           },
           "title": "Keyframe Asset Ids",
           "type": "array"
+        },
+        "audio_asset_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Audio Asset Ids",
+          "type": "array"
+        },
+        "motion_reference_asset_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Motion Reference Asset Ids",
+          "type": "array"
+        },
+        "reference_lock": {
+          "$ref": "#/$defs/ReferenceLock",
+          "default": "none"
+        },
+        "continuity_mode": {
+          "$ref": "#/$defs/ContinuityMode",
+          "default": "independent"
         },
         "engine": {
           "$ref": "#/$defs/Engine"
@@ -1153,10 +2012,40 @@
           "title": "Preview Path",
           "type": "string"
         },
+        "picture_sha256": {
+          "default": "",
+          "title": "Picture Sha256",
+          "type": "string"
+        },
+        "program_sha256": {
+          "default": "",
+          "title": "Program Sha256",
+          "type": "string"
+        },
+        "source_artifact_sha256s": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Artifact Sha256S",
+          "type": "array"
+        },
         "stitched": {
           "default": false,
           "title": "Stitched",
           "type": "boolean"
+        },
+        "gallery_removed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gallery Removed At"
         }
       },
       "required": [
@@ -1221,12 +2110,139 @@
       ],
       "title": "TimelineEvent",
       "type": "object"
+    },
+    "WanPromptPlan": {
+      "description": "Typed, inspectable Wan2.2 prompt layers compiled from the Idea.",
+      "properties": {
+        "strategy_version": {
+          "default": "wan22-five-layer-v3",
+          "title": "Strategy Version",
+          "type": "string"
+        },
+        "source_idea_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "title": "Source Idea Sha256",
+          "type": "string"
+        },
+        "subject": {
+          "title": "Subject",
+          "type": "string"
+        },
+        "identity_anchors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Identity Anchors",
+          "type": "array"
+        },
+        "motion": {
+          "title": "Motion",
+          "type": "string"
+        },
+        "camera": {
+          "title": "Camera",
+          "type": "string"
+        },
+        "scene": {
+          "title": "Scene",
+          "type": "string"
+        },
+        "environment_dynamics": {
+          "default": "",
+          "title": "Environment Dynamics",
+          "type": "string"
+        },
+        "high_noise_plan": {
+          "default": "",
+          "title": "High Noise Plan",
+          "type": "string"
+        },
+        "low_noise_plan": {
+          "default": "",
+          "title": "Low Noise Plan",
+          "type": "string"
+        },
+        "generation_method": {
+          "default": "",
+          "title": "Generation Method",
+          "type": "string"
+        },
+        "audio_strategy": {
+          "default": "silent_plate",
+          "title": "Audio Strategy",
+          "type": "string"
+        },
+        "quality_lora_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Quality Lora Ids",
+          "type": "array"
+        },
+        "continuity_risks": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Continuity Risks",
+          "type": "array"
+        },
+        "negative_terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Negative Terms",
+          "type": "array"
+        },
+        "word_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Word Count",
+          "type": "integer"
+        },
+        "diagnostics": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Diagnostics",
+          "type": "array"
+        }
+      },
+      "required": [
+        "source_idea_sha256",
+        "subject",
+        "motion",
+        "camera",
+        "scene"
+      ],
+      "title": "WanPromptPlan",
+      "type": "object"
     }
   },
   "properties": {
+    "schema_version": {
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
     "id": {
       "title": "Id",
       "type": "string"
+    },
+    "workspace_id": {
+      "default": "local-workspace",
+      "title": "Workspace Id",
+      "type": "string"
+    },
+    "owner_user_id": {
+      "default": "local-user",
+      "title": "Owner User Id",
+      "type": "string"
+    },
+    "version": {
+      "default": 1,
+      "title": "Version",
+      "type": "integer"
     },
     "status": {
       "$ref": "#/$defs/ProjectStatus",
@@ -1285,6 +2301,13 @@
       "title": "Edits",
       "type": "array"
     },
+    "compositions": {
+      "items": {
+        "$ref": "#/$defs/ClipComposition"
+      },
+      "title": "Compositions",
+      "type": "array"
+    },
     "timeline": {
       "anyOf": [
         {
@@ -1333,6 +2356,86 @@
       "format": "date-time",
       "title": "Created At",
       "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    },
+    "deleted_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Deleted At"
+    },
+    "production_started_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Production Started At"
+    },
+    "production_ended_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Production Ended At"
+    },
+    "production_stop": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProductionStopReceipt"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "production_restarts": {
+      "items": {
+        "$ref": "#/$defs/ProductionRestartReceipt"
+      },
+      "title": "Production Restarts",
+      "type": "array"
+    },
+    "production_pause": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProductionPauseReceipt"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "production_recoveries": {
+      "items": {
+        "$ref": "#/$defs/ProductionInfrastructureRecovery"
+      },
+      "title": "Production Recoveries",
+      "type": "array"
     }
   },
   "required": [

@@ -105,7 +105,7 @@ def inference_live() -> bool:
 
 
 def wizard_live() -> bool:
-    """Dual-Spark/B300 App SSHes, pulls the pack, and starts Producer. Pytest stays dry."""
+    """Dual-Spark / B300 / B200 App SSHes, pulls the pack, and starts Producer. Pytest stays dry."""
     if _falsy_live():
         return False
     if _truthy("DIONY_WIZARD_LIVE") or _truthy("DIONY_LIVE"):

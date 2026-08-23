@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from diony_contracts.enums import (
     ArtifactKind,
     Engine,
-    PictureLockState,
+    GateName,
     QCVerdict,
     TakeOrigin,
 )
@@ -98,8 +98,9 @@ def apply_clip_edit(
     t_out_frames: int | None = None,
     attachment_ids: list[str] | None = None,
 ) -> Project:
-    if project.timeline and project.timeline.picture_lock == PictureLockState.LOCKED:
-        raise ValueError("picture is locked; unlock is a human gate, not an edit")
+    dist = next((gate for gate in project.gates if gate.name == GateName.DISTRIBUTION), None)
+    if dist is not None and not dist.open:
+        raise ValueError("distributed; edit is closed")
     parent = project.take(source_take_id)
     shot = project.shot(parent.shot_id)
     lineage_len = 1 + len(parent.lineage)

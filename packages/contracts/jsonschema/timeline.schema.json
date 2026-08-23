@@ -97,10 +97,40 @@
       "title": "Preview Path",
       "type": "string"
     },
+    "picture_sha256": {
+      "default": "",
+      "title": "Picture Sha256",
+      "type": "string"
+    },
+    "program_sha256": {
+      "default": "",
+      "title": "Program Sha256",
+      "type": "string"
+    },
+    "source_artifact_sha256s": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Artifact Sha256S",
+      "type": "array"
+    },
     "stitched": {
       "default": false,
       "title": "Stitched",
       "type": "boolean"
+    },
+    "gallery_removed_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gallery Removed At"
     }
   },
   "required": [
