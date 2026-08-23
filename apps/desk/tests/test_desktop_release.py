@@ -39,16 +39,16 @@ def test_desktop_and_home_surfaces_use_the_bar_mark_logo_and_app_icon() -> None:
 
     logo_png = brand_source.read_bytes()
     assert hashlib.sha256(logo_png).hexdigest() == (
-        "6572d4f7310cc15251624b4a7d9623e1ce33d330c7011119610f2477dfb735b2"
+        "10df26b832dd824e13a5e38a49b97520dc5ed87d8338750266f3ebe94518c38c"
     )
     assert logo_png.startswith(b"\x89PNG\r\n\x1a\n")
-    assert struct.unpack(">II", logo_png[16:24]) == (960, 920)
+    assert struct.unpack(">II", logo_png[16:24]) == (960, 894)
     assert logo_png[24] == 8
     assert logo_png[25] == 6  # RGBA: the bar mark floats on a transparent canvas.
 
     png = master.read_bytes()
     assert hashlib.sha256(png).hexdigest() == (
-        "d1c90ec2c670f8687a478ac96aa5d67f2c627f1ae5148a46c54482697e31522a"
+        "d85f8d697148c27c7dfe54bbfc51fd3c833300d967899c599df46fde81d02aa9"
     )
     assert png.startswith(b"\x89PNG\r\n\x1a\n")
     assert struct.unpack(">II", png[16:24]) == (1024, 1024)
