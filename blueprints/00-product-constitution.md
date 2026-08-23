@@ -6,7 +6,7 @@ Applies to: every Blueprint, profile, app, and agent session
 
 ## What Diony AI is
 
-Diony AI is a **packaged SKU**: software, versioned cluster profiles, crate-to-cluster Wizard, Producer, Conductor, and these Blueprints. A customer takes the hardware cluster and this product and can make a **full 1-hour TV/movie-ready clip** given enough time and energy.
+Diony AI is a **packaged SKU**: software, versioned cluster profiles, crate-to-cluster Studio, Producer, Conductor, and these Blueprints. A customer takes the hardware cluster and this product and can make a **full 1-hour TV/movie-ready clip** given enough time and energy.
 
 It is not:
 
@@ -19,9 +19,10 @@ It is not:
 
 | Surface | User | Success |
 |---|---|---|
-| Wizard | Technician at first boot | Site recorded. Local Quad-Spark: fabric green. Leased Dual-Spark or Leased B300: Connect → App → Producer. App applies the pinned site pack; Brain is auto. Sign writes `{vault}/.cluster/site.json` and locks the last line. Then open Producer. |
-| Producer | Showrunner | Idea → Dailies → Program stitch → Lock. Reads the site lock. Notes on Shot/Take IDs |
-| Conductor | Autonomous | Plans, dispatches, QC, retakes, mode changes. Stops at human gates. |
+| Desk | First software open | START HERE: local crate, or Runpod then Enverge leases. Double-click Open Diony AI (11). Continue is Studio. |
+| Studio | Technician at first boot | Site recorded. Local Quad-Spark: fabric green. Leased Dual-Spark, Leased B300, or Leased B200: Connect → App → Ready → Producer. App applies the pinned site pack; Ready is Test GPU; Brain is auto. Sign writes `{vault}/.cluster/site.json` and locks the last line. Then open Producer. |
+| Producer | Showrunner | Idea → Production (the run) → Gallery. Production runs 1080 finish and mix. Reads the site lock. Notes on Shot/Take IDs |
+| Conductor | Autonomous | Plans, dispatches, QC, retakes, mode changes. Stops at bible and distribution. |
 | Blueprints | Operators and coding agents | Operational truth. Code implements; it does not contradict. |
 
 ## North Star deliverable
@@ -43,15 +44,15 @@ One hour of audiovisual program:
 2. **DeepSeek-V4-Flash-0731 is the brain.** MIT. ~167 GB. Spark recipes are not GB300 recipes (`04`).
 3. **1 hour is a multi-day job.** SLA 2–5 wall-clock days (`07`). Do not promise real-time.
 4. **NAS is the vault.** Node NVMe holds weights and scratch. `/diony/vault` holds projects.
-5. **Never cloud-by-default.** No Dashscope, no hosted prompt extend, no off-box inference unless a human explicitly authorizes it. Local Quad-Spark (`spark-4x-v1`) is the default. Leased Dual-Spark (`spark-2x-v1`) and Leased B300 (`b300-v1`) are Wizard **Site** exceptions with a named human (`14`). They are still DeepSeek on that site — not a hosted LLM and not a failover. `lease-gpu-v1` is not a Wizard Site.
+5. **Never cloud-by-default.** No Dashscope, no hosted prompt extend, no off-box inference unless a human explicitly authorizes it. Local Quad-Spark (`spark-4x-v1`) is the default. Leased Dual-Spark (`spark-2x-v1`), Leased B300 (`b300-v1`), and Leased B200 (`b200-v1`) are Studio **Site** exceptions with a named human (`14`). They are still DeepSeek on that site — not a hosted LLM and not a failover. `lease-gpu-v1` is not a Studio Site.
 6. **NVIDIA Sync owns fabric.** Diony overlay owns storage, models, fleet modes, Producer.
 
 ## Human gates (cannot be removed)
 
 1. Bible lock
-2. Picture lock
-3. Mix lock
-4. Distribution
+2. Distribution
+
+Picture and mix are Production steps, not clicks. After Wan 720p, the run finishes 1080 (`diony_sr_v1`) and locks mix (loudness from the bible). Retakes reopen picture and mix; the run does them again. Do not skip bible or distribution.
 
 ## Fleet modes (cannot be collapsed)
 

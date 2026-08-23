@@ -8,13 +8,13 @@ Profile: `spark-4x-v1`
 | Network | Hardware | Purpose |
 |---|---|---|
 | **Fabric** | ConnectX-7, Spark **port 2**, RoCE v2, 200 GbE class | NCCL, vLLM TP, Gloo, SSH-over-fabric |
-| **Management / vault** | RJ-45 10GbE | Wizard, Producer browsers, NFS/SMB to NAS, OTA, Sync enrollment |
+| **Management / vault** | RJ-45 10GbE | Studio, Producer browsers, NFS/SMB to NAS, OTA, Sync enrollment |
 
 Do not put NAS traffic on the RoCE fabric. Do not put NCCL on 10GbE.
 
 ## Node identity
 
-Canonical IPs are **examples**. Wizard records the actual Sync IP plan.
+Canonical IPs are **examples**. Studio records the actual Sync IP plan.
 
 ```
 # Fabric (RoCE) — /24 example
@@ -57,9 +57,9 @@ GLOO_SOCKET_IFNAME=<fabric iface>
 
 Fail if `/etc/nccl.conf` forces `NCCL_IB_DISABLE=1` or `NET=Socket`.
 
-Interface names on GB10 vary. Wizard records the live names from Sync. Community CRS812 recipe used Spark **port2** names like `enP2p1s0f1np1` / `roceP2p1s0f1`.
+Interface names on GB10 vary. Studio records the live names from Sync. Community CRS812 recipe used Spark **port2** names like `enP2p1s0f1np1` / `roceP2p1s0f1`.
 
-## Health gates (Wizard step `roce`)
+## Health gates (Studio step `roce`)
 
 Run from spark-01 after Sync claims healthy.
 
@@ -90,7 +90,7 @@ Single-flow iperf topping out near 100G is **expected** if only one logical half
 # Fail: Socket backend or <10 GB/s busbw
 ```
 
-Day 1 Wizard records these as **planned probes** and can ingest pasted numbers.
+Day 1 Studio records these as **planned probes** and can ingest pasted numbers.
 
 ## Storage topology
 
@@ -122,4 +122,4 @@ Passwordless SSH **over fabric** as configured by Sync. Conductor and torchrun u
 | Intermittent GID errors | IPv6 / GID index drift | Pin GID index; document in profile |
 | Vault 10 MB/s | NAS on Wi-Fi or 1GbE | 10GbE wired, LACP |
 | Node A can ping fabric B, not C | switch VLAN / breakout mapping | Recable to canonical map |
-| After reboot, 50G | switch did not persist 200G | Save RouterOS config; Wizard re-verify |
+| After reboot, 50G | switch did not persist 200G | Save RouterOS config; Studio re-verify |

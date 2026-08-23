@@ -67,4 +67,4 @@ Picture lock **before** final mix. Temp mix allowed under dailies.
 | “Overnight movie” expectation | marketing vs GB10 | SLA table in Producer |
 | Vault full at hour 40 | no NAS / small NAS | halt; Blueprint 09 BOM |
 | 10,000 one-second shots | rundown too cutty | Conductor rewrite shot length |
-| Audio after picture lock drift | recut | new picture lock gate |
+| Audio after 1080 drift | recut | re-run 1080 finish and mix |

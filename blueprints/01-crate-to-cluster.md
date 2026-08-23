@@ -1,15 +1,17 @@
 # Blueprint 01 — Crate to cluster
 
 Status: Day 2 locked  
-Wizard implements this as a step machine. Fabric mutation (netplan, Sync) stays dry-run on a laptop. **Leased Dual-Spark / B300 App Continue is live:** SSH (or local on spark-01), pull the pinned pack, clone Wan2.2, install diony-finish, start Producer. Pytest sets `DIONY_DRY_RUN=1` and never SSHes.
+Studio implements this as a step machine. Fabric mutation (netplan, Sync) stays dry-run on a laptop. **Leased Dual-Spark / B300 / B200 App Continue is live:** SSH (or local on the GPU), pull the pinned pack, clone Wan2.2, install diony-finish, start Producer. Pytest sets `DIONY_DRY_RUN=1` and never SSHes.
 
 ## Goal
 
 Site → unbox → four healthy nodes on fabric → Diony overlay → Producer URL.
 
-**Local Quad-Spark Cluster** (`spark-4x-v1`) is the SKU this Blueprint cabling describes. **Leased Dual-Spark** (`spark-2x-v1`) and **Leased B300** (`b300-v1`) skip Unbox/Cables/Switch/Sync/Fabric — software rail in Blueprint 14. Do not treat a lease as the default. `lease-gpu-v1` is not a Wizard Site.
+On a laptop or spark-01, first software open is **START HERE.txt** then **Open Diony AI** (Blueprint 11). START HERE names the hardware: Local Quad-Spark crate, or a lease from Runpod first (`https://www.runpod.io/`) then Enverge (`https://enverge.ai/`) for Dual-Spark, B300, and B200. No `pip` in that path.
 
-NVIDIA Sync Cluster Assistant configures ConnectX-7, netplan, SSH trust, and `ib_write_bw` / `ib_write_lat` on the desk. Diony does not reimplement that. The Wizard **wraps** it. On a lease, the fabric owner is Sync **or** the provider; Diony still does not replace them.
+**Local Quad-Spark Cluster** (`spark-4x-v1`) is the SKU this Blueprint cabling describes. **Leased Dual-Spark** (`spark-2x-v1`), **Leased B300** (`b300-v1`), and **Leased B200** (`b200-v1`) skip Unbox/Cables/Switch/Sync/Fabric — software rail in Blueprint 14. Do not treat a lease as the default. `lease-gpu-v1` is not a Studio Site.
+
+NVIDIA Sync Cluster Assistant configures ConnectX-7, netplan, SSH trust, and `ib_write_bw` / `ib_write_lat` on the desk. Diony does not reimplement that. The Studio **wraps** it. On a lease, the fabric owner is Sync **or** the provider; Diony still does not replace them.
 
 ## Physical checklist (before power)
 
@@ -32,39 +34,39 @@ spark-04 CX7 port2  ----QSFP----  switch fabric port D
 
 spark-01..04 RJ-45  ----Cat6----  mgmt switch
 NAS 10GbE           ----Cat6----  mgmt switch
-Wizard laptop       ----Cat6----  mgmt switch
+Studio laptop       ----Cat6----  mgmt switch
 ```
 
 Breakout variant (CRS812): two QSFP-DD→2×QSFP56 DACs. Switch port 1 → spark-01 + spark-02. Switch port 2 → spark-03 + spark-04.
 
 Label every cable both ends: `S1-P2`, `S2-P2`, …
 
-## Wizard steps (product order)
+## Studio steps (product order)
 
 | Step id | Name | Pass criteria |
 |---|---|---|
-| `path` | Site | Local Quad-Spark, Leased Dual-Spark, or Leased B300. Leases record a named human (14). |
-| `connect` | Hosts + vault | Lease only. Dual-Spark: two hosts + CX-7 RoCE. B300: one host + vault, then App (14). |
-| `unbox` | Crate on the desk, before power | Local crate only. Leased B300 skips this line (14). |
+| `path` | Site | Local Quad-Spark, Leased Dual-Spark, Leased B300, or Leased B200. Leases record a named human (14). |
+| `connect` | Hosts + vault | Lease only. Dual-Spark: two hosts + cluster fabric (Runpod Instant Cluster, or Enverge CX-7 RoCE). B300 / B200: one host + vault (Runpod field map in 14), then App. |
+| `unbox` | Crate on the desk, before power | Local crate only. Dual-Spark / B300 / B200 skip this line (14). |
 | `inventory` | Serials / instance IDs, matched OS | Desk: four Sparks. Lease is filled by Connect. |
-| `cables` | Operator confirms cable / fabric map | Local crate only. Leased B300 skips this line (14). |
-| `switch` | Advertised class forced, autoneg off | Local: MikroTik 200G snippets. Leased B300 skips this line (14). |
-| `sync` | Fabric owner reports healthy | Local: NVIDIA Sync. Leased B300 skips this line (14). |
+| `cables` | Operator confirms cable / fabric map | Local crate only. Dual-Spark / B300 / B200 skip this line (14). |
+| `switch` | Advertised class forced, autoneg off | Local: MikroTik 200G snippets. Dual-Spark / B300 / B200 skip this line (14). |
+| `sync` | Fabric owner reports healthy | Local: NVIDIA Sync. Dual-Spark / B300 / B200 skip this line (14). |
 | `roce` | Diony health: full fabric class + NCCL | Local crate only. See Blueprint 02. |
 | `vault` | Mount `/diony/vault` | Same path on every site |
-| `weights` | Pack (not a Wizard page) | Pinned DeepSeek 0731 + Wan2.2 A14B + `diony_sr_v1`. Recorded on App (leases) or Producer (desk). Brain recipe auto. Dual/B300 App **pulls** it. |
-| `app` | Pack + Producer running | Dual-Spark and B300: Continue pulls + `diony-producer` (14). Desk records this on Producer. |
-| `producer` | Print Producer URL | Floors: Idea, Dailies, Program, Lock. `http://producer.diony.local`. Sign, then open. |
+| `weights` | Pack (not a Studio page) | Pinned DeepSeek 0731 + Wan2.2 A14B + `diony_sr_v1`. Recorded on App (leases) or Producer (desk). Brain recipe auto. Dual/B300/B200 App **pulls** it. |
+| `app` | Pack + Producer running | Dual-Spark, B300, and B200: Continue mounts `/diony/vault`, pulls, starts `diony-producer` (14). Desk records this on Producer. |
+| `producer` | Print Producer URL | Floors: Idea, Production, Gallery. Sign writes `site.json`. Open `http://producer.diony.local`. |
 
-Laptop pytest is `dry-run`. Live Dual-Spark/B300 App pulls weights. The Wizard starts at **Site**. On the local path, do not power Spark Cluster (4) until **Unbox** is signed. Fabric netplan remains Week 2+.
+Laptop pytest is `dry-run`. Live Dual-Spark/B300/B200 App pulls weights. The Studio starts at **Site**. On the local path, do not power Spark Cluster (4) until **Unbox** is signed. Fabric netplan remains Week 2+.
 
 ## NVIDIA Sync handoff
 
-Do **not** script Sync internals. The Wizard shows:
+Do **not** script Sync internals. The Studio shows:
 
 1. Open NVIDIA Sync on a machine that already enrolled Spark Cluster (4).
 2. Cluster Assistant: readiness (OTA, sudo) → CX-7 topology probe → IP plan → netplan → `ib_write_bw` / `ib_write_lat` → SSH over CX-7.
-3. Paste Sync’s cluster name + node IPs into the Wizard.
+3. Paste Sync’s cluster name + node IPs into the Studio.
 4. Continue to Diony RoCE gates (those are ours).
 
 Official refs (operators follow NVIDIA’s current docs, not a fork):
@@ -101,14 +103,14 @@ Exact snippets: `infra/switch/crs804-200g.rsc` and `infra/switch/crs812-200g.rsc
 | iperf ~100G single flow | CX-7 two logical halves | Drive **both** halves (`enp1s0f1np1` + `enP2p1s0f1np1`) |
 | NCCL Socket not IB | leftover `/etc/nccl.conf` | Remove `NCCL_IB_DISABLE=1` |
 | One node different OS | imaging drift | Reimage to matched train; Sync assumes matched firmware |
-| Vault mount only on spark-01 | fstab not shipped | Wizard step `vault` must pass on all four |
+| Vault mount only on spark-01 | fstab not shipped | Studio step `vault` must pass on all four |
 | OOM during weight pull | pulling to rootfs | Pull to NVMe model dir per manifest |
 
 ## Hostnames and roles
 
 | Host | Role |
 |---|---|
-| `spark-01` | Primary. Wizard + Producer UI. Sync seed. |
+| `spark-01` | Primary. Studio + Producer UI. Sync seed. |
 | `spark-02` | Peer. TP rank 1 in BRAIN/SPLIT brain. |
 | `spark-03` | Peer. Wan lane A in SPLIT; TP rank 2 in BRAIN. |
 | `spark-04` | Peer. Wan lane B in SPLIT; TP rank 3 in BRAIN. |

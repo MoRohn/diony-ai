@@ -3,7 +3,7 @@
 Status: Day 1 locked  
 SKU name: **Diony AI Cluster `spark-4x-v1`**
 
-This is what the crate contains, plus what the customer must add. Wizard assumes this BOM for **Local Quad-Spark**. Leased Dual-Spark (`spark-2x-v1`) and Leased B300 (`b300-v1`) are signed Site exceptions in Blueprint 14, not this crate.
+This is what the crate contains, plus what the customer must add. Studio assumes this BOM for **Local Quad-Spark**. Leased Dual-Spark (`spark-2x-v1`), Leased B300 (`b300-v1`), and Leased B200 (`b200-v1`) are signed Site exceptions in Blueprint 14, not this crate.
 
 ## Compute (required)
 
@@ -58,7 +58,7 @@ DGX OS, NVIDIA Sync, Cluster Assistant, CUDA, NCCL — preinstalled / NVIDIA lic
 
 - Blueprints 00–14
 - `infra/profiles/spark-4x-v1.yaml` (crate). Signed exceptions: `lease-gpu-v1`, `b300-v1`
-- Wizard, Producer, Conductor
+- Studio, Producer, Conductor
 - Contracts
 - Weight **manifest** (not the 167 GB in git)
 
@@ -68,7 +68,7 @@ DGX OS, NVIDIA Sync, Cluster Assistant, CUDA, NCCL — preinstalled / NVIDIA lic
 - Four units + switch still a **normal office circuit** if NAS is not a full rack
 - Ventilation: do not enclose in an unvented cabinet
 
-## Procurement checklist (Wizard `inventory` expects)
+## Procurement checklist (Studio `inventory` expects)
 
 - [ ] Four serial numbers
 - [ ] Switch SKU A or B

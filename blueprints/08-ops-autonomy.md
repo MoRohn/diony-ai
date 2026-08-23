@@ -8,9 +8,9 @@ Goal: run, maintain, and recover **near autonomously**. Humans: gates + hardware
 | Actor | Owns |
 |---|---|
 | Conductor (DeepSeek) | rundown, expand, dispatch, QC, retake, request mode, disk pressure pause |
-| Wizard | first boot, later “repair crate” replay of failed steps |
+| Studio | first boot, later “repair crate” replay of failed steps |
 | systemd/compose | restart policy on brain/wan/finish |
-| Human | bible / picture / mix / distribution; cable reseat; NAS disks; legal |
+| Human | bible / distribution; cable reseat; NAS disks; legal |
 
 ## Health
 
@@ -38,28 +38,28 @@ Probes (Day 1 scripts record dry-run; Week 2 hit live endpoints):
 - Reimaging a node without operator confirm
 - Deleting vault selects
 
-Leased Dual-Spark (`spark-2x-v1`) and Leased B300 (`b300-v1`) are **chosen sites**, recorded in Wizard `path` with a named human (Blueprint 14). They are not failovers. Do not bounce jobs because local health failed. `lease-gpu-v1` is not a Wizard Site.
+Leased Dual-Spark (`spark-2x-v1`), Leased B300 (`b300-v1`), and Leased B200 (`b200-v1`) are **chosen sites**, recorded in Studio `path` with a named human (Blueprint 14). They are not failovers. Do not bounce jobs because local health failed. `lease-gpu-v1` is not a Studio Site.
 
 ## Updates
 
-- DGX OS OTA: operator-initiated. Wizard records versions. Matched four nodes.
+- DGX OS OTA: operator-initiated. Studio records versions. Matched four nodes.
 - Diony software: versioned with profiles (`spark-4x-v1` / `spark-2x-v1` / `lease-gpu-v1` / `b300-v1` + app semver).
 - Weights: pin revision hashes in `infra/models/manifest.yaml`. Do not `latest` in production.
 
 ## Air-gap
 
-Default: **no outbound** except operator-approved weight pull (Hugging Face / ModelScope) during Wizard App (leases) or Producer (desk). After pull, cluster can run disconnected. Producer must not call Dashscope or other hosted LLMs.
+Default: **no outbound** except operator-approved weight pull (Hugging Face / ModelScope) during Studio App (leases) or Producer (desk). After pull, cluster can run disconnected. Producer must not call Dashscope or other hosted LLMs.
 
-If the site is air-gapped from day one, weights arrive on encrypted disk; Wizard App / Producer verifies checksums only.
+If the site is air-gapped from day one, weights arrive on encrypted disk; Studio App / Producer verifies checksums only.
 
 ## Logging
 
 - Cluster: `/diony/vault/.cluster/logs/`
-- Site lock: `/diony/vault/.cluster/site.json` (Wizard Sign). `mode.lock` beside it.
+- Site lock: `/diony/vault/.cluster/site.json` (Studio Sign). `mode.lock` beside it.
 - Job: beside the Take
 - No secrets in logs (HF tokens)
 
-Mode changes write `mode.lock`. Dual-Spark and B300 refuse concurrent `brain` + `wan`. Drain → unload → load → healthgate. Producer and Conductor read the same files.
+Mode changes write `mode.lock`. Dual-Spark, B300, and B200 refuse concurrent `brain` + `wan`. Drain → unload → load → healthgate. Producer and Conductor read the same files.
 
 ## Failure modes
 
