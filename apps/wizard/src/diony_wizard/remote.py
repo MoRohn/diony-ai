@@ -1,4 +1,4 @@
-"""SSH or local shell for Dual-Spark / B300 App apply. Never logs tokens."""
+"""SSH or local shell for Dual-Spark / B300 / B200 App apply. Never logs tokens."""
 
 from __future__ import annotations
 
@@ -31,6 +31,19 @@ def ssh_user() -> str:
     )
 
 
+def ssh_port() -> int:
+    raw = os.environ.get("DIONY_SSH_PORT", "").strip()
+    if not raw:
+        return 22
+    try:
+        port = int(raw)
+    except ValueError:
+        return 22
+    if port < 1 or port > 65535:
+        return 22
+    return port
+
+
 def apply_local(host: str) -> bool:
     if os.environ.get("DIONY_APPLY_LOCAL", "").strip().lower() in {"1", "true", "yes"}:
         return True
@@ -39,9 +52,30 @@ def apply_local(host: str) -> bool:
         return True
     if name == socket.gethostname().lower():
         return True
-    if Path("/models").is_dir() and name in {"spark-01", "b300-01"}:
+    if Path("/models").is_dir() and name in {"spark-01", "b300-01", "b200-01"}:
         return True
     return False
+
+
+def ssh_connect_advice(host: str, port: int, text: str = "") -> str | None:
+    """Operator copy when the TCP map is dead. RunPod remaps IP/-p on Stop/Resume."""
+    blob = f"{text or ''}".lower()
+    dead = (
+        "connection refused" in blob
+        or "connection timed out" in blob
+        or "timed out" in blob
+        or "no route to host" in blob
+        or "network is unreachable" in blob
+        or "operation timed out" in blob
+    )
+    if not dead:
+        return None
+    dest = f"{host}:{port}"
+    return (
+        f"{dest} is not accepting SSH. Resume the pod on RunPod. "
+        "Open Connect. Copy the new SSH over exposed TCP IP and -p "
+        "(not Jupyter 8888, not ssh.runpod.io). Then Pull pack."
+    )
 
 
 def ssh_args() -> list[str]:
@@ -55,7 +89,10 @@ def ssh_args() -> list[str]:
     ]
     key = os.environ.get("DIONY_SSH_KEY", "").strip()
     if key:
-        args.extend(["-i", key])
+        args.extend(["-i", str(Path(key).expanduser())])
+    port = ssh_port()
+    if port != 22:
+        args.extend(["-p", str(port)])
     return args
 
 

@@ -1,3 +1,6 @@
+from pathlib import Path
+
+from diony_wizard.prep import bind_ssh_env
 from diony_wizard.remote import rsync_repo, ssh_args
 
 
@@ -7,6 +10,16 @@ def test_ssh_args_include_identity(monkeypatch) -> None:
     assert "BatchMode=yes" in args
     assert "-i" in args
     assert args[args.index("-i") + 1] == "/tmp/diony_id"
+
+
+def test_streamlined_connection_binds_the_copied_identity_file(monkeypatch) -> None:
+    monkeypatch.delenv("DIONY_SSH_KEY", raising=False)
+
+    bind_ssh_env({"ssh_identity_file": "~/.ssh/id_ed25519"})
+
+    assert ssh_args()[ssh_args().index("-i") + 1] == str(
+        Path("~/.ssh/id_ed25519").expanduser()
+    )
 
 
 def test_rsync_uses_ssh_identity(monkeypatch) -> None:
@@ -37,3 +50,52 @@ def test_rsync_uses_ssh_identity(monkeypatch) -> None:
     assert "-i" in transport
     assert "/tmp/diony_id" in transport
     assert "spark@spark-01:" in cmd[-1]
+
+
+def test_ssh_args_include_port(monkeypatch) -> None:
+    monkeypatch.setenv("DIONY_SSH_PORT", "28231")
+    args = ssh_args()
+    assert "-p" in args
+    assert args[args.index("-p") + 1] == "28231"
+
+
+def test_rsync_uses_ssh_port(monkeypatch) -> None:
+    monkeypatch.delenv("DIONY_APPLY_LOCAL", raising=False)
+    monkeypatch.setenv("DIONY_SSH_USER", "root")
+    monkeypatch.setenv("DIONY_SSH_PORT", "28231")
+    monkeypatch.setattr("diony_wizard.remote.apply_local", lambda host: False)
+
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+
+        class Proc:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Proc()
+
+    monkeypatch.setattr("diony_wizard.remote.subprocess.run", fake_run)
+    result = rsync_repo("198.13.252.68", "/src", "/opt/diony-ai")
+    assert result.ok is True
+    transport = captured["cmd"][captured["cmd"].index("-e") + 1]
+    assert "-p" in transport
+    assert "28231" in transport
+    assert "root@198.13.252.68:" in captured["cmd"][-1]
+
+
+def test_ssh_connect_advice_maps_refused() -> None:
+    from diony_wizard.remote import ssh_connect_advice
+
+    msg = ssh_connect_advice(
+        "198.13.252.68",
+        28231,
+        "ssh: connect to host 198.13.252.68 port 28231: Connection refused",
+    )
+    assert msg is not None
+    assert "198.13.252.68:28231" in msg
+    assert "Resume the pod" in msg
+    assert "SSH over exposed TCP" in msg
+    assert ssh_connect_advice("198.13.252.68", 28231, "Permission denied") is None

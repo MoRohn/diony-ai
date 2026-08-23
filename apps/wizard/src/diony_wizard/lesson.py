@@ -1,4 +1,4 @@
-"""Shared Wizard lesson types."""
+"""Shared Studio lesson types."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field
 class Field:
     id: str
     label: str
-    kind: str  # text, select, check, quiz, choice
+    kind: str  # text, password, select, check, quiz, choice
     options: list[str] = field(default_factory=list)
     placeholder: str = ""
     accept: list[str] = field(default_factory=list)
@@ -18,6 +18,8 @@ class Field:
     option_help: dict[str, str] = field(default_factory=dict)
     default: str = ""
     auto: bool = False  # recorded on Continue; not shown as a quiz
+    source: str = ""  # where on the provider page this box is copied from
+    prefill: bool = True  # False: show placeholder, still default on Continue if empty
 
     def as_public(self) -> dict:
         data = asdict(self)
@@ -35,6 +37,8 @@ class Lesson:
     commands: list[str] = field(default_factory=list)
     diagram: str = ""
     handoff: list[str] = field(default_factory=list)
+    # Provider page map. Each row: tab, heading, use (use|skip|check), body, example, take.
+    guide: list[dict[str, str]] = field(default_factory=list)
 
     def as_public(self) -> dict:
         data = asdict(self)

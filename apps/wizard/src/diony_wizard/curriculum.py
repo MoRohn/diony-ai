@@ -1,9 +1,22 @@
-"""Learn + do curriculum for the Wizard. IDs match Blueprint 01 / 14."""
+"""Learn + do curriculum for the Studio. IDs match Blueprint 01 / 14."""
 
 from __future__ import annotations
 
+import os
+
 from diony_wizard.lesson import Field, Lesson, field_applies, normalize
-from diony_wizard.prep import PACK_LABEL, PRODUCER_URL, SHOW_FLOORS, pack_pull_commands, parse_lease_hosts, vault_is_public
+from diony_wizard.prep import (
+    PACK_LABEL,
+    PRODUCER_URL,
+    SHOW_FLOORS,
+    hosts_commands,
+    pack_pull_commands,
+    parse_lease_hosts,
+    parse_ssh_port,
+    parse_ssh_user,
+    producer_start_commands,
+    vault_is_public,
+)
 
 CABLE_MAP = """spark-01 CX7 port2  ----QSFP----  switch fabric port A
 spark-02 CX7 port2  ----QSFP----  switch fabric port B
@@ -12,19 +25,23 @@ spark-04 CX7 port2  ----QSFP----  switch fabric port D
 
 spark-01..04 RJ-45  ----Cat6----  mgmt switch
 NAS 10GbE           ----Cat6----  mgmt switch
-Wizard laptop       ----Cat6----  mgmt switch"""
+Studio laptop       ----Cat6----  mgmt switch"""
 
 PATH_LESSON = Lesson(
     "path",
     "Pick where this production will run. One place. Stay there.",
     [
-        "Local Quad-Spark Cluster: four GB10 on this floor. Next you unbox them.",
-        "Leased Dual-Spark Cluster: two rented GB10 with RoCE between them. Connect, App, then Producer. Brain is TP=2, sequential.",
-        "Leased B300: one rented Blackwell B300. Connect, App, then Producer. Pack and Brain are on App.",
+        "Local Quad-Spark Cluster: four GB10 on this floor. Next you unbox them. This is the default. Do not pre-select a lease.",
+        "Leased Dual-Spark Cluster: two GB10 with interconnect. Runpod Instant Clusters (2 nodes) first, Enverge 2× DGX Spark GB10 second. Connect, App, Ready, then Producer. Brain is TP=2, sequential. Not a B200 Instant Cluster.",
+        "Leased B300: one Blackwell B300 (288 GB class). Runpod Deploy NVIDIA B300 first, Enverge NVIDIA B300 second. Connect, App, Ready, then Producer. Pack and Brain are on App.",
+        "Leased B200: one Blackwell B200 (180 GB). Runpod Deploy NVIDIA B200 first, Enverge NVIDIA B200 second. Same rail as B300. Brain is TP=1 with max_model_len 16384. Pack and Brain are on App.",
+        "Match Where? to the GPU you deployed. A B200 pod is Leased B200. A B300 pod is Leased B300. Picking the other Blackwell site is a fail.",
     ],
     [
         "A leased site with no name on it",
+        "Picking Leased B300 for a B200 pod, or Leased B200 for a B300 pod",
         "Two Sparks with no fabric between them",
+        "Recording a B200 Instant Cluster as Dual-Spark",
         "Switching sites in the middle of a production",
     ],
     [
@@ -32,30 +49,31 @@ PATH_LESSON = Lesson(
             "site",
             "Where?",
             "choice",
-            options=["local", "dual", "b300"],
-            accept=["local", "dual", "b300"],
-            hint="Choose one. You cannot move the production later without starting over.",
+            options=["local", "dual", "b300", "b200"],
+            accept=["local", "dual", "b300", "b200"],
+            hint="One place. Local is the crate. Leases: Runpod first (https://www.runpod.io/), Enverge second (https://enverge.ai/).",
             option_help={
-                "local": "Four GB10 on this floor. You will cable and power them next.",
-                "dual": "Two rented Sparks. They must share CX-7 RoCE. Next: Connect, App, then Producer.",
-                "b300": "One B300 at a provider. Next: Connect, App, then Producer. Pack and Brain are on App.",
+                "local": "Four GB10 on this floor. Next you unbox them.",
+                "dual": "Two Sparks with fabric. Not a B200 Instant Cluster.",
+                "b300": "One NVIDIA B300. Must match the GPU you deployed.",
+                "b200": "One NVIDIA B200 (180 GB). Not B300. Must match the GPU you deployed.",
             },
         ),
         Field(
             "provider",
             "Provider",
             "text",
-            placeholder="Who owns these GPUs?",
-            when="dual,b300",
-            hint="The company or floor that rented you this site.",
+            placeholder="Runpod",
+            when="dual,b300,b200",
+            hint="Usually Runpod. Enverge is second.",
         ),
         Field(
             "signer",
             "Your name",
             "text",
             placeholder="Name",
-            when="dual,b300",
-            hint="A leased site needs a named human on the production.",
+            when="dual,b300,b200",
+            hint="Named human on this lease.",
         ),
     ],
 )
@@ -126,7 +144,7 @@ LOCAL_LESSONS: dict[str, Lesson] = {
         "inventory",
         "Matched hardware is a clustering rule, not a preference. NVIDIA Sync assumes four nodes on the same DGX OS train.",
         [
-            "Hostnames spark-01 … spark-04. spark-01 is primary (Wizard + Producer).",
+            "Hostnames spark-01 … spark-04. spark-01 is primary (Studio + Producer).",
             "4 TB NVMe SKU is the BOM. 1 TB will hurt weights + scratch.",
             "OEM GB10 (ASUS / MSI / Founders) is OK if clustering-compatible.",
         ],
@@ -145,7 +163,7 @@ LOCAL_LESSONS: dict[str, Lesson] = {
             ),
             Field(
                 "quiz",
-                "Check: which node runs Wizard and Producer?",
+                "Check: which node runs Studio and Producer?",
                 "quiz",
                 placeholder="spark-01",
                 accept=["spark-01", "spark 01", "spark01", "primary"],
@@ -240,7 +258,7 @@ LOCAL_LESSONS: dict[str, Lesson] = {
         "NVIDIA Sync Cluster Assistant owns ConnectX-7, netplan, SSH-over-fabric, and ib_write_bw. Diony does not reimplement it.",
         [
             "Enroll Spark Cluster (4) in Sync, run Cluster Assistant to healthy.",
-            "Paste the fabric IPs here. Wizard records them; it does not write netplan in dry-run.",
+            "Paste the fabric IPs here. Studio records them; it does not write netplan in dry-run.",
             "Official docs: DGX Spark clustering guide + Sync Cluster Assistant.",
         ],
         ["Sync only sees 10GbE", "Password SSH leftover", "One node missing from the cluster name"],
@@ -306,7 +324,7 @@ LOCAL_LESSONS: dict[str, Lesson] = {
     ),
     "vault": Lesson(
         "vault",
-        "Node NVMe holds weights and scratch. Dailies and masters live on the NAS at /diony/vault. A 1-hour production is multiple TB.",
+        "Node NVMe holds weights and scratch. Takes and masters live on the NAS at /diony/vault. A 1-hour production is multiple TB.",
         [
             "Where to find the NAS: the 10GbE management LAN, not RoCE. Open the NAS admin UI and copy the IPv4 and the NFS export (example /volume1/diony-vault).",
             "What to type: NAS address is that IPv4. Export path is the share on the NAS. Diony mounts it at /diony/vault on all four nodes.",
@@ -345,15 +363,15 @@ LOCAL_LESSONS: dict[str, Lesson] = {
     ),
     "producer": Lesson(
         "producer",
-        "The Spark pack is pinned. Pull it, start Producer, then Sign this last line.",
+        "The Spark pack is pinned. Pull it, start Producer (with finish), then Sign this last line.",
         [
             "Nothing to shop. The pack is DeepSeek-V4-Flash-0731 + Wan2.2 A14B. Pull commands are in How. Brain is spark-4x-v1 TP=4.",
-            "Then install and start Producer: pip install -e packages/contracts -e apps/producer, then diony-producer.",
-            f"Producer opens at {PRODUCER_URL} — same address on this laptop and on the cluster.",
-            "Floors are Idea, Dailies, Program, Lock. Cut is optional prompt-to-edit. Program stitches the cut.",
-            "Wan is 720p negative. Deliverables are Diony 1080. Sign locks this setup.",
+            "Install contracts, wan, finish, and producer. Picture lock needs diony_sr_v1. Then start diony-producer with DIONY_VAULT=/diony/vault.",
+            f"Producer opens at {PRODUCER_URL}. Same address on this laptop and on the cluster.",
+            "Floors are Idea, Production, Gallery. Gallery is the finished clip inventory.",
+            "Wan is 720p negative. Deliverables are Diony 1080. Sign writes site.json so Producer can read this site.",
         ],
-        ["Shipping previz as a master", "Notes only in chat", "Cloud prompt extend", "Skipping Program stitch"],
+        ["Shipping previz as a master", "Notes only in chat", "Cloud prompt extend", "Skipping Production screening"],
         [
             Field(
                 "pack",
@@ -374,75 +392,63 @@ LOCAL_LESSONS: dict[str, Lesson] = {
                 default=SHOW_FLOORS,
                 auto=True,
             ),
-            Field(
-                "url",
-                "Producer",
-                "text",
-                placeholder=PRODUCER_URL,
-                default=PRODUCER_URL,
-                hint="Same address on this laptop and on the cluster.",
-            ),
-            Field(
-                "ready",
-                "This URL opens the showrunner?",
-                "select",
-                options=["", "yes"],
-                accept=["yes"],
-                hint="Sign this line, then open Producer.",
-            ),
         ],
         commands=[
             "# 1. Pack — /models, then replicate to spark-02..04",
             *pack_pull_commands("local"),
-            "# 2. Producer",
-            "pip install -e packages/contracts -e apps/wan -e apps/producer",
-            "diony-producer",
-            f"# Opens {PRODUCER_URL}",
+            "# 2. Producer — install finish too. Picture lock needs diony_sr_v1.",
+            *producer_start_commands(cluster=True),
+            *hosts_commands("spark-01"),
         ],
         handoff=[
-            "Sign this line.",
-            "Open Producer. Write the idea, Produce, then screen the Program.",
+            "Sign this line. Studio writes site.json. On a live spark-01 it also starts Producer.",
+            "Open Producer. Write the idea, Produce, then screen Production. Gallery holds the clips.",
         ],
     ),
 }
 
 
+def _book(path: str) -> dict[str, Lesson]:
+    """Load a site book. Import errors become an empty book, never a 500."""
+    try:
+        if path == "local":
+            return LOCAL_LESSONS
+        if path == "dual":
+            from diony_wizard.lessons_dual import DUAL_LESSONS
+
+            return DUAL_LESSONS
+        if path == "b300":
+            from diony_wizard.lessons_b300 import B300_LESSONS
+
+            return B300_LESSONS
+        if path == "b200":
+            from diony_wizard.lessons_b200 import B200_LESSONS
+
+            return B200_LESSONS
+        if path == "lease":
+            from diony_wizard.lessons_lease import LEASE_LESSONS
+
+            return LEASE_LESSONS
+    except Exception:
+        return {}
+    return {}
+
+
 def lesson_for(step_id: str, path: str | None = None) -> Lesson:
     if step_id == "path":
         return PATH_LESSON
-    if path not in ("local", "lease", "dual", "b300"):
+    if path not in ("local", "lease", "dual", "b300", "b200"):
         raise KeyError("compute path not chosen")
-    if path == "local":
-        return LOCAL_LESSONS[step_id]
-    if path == "dual":
-        from diony_wizard.lessons_dual import DUAL_LESSONS
-
-        return DUAL_LESSONS[step_id]
-    if path == "b300":
-        from diony_wizard.lessons_b300 import B300_LESSONS
-
-        return B300_LESSONS[step_id]
-    from diony_wizard.lessons_lease import LEASE_LESSONS
-
-    return LEASE_LESSONS[step_id]
+    book = _book(path)
+    if step_id not in book:
+        raise KeyError(f"{path} {step_id} unavailable")
+    return book[step_id]
 
 
 def lessons_for(path: str | None) -> dict[str, Lesson]:
     out = {"path": PATH_LESSON}
-    if path == "local":
-        out.update(LOCAL_LESSONS)
-    elif path == "lease":
-        from diony_wizard.lessons_lease import LEASE_LESSONS
-
-        out.update(LEASE_LESSONS)
-    elif path == "dual":
-        from diony_wizard.lessons_dual import DUAL_LESSONS
-
-        out.update(DUAL_LESSONS)
-    elif path == "b300":
-        from diony_wizard.lessons_b300 import B300_LESSONS
-
-        out.update(B300_LESSONS)
+    if path in ("local", "lease", "dual", "b300", "b200"):
+        out.update(_book(path))
     return out
 
 
@@ -475,6 +481,19 @@ def validate_answers(
         if not field_applies(field, site):
             continue
         raw = str(answers.get(field.id, "")).strip()
+        if field.id == "hf_token":
+            if os.environ.get("PYTEST_CURRENT_TEST"):
+                continue
+            if raw and raw not in {"set", "••••"}:
+                continue
+            if os.environ.get("HF_TOKEN", "").strip() or os.environ.get(
+                "HUGGING_FACE_HUB_TOKEN", ""
+            ).strip():
+                continue
+            return (
+                "HF_TOKEN is empty. Open https://huggingface.co/settings/tokens, "
+                "Create new token, paste it here."
+            )
         if not raw:
             return f"{field.label} is empty."
         if field.accept:
@@ -484,7 +503,7 @@ def validate_answers(
                     return f"Check missed. Re-read the lesson, then answer {field.label.lower()}."
             elif raw not in field.accept:
                 return f"{field.label} is not a passing value."
-    if step_id == "path" and site in ("b300", "dual"):
+    if step_id == "path" and site in ("b300", "b200", "dual"):
         if len(str(answers.get("signer", "")).strip()) < 2:
             return "This site requires a named human exception."
     if step_id == "connect":
@@ -493,6 +512,14 @@ def validate_answers(
             return err
         if vault_is_public(str(answers.get("nas_ip", ""))):
             return "Vault must be private. Not a public bucket."
+        if path in ("dual", "b300", "b200"):
+            ssh_err = parse_ssh_user(str(answers.get("ssh_user", "")))
+            if ssh_err:
+                return ssh_err
+        if path in ("b300", "b200"):
+            _, port_err = parse_ssh_port(str(answers.get("ssh_port", "")))
+            if port_err:
+                return port_err
     if step_id == "sync":
         parts = [p.strip() for p in str(answers.get("ips", "")).split(",") if p.strip()]
         if len(parts) < 4:
@@ -502,3 +529,17 @@ def validate_answers(
 
 # Tests and older imports still see a full local book plus Site.
 CURRICULUM: dict[str, Lesson] = {"path": PATH_LESSON, **LOCAL_LESSONS}
+
+# Warm lease books at import. Failure must not prevent Studio from starting.
+try:
+    from diony_wizard.lessons_b200 import B200_LESSONS as _B200_LESSONS  # noqa: E402, F401
+except Exception:  # pragma: no cover — stale prep on a live process
+    _B200_LESSONS = {}
+try:
+    from diony_wizard.lessons_b300 import B300_LESSONS as _B300_LESSONS  # noqa: E402, F401
+except Exception:  # pragma: no cover
+    _B300_LESSONS = {}
+try:
+    from diony_wizard.lessons_dual import DUAL_LESSONS as _DUAL_LESSONS  # noqa: E402, F401
+except Exception:  # pragma: no cover
+    _DUAL_LESSONS = {}

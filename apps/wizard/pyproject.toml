@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "diony-wizard"
-version = "0.16.0"
-description = "Diony AI crate-to-system Wizard — live Dual-Spark pack apply, then Producer."
+version = "0.20.0"
+description = "Diony AI crate-to-system Studio — live pack apply, site lock on the vault, Producer start."
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
 dependencies = [

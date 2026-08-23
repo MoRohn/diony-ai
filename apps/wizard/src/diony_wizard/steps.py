@@ -1,4 +1,4 @@
-"""Wizard step machine — Blueprint 01 / 11 / 14. Day 2 is dry-run (no fabric mutation)."""
+"""Studio step machine — Blueprint 01 / 11 / 14. Day 2 is dry-run (no fabric mutation)."""
 
 from __future__ import annotations
 
@@ -23,21 +23,18 @@ LEASE_RAIL = [
     "producer",
 ]
 
-# Leased Dual-Spark: Site → Connect → App → Producer. Pack is on App. Brain is TP=2 sequential.
+# Leased Dual-Spark / B300 / B200: Site → Connect → App → Ready → Producer.
+# Pack is on App. Ready is Test GPU. Brain is sequential (TP=2 dual, TP=1 GPU).
 DUAL_RAIL = [
     "path",
     "connect",
     "app",
+    "prove",
     "producer",
 ]
 
-# Leased B300: Site → Connect → App → Producer. Pack is on App. Brain is auto.
-B300_RAIL = [
-    "path",
-    "connect",
-    "app",
-    "producer",
-]
+B300_RAIL = list(DUAL_RAIL)
+B200_RAIL = list(DUAL_RAIL)
 
 STEP_IDS = LOCAL_RAIL
 ALL_STEP_IDS = list(
@@ -62,20 +59,20 @@ STEPS: list[Step] = [
     Step(
         "path",
         "Site",
-        "Local Quad-Spark, Leased Dual-Spark, or Leased B300; leases record a named human",
+        "Local Quad-Spark, Dual-Spark, B300, or B200; leases record a named human",
         "Never cloud-by-default. Same Diony on every site.",
     ),
     Step(
         "connect",
         "Connect",
-        "Host and vault recorded for this lease",
+        "Hosts, SSH login, and vault recorded for this lease",
         "Lease only. Provider already owns the box. App and Producer come next.",
     ),
     Step(
         "unbox",
         "Unbox",
         "Crate on the desk before power",
-        "Local crate only. Lease and leased B300 skip this line.",
+        "Local crate only. Lease, B300, and B200 skip this line.",
     ),
     Step(
         "inventory",
@@ -117,24 +114,30 @@ STEPS: list[Step] = [
         "weights",
         "Models",
         "Site pack on /models: pinned DeepSeek 0731 + Wan2.2 A14B; Brain auto",
-        "Not a Wizard page. Recorded when App (lease) or Producer (desk) is continued.",
+        "Not a Studio page. Recorded when App (lease) or Producer (desk) is continued.",
     ),
     Step(
         "brain_smoke",
         "Brain",
-        "Auto with the model pack (not a Wizard page)",
-        "Desk: spark-4x-v1 TP=4. Dual-Spark: spark-2x-v1 TP=2. B300: b300-v1 TP=1. Recorded with the pack.",
+        "Auto with the model pack (not a Studio page)",
+        "Desk: spark-4x-v1 TP=4. Dual-Spark: spark-2x-v1 TP=2. B300: b300-v1 TP=1. B200: b200-v1 TP=1 (16k). Recorded with the pack.",
     ),
     Step(
         "app",
         "App",
         "Pinned pack on /models; Producer installed and running",
-        "Pack is pinned for this site. Pull it, start Producer, Continue.",
+        "Pack is pinned for this site. Continue starts the pull and opens Ready.",
+    ),
+    Step(
+        "prove",
+        "Ready",
+        "SSH, GPU name, vault, and pack pass on this lease",
+        "Test GPU. Continue only when every row is a pass. Dry-run records the same list.",
     ),
     Step(
         "producer",
         "Producer",
-        "Producer URL is recorded; floors include Program stitch and prompt-to-edit",
+        "Producer URL is recorded; floors include Idea, Production, and Gallery",
         "Producer is http://producer.diony.local. Sign this last line, then open it.",
     ),
 ]
@@ -149,6 +152,8 @@ def rail_ids(path: str | None) -> list[str]:
         return list(DUAL_RAIL)
     if path == "b300":
         return list(B300_RAIL)
+    if path == "b200":
+        return list(B200_RAIL)
     if path == "local":
         return list(LOCAL_RAIL)
     return ["path"]
@@ -172,6 +177,10 @@ def attach_rail(path: str, site_step: Step) -> list[Step]:
             "producer": "Producer",
         },
         "b300": {
+            "app": "App",
+            "producer": "Producer",
+        },
+        "b200": {
             "app": "App",
             "producer": "Producer",
         },
