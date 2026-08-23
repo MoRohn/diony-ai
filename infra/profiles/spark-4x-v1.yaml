@@ -1,5 +1,5 @@
 # Diony AI cluster profile — spark-4x-v1
-# Infrastructure as a Product. Wizard and Conductor share this desired state.
+# Infrastructure as a Product. Studio and Conductor share this desired state.
 # Live mutation is Week 2+. Day 1: source of truth for shells and health stubs.
 
 apiVersion: diony.ai/v1
@@ -41,7 +41,7 @@ spec:
         spark-02: 192.168.200.12
         spark-03: 192.168.200.13
         spark-04: 192.168.200.14
-      notes: "Wizard records Sync's real IP plan. Dual-half addressing may add a second /24."
+      notes: "Studio records Sync's real IP plan. Dual-half addressing may add a second /24."
     management:
       nic: rj45_10gbe
       mtu: 1500

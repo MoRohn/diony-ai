@@ -1,6 +1,6 @@
 # Diony AI cluster profile — lease-gpu-v1
 # Same product as spark-4x-v1 on leased GPU. Not Dashscope. Not a failover.
-# Wizard Site must record a named human exception before this profile is active.
+# Studio Site must record a named human exception before this profile is active.
 # Spark recipes are not GB300/H100 recipes. Pin serving flags per Blueprint 04.
 
 apiVersion: diony.ai/v1
@@ -43,7 +43,7 @@ spec:
         node-02: 10.0.0.12
         node-03: 10.0.0.13
         node-04: 10.0.0.14
-      notes: "Wizard records the provider IP plan. Public NIC is not NCCL."
+      notes: "Studio records the provider IP plan. Public NIC is not NCCL."
     management:
       nic: provider_mgmt
       mtu: 1500

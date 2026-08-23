@@ -1,5 +1,5 @@
 # SPLIT on b300-v1 is sequential, not 2 Sparks + 2 Wan.
-# Conductor/Wizard still name the mode SPLIT (default production).
+# Conductor/Studio still name the mode SPLIT (default production).
 # Layout: drain brain → load Wan, or drain Wan → load brain.
 # Do not start both services together until Blueprint 03 records a measured yes.
 

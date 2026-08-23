@@ -1,0 +1,4 @@
+# Diony-owned additions to the upstream Wan2.2 requirements.
+# Install into DIONY_PYTHON, the CUDA interpreter used to run generate.py.
+einops==0.8.1
+decord==0.6.0

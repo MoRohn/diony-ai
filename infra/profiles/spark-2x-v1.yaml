@@ -2,7 +2,7 @@
 # Two leased NVIDIA DGX Spark GB10 (256 GB unified). Same product: DeepSeek, Wan 720
 # negative, Diony 1080, /diony/vault, Producer.
 # Not the desk crate (spark-4x-v1). Not a four-node lease. Not B300.
-# Wizard Site requires a named human. Brain is Spark TP=2. SPLIT is sequential.
+# Studio Site requires a named human. Brain is Spark TP=2. SPLIT is sequential.
 # Do not paste TP=4. Do not co-resident DeepSeek and Wan A14B.
 
 apiVersion: diony.ai/v1

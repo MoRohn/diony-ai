@@ -5,8 +5,8 @@ One rented Blackwell B300. Same Diony product as Spark Cluster (4). No four-node
 ## Pass class
 
 - Training traffic stays **on-package** (NVLink / the GPU’s own interconnect).
-- Management (Wizard, Producer, vault NFS) is a separate NIC or the host LAN. Never NCCL on a public address.
-- Record one hostname (`b300-01`) in Wizard Connect. The provider already owns interconnect.
+- Management (Studio, Producer, vault NFS) is a separate NIC or the host LAN. Never NCCL on a public address.
+- Record one hostname (`b300-01`) in Studio Connect. The provider already owns interconnect.
 - Autoneg to 50G on a leftover NIC is still a fail if that NIC is used for NCCL.
 
 ## Fail
@@ -18,7 +18,7 @@ One rented Blackwell B300. Same Diony product as Spark Cluster (4). No four-node
 - Open 8000 / 8010 to the world
 - Public bucket as `/diony/vault`
 
-## Record in Wizard `inventory`
+## Record in Studio `inventory`
 
 Interconnect: On-package or NVLink  
 Class: on-package

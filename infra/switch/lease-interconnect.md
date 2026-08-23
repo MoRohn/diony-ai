@@ -18,7 +18,7 @@ Same Diony fabric rules as the desk crate. The switch is whoever provisioned the
 - `NCCL_IB_DISABLE=1` leftover
 - Vault traffic on the NCCL NIC
 
-## Record in Wizard `switch`
+## Record in Studio `switch`
 
 Interconnect SKU: InfiniBand | RoCE | NVLink  
 Class: 200G, HDR, or NDR (50G is not in the accept list)
@@ -31,4 +31,4 @@ ibstat || rdma link || nvidia-smi nvlink -s
 
 Day 2 dry-run: sign the class you reserved. Do not pretend a public VM is a cluster.
 
-Wizard Files on Producer is the rest of the runbook: `lease-gpu-v1` profile, vault fstab, weight manifest, serving notes. Stay in Diony.
+Studio Files on Producer is the rest of the runbook: `lease-gpu-v1` profile, vault fstab, weight manifest, serving notes. Stay in Diony.

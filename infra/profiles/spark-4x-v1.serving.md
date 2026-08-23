@@ -1,6 +1,6 @@
 # Serving — spark-4x-v1
 
-Desk crate. Spark Cluster (4). Wizard pack points here so the operator does not leave Diony.
+Desk crate. Spark Cluster (4). Studio pack points here so the operator does not leave Diony.
 
 - Brain: Blueprint 04 Spark TP=2 (SPLIT) and TP=4 (BRAIN). **Not** the GB300 card command.
 - Compose: `infra/compose/brain.yml`, `split.yml`, `wan.yml`, `finish.yml`

@@ -1,0 +1,14 @@
+# SPLIT on b200-v1 is sequential, not 2 Sparks + 2 Wan.
+# Conductor/Studio still name the mode SPLIT (default production).
+# Layout: drain brain → load Wan, or drain Wan → load brain.
+# Do not start both services together until Blueprint 03 records a measured yes.
+
+x-diony:
+  layout: sequential
+  concurrent_brain_and_wan: false
+  vram_gb: 180
+  transition: [drain, unload, load, healthgate]
+
+include:
+  - path: brain-b200.yml
+  - path: wan.yml

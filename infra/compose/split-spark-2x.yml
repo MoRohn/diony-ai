@@ -1,5 +1,5 @@
 # SPLIT on spark-2x-v1 is sequential, not 2 brain + 2 Wan.
-# Conductor/Wizard still name the mode SPLIT (default production).
+# Conductor/Studio still name the mode SPLIT (default production).
 # Layout: drain brain → load Wan, or drain Wan → load brain.
 # Both Sparks run the same engine. Do not start brain and Wan together.
 

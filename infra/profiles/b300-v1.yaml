@@ -1,6 +1,6 @@
 # Diony AI cluster profile — b300-v1
 # One leased NVIDIA Blackwell B300. Same product: DeepSeek, Wan 720 negative, Diony 1080, /diony/vault, Producer.
-# Not the desk crate. Not a 4-node lease (4×B300). Wizard Site requires a named human.
+# Not the desk crate. Not a 4-node lease (4×B300). Studio Site requires a named human.
 # Spark TP=2/TP=4 flags are not this recipe. 4×GB300 data-parallel is not this recipe.
 
 apiVersion: diony.ai/v1
