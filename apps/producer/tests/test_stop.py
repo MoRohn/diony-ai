@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from diony_contracts.enums import ArtifactKind, QCVerdict
+from diony_contracts.enums import ArtifactKind, ProductionStopDisposition, QCVerdict
 from diony_contracts.models import Project
 from diony_contracts.wan_prompt import prompt_receipt_sha256
 
@@ -110,7 +110,7 @@ def test_stop_keep_cancels_future_camera_and_saves_a_stitched_incomplete_result(
     assert kept["file_url"].startswith(f"/api/projects/{project.id}/program/preview")
 
 
-def test_stop_keep_drains_the_active_clip_then_publishes_it_to_gallery(
+def test_stop_keep_cancels_the_active_clip_and_publishes_only_completed_clips(
     tmp_path, monkeypatch
 ) -> None:
     app_module = import_module("diony_producer.app")
@@ -118,23 +118,17 @@ def test_stop_keep_drains_the_active_clip_then_publishes_it_to_gallery(
     stop_module = import_module("diony_producer.production_stop")
     client = TestClient(app_module.app)
     project = _opened_project(client)
+    landed = _land_completed_negatives(project, tmp_path, 1)
     app_module._project = project
     farm_module.reset_farm()
-    active_take_id = project.shots[0].selected_take_id or ""
-    rolling = {"value": True}
+    completed_take_id = project.shots[0].selected_take_id or ""
+    active_take_id = project.shots[1].selected_take_id or ""
+    cancelled: list[str] = []
     monkeypatch.setattr(app_module, "should_proxy", lambda: False)
-    monkeypatch.setattr(app_module, "camera_rolling", lambda: rolling["value"])
-    monkeypatch.setattr(app_module, "read_camera_lock", lambda: {"take_id": active_take_id})
-
-    requested = client.post("/api/production/stop", json={"disposition": "keep"})
-
-    assert requested.status_code == 200
-    assert project.production_stop is None
-    assert project.production_pause is not None
-    assert project.production_pause.reason == "stop_keep"
-    assert project.production_pause.after_take_id == active_take_id
-
-    landed = _land_completed_negatives(project, tmp_path, 1)
+    monkeypatch.setattr(app_module, "camera_rolling", lambda: True)
+    monkeypatch.setattr(app_module, "abort_farm", lambda: cancelled.append("farm"))
+    monkeypatch.setattr(app_module, "abort_finish", lambda: cancelled.append("finish"))
+    monkeypatch.setattr(app_module, "abort_mix", lambda: cancelled.append("mix"))
 
     def fake_stitch(clips, destination, fps):
         assert [row[0] for row in clips] == landed
@@ -143,18 +137,95 @@ def test_stop_keep_drains_the_active_clip_then_publishes_it_to_gallery(
         return destination
 
     monkeypatch.setattr(stop_module, "stitch_masters", fake_stitch)
-    monkeypatch.setattr(app_module, "abort_farm", lambda: None)
-    monkeypatch.setattr(app_module, "abort_finish", lambda: None)
-    monkeypatch.setattr(app_module, "abort_mix", lambda: None)
-    rolling["value"] = False
+
+    stopped = client.post("/api/production/stop", json={"disposition": "keep"})
+
+    assert stopped.status_code == 200
+    assert cancelled == ["farm", "finish", "mix"]
+    assert project.production_pause is None
+    assert project.production_stop is not None
+    assert project.production_stop.completed_take_ids == [completed_take_id]
+    assert active_take_id not in project.production_stop.completed_take_ids
+    assert stopped.json()["phase"] == "stopped"
+    assert stopped.json()["can_stop"] is False
+    gallery = client.get("/api/gallery").json()
+    assert any(item["id"] == f"program-{project.id}" for item in gallery["items"])
+
+
+def test_pending_stop_keep_from_an_older_service_is_cancelled_immediately(
+    tmp_path, monkeypatch
+) -> None:
+    app_module = import_module("diony_producer.app")
+    farm_module = import_module("diony_producer.farm")
+    stop_module = import_module("diony_producer.production_stop")
+    client = TestClient(app_module.app)
+    project = _opened_project(client)
+    landed = _land_completed_negatives(project, tmp_path, 1)
+    completed_take_id = project.shots[0].selected_take_id or ""
+    active_take_id = project.shots[1].selected_take_id or ""
+    farm_module.request_pause_after_current(
+        project,
+        reason="stop_keep",
+        after_take_id=active_take_id,
+    )
+    app_module._project = project
+    cancelled: list[str] = []
+    monkeypatch.setattr(app_module, "should_proxy", lambda: False)
+    monkeypatch.setattr(app_module, "camera_rolling", lambda: True)
+    monkeypatch.setattr(app_module, "farm_status", lambda: {"busy": True})
+    monkeypatch.setattr(app_module, "abort_farm", lambda: cancelled.append("farm"))
+    monkeypatch.setattr(app_module, "abort_finish", lambda: cancelled.append("finish"))
+    monkeypatch.setattr(app_module, "abort_mix", lambda: cancelled.append("mix"))
+
+    def fake_stitch(clips, destination, fps):
+        assert [row[0] for row in clips] == landed
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"kept" * 160)
+        return destination
+
+    monkeypatch.setattr(stop_module, "stitch_masters", fake_stitch)
 
     app_module._advance_legacy_once()
 
+    assert cancelled == ["farm", "finish", "mix"]
     assert project.production_pause is None
     assert project.production_stop is not None
-    assert project.production_stop.completed_take_ids == [active_take_id]
-    gallery = client.get("/api/gallery").json()
-    assert any(item["id"] == f"program-{project.id}" for item in gallery["items"])
+    assert project.production_stop.completed_take_ids == [completed_take_id]
+    assert active_take_id not in project.production_stop.completed_take_ids
+
+
+def test_interrupted_stop_keep_finalization_is_completed_after_restart(
+    tmp_path, monkeypatch
+) -> None:
+    app_module = import_module("diony_producer.app")
+    stop_module = import_module("diony_producer.production_stop")
+    client = TestClient(app_module.app)
+    project = _opened_project(client)
+    landed = _land_completed_negatives(project, tmp_path, 2)
+    receipt = stop_module.record_production_stop(project, ProductionStopDisposition.KEEP)
+    app_module._project = project
+    cancelled: list[str] = []
+    monkeypatch.setattr(app_module, "should_proxy", lambda: False)
+    monkeypatch.setattr(app_module, "abort_farm", lambda: cancelled.append("farm"))
+    monkeypatch.setattr(app_module, "abort_finish", lambda: cancelled.append("finish"))
+    monkeypatch.setattr(app_module, "abort_mix", lambda: cancelled.append("mix"))
+
+    def fake_stitch(clips, destination, fps):
+        assert [row[0] for row in clips] == landed
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"recovered" * 160)
+        return destination
+
+    monkeypatch.setattr(stop_module, "stitch_masters", fake_stitch)
+
+    assert receipt.completed_take_ids
+    assert receipt.result_path == ""
+    app_module._advance_legacy_once()
+
+    assert cancelled == ["farm", "finish", "mix"]
+    assert receipt.result_path.endswith("/incomplete_720.mov")
+    assert receipt.result_sha256
+    assert receipt.result_error == ""
 
 
 def test_stop_delete_removes_generated_project_media_and_is_idempotent(tmp_path) -> None:

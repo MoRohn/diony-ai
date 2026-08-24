@@ -75,7 +75,6 @@ from diony_producer.farm import (
     enter_farm,
     farm_status,
     new_generation_take,
-    read_camera_lock,
     reset_farm,
     request_pause_after_current,
     resume_camera,
@@ -177,10 +176,27 @@ def _advance_legacy_once() -> None:
             drive_remote_advance(base)
             gpu_monitor()
         return
+    stop = _project.production_stop
+    if (
+        stop is not None
+        and stop.disposition == ProductionStopDisposition.KEEP
+        and stop.completed_take_ids
+        and not stop.result_path
+        and not stop.result_error
+    ):
+        # record_production_stop persists before cancellation. If the Producer
+        # is replaced in that narrow window, finish the already-authorized Keep
+        # exactly once on the next controller tick.
+        abort_farm()
+        abort_finish()
+        abort_mix()
+        finalize_production_stop(_project)
+        return
     pause = _project.production_pause
     if pause is not None and pause.reason == "stop_keep":
-        if camera_rolling() or bool(farm_status().get("busy")):
-            return
+        # Older Producers recorded STOP Keep as a Take-boundary drain. Honor
+        # that already-authorized STOP immediately after an upgrade instead of
+        # letting a wedged or long-running camera keep Production alive.
         _project.production_pause = None
         record_production_stop(_project, ProductionStopDisposition.KEEP)
         abort_farm()
@@ -697,30 +713,10 @@ def stop_production(body: ProductionStopIn) -> dict:
                 ),
             )
         return run_payload(_project)
-    if (
-        body.disposition == ProductionStopDisposition.KEEP
-        and _project.production_pause is not None
-        and _project.production_pause.reason == "stop_keep"
-    ):
-        return run_payload(_project)
-    if body.disposition == ProductionStopDisposition.KEEP and camera_rolling():
-        lock = read_camera_lock()
-        take_id = str(lock.get("take_id") or "")
-        try:
-            request_pause_after_current(
-                _project,
-                reason="stop_keep",
-                after_take_id=take_id,
-            )
-        except ValueError as exc:
-            raise HTTPException(409, f"Keep could not identify the active clip: {exc}") from exc
-        record_activity(
-            "run",
-            f"STOP Keep requested · {take_id} will land before Production stops",
-            level="info",
-            shot_id=_project.take(take_id).shot_id,
-        )
-        return run_payload(_project)
+    # STOP is immediate for both retention choices. Keep snapshots only the
+    # checksum-valid, QC-passed negatives that landed before this request; an
+    # in-flight camera process is cancelled and is never promoted into Keep.
+    _project.production_pause = None
     try:
         record_production_stop(_project, body.disposition)
     except ValueError as exc:

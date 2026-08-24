@@ -1,3 +1,5 @@
+import hashlib
+import json
 import time
 
 import pytest
@@ -21,6 +23,48 @@ save = Path(args[args.index("--save_file") + 1])
 save.parent.mkdir(parents=True, exist_ok=True)
 save.write_bytes(b"\\x00\\x00\\x00\\x18ftypmp42" + b"\\x00" * 200)
 """
+
+
+def test_farm_persists_and_verifies_the_actual_wan_execution_lane(tmp_path) -> None:
+    from diony_producer import farm
+
+    project = demo_project()
+    take = project.takes[0]
+    negative = tmp_path / "negative_720.mp4"
+    negative.write_bytes(b"verified negative" * 8)
+    digest = hashlib.sha256(negative.read_bytes()).hexdigest()
+    negative.with_suffix(".generation.json").write_text(
+        json.dumps(
+            {
+                "status": "succeeded",
+                "backend": "native",
+                "selected_lane": "wan22_quality_cli",
+                "task": "i2v-A14B",
+                "native_width": 1280,
+                "native_height": 720,
+                "frame_num": 81,
+                "sample_steps": 24,
+                "sample_solver": "unipc",
+                "precision": "bfloat16",
+                "negative_conditioning": True,
+                "finish_required": True,
+                "quality_contract_sha256": "a" * 64,
+                "quality_contract_matched": True,
+                "attention_backend": "auto",
+                "elapsed_seconds": 900.0,
+                "output_sha256": digest,
+                "output_bytes": negative.stat().st_size,
+            }
+        )
+    )
+
+    farm._load_generation_receipt(take, negative)
+
+    assert take.generation_receipt is not None
+    assert take.generation_receipt.selected_lane == "wan22_quality_cli"
+    negative.write_bytes(b"tampered negative" * 8)
+    with pytest.raises(RuntimeError, match="does not match"):
+        farm._load_generation_receipt(take, negative)
 
 
 def test_reference_and_boundary_quality_floor_cannot_be_weakened(monkeypatch) -> None:

@@ -27,3 +27,4 @@ Numbered operational constitution for Diony AI. Read `00` first. Coding agents: 
 | 20 | [20-wan22-prompt-intelligence.md](20-wan22-prompt-intelligence.md) | Autonomous typed Wan2.2 prompt planning, validation, guarded refinement, QC repair, and receipts |
 | 21 | [21-production-performance-assurance.md](21-production-performance-assurance.md) | Exact-quality Wan residency, streaming Finish, measured QC, durable latency evidence, canary, and rollback gates |
 | 22 | [22-voice-performance-system.md](22-voice-performance-system.md) | Immutable Character voices, performance scripts, studio audio, S2V conditioning, AV QC, cache, and backend qualification |
+| 23 | [23-optimal-clip-production-flow.md](23-optimal-clip-production-flow.md) | Receipt-addressed Idea -> Voice -> Wan -> AutoQC -> 1080 Finish flow, B200 activation, and advanced-model qualification boundary |

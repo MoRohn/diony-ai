@@ -43,8 +43,8 @@ def test_producer_floors_are_idea_production_gallery() -> None:
     assert 'class="clap"' in html
     assert 'id="cast"' in html
     assert 'id="site-line"' in html
-    assert 'href="/static/app.css?v=brand7"' in html
-    assert 'src="/static/app.js?v=brand7"' in html
+    assert 'href="/static/app.css?v=brand9"' in html
+    assert 'src="/static/app.js?v=brand9"' in html
     assert "v=run30" not in html
     assert "Unsigned" not in html
     assert "Unsigned" not in js
@@ -73,6 +73,8 @@ def test_producer_floors_are_idea_production_gallery() -> None:
     assert "paintClock" in js
     assert "pollClock" in js
     assert 'id="run-clips"' in html
+    assert "clip.generation_lane_label" in js
+    assert "clip.generation_fallback" in js
     assert 'id="run-clip-summary"' in html
     assert 'id="run-signal"' in html
     assert 'id="run-signal-title"' in html
@@ -248,6 +250,9 @@ def test_production_stop_modal_offers_keep_or_delete_completed_clips() -> None:
     assert "function submitProductionStop" in js
     assert ".production-stop-dialog" in css
     assert ".run-stop-action" in css
+    hidden_start = css.rindex(".run-stop-action[hidden]")
+    hidden_rule = css[hidden_start : css.index("}", hidden_start)]
+    assert "display: none;" in hidden_rule
 
 
 def test_production_folio_fits_the_viewport_and_clears_the_last_pipeline_row() -> None:
@@ -442,8 +447,8 @@ def test_production_header_and_idea_body_explain_the_working_state() -> None:
     assert ".reference-hint" in css
     assert ".reference-hint-label" in css
     assert 'stageEl.addEventListener("drop"' in js
-    assert 'href="/static/app.css?v=brand7"' in html
-    assert 'src="/static/app.js?v=brand7"' in html
+    assert 'href="/static/app.css?v=brand9"' in html
+    assert 'src="/static/app.js?v=brand9"' in html
     assert "v=run30" not in html
 
 

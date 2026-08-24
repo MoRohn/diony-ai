@@ -46,9 +46,14 @@ GPU_STAMP_FILES = (
     "apps/finish/src/diony_finish/rrdb.py",
     "apps/finish/src/diony_finish/pipeline.py",
     "apps/wan/src/diony_wan/runner.py",
+    "apps/wan/src/diony_wan/attention_qualification.py",
+    "apps/wan/src/diony_wan/resident.py",
     "apps/wan/src/diony_wan/runtime.py",
     "apps/wan/src/diony_wan/storage.py",
+    "packages/contracts/src/diony_contracts/models.py",
     "packages/contracts/src/diony_contracts/studio.py",
+    "packages/contracts/src/diony_contracts/voice.py",
+    "scripts/benchmark/measure_wan_attention.py",
 )
 
 GPU_SYNC_TREES = (
@@ -57,6 +62,7 @@ GPU_SYNC_TREES = (
     ("apps/wan/src/diony_wan", "/opt/diony-ai/apps/wan/src/diony_wan"),
     ("packages/contracts/src/diony_contracts", "/opt/diony-ai/packages/contracts/src/diony_contracts"),
     ("infra/runtime", "/opt/diony-ai/infra/runtime"),
+    ("scripts", "/opt/diony-ai/scripts"),
 )
 
 _lock = threading.Lock()
@@ -479,6 +485,24 @@ def _remote_code_matches(conn: dict, root: Path) -> bool:
 def _remote_producer_busy(conn: dict) -> bool:
     """Fail closed when remote FARM/Finish state cannot prove an idle boundary."""
     script = r'''
+project="$(curl -sf --max-time 4 http://127.0.0.1:8788/api/project 2>/dev/null || true)"
+if [ -n "$project" ]; then
+  stop_state="$(PROJECT_PAYLOAD="$project" python3 - <<'PY'
+import json, os
+try:
+    data=json.loads(os.environ.get('PROJECT_PAYLOAD') or '{}')
+except (TypeError, json.JSONDecodeError):
+    print('unknown')
+    raise SystemExit
+pause=data.get('production_pause') if isinstance(data.get('production_pause'),dict) else {}
+print('stop_keep' if pause.get('reason') == 'stop_keep' else 'normal')
+PY
+)"
+  if [ "$stop_state" = stop_keep ]; then
+    echo idle
+    exit 0
+  fi
+fi
 if pgrep -f '[g]enerate.py.*--task' >/dev/null 2>&1; then
   echo busy
   exit 0

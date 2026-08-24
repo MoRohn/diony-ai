@@ -61,8 +61,10 @@ scene-level deterministic audio chain runs after ordered collection.
 
 Production also has a durable **STOP** control. Its modal offers **Keep** (save
 QC-passed completed clips as a stitched 720p incomplete result) or **Delete**
-(remove generated media in the current Project namespace). Both choices stop
-future negative generation and survive Producer restarts.
+(remove generated media in the current Project namespace). Both choices cancel
+the in-flight camera immediately, refuse future negative generation, and survive
+Producer restarts. Keep never waits for a partial Take to finish; it retains only
+checksum-valid, QC-passed negatives that landed before STOP.
 
 `POST /api/production/restart` is the explicit same-Project recalibration path
 after STOP. It retains the old Takes and incomplete-result receipt, recompiles

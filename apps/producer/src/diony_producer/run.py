@@ -225,6 +225,18 @@ def _finish_take_id(finish: dict) -> str:
     return match.group(1) if match else ""
 
 
+def _generation_lane_label(lane: str, fallback_reason: str) -> str:
+    if lane.startswith("resident_bf16"):
+        return "Validated resident BF16"
+    if "cudnn_sdpa" in lane:
+        return "Qualified B200 cuDNN"
+    if lane.startswith("wan22_quality_cli"):
+        return "Quality CLI fallback" if fallback_reason else "Wan2.2 quality CLI"
+    if lane == "comfyui":
+        return "ComfyUI"
+    return lane.replace("_", " ").strip().title()
+
+
 def _clip_rows(project: Project, farm: dict, finish: dict | None = None) -> list[dict]:
     finish = finish or {}
     stop = project.production_stop
@@ -288,6 +300,9 @@ def _clip_rows(project: Project, farm: dict, finish: dict | None = None) -> list
             stage = "queued"
             status = "Waiting for camera"
             note = "This site works one clip at a time" if project.shots else "Waiting for the rundown"
+        receipt = take.generation_receipt if take is not None else None
+        generation_lane = receipt.selected_lane if receipt is not None else ""
+        generation_fallback = receipt.fallback_reason if receipt is not None else ""
         rows.append(
             {
                 "shot_id": shot.id,
@@ -300,6 +315,19 @@ def _clip_rows(project: Project, farm: dict, finish: dict | None = None) -> list
                 "progress": progress,
                 "negative_ready": negative_ready,
                 "master_ready": master_ready,
+                "generation_lane": generation_lane,
+                "generation_lane_label": _generation_lane_label(
+                    generation_lane,
+                    generation_fallback,
+                ) if generation_lane else "",
+                "generation_fallback": generation_fallback,
+                "generation_elapsed_seconds": (
+                    receipt.elapsed_seconds if receipt is not None else None
+                ),
+                "quality_contract_matched": (
+                    receipt.quality_contract_matched if receipt is not None else None
+                ),
+                "attention_backend": receipt.attention_backend if receipt is not None else "",
                 "milestones": _milestones(stage, failed_at=failed_at),
             }
         )

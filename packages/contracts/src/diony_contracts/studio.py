@@ -7,9 +7,11 @@ on the cluster (Blueprint 10). Never Dashscope.
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from diony_contracts.enums import (
     AssetKind,
@@ -24,6 +26,7 @@ from diony_contracts.enums import (
     ProductionKind,
     ProjectStatus,
     ReferenceLock,
+    VoiceProfileSource,
 )
 from diony_contracts.models import (
     Asset,
@@ -37,6 +40,12 @@ from diony_contracts.models import (
     Project,
     Shot,
     Timeline,
+)
+from diony_contracts.voice import (
+    DialogueTurn,
+    EmotionPerformance,
+    ProsodySignature,
+    VoiceProfile,
 )
 from diony_contracts.stitch import stitch_events
 from diony_contracts.wan_prompt import (
@@ -64,6 +73,12 @@ class ScriptScene:
     visual: str
     narration: str
     weight: int
+
+
+@dataclass(frozen=True)
+class ScriptDialogue:
+    speaker: str
+    text: str
 
 
 PLAYBOOKS: dict[CustomerKind, Playbook] = {
@@ -566,6 +581,133 @@ def _clean_narration(value: str) -> str:
     return " ".join(line for line in lines if line).strip()
 
 
+_SCREENPLAY_DIALOGUE = re.compile(
+    r"^[ \t]*(?P<speaker>[A-Z][A-Za-z0-9.'\N{RIGHT SINGLE QUOTATION MARK}-]*"
+    r"(?:[ \t]+[A-Z][A-Za-z0-9.'\N{RIGHT SINGLE QUOTATION MARK}-]*){0,3})"
+    r"(?:[ \t]*\([^\n)]*\))?[ \t]*:[ \t]*(?P<text>[^\n]+?)[ \t]*$",
+    re.MULTILINE,
+)
+_NON_CHARACTER_CUES = {
+    "AUDIO",
+    "ACTION",
+    "CAMERA",
+    "CUT TO",
+    "DIALOGUE",
+    "EXT",
+    "FADE IN",
+    "FADE OUT",
+    "FINAL HOLD",
+    "INT",
+    "MUSIC",
+    "NARRATION",
+    "NARRATOR",
+    "SCENE",
+    "SCORE",
+    "SFX",
+    "SOUND",
+    "TITLE",
+    "VOICEOVER",
+    "VOICE OVER",
+}
+
+
+def _script_dialogue(idea: str) -> list[ScriptDialogue]:
+    """Preserve explicitly authored screenplay lines without inventing speech."""
+    lines: list[ScriptDialogue] = []
+    for match in _SCREENPLAY_DIALOGUE.finditer(idea):
+        raw_speaker = re.sub(r"\s+", " ", match.group("speaker")).strip(" .-")
+        cue = raw_speaker.upper()
+        if cue in _NON_CHARACTER_CUES or cue.startswith("SCENE "):
+            continue
+        text = re.sub(r"\s+", " ", match.group("text")).strip()
+        text = text.strip('"“”')
+        if not text:
+            continue
+        speaker = raw_speaker.title() if raw_speaker.isupper() else raw_speaker
+        lines.append(ScriptDialogue(speaker=speaker, text=text))
+    return lines
+
+
+def _character_id(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.casefold()).strip("-")
+    return f"char-{slug or hashlib.sha256(name.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _stable_voice_embedding(*parts: str, dimensions: int = 192) -> tuple[float, ...]:
+    values: list[float] = []
+    counter = 0
+    while len(values) < dimensions:
+        block = hashlib.sha256(("\x1f".join(parts) + f":{counter}").encode("utf-8")).digest()
+        values.extend((byte - 127.5) / 127.5 for byte in block)
+        counter += 1
+    vector = values[:dimensions]
+    norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+    return tuple(round(value / norm, 8) for value in vector)
+
+
+def _synthetic_voice_profile(project_id: str, character: Character) -> VoiceProfile:
+    """Lock a deterministic project-local identity before picture generation."""
+    descriptor = " ".join(
+        (character.name, character.notes, character.wardrobe)
+    ).strip()
+    seed_blob = "\x1f".join((character.id, character.name, "voice-v1"))
+    seed = (
+        int(hashlib.sha256(seed_blob.encode("utf-8")).hexdigest()[:12], 16)
+        % 2_000_000_000
+    )
+    return VoiceProfile(
+        id=f"voice-{character.id}-v1",
+        project_id=project_id,
+        character_id=character.id,
+        source=VoiceProfileSource.SYNTHETIC,
+        speaker_embedding_model="diony-synthetic-speaker-space-v1",
+        speaker_embedding=_stable_voice_embedding(character.id, descriptor),
+        prosody=ProsodySignature(
+            pitch_floor_hz=105,
+            pitch_ceiling_hz=310,
+            speaking_rate_syllables_per_second=4.0,
+            breath_interval_seconds=5.0,
+            vocal_fry=0.08,
+            pause_bias=0.5,
+        ),
+        emotion_map=(
+            EmotionPerformance(emotion="neutral", timbre="locked natural character voice"),
+            EmotionPerformance(
+                emotion="joy",
+                intensity_curve=(0.25, 0.55, 0.4),
+                rate_multiplier=1.06,
+                pitch_shift_semitones=0.8,
+                timbre="brighter resonance without identity change",
+            ),
+            EmotionPerformance(
+                emotion="grief",
+                intensity_curve=(0.2, 0.65, 0.35),
+                rate_multiplier=0.9,
+                pitch_shift_semitones=-0.5,
+                timbre="restrained breath and stable chest resonance",
+            ),
+            EmotionPerformance(
+                emotion="tension",
+                intensity_curve=(0.35, 0.8, 0.55),
+                rate_multiplier=1.03,
+                pitch_shift_semitones=0.3,
+                timbre="compressed breath with profile-locked texture",
+            ),
+        ),
+        age_descriptor="Bible locked",
+        gender_descriptor="Bible locked",
+        accent_descriptor="project neutral until directed",
+        texture_descriptor="natural studio character voice",
+        seed=seed,
+        style_lock=(
+            f"identity:{character.id}:synthetic-v1:"
+            f"{hashlib.sha256(descriptor.encode('utf-8')).hexdigest()[:16]}"
+        ),
+        locked=True,
+        locked_at=datetime.now(timezone.utc),
+    )
+
+
 def _script_scenes(idea: str) -> list[ScriptScene]:
     """Parse an explicitly authored Scene plan without asking a model to rewrite it."""
     matches = list(_SCENE_HEADING.finditer(idea))
@@ -841,6 +983,8 @@ def expand_idea(
         + brief.production_kind.value
         + (str(sample_seconds) if is_sample else "")
     )
+    run_id = f"{seed}-{uuid.uuid4().hex}"
+    pid = f"studio-{run_id}"
     if is_sample:
         recipes = _sample_recipes(brief.customer_kind, sample_seconds)
     else:
@@ -849,7 +993,8 @@ def expand_idea(
     image_ids = [a.id for a in held if a.kind == AssetKind.IMAGE]
     video_ids = [a.id for a in held if a.kind == AssetKind.VIDEO]
     audio_ids = [a.id for a in held if a.kind == AssetKind.AUDIO]
-    sound_requested = _asks_for_sound(idea)
+    screenplay_dialogue = _script_dialogue(brief.idea)
+    sound_requested = bool(screenplay_dialogue) or _asks_for_sound(idea)
     spoken_direction = _spoken_direction_script(brief.idea)
     spoken_direction_assigned = False
     synced_performance = bool(audio_ids) and _asks_for_synced_performance(idea)
@@ -859,15 +1004,33 @@ def expand_idea(
     scenes = _script_scenes(brief.idea)
     scene_schedule = _scene_schedule(scenes, n)
     sample_camera = _explicit_sample_camera(brief.idea) if is_sample else {}
-    char_id = "char-lead"
     stills = subject_image_ids or image_ids[:2] or ["still-lead-wide", "still-lead-close"]
-    character = Character(
-        id=char_id,
-        name=book.lead_name,
-        still_asset_ids=stills,
-        wardrobe=book.lead_wardrobe,
-        notes="Lock stills before FARM. Identity drift is a QC fail.",
-    )
+    character_names = list(dict.fromkeys(line.speaker for line in screenplay_dialogue))
+    if not character_names:
+        character_names = [book.lead_name]
+    characters = [
+        Character(
+            id=_character_id(name) if screenplay_dialogue else "char-lead",
+            name=name,
+            still_asset_ids=stills,
+            wardrobe=book.lead_wardrobe,
+            notes="Lock stills before FARM. Identity drift is a QC fail.",
+        )
+        for name in character_names
+    ]
+    character_by_name = {character.name: character for character in characters}
+    voice_profiles = [
+        _synthetic_voice_profile(pid, character)
+        for character in characters
+        if screenplay_dialogue
+    ]
+    for character, profile in zip(characters, voice_profiles):
+        character.voice_profile_id = profile.id
+    dialogue_by_shot: dict[int, list[ScriptDialogue]] = {}
+    for index, line in enumerate(screenplay_dialogue):
+        shot_index = min(n - 1, (index * n) // len(screenplay_dialogue))
+        dialogue_by_shot.setdefault(shot_index, []).append(line)
+    visual_idea = re.sub(r"\s+", " ", _SCREENPLAY_DIALOGUE.sub(" ", idea)).strip() or idea
     bible = Bible(
         title=title,
         logline=idea[:240],
@@ -876,13 +1039,14 @@ def expand_idea(
         loudness=book.loudness,
         visual_grammar=book.grammar,
         world=f"{book.world_prefix}: {idea}",
-        characters=[character],
+        characters=characters,
         locked=False,
     )
     shots: list[Shot] = []
     narrated_scenes: set[int] = set()
     for i, rec in enumerate(recipes):
         scene_beat = scene_schedule[i]
+        spoken_lines = dialogue_by_shot.get(i, [])
         frames = max(24, int(round(rec["seconds"] * 23.976)))
         if is_sample and reference_lock != ReferenceLock.NONE and i > 0:
             # The temporal blend consumes the incoming handle. Preserve the user's
@@ -900,8 +1064,14 @@ def expand_idea(
             # Once a first print exists, its final frame is a stronger identity
             # and world anchor than a fresh unconditioned text generation.
             engine = Engine.I2V_A14B
-        refs = [char_id]
+        refs = list(
+            dict.fromkeys(
+                character_by_name[line.speaker].id for line in spoken_lines
+            )
+        ) or [characters[0].id]
         keys = list(subject_image_ids) if image_is_subject else []
+        if spoken_lines and image_ids:
+            keys = list(subject_image_ids) or image_ids[:1]
         if i == 0 and image_ids and not keys:
             keys = image_ids[:1]
         if engine in (Engine.S2V_14B, Engine.ANIMATE_14B) and not keys:
@@ -963,6 +1133,14 @@ def expand_idea(
                 engine=engine,
                 finish=FinishIntent.DELIVERABLE,
                 audio_line=audio,
+                dialogue_turns=[
+                    DialogueTurn(
+                        id=f"turn-{sid}-{turn_index + 1}",
+                        character_id=character_by_name[line.speaker].id,
+                        text=line.text,
+                    )
+                    for turn_index, line in enumerate(spoken_lines)
+                ],
                 overlap_frames=overlap_frames,
             )
         _install_wan_prompt_plan(
@@ -970,16 +1148,18 @@ def expand_idea(
             idea=(
                 scene_beat.visual
                 if scene_beat and scene_beat.visual
-                else idea
+                else visual_idea
             ),
             bible=bible,
-            wardrobe=character.wardrobe,
+            wardrobe=(
+                character_by_name[spoken_lines[0].speaker].wardrobe
+                if spoken_lines
+                else characters[0].wardrobe
+            ),
             shot_index=i,
             sample_seconds=sample_seconds if is_sample else None,
         )
         shots.append(planned_shot)
-    run_id = f"{seed}-{uuid.uuid4().hex}"
-    pid = f"studio-{run_id}"
     notes = []
     coverage_sec = n * WAN_QUALITY_SECONDS
     if brief.target_minutes > 15:
@@ -1017,6 +1197,7 @@ def expand_idea(
         takes=[],
         notes=notes,
         assets=held,
+        voice_profiles=voice_profiles,
         mix=MixLock(
             id=f"mix-{run_id}",
             loudness=book.loudness,

@@ -80,3 +80,10 @@ def test_gpu_sync_contract_includes_finish_runtime_and_stamp() -> None:
     ) in gpu_module.GPU_SYNC_TREES
     assert "apps/finish/src/diony_finish/rrdb.py" in gpu_module.GPU_STAMP_FILES
     assert "apps/finish/src/diony_finish/pipeline.py" in gpu_module.GPU_STAMP_FILES
+    assert "scripts/benchmark/measure_wan_attention.py" in gpu_module.GPU_STAMP_FILES
+    assert "packages/contracts/src/diony_contracts/models.py" in gpu_module.GPU_STAMP_FILES
+    assert "apps/wan/src/diony_wan/attention_qualification.py" in gpu_module.GPU_STAMP_FILES
+    assert (
+        "scripts",
+        "/opt/diony-ai/scripts",
+    ) in gpu_module.GPU_SYNC_TREES

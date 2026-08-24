@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -522,6 +523,11 @@ def test_comfy_backend_dispatches_without_touching_generate_py(tmp_path, monkeyp
     assert captured["config"].frames == 81
     assert captured["config"].negative_prompt == "no flicker"
     assert captured["dest"] == destination
+    receipt = json.loads(destination.with_suffix(".generation.json").read_text())
+    assert receipt["status"] == "succeeded"
+    assert receipt["selected_lane"] == "comfyui"
+    assert receipt["quality_contract_matched"] is False
+    assert len(receipt["output_sha256"]) == 64
 
 
 def test_validated_native_lane_uses_the_resident_worker_without_changing_inputs(
@@ -579,3 +585,8 @@ def test_validated_native_lane_uses_the_resident_worker_without_changing_inputs(
     assert captured["sample_steps"] == 24
     assert captured["offload_model"] is False
     assert captured["image"] == str(locked)
+    receipt = json.loads(destination.with_suffix(".generation.json").read_text())
+    assert receipt["status"] == "succeeded"
+    assert receipt["selected_lane"] == "resident_bf16_eager"
+    assert receipt["resident_receipt_sha256"] == "receipt-sha"
+    assert receipt["quality_contract_matched"] is True

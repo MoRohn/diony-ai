@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from diony_contracts.enums import (
@@ -519,6 +520,66 @@ class QCReport(BaseModel):
         return self
 
 
+class GenerationExecutionReceipt(BaseModel):
+    """Immutable evidence for the generation lane that actually produced a Take."""
+
+    schema_version: int = 1
+    status: Literal["succeeded", "failed", "cancelled"]
+    backend: str
+    selected_lane: str
+    task: str
+    native_width: int = Field(gt=0)
+    native_height: int = Field(gt=0)
+    frame_num: int = Field(gt=0)
+    sample_steps: int = Field(gt=0)
+    sample_solver: str
+    precision: str
+    negative_conditioning: bool
+    finish_required: bool = True
+    quality_contract_sha256: str = Field(min_length=64, max_length=64)
+    quality_contract_matched: bool
+    attention_backend: str = "auto"
+    resident_reason: str = ""
+    resident_receipt_sha256: str = ""
+    resident_kernel_mode: str = ""
+    fallback_reason: str = ""
+    started_at: datetime = Field(default_factory=_now)
+    completed_at: datetime = Field(default_factory=_now)
+    elapsed_seconds: float = Field(default=0, ge=0)
+    output_sha256: str = ""
+    output_bytes: int = Field(default=0, ge=0)
+    error: str = ""
+
+    @model_validator(mode="after")
+    def receipt_addresses_output_and_quality(self) -> GenerationExecutionReceipt:
+        if (
+            not self.backend.strip()
+            or not self.selected_lane.strip()
+            or not self.task.strip()
+        ):
+            raise ValueError("generation receipt requires backend, lane, and task")
+        if self.status == "succeeded" and (
+            self.output_bytes < 32
+            or len(self.output_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in self.output_sha256.casefold())
+        ):
+            raise ValueError("succeeded generation receipt requires addressed output")
+        if not self.finish_required:
+            raise ValueError("Diony production generation must require Finish")
+        if self.quality_contract_matched and (
+            self.backend != "native"
+            or self.native_width != 1280
+            or self.native_height != 720
+            or self.frame_num != 81
+            or self.sample_steps != 24
+            or self.sample_solver != "unipc"
+            or self.precision != "bfloat16"
+            or not self.negative_conditioning
+        ):
+            raise ValueError("matched Wan quality contract has inconsistent generation fields")
+        return self
+
+
 class Take(BaseModel):
     id: str
     shot_id: str
@@ -537,6 +598,7 @@ class Take(BaseModel):
     label: str = ""
     artifacts: list[Artifact] = Field(default_factory=list)
     voice_package: VoiceClipPackage | None = None
+    generation_receipt: GenerationExecutionReceipt | None = None
 
     @model_validator(mode="after")
     def deliverable_needs_1080(self) -> Take:

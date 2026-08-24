@@ -23,7 +23,7 @@ ROOT_FILES = (
     "README.md",
     "START HERE.txt",
 )
-PRODUCT_TREES = ("apps", "packages", "infra", "blueprints")
+PRODUCT_TREES = ("apps", "packages", "infra", "blueprints", "scripts/benchmark")
 FEATURE_FILE_SETS = {
     "voice_performance": (
         Path("apps/desk/src/diony_desk/boot.py"),
@@ -47,6 +47,20 @@ FEATURE_FILE_SETS = {
         Path("packages/contracts/jsonschema/voice_profile.schema.json"),
         Path("packages/contracts/jsonschema/voice_qc_receipt.schema.json"),
         Path("blueprints/22-voice-performance-system.md"),
+    ),
+    "optimal_clip_flow": (
+        Path("apps/producer/src/diony_producer/farm.py"),
+        Path("apps/producer/src/diony_producer/gpu.py"),
+        Path("apps/producer/src/diony_producer/run.py"),
+        Path("apps/producer/src/diony_producer/static/app.js"),
+        Path("apps/producer/src/diony_producer/static/index.html"),
+        Path("apps/wan/src/diony_wan/attention_qualification.py"),
+        Path("apps/wan/src/diony_wan/runner.py"),
+        Path("packages/contracts/src/diony_contracts/models.py"),
+        Path("packages/contracts/src/diony_contracts/studio.py"),
+        Path("packages/contracts/jsonschema/generation_execution_receipt.schema.json"),
+        Path("scripts/benchmark/measure_wan_attention.py"),
+        Path("blueprints/23-optimal-clip-production-flow.md"),
     ),
 }
 EXCLUDED_PARTS = {

@@ -1150,6 +1150,158 @@
       "title": "GateName",
       "type": "string"
     },
+    "GenerationExecutionReceipt": {
+      "description": "Immutable evidence for the generation lane that actually produced a Take.",
+      "properties": {
+        "schema_version": {
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "cancelled"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "backend": {
+          "title": "Backend",
+          "type": "string"
+        },
+        "selected_lane": {
+          "title": "Selected Lane",
+          "type": "string"
+        },
+        "task": {
+          "title": "Task",
+          "type": "string"
+        },
+        "native_width": {
+          "exclusiveMinimum": 0,
+          "title": "Native Width",
+          "type": "integer"
+        },
+        "native_height": {
+          "exclusiveMinimum": 0,
+          "title": "Native Height",
+          "type": "integer"
+        },
+        "frame_num": {
+          "exclusiveMinimum": 0,
+          "title": "Frame Num",
+          "type": "integer"
+        },
+        "sample_steps": {
+          "exclusiveMinimum": 0,
+          "title": "Sample Steps",
+          "type": "integer"
+        },
+        "sample_solver": {
+          "title": "Sample Solver",
+          "type": "string"
+        },
+        "precision": {
+          "title": "Precision",
+          "type": "string"
+        },
+        "negative_conditioning": {
+          "title": "Negative Conditioning",
+          "type": "boolean"
+        },
+        "finish_required": {
+          "default": true,
+          "title": "Finish Required",
+          "type": "boolean"
+        },
+        "quality_contract_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "title": "Quality Contract Sha256",
+          "type": "string"
+        },
+        "quality_contract_matched": {
+          "title": "Quality Contract Matched",
+          "type": "boolean"
+        },
+        "attention_backend": {
+          "default": "auto",
+          "title": "Attention Backend",
+          "type": "string"
+        },
+        "resident_reason": {
+          "default": "",
+          "title": "Resident Reason",
+          "type": "string"
+        },
+        "resident_receipt_sha256": {
+          "default": "",
+          "title": "Resident Receipt Sha256",
+          "type": "string"
+        },
+        "resident_kernel_mode": {
+          "default": "",
+          "title": "Resident Kernel Mode",
+          "type": "string"
+        },
+        "fallback_reason": {
+          "default": "",
+          "title": "Fallback Reason",
+          "type": "string"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        },
+        "completed_at": {
+          "format": "date-time",
+          "title": "Completed At",
+          "type": "string"
+        },
+        "elapsed_seconds": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Elapsed Seconds",
+          "type": "number"
+        },
+        "output_sha256": {
+          "default": "",
+          "title": "Output Sha256",
+          "type": "string"
+        },
+        "output_bytes": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Output Bytes",
+          "type": "integer"
+        },
+        "error": {
+          "default": "",
+          "title": "Error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "backend",
+        "selected_lane",
+        "task",
+        "native_width",
+        "native_height",
+        "frame_num",
+        "sample_steps",
+        "sample_solver",
+        "precision",
+        "negative_conditioning",
+        "quality_contract_sha256",
+        "quality_contract_matched"
+      ],
+      "title": "GenerationExecutionReceipt",
+      "type": "object"
+    },
     "Grain": {
       "enum": [
         "none",
@@ -2411,6 +2563,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/VoiceClipPackage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "generation_receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GenerationExecutionReceipt"
             },
             {
               "type": "null"

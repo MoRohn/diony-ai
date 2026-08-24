@@ -31,7 +31,15 @@ from diony_contracts.enums import (
     TakeOrigin,
 )
 from diony_contracts.live import inference_live
-from diony_contracts.models import Artifact, ProductionPauseReceipt, Project, QCReport, Shot, Take
+from diony_contracts.models import (
+    Artifact,
+    GenerationExecutionReceipt,
+    ProductionPauseReceipt,
+    Project,
+    QCReport,
+    Shot,
+    Take,
+)
 from diony_contracts.stitch import assemble_program
 from diony_contracts.studio import refresh_reference_shot
 from diony_contracts.wan_prompt import prompt_receipt_sha256, repair_wan_prompt_for_qc
@@ -483,6 +491,33 @@ def resume_camera(project: Project) -> Project:
 def negative_rel(project: Project, take: Take) -> str:
     """One show per folder. `takes/sh-010-t1` collides across Ideas."""
     return f"projects/{project.id}/takes/{take.id}/negative_720.mp4"
+
+
+def _load_generation_receipt(take: Take, negative: Path) -> GenerationExecutionReceipt:
+    """Bind runner evidence only when it addresses this exact immutable output."""
+    from diony_wan.runner import generation_receipt_path
+
+    path = generation_receipt_path(negative)
+    try:
+        receipt = GenerationExecutionReceipt.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            "Wan generation completed without a valid execution-lane receipt."
+        ) from exc
+    if receipt.status != "succeeded":
+        raise RuntimeError(f"Wan execution lane reported {receipt.status}: {receipt.error}")
+    if not receipt.quality_contract_matched:
+        raise RuntimeError(
+            "Wan execution receipt does not match the pinned 720p BF16 quality contract."
+        )
+    actual_sha256 = _sha256_file(negative)
+    actual_bytes = negative.stat().st_size
+    if receipt.output_sha256 != actual_sha256 or receipt.output_bytes != actual_bytes:
+        raise RuntimeError("Wan execution receipt does not match the generated negative.")
+    take.generation_receipt = receipt
+    return receipt
 
 
 def new_generation_take(
@@ -1152,7 +1187,14 @@ def attach_negative(
 ) -> None:
     dest = vault_root() / dest_rel
     size = dest.stat().st_size if dest.is_file() else 0
-    digest = _sha256_file(dest) if dest.is_file() else ""
+    addressed = take.generation_receipt
+    digest = (
+        addressed.output_sha256
+        if addressed is not None and addressed.output_bytes == size
+        else _sha256_file(dest)
+        if dest.is_file()
+        else ""
+    )
     shot = project.shot(take.shot_id)
     media = probe_media(
         dest,
@@ -1448,6 +1490,8 @@ def run_one(
         )
         if farm_cancelled(token):
             return
+        if dest.is_file():
+            _load_generation_receipt(take, dest)
         attach_negative(
             project,
             take,
@@ -1464,7 +1508,16 @@ def run_one(
             record_activity("qc", f"{shot.id} · {_detail}", level="fail", shot_id=shot.id)
         else:
             _error = ""
-            record_activity("wan", f"{shot.id} · 720p negative landed", shot_id=shot.id)
+            lane = (
+                take.generation_receipt.selected_lane
+                if take.generation_receipt is not None
+                else "unreported lane"
+            )
+            record_activity(
+                "wan",
+                f"{shot.id} · 720p negative landed · {lane}",
+                shot_id=shot.id,
+            )
     except Exception as exc:  # noqa: BLE001 — farm must record QC fail
         if farm_cancelled(token):
             return
@@ -1502,7 +1555,19 @@ def run_one(
             duration_seconds=time.monotonic() - started,
             outcome=outcome,
             retry=take.attempt > 1,
-            metadata={"task": task, "measured_qc": bool(take.qc and take.qc.measurement_version)},
+            metadata={
+                "task": task,
+                "measured_qc": bool(take.qc and take.qc.measurement_version),
+                "generation_lane": (
+                    take.generation_receipt.selected_lane
+                    if take.generation_receipt is not None
+                    else "unreported"
+                ),
+                "quality_contract_matched": bool(
+                    take.generation_receipt
+                    and take.generation_receipt.quality_contract_matched
+                ),
+            },
         )
 
 

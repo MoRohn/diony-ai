@@ -138,10 +138,11 @@ def test_stage_product_is_complete_but_excludes_machine_state(tmp_path: Path) ->
     (source / "packages" / "contracts" / "pyproject.toml").write_text("[project]\n")
     (source / "infra" / "profiles" / "spark-4x-v1.yaml").write_text("sku: spark\n")
     (source / "blueprints" / "00-product-constitution.md").write_text("truth\n")
-    for relative in FEATURE_FILE_SETS["voice_performance"]:
-        feature_file = source / relative
-        feature_file.parent.mkdir(parents=True, exist_ok=True)
-        feature_file.write_text(f"packaged feature: {relative.as_posix()}\n")
+    for relatives in FEATURE_FILE_SETS.values():
+        for relative in relatives:
+            feature_file = source / relative
+            feature_file.parent.mkdir(parents=True, exist_ok=True)
+            feature_file.write_text(f"packaged feature: {relative.as_posix()}\n")
     (source / ".env").write_text("TOKEN=must-not-ship\n")
 
     target = tmp_path / "payload"
@@ -212,6 +213,36 @@ def test_stage_product_preserves_voice_performance_system_exactly(tmp_path: Path
         assert (target / relative).read_bytes() == (root / relative).read_bytes()
     metadata = json.loads((target / "desktop-release.json").read_text())
     receipt = metadata["features"]["voice_performance"]
+    assert receipt["paths"] == [path.as_posix() for path in required]
+    assert receipt["files"] == len(required)
+    assert len(receipt["sha256"]) == 64
+
+
+def test_stage_product_preserves_optimal_clip_flow_and_gpu_qualifier(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[3]
+    target = tmp_path / "payload"
+    required = (
+        Path("apps/producer/src/diony_producer/farm.py"),
+        Path("apps/producer/src/diony_producer/gpu.py"),
+        Path("apps/producer/src/diony_producer/run.py"),
+        Path("apps/producer/src/diony_producer/static/app.js"),
+        Path("apps/producer/src/diony_producer/static/index.html"),
+        Path("apps/wan/src/diony_wan/attention_qualification.py"),
+        Path("apps/wan/src/diony_wan/runner.py"),
+        Path("packages/contracts/src/diony_contracts/models.py"),
+        Path("packages/contracts/src/diony_contracts/studio.py"),
+        Path("packages/contracts/jsonschema/generation_execution_receipt.schema.json"),
+        Path("scripts/benchmark/measure_wan_attention.py"),
+        Path("blueprints/23-optimal-clip-production-flow.md"),
+    )
+
+    stage_product(root, target, version="test-optimal-clip-flow")
+
+    for relative in required:
+        assert (target / relative).read_bytes() == (root / relative).read_bytes()
+    receipt = json.loads((target / "desktop-release.json").read_text())["features"][
+        "optimal_clip_flow"
+    ]
     assert receipt["paths"] == [path.as_posix() for path in required]
     assert receipt["files"] == len(required)
     assert len(receipt["sha256"]) == 64

@@ -53,6 +53,17 @@ Activation is intentionally two-stage:
    continuity/temporal QC, and a verified 1920x1080 Finish. Only then may
    `wan-cudnn-sdpa-validation.json` enable the remaining Takes in that Project.
 
+The exact-shape operator command is:
+
+```bash
+python scripts/benchmark/measure_wan_attention.py \
+  --project-id "$PROJECT_ID" \
+  --approved-by "Named reviewer" \
+  --output /diony/vault/qualification/wan-cudnn-sdpa-validation.json
+```
+
+It writes a held operator receipt only; it cannot promote its own quality canary.
+
 Producer selects the backend per immutable Take rather than relying on the
 Producer process environment captured at startup. At a Take boundary, measured
 B200 operator proof may be rebound to the active Project and exactly one selected
@@ -227,6 +238,12 @@ relative or pre-configuration path during module import; camera evidence and the
 an SSH probe. A background controller owns legacy advancement and GPU sampling;
 `POST /api/run/advance` is the explicit compatibility action. Browser polling may
 therefore be frequent without becoming part of production correctness.
+
+Every new negative also writes an atomic execution-lane sidecar. Producer binds
+it to `Take.generation_receipt` only after checking the output hash, byte count,
+and pinned quality fields. Production clip rows expose the actual lane, timing,
+attention backend, and fallback reason so held or rolled-back acceleration cannot
+look like an unexplained performance regression.
 
 `GET /api/project` is also observational and must never persist or change
 `.cluster/current.json`. `POST /api/projects/{project_id}/activate` is the only

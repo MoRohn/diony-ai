@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import functools
+import hashlib
+import json
 import os
 import re
 import shutil
 import signal
 import subprocess
 import threading
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from diony_contracts.live import ckpt_dir, generate_py, wan_frame_num, wan_repo
 from diony_wan.resident import (
+    QUALITY_CONTRACT_SHA256,
     ResidentError,
     resident_canary_selected,
     resident_decision,
@@ -34,6 +39,83 @@ TASKS = {
 
 class WanError(RuntimeError):
     pass
+
+
+def generation_receipt_path(save_file: Path) -> Path:
+    return save_file.with_suffix(".generation.json")
+
+
+def _write_generation_receipt(
+    save_file: Path,
+    *,
+    started_at: datetime,
+    started_monotonic: float,
+    status: str,
+    backend: str,
+    selected_lane: str,
+    task: str,
+    frame_num: int,
+    width: int,
+    height: int,
+    steps: int,
+    negative_conditioning: bool,
+    attention_backend: str,
+    resident_reason: str = "",
+    resident_receipt_sha256: str = "",
+    resident_kernel_mode: str = "",
+    fallback_reason: str = "",
+    error: str = "",
+) -> None:
+    output_sha256 = ""
+    output_bytes = 0
+    if status == "succeeded" and save_file.is_file():
+        output_bytes = save_file.stat().st_size
+        digest = hashlib.sha256()
+        with save_file.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        output_sha256 = digest.hexdigest()
+    quality_contract_matched = bool(
+        backend == "native"
+        and width == 1280
+        and height == 720
+        and frame_num == 81
+        and steps == 24
+        and negative_conditioning
+    )
+    payload = {
+        "schema_version": 1,
+        "status": status,
+        "backend": backend,
+        "selected_lane": selected_lane,
+        "task": task,
+        "native_width": width,
+        "native_height": height,
+        "frame_num": frame_num,
+        "sample_steps": steps,
+        "sample_solver": "unipc" if backend == "native" else "backend_configured",
+        "precision": "bfloat16" if backend == "native" else "backend_configured",
+        "negative_conditioning": negative_conditioning,
+        "finish_required": True,
+        "quality_contract_sha256": QUALITY_CONTRACT_SHA256,
+        "quality_contract_matched": quality_contract_matched,
+        "attention_backend": attention_backend or "auto",
+        "resident_reason": resident_reason,
+        "resident_receipt_sha256": resident_receipt_sha256,
+        "resident_kernel_mode": resident_kernel_mode,
+        "fallback_reason": fallback_reason[:500],
+        "started_at": started_at.isoformat(),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "elapsed_seconds": round(max(0.0, time.monotonic() - started_monotonic), 6),
+        "output_sha256": output_sha256,
+        "output_bytes": output_bytes,
+        "error": error[:500],
+    }
+    path = generation_receipt_path(save_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pending = path.with_suffix(path.suffix + ".part")
+    pending.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    pending.replace(path)
 
 
 def wan_backend() -> str:
@@ -664,6 +746,8 @@ def run_generate(
     timeout: int | None = None,
 ) -> Path:
     """Run the selected local Wan backend and write a 720p negative."""
+    started_at = datetime.now(timezone.utc)
+    started_monotonic = time.monotonic()
     frames = wan_frame_num(duration_frames, fps)
     save_file.parent.mkdir(parents=True, exist_ok=True)
     if wan_backend() == "comfyui":
@@ -675,7 +759,7 @@ def run_generate(
         )
 
         try:
-            return configured_runner().run(
+            result = configured_runner().run(
                 GenerationConfig(
                     mode=task,
                     prompt=prompt,
@@ -694,7 +778,39 @@ def run_generate(
                 last_image=last_image,
             )
         except ComfyError as exc:
+            _write_generation_receipt(
+                save_file,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                status="failed",
+                backend="comfyui",
+                selected_lane="comfyui",
+                task=task,
+                frame_num=frames,
+                width=width,
+                height=height,
+                steps=steps,
+                negative_conditioning=True,
+                attention_backend=attention_backend or "auto",
+                error=str(exc),
+            )
             raise WanError(str(exc)) from exc
+        _write_generation_receipt(
+            save_file,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            status="succeeded",
+            backend="comfyui",
+            selected_lane="comfyui",
+            task=task,
+            frame_num=frames,
+            width=width,
+            height=height,
+            steps=steps,
+            negative_conditioning=True,
+            attention_backend=attention_backend or "auto",
+        )
+        return result
     ensure_attention_fallback()
     ensure_negative_prompt_input()
     offload = wan_needs_offload()
@@ -721,9 +837,10 @@ def run_generate(
     log_path = save_file.with_suffix(".wan.log")
     start_wan_attempt_log(log_path)
     decision = resident_decision(task=task, offload=offload)
+    resident_selected = resident_canary_selected(str(save_file))
     resident_compatible = (
         decision.enabled
-        and resident_canary_selected(str(save_file))
+        and resident_selected
         and frames == 81
         and steps == 24
         and width == 1280
@@ -733,6 +850,7 @@ def run_generate(
         and animate_root is None
         and (task != "i2v-A14B" or image is not None)
     )
+    fallback_reason = ""
     if resident_compatible:
         payload = resident_job_payload(
             task=task,
@@ -754,6 +872,27 @@ def run_generate(
                 timeout=limit,
             )
             if save_file.is_file() and save_file.stat().st_size >= 32:
+                lane = f"resident_bf16_{decision.kernel_mode}"
+                if attention_backend:
+                    lane += f"_{attention_backend}"
+                _write_generation_receipt(
+                    save_file,
+                    started_at=started_at,
+                    started_monotonic=started_monotonic,
+                    status="succeeded",
+                    backend="native",
+                    selected_lane=lane,
+                    task=task,
+                    frame_num=frames,
+                    width=width,
+                    height=height,
+                    steps=steps,
+                    negative_conditioning=True,
+                    attention_backend=attention_backend or "auto",
+                    resident_reason=decision.reason,
+                    resident_receipt_sha256=decision.receipt_sha256,
+                    resident_kernel_mode=decision.kernel_mode,
+                )
                 return save_file
             raise ResidentError("Resident Wan exited without a complete 720p negative.")
         except (ResidentError, OSError, subprocess.SubprocessError) as exc:
@@ -761,6 +900,7 @@ def run_generate(
             # attempt's partial output, then rerun with the same quality inputs.
             save_file.unlink(missing_ok=True)
             suppress_resident(decision.receipt_sha256, str(exc))
+            fallback_reason = f"Resident automatic rollback: {type(exc).__name__}: {exc}"
             try:
                 log_path.write_text(
                     f"DIONY_RESIDENT_ROLLBACK {type(exc).__name__}: {exc}\n",
@@ -768,6 +908,12 @@ def run_generate(
                 )
             except OSError:
                 pass
+    elif decision.enabled and not resident_selected:
+        fallback_reason = "Resident lane held by the receipt-capped canary rollout."
+    elif decision.enabled:
+        fallback_reason = "Resident lane is incompatible with this Take shape or conditioning."
+    else:
+        fallback_reason = decision.reason
     global _wan_proc
     with log_path.open("ab") as log:
         proc = subprocess.Popen(
@@ -784,6 +930,26 @@ def run_generate(
         except subprocess.TimeoutExpired as exc:
             proc.kill()
             proc.wait()
+            _write_generation_receipt(
+                save_file,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                status="failed",
+                backend="native",
+                selected_lane="wan22_quality_cli",
+                task=task,
+                frame_num=frames,
+                width=width,
+                height=height,
+                steps=steps,
+                negative_conditioning=True,
+                attention_backend=attention_backend or "auto",
+                resident_reason=decision.reason,
+                resident_receipt_sha256=decision.receipt_sha256,
+                resident_kernel_mode=decision.kernel_mode,
+                fallback_reason=fallback_reason,
+                error="Wan2.2 timed out before the 720p negative landed.",
+            )
             raise WanError("Wan2.2 timed out before the 720p negative landed.") from exc
         finally:
             with _wan_lock:
@@ -795,7 +961,70 @@ def run_generate(
     except OSError:
         blob = ""
     if returncode != 0:
-        raise WanError(classify_wan_log(blob, returncode))
+        message = classify_wan_log(blob, returncode)
+        _write_generation_receipt(
+            save_file,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            status="failed",
+            backend="native",
+            selected_lane="wan22_quality_cli",
+            task=task,
+            frame_num=frames,
+            width=width,
+            height=height,
+            steps=steps,
+            negative_conditioning=True,
+            attention_backend=attention_backend or "auto",
+            resident_reason=decision.reason,
+            resident_receipt_sha256=decision.receipt_sha256,
+            resident_kernel_mode=decision.kernel_mode,
+            fallback_reason=fallback_reason,
+            error=message,
+        )
+        raise WanError(message)
     if not save_file.is_file() or save_file.stat().st_size < 32:
+        _write_generation_receipt(
+            save_file,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            status="failed",
+            backend="native",
+            selected_lane="wan22_quality_cli",
+            task=task,
+            frame_num=frames,
+            width=width,
+            height=height,
+            steps=steps,
+            negative_conditioning=True,
+            attention_backend=attention_backend or "auto",
+            resident_reason=decision.reason,
+            resident_receipt_sha256=decision.receipt_sha256,
+            resident_kernel_mode=decision.kernel_mode,
+            fallback_reason=fallback_reason,
+            error=f"generate.py exited 0 but wrote no clip at {save_file}",
+        )
         raise WanError(f"generate.py exited 0 but wrote no clip at {save_file}")
+    lane = "wan22_quality_cli"
+    if attention_backend:
+        lane += f"_{attention_backend}"
+    _write_generation_receipt(
+        save_file,
+        started_at=started_at,
+        started_monotonic=started_monotonic,
+        status="succeeded",
+        backend="native",
+        selected_lane=lane,
+        task=task,
+        frame_num=frames,
+        width=width,
+        height=height,
+        steps=steps,
+        negative_conditioning=True,
+        attention_backend=attention_backend or "auto",
+        resident_reason=decision.reason,
+        resident_receipt_sha256=decision.receipt_sha256,
+        resident_kernel_mode=decision.kernel_mode,
+        fallback_reason=fallback_reason,
+    )
     return save_file

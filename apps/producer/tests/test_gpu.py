@@ -229,6 +229,27 @@ def test_gpu_remote_busy_boundary_includes_mix(monkeypatch) -> None:
     assert 'if [ -z "$payload" ]; then\n  echo busy' in captured["script"]
 
 
+def test_gpu_remote_busy_boundary_allows_a_pending_stop_keep_hotfix(monkeypatch) -> None:
+    import diony_producer.gpu as gpu
+
+    captured: dict[str, str] = {}
+
+    def fake_run(_command, **kwargs):
+        captured["script"] = kwargs["input"]
+        return type("Result", (), {"returncode": 0, "stdout": "idle\n", "stderr": ""})()
+
+    monkeypatch.setattr(gpu.subprocess, "run", fake_run)
+
+    assert gpu._remote_producer_busy(
+        {"ssh_port": "28869", "ssh_user": "root", "host": "gpu"}
+    ) is False
+    script = captured["script"]
+    assert "/api/project" in script
+    assert "production_pause" in script
+    assert "stop_keep" in script
+    assert script.index("stop_keep") < script.index("pgrep -f '[g]enerate.py.*--task'")
+
+
 def test_gpu_sync_writes_content_stamp_through_stdin_script(tmp_path, monkeypatch) -> None:
     import diony_producer.gpu as gpu
 

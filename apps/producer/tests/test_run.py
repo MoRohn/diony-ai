@@ -1,7 +1,16 @@
 from datetime import datetime, timedelta, timezone
 
 from diony_contracts.enums import CameraMove, Engine, FinishIntent, QCVerdict
-from diony_contracts.models import Bible, Character, MixLock, Project, QCReport, Shot, Take
+from diony_contracts.models import (
+    Bible,
+    Character,
+    GenerationExecutionReceipt,
+    MixLock,
+    Project,
+    QCReport,
+    Shot,
+    Take,
+)
 from diony_producer.run import format_elapsed, production_clock, production_standard
 
 
@@ -221,6 +230,74 @@ def test_failed_autoqc_outranks_a_landed_negative(monkeypatch) -> None:
     assert board["failed"] is True
     assert board["steps"][1]["state"] == "failed"
     assert board["steps"][2]["state"] == "next"
+
+
+def test_clip_monitor_exposes_actual_lane_and_fallback_reason(monkeypatch) -> None:
+    from diony_producer.run import _clip_rows
+
+    shot = Shot(
+        id="sh-lane",
+        scene="1",
+        slug="INT. STAGE — LANE RECEIPT",
+        duration_frames=120,
+        fps=23.976,
+        focal_mm=40,
+        t_stop=2.8,
+        lighting_ratio="4:1",
+        camera_move=CameraMove.STATIC,
+        prompt="A verified camera negative.",
+        seed=42,
+        engine=Engine.I2V_A14B,
+        finish=FinishIntent.DELIVERABLE,
+        selected_take_id="take-lane",
+    )
+    receipt = GenerationExecutionReceipt(
+        status="succeeded",
+        backend="native",
+        selected_lane="wan22_quality_cli",
+        task="i2v-A14B",
+        native_width=1280,
+        native_height=720,
+        frame_num=81,
+        sample_steps=24,
+        sample_solver="unipc",
+        precision="bfloat16",
+        negative_conditioning=True,
+        quality_contract_sha256="a" * 64,
+        quality_contract_matched=True,
+        fallback_reason="Resident Wan validation receipt is not configured.",
+        elapsed_seconds=901.0,
+        output_sha256="b" * 64,
+        output_bytes=1024,
+    )
+    take = Take(
+        id="take-lane",
+        shot_id=shot.id,
+        attempt=1,
+        engine=Engine.I2V_A14B,
+        seed=42,
+        generation_receipt=receipt,
+        qc=QCReport(
+            id="qc-lane",
+            take_id="take-lane",
+            shot_id=shot.id,
+            verdict=QCVerdict.PASS,
+            identity_ok=True,
+            morph_ok=True,
+            flicker_ok=True,
+            duration_ok=True,
+            legal_ok=True,
+        ),
+    )
+    project = Project(id="ep-lane", bible=_bible(), shots=[shot], takes=[take])
+    monkeypatch.setattr("diony_producer.run.take_has_live_negative", lambda *_args: True)
+
+    row = _clip_rows(project, {"busy": False})[0]
+
+    assert row["generation_lane"] == "wan22_quality_cli"
+    assert row["generation_lane_label"] == "Quality CLI fallback"
+    assert "receipt" in row["generation_fallback"].casefold()
+    assert row["generation_elapsed_seconds"] == 901.0
 
 
 def test_clip_monitor_tracks_finish_progress_as_structured_milestones(monkeypatch) -> None:

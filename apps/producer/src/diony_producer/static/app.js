@@ -502,7 +502,9 @@ function paintClips(list, clips) {
     id.className = "id";
     id.textContent = clip.shot_id || "Clip";
     const take = document.createElement("span");
-    take.textContent = clip.take_id || clip.engine || "";
+    const lane = String(clip.generation_lane_label || "").trim();
+    take.textContent = [clip.take_id || clip.engine || "", lane].filter(Boolean).join(" · ");
+    if (clip.generation_fallback) take.title = clip.generation_fallback;
     identity.append(id, take);
     const state = document.createElement("span");
     state.className = "clip-state";
