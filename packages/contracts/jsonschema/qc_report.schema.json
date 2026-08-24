@@ -106,6 +106,18 @@
       "default": null,
       "title": "Audio Ready Ok"
     },
+    "voice_ready_ok": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Voice Ready Ok"
+    },
     "lipsync_ok": {
       "anyOf": [
         {
@@ -129,6 +141,80 @@
       ],
       "default": null,
       "title": "Loudness Ok"
+    },
+    "voice_measurement_version": {
+      "default": "",
+      "title": "Voice Measurement Version",
+      "type": "string"
+    },
+    "speaker_similarity": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": -1,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Speaker Similarity"
+    },
+    "voice_project_consistency": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": -1,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Voice Project Consistency"
+    },
+    "voice_performance_consistency": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Voice Performance Consistency"
+    },
+    "lip_sync_confidence": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Lip Sync Confidence"
+    },
+    "audiovisual_offset_ms_p95": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Audiovisual Offset Ms P95"
     },
     "reference_asset_ids": {
       "items": {

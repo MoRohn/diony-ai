@@ -36,7 +36,7 @@ Project contains no spoken intent.
 | `DialogueTurn` | Character, spoken text, emotion curve, subtext, start/overlap/interruption, pronunciation | explicit multi-character timing intent |
 | `PerformanceScript` | profile-aware lines, breaths, stress, pauses, timing, phonetics, emotion curve | deterministic content hash |
 | `VoiceQCReceipt` | identity, consistency, SNR, LUFS, true peak, harshness, sibilance, lip confidence, AV offset | cannot claim pass below a locked threshold |
-| `VoiceClipPackage` | profile ids, generation seeds, script, three Asset ids, backend versions, cache key, QC | `verified` requires complete audio and animation evidence |
+| `VoiceClipPackage` | profile ids, generation seeds, script, three Asset ids, backend versions, cache key, exact video SHA-256, QC | `verified` requires complete audio and animation evidence bound to the rendered negative |
 
 `Character.voice_profile_id` names the current locked Project identity.
 `Project.voice_profiles[]` retains every immutable revision. `Take.voice_package`
@@ -53,13 +53,17 @@ JSON Schemas are exported for `voice_profile`, `performance_script`,
 
 - `ensure_synthetic(character_id)` locks a deterministic seed, style token,
   synthetic speaker-space vector, prosody, and neutral/joy/grief/tension maps.
-- `lock_reference_voice_profile(...)` accepts local audio Assets only, extracts
-  a speaker embedding per sample through the configured local backend, records
+- `lock_reference_voice_profile(...)` accepts local audio Assets only, probes
+  duration from the media bytes, extracts a speaker embedding per sample
+  through the configured local backend, records
   per-sample emotion/transcript/checksum, averages and normalizes the locked
   speaker vector, and rejects a total reference duration outside 5–30 seconds.
 - A locked profile object is frozen. Changing voice identity requires a new
   versioned Bible/Project decision; regenerating a clip reuses the exact locked
   profile and content hash.
+- `identity_lineage_id`, seed, style lock, and speaker embedding are stable for
+  the same Character identity and descriptors across episode Projects. The
+  Profile object and its assets remain scoped to each Project.
 - `GET /api/voice-profiles` reads the registry.
 - `POST /api/characters/{character_id}/voice-profiles/lock` locks a synthetic,
   zero-shot, or few-shot identity. It never uploads data or calls a hosted API.
@@ -172,10 +176,18 @@ metrics, and diagnostic. A visual performance failure uses the normal immutable
 Take retake path and counts against the four camera Take cap. Infrastructure and
 missing-backend failures do not invent output.
 
+Independent dialogue lines synthesize, embed, and align concurrently through a
+bounded local worker pool (`DIONY_VOICE_WORKERS`, default 4, maximum 8). Results
+are collected in script order before the deterministic scene-level audio chain,
+so concurrency changes latency but not package ordering or hashes. A backend
+that needs stricter GPU admission may set the worker count to 1.
+
 The cache key covers pipeline version, PerformanceScript hash, and every
 VoiceProfile hash. A visual retake reuses clean/final audio and performance
 metadata, resets only animation QC, and must verify the new negative. Completed
-audio is never resynthesized merely because picture changed.
+audio is never resynthesized merely because picture changed. The successful AV
+receipt records that negative's SHA-256; a new negative can never inherit an old
+animation pass.
 
 ## Clip and program outputs
 

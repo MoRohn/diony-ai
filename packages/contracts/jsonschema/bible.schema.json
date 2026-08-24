@@ -26,6 +26,11 @@
           "default": "",
           "title": "Notes",
           "type": "string"
+        },
+        "voice_profile_id": {
+          "default": "",
+          "title": "Voice Profile Id",
+          "type": "string"
         }
       },
       "required": [

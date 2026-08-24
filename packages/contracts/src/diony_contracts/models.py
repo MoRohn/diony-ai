@@ -466,6 +466,7 @@ class QCReport(BaseModel):
     voice_measurement_version: str = ""
     speaker_similarity: float | None = Field(default=None, ge=-1, le=1)
     voice_project_consistency: float | None = Field(default=None, ge=-1, le=1)
+    voice_performance_consistency: float | None = Field(default=None, ge=0, le=1)
     lip_sync_confidence: float | None = Field(default=None, ge=0, le=1)
     audiovisual_offset_ms_p95: float | None = Field(default=None, ge=0)
     reference_asset_ids: list[str] = Field(default_factory=list)

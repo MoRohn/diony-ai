@@ -10,12 +10,14 @@ brief → bible (DeepSeek, BRAIN or SPLIT)
      → HUMAN GATE: bible lock
      → rundown (Shot[] JSON)
      → keyframe lock (stills / I2V refs)
-     → generate (Wan T2V / I2V / S2V)
+     → VoiceProfile lock + performance script (spoken Shots)
+     → processed clip audio + timing/performance lock
+     → generate (Wan T2V / I2V / audio-driven S2V)
      → AutoQC
         fail → DeepSeek retake (new Take, same Shot id)
         pass → Diony 1080 finish (Production)
      → timeline conform
-     → dialogue / score / SFX / mix (Production)
+     → verified per-clip audio assembly + score / SFX / mix (Production)
      → masters
      → HUMAN GATE: distribution
 ```
@@ -46,6 +48,9 @@ Before render, Producer probes every source. Resolution, frame-rate, and codec m
 | `Asset` | Idea reference: still, clip, or document in the vault |
 | `ClipEdit` | Legacy read-only lineage from Projects created before the Edit surface was retired |
 | `QCReport` | Machine verdict on a Take |
+| `VoiceProfile` | Immutable Project-scoped Character voice identity revision |
+| `PerformanceScript` | Breath, stress, phonetic, timing, emotion, subtext, and overlap decisions |
+| `VoiceClipPackage` | Clean/final audio, performance metadata, seeds, backend versions, and voice/AV QC |
 | `Timeline` | Ordered Shot ids + handles |
 | `MixLock` | Stem list + LUFS + picture-lock ref |
 | `Deliverable` | Master files + checksums |
@@ -73,7 +78,7 @@ A Shot that lacks these is invalid; Conductor must fill them before dispatch:
 | Establishing / cinematic, no lock | T2V-A14B |
 | Character or wardrobe lock | I2V-A14B from locked still |
 | Fast blocking | TI2V-5B, `finish=previz` |
-| Talking / singing to picture | S2V-14B + CosyVoice or licensed VO |
+| Talking / singing to picture | locked VoiceClipPackage → S2V-14B |
 | Motion transfer / replacement | Animate-14B |
 | Legacy VACE child Take import | VACE Fun A14B metadata, read-only |
 
@@ -95,6 +100,10 @@ Fail (block finish) on:
 - duration mismatch > 1 frame vs Shot
 - Rec.709 illegal after finish
 - lipsync offset > 40 ms on S2V
+- speaker cosine similarity < 0.92 or Project consistency < 0.90
+- missing/unverified VoiceClipPackage for any spoken Shot
+- lip-sync confidence < 0.90 or p95 audiovisual offset > 40 ms
+- dialogue SNR < 30 dB, harshness/sibilance above 0.25, or loudness/peak outside the Bible target
 - loudness out of spec on mix
 
 Reference-lock and first/last boundary failures reject only the immutable Take,
@@ -125,6 +134,12 @@ Warn (human visible, not auto-fail) on:
 Day 1 Conductor is a stub that walks a fixture project through states so Producer UX is real.
 
 Producer `POST /api/studio/roll` farms Wan2.2 when this process has `/models/wan` **or** when a signed Dual-Spark / B300 / B200 site has a Connect SSH line (desk Producer tunnels to GPU Producer). Official `generate.py`, 720p mp4 negatives in the GPU vault. Cap 4. Production then runs 1080 finish (`diony_sr_v1`) and mix without a click. Studio App already pulled Wan + `diony_sr_v1` onto that GPU; desk Producer must not look for `/models` on the laptop or say the 1080 pack is missing “on this site.” Unsigned laptop without weights stays stub (title cards, then auto 1080/mix gates). A signed lease with `gpu_ready` is not a stub camera. After a pod restart, desk Producer reads live Studio Connect (not a cached `site.json` TCP line), rsyncs Producer/Wan onto `/opt/diony-ai`, and health-checks GPU `:8788` — it does not trust `pgrep diony-producer`. Dual-Spark drains brain (`DIONY_DRAIN_BRAIN`) then FARM; drains Wan then FINISH. Retakes reopen picture/mix; the run does them again.
+
+For spoken Shots, `POST /api/studio/roll` first creates or resolves the locked
+Character VoiceProfile, compiles the PerformanceScript, produces and verifies
+the studio-audio package, and only then enters S2V camera preflight. Final Mix
+assembles those verified clip packages and never synthesizes dialogue. Full
+contracts, backend actions, caching, and thresholds are Blueprint `22`.
 
 ## Site lock
 

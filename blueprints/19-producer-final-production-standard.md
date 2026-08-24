@@ -333,17 +333,22 @@ failed checks, stable references, and recommended repair route.
 ### Audio parity
 
 - dialogue intelligibility precedes score impact;
-- required scripted dialogue is synthesized locally by the pinned
-  `iic/CosyVoice2-0.5B` runtime into a versioned dialogue stem; Production never
-  downloads it on demand and missing preparation blocks Mix;
-- voice identity, reference prompt, script hash, and pronunciation remain
-  versioned inputs;
-- S2V/dialogue lipsync is within 40 ms;
+- required scripted dialogue locks an immutable Project-scoped VoiceProfile,
+  profile-aware PerformanceScript, processed clean dialogue, final clip mix,
+  timing/performance metadata, seeds, backend versions, and QC before picture;
+- voice identity, multi-emotion reference embeddings, prosody, script hash,
+  pronunciation, subtext, overlap, and interruption intent remain versioned inputs;
+- generated speaker similarity is at least 0.92, prior-Project consistency at
+  least 0.90, SNR at least 30 dB, and harshness/sibilance at most 0.25;
+- Wan S2V consumes the locked processed audio. Lip confidence is at least 0.90
+  and p95 dialogue offset is within 40 ms; facial and upper-body performance
+  must pass the same timed performance receipt;
 - dialogue, score, and SFX are separate stems when present;
 - a picture-only request does not invent dialogue or route a template beat to
   S2V; Producer bounces a versioned, content-neutral stereo room-tone stem so
   the program still has honest measured audio evidence;
 - room tone is never a fallback for required dialogue;
+- final Mix assembles verified per-clip VoiceClipPackages and never invokes synthesis;
 - broadcast target is −24 LUFS, streaming target is −16 LUFS;
 - true peak is −1 dBTP;
 - missing required dialogue, clipped stems, silent channels, phase faults, or

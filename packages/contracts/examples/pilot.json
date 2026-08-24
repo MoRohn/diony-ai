@@ -37,7 +37,8 @@
           "still-mara-close"
         ],
         "wardrobe": "Ink-stained oxford, dark wool vest, hair pinned",
-        "notes": ""
+        "notes": "",
+        "voice_profile_id": ""
       }
     ],
     "lut_asset_id": null,
@@ -73,6 +74,7 @@
       "engine": "i2v-A14B",
       "finish": "deliverable",
       "audio_line": "They're running tomorrow's obit tonight.",
+      "dialogue_turns": [],
       "overlap_frames": 8,
       "max_takes": 4,
       "selected_take_id": "sh-010-t2"
@@ -101,6 +103,7 @@
       "engine": "t2v-A14B",
       "finish": "deliverable",
       "audio_line": null,
+      "dialogue_turns": [],
       "overlap_frames": 8,
       "max_takes": 4,
       "selected_take_id": null
@@ -133,6 +136,7 @@
       "engine": "i2v-A14B",
       "finish": "deliverable",
       "audio_line": "If it's printed, someone already died.",
+      "dialogue_turns": [],
       "overlap_frames": 8,
       "max_takes": 4,
       "selected_take_id": null
@@ -162,8 +166,15 @@
         "lighting_ok": null,
         "production_clean_ok": null,
         "audio_ready_ok": null,
+        "voice_ready_ok": null,
         "lipsync_ok": null,
         "loudness_ok": null,
+        "voice_measurement_version": "",
+        "speaker_similarity": null,
+        "voice_project_consistency": null,
+        "voice_performance_consistency": null,
+        "lip_sync_confidence": null,
+        "audiovisual_offset_ms_p95": null,
         "reference_asset_ids": [],
         "reference_similarity": null,
         "reference_similarities": {},
@@ -177,9 +188,9 @@
         "flicker_luma_p95": null,
         "measured_frame_count": 0,
         "notes": "Identity drift vs still-mara-wide. Retake.",
-        "created_at": "2026-08-22T14:48:55.481491Z"
+        "created_at": "2026-08-24T10:54:27.581961Z"
       },
-      "created_at": "2026-08-22T14:48:55.481512Z",
+      "created_at": "2026-08-24T10:54:27.581975Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -207,9 +218,10 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-08-22T14:48:55.481280Z"
+          "created_at": "2026-08-24T10:54:27.581808Z"
         }
-      ]
+      ],
+      "voice_package": null
     },
     {
       "id": "sh-010-t2",
@@ -234,8 +246,15 @@
         "lighting_ok": null,
         "production_clean_ok": null,
         "audio_ready_ok": null,
+        "voice_ready_ok": null,
         "lipsync_ok": true,
         "loudness_ok": null,
+        "voice_measurement_version": "",
+        "speaker_similarity": null,
+        "voice_project_consistency": null,
+        "voice_performance_consistency": null,
+        "lip_sync_confidence": null,
+        "audiovisual_offset_ms_p95": null,
         "reference_asset_ids": [],
         "reference_similarity": null,
         "reference_similarities": {},
@@ -249,9 +268,9 @@
         "flicker_luma_p95": null,
         "measured_frame_count": 0,
         "notes": "",
-        "created_at": "2026-08-22T14:48:55.481527Z"
+        "created_at": "2026-08-24T10:54:27.581987Z"
       },
-      "created_at": "2026-08-22T14:48:55.481531Z",
+      "created_at": "2026-08-24T10:54:27.581990Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -279,7 +298,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-08-22T14:48:55.481521Z"
+          "created_at": "2026-08-24T10:54:27.581980Z"
         },
         {
           "id": "art-sh-010-t2-1080",
@@ -301,9 +320,10 @@
           "height": 1080,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-08-22T14:48:55.481524Z"
+          "created_at": "2026-08-24T10:54:27.581983Z"
         }
-      ]
+      ],
+      "voice_package": null
     },
     {
       "id": "sh-020-t1",
@@ -328,8 +348,15 @@
         "lighting_ok": null,
         "production_clean_ok": null,
         "audio_ready_ok": null,
+        "voice_ready_ok": null,
         "lipsync_ok": null,
         "loudness_ok": null,
+        "voice_measurement_version": "",
+        "speaker_similarity": null,
+        "voice_project_consistency": null,
+        "voice_performance_consistency": null,
+        "lip_sync_confidence": null,
+        "audiovisual_offset_ms_p95": null,
         "reference_asset_ids": [],
         "reference_similarity": null,
         "reference_similarities": {},
@@ -343,9 +370,9 @@
         "flicker_luma_p95": null,
         "measured_frame_count": 0,
         "notes": "Paper stock slightly modern. Usable.",
-        "created_at": "2026-08-22T14:48:55.481539Z"
+        "created_at": "2026-08-24T10:54:27.582001Z"
       },
-      "created_at": "2026-08-22T14:48:55.481542Z",
+      "created_at": "2026-08-24T10:54:27.582004Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -373,9 +400,10 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 72,
-          "created_at": "2026-08-22T14:48:55.481536Z"
+          "created_at": "2026-08-24T10:54:27.581998Z"
         }
-      ]
+      ],
+      "voice_package": null
     },
     {
       "id": "sh-030-t1",
@@ -400,8 +428,15 @@
         "lighting_ok": null,
         "production_clean_ok": null,
         "audio_ready_ok": null,
+        "voice_ready_ok": null,
         "lipsync_ok": true,
         "loudness_ok": null,
+        "voice_measurement_version": "",
+        "speaker_similarity": null,
+        "voice_project_consistency": null,
+        "voice_performance_consistency": null,
+        "lip_sync_confidence": null,
+        "audiovisual_offset_ms_p95": null,
         "reference_asset_ids": [],
         "reference_similarity": null,
         "reference_similarities": {},
@@ -415,9 +450,9 @@
         "flicker_luma_p95": null,
         "measured_frame_count": 0,
         "notes": "",
-        "created_at": "2026-08-22T14:48:55.481547Z"
+        "created_at": "2026-08-24T10:54:27.582009Z"
       },
-      "created_at": "2026-08-22T14:48:55.481551Z",
+      "created_at": "2026-08-24T10:54:27.582012Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -445,9 +480,10 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 168,
-          "created_at": "2026-08-22T14:48:55.481545Z"
+          "created_at": "2026-08-24T10:54:27.582006Z"
         }
-      ]
+      ],
+      "voice_package": null
     }
   ],
   "notes": [
@@ -455,7 +491,7 @@
       "id": "n-human-010",
       "author": "human",
       "body": "Hold her eyes on the nick in the case. Don't blink off it.",
-      "created_at": "2026-08-22T14:48:55.481574Z",
+      "created_at": "2026-08-24T10:54:27.582025Z",
       "shot_id": "sh-010",
       "take_id": null
     }
@@ -463,6 +499,7 @@
   "assets": [],
   "edits": [],
   "compositions": [],
+  "voice_profiles": [],
   "timeline": {
     "id": "tl-pilot",
     "events": [
@@ -549,8 +586,8 @@
     "exception_by": "",
     "exception_at": null
   },
-  "created_at": "2026-08-22T14:48:55.481621Z",
-  "updated_at": "2026-08-22T14:48:55.481622Z",
+  "created_at": "2026-08-24T10:54:27.582060Z",
+  "updated_at": "2026-08-24T10:54:27.582061Z",
   "deleted_at": null,
   "production_started_at": null,
   "production_ended_at": null,

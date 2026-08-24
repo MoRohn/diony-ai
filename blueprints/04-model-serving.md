@@ -132,7 +132,7 @@ Worker: `diony-wan` (`apps/wan`) selects `native` (default) or `comfyui` explici
 
 On the signed pair after Studio App: clone Wan2.2 to `/opt/wan22`, `pip install -r /opt/wan22/requirements.txt`, `PYTHONPATH=/opt/wan22`. `DIONY_PYTHON` is the **host** interpreter that can `import torch` (RunPod image: `/usr/bin/python3`). It is not `$DIONY_REPO/.venv/bin/python` — that venv is FastAPI only. Studio writes `diony-system-torch.pth` so in-process finish can see the same torch. Produce then writes `takes/{id}/negative_720.mp4`.
 
-Host dependencies are tiered. T2V/I2V are the strict Production core: upstream base requirements plus `infra/runtime/wan-host-overlay.txt`, validated by `diony_wan.runtime` under the exact CUDA interpreter used for `generate.py`. S2V and Animate are purpose-built optional capability sets: Producer routes S2V only with a still plus recorded performance audio, and Animate only with a still plus official preprocessed motion source. Their missing packages are reported but do not break core camera startup. Diony patches Wan's package exports to lazy-load those optional engines. Never compile an optional SAM2 extension against a CUDA/PyTorch mismatch just to make T2V import.
+Host dependencies are tiered. T2V/I2V are the strict Production core: upstream base requirements plus `infra/runtime/wan-host-overlay.txt`, validated by `diony_wan.runtime` under the exact CUDA interpreter used for `generate.py`. S2V and Animate are purpose-built capability sets: spoken intent makes S2V mandatory after VoiceProfile, studio-audio, and performance metadata lock; Animate remains required only for authored motion-transfer intent. Their missing packages are reported without breaking picture-only camera startup, but a spoken Shot cannot fall back to T2V. Diony patches Wan's package exports to lazy-load those engines. Never compile an optional SAM2 extension against a CUDA/PyTorch mismatch just to make T2V import.
 
 LightX2V / Cache-dit / FastVideo are **Week 2+ accelerators**. Day 1 quality path is official Wan. Speed path must not silently drop the quality mandate.
 
@@ -142,14 +142,16 @@ Not an upstream model. Pipeline in Blueprint `06`. Worker: `diony-finish` (`apps
 
 ## Audio
 
-- Dialogue TTS: pinned local `iic/CosyVoice2-0.5B` through the official CosyVoice
-  runtime. Studio App prepares the runtime, model, and a local reference prompt;
-  Production never downloads audio dependencies on demand. Spoken intent must
-  produce a versioned dialogue stem or block Mix with an actionable readiness
-  error. It may never be replaced by room tone.
-- Wan S2V remains a separate camera capability for a still plus recorded
-  performance audio; CosyVoice supplies dialogue audio and does not silently
-  relabel a Shot as S2V.
+- Dialogue is the modular local Blueprint `22` backend: synthesis (CosyVoice or
+  qualified replacement), ECAPA-TDNN/CAM++-class embeddings, forced alignment,
+  deterministic studio processing, and audiovisual QC behind
+  `DIONY_VOICE_BACKEND_COMMAND`. Studio prepares the complete pinned backend pack;
+  Production never downloads dependencies on demand.
+- Spoken intent must lock a VoiceProfile, PerformanceScript, clean dialogue,
+  final clip mix, timing/performance metadata, seeds, and audio QC before camera.
+  Missing preparation blocks the Shot; room tone and post-picture TTS are forbidden.
+- Wan S2V consumes the locked processed audio plus a still or selected prior
+  frame. Final Mix only assembles verified per-clip packages.
 - Score: pin **ACE-Step** as the Day 1 Blueprint choice (local, replaceable). Bake-off is Week 2+.
 - Mix: ffmpeg + loudness (pyloudnorm or ffmpeg `loudnorm`) to LUFS targets in `00`
 

@@ -49,7 +49,7 @@ Scratch on NVMe is wipeable. Never the only copy of selects.
 
 ## Audio hour
 
-- Dialogue: script lines on Shot → CosyVoice (or licensed VO) → S2V when lips must match
+- Dialogue: locked Character VoiceProfile → performance-ready script → processed clip audio → S2V → audiovisual QC. Final Mix only assembles verified clip packages (Blueprint 22).
 - Score: ACE-Step (Blueprint pin) to picture duration + handles
 - SFX: library on vault + generated fills
 - Mix: −24 LUFS broadcast or −16 LUFS streaming; TP −1 dBTP; stem bounce

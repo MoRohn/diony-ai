@@ -516,7 +516,7 @@ def lock_voice_profile(character_id: str, body: VoiceProfileLockIn) -> dict:
         if body.source == VoiceProfileSource.SYNTHETIC:
             if body.reference_asset_ids:
                 raise HTTPException(400, "Synthetic voice lock does not accept reference audio")
-            profile = registry.ensure_synthetic(character_id)
+            profile = registry.ensure_synthetic(character_id, body.descriptors)
         else:
             profile = lock_reference_voice_profile(
                 _project,

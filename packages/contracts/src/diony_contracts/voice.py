@@ -22,16 +22,20 @@ def _content_sha256(model: BaseModel, *, exclude: set[str]) -> str:
 
 
 class VoiceReferenceSample(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     asset_id: str
     duration_seconds: float = Field(ge=0.1, le=30.0)
     emotion: str = "neutral"
     transcript: str = ""
-    embedding: list[float] = Field(min_length=2, max_length=4096)
+    embedding: tuple[float, ...] = Field(min_length=2, max_length=4096)
     embedding_model: str
     sha256: str = Field(min_length=64, max_length=64)
 
 
 class ProsodySignature(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     pitch_floor_hz: float = Field(default=90.0, gt=20, lt=1000)
     pitch_ceiling_hz: float = Field(default=300.0, gt=20, lt=1500)
     speaking_rate_syllables_per_second: float = Field(default=4.0, gt=0.5, lt=12)
@@ -48,15 +52,17 @@ class ProsodySignature(BaseModel):
 
 
 class EmotionPerformance(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     emotion: str
-    intensity_curve: list[float] = Field(default_factory=lambda: [0.25, 0.35, 0.25])
+    intensity_curve: tuple[float, ...] = Field(default_factory=lambda: (0.25, 0.35, 0.25))
     rate_multiplier: float = Field(default=1.0, ge=0.5, le=1.8)
     pitch_shift_semitones: float = Field(default=0.0, ge=-12, le=12)
     timbre: str = "profile-locked"
 
     @field_validator("intensity_curve")
     @classmethod
-    def intensity_is_normalized(cls, value: list[float]) -> list[float]:
+    def intensity_is_normalized(cls, value: tuple[float, ...]) -> tuple[float, ...]:
         if not value or any(point < 0 or point > 1 for point in value):
             raise ValueError("emotion intensity curve values must be between 0 and 1")
         return value
@@ -70,14 +76,15 @@ class VoiceProfile(BaseModel):
     id: str
     project_id: str
     character_id: str
+    identity_lineage_id: str = ""
     version: int = Field(default=1, ge=1)
     parent_profile_id: str | None = None
     source: VoiceProfileSource
-    reference_samples: list[VoiceReferenceSample] = Field(default_factory=list, max_length=16)
+    reference_samples: tuple[VoiceReferenceSample, ...] = Field(default_factory=tuple, max_length=16)
     speaker_embedding_model: str
-    speaker_embedding: list[float] = Field(min_length=2, max_length=4096)
+    speaker_embedding: tuple[float, ...] = Field(min_length=2, max_length=4096)
     prosody: ProsodySignature
-    emotion_map: list[EmotionPerformance] = Field(min_length=1, max_length=32)
+    emotion_map: tuple[EmotionPerformance, ...] = Field(min_length=1, max_length=32)
     age_descriptor: str = ""
     gender_descriptor: str = ""
     accent_descriptor: str = ""
@@ -103,6 +110,21 @@ class VoiceProfile(BaseModel):
             raise ValueError("synthetic voice profiles do not accept reference samples")
         if self.locked and self.locked_at is None:
             raise ValueError("locked voice profile requires locked_at")
+        if not self.identity_lineage_id:
+            identity_blob = json.dumps(
+                {
+                    "model": self.speaker_embedding_model,
+                    "embedding": self.speaker_embedding,
+                    "style_lock": self.style_lock.split(":")[-1],
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            object.__setattr__(
+                self,
+                "identity_lineage_id",
+                f"voice-identity-{hashlib.sha256(identity_blob).hexdigest()[:20]}",
+            )
         expected = _content_sha256(self, exclude={"content_sha256", "created_at"})
         if self.content_sha256 and self.content_sha256 != expected:
             raise ValueError("voice profile content hash does not match its locked fields")
@@ -165,6 +187,9 @@ class PerformanceScript(BaseModel):
     project_id: str
     shot_id: str
     version: int = Field(default=1, ge=1)
+    narrative_context: str = ""
+    camera_language: str = ""
+    pacing_target_ms: int = Field(default=0, ge=0)
     lines: list[PerformanceScriptLine] = Field(min_length=1, max_length=32)
     content_sha256: str = ""
     created_at: datetime = Field(default_factory=_now)
@@ -201,6 +226,8 @@ class VoiceQCReceipt(BaseModel):
     lip_sync_confidence_min: float = Field(default=0.90, ge=0, le=1)
     audiovisual_offset_ms_p95: float | None = Field(default=None, ge=0)
     audiovisual_offset_ms_max: float = Field(default=40.0, gt=0, le=100)
+    performance_consistency: float | None = Field(default=None, ge=0, le=1)
+    performance_consistency_min: float = Field(default=0.90, ge=0, le=1)
     audio_passed: bool = False
     animation_passed: bool = False
     passed: bool = False
@@ -234,6 +261,12 @@ class VoiceQCReceipt(BaseModel):
                 self.audiovisual_offset_ms_p95 > self.audiovisual_offset_ms_max
             ):
                 raise ValueError("animation cannot pass failed audiovisual offset threshold")
+            if self.performance_consistency is None or (
+                self.performance_consistency < self.performance_consistency_min
+            ):
+                raise ValueError(
+                    "animation cannot pass failed physical-performance consistency threshold"
+                )
         if self.passed and not (self.audio_passed and self.animation_passed):
             raise ValueError("voice QC pass requires both audio and animation evidence")
         return self
@@ -254,6 +287,7 @@ class VoiceClipPackage(BaseModel):
     synthesis_backend: str
     embedding_backend: str
     alignment_backend: str
+    video_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     state: VoiceRenderState = VoiceRenderState.PLANNED
     qc: VoiceQCReceipt
     created_at: datetime = Field(default_factory=_now)
@@ -266,4 +300,6 @@ class VoiceClipPackage(BaseModel):
             raise ValueError("every voice profile requires its locked generation seed")
         if self.state == VoiceRenderState.VERIFIED and not self.qc.passed:
             raise ValueError("verified voice package requires passing audiovisual QC")
+        if self.state == VoiceRenderState.VERIFIED and not self.video_sha256:
+            raise ValueError("verified voice package requires the exact rendered video hash")
         return self

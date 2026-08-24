@@ -137,6 +137,184 @@
       "title": "Engine",
       "type": "string"
     },
+    "PerformanceScript": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "project_id": {
+          "title": "Project Id",
+          "type": "string"
+        },
+        "shot_id": {
+          "title": "Shot Id",
+          "type": "string"
+        },
+        "version": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "narrative_context": {
+          "default": "",
+          "title": "Narrative Context",
+          "type": "string"
+        },
+        "camera_language": {
+          "default": "",
+          "title": "Camera Language",
+          "type": "string"
+        },
+        "pacing_target_ms": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Pacing Target Ms",
+          "type": "integer"
+        },
+        "lines": {
+          "items": {
+            "$ref": "#/$defs/PerformanceScriptLine"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Lines",
+          "type": "array"
+        },
+        "content_sha256": {
+          "default": "",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "shot_id",
+        "lines"
+      ],
+      "title": "PerformanceScript",
+      "type": "object"
+    },
+    "PerformanceScriptLine": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "shot_id": {
+          "title": "Shot Id",
+          "type": "string"
+        },
+        "character_id": {
+          "title": "Character Id",
+          "type": "string"
+        },
+        "voice_profile_id": {
+          "title": "Voice Profile Id",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "spoken_text": {
+          "title": "Spoken Text",
+          "type": "string"
+        },
+        "emotion": {
+          "default": "neutral",
+          "title": "Emotion",
+          "type": "string"
+        },
+        "intensity_curve": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Intensity Curve",
+          "type": "array"
+        },
+        "phonetic_guidance": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Phonetic Guidance",
+          "type": "object"
+        },
+        "breath_after_word_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Breath After Word Indices",
+          "type": "array"
+        },
+        "stress_word_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Stress Word Indices",
+          "type": "array"
+        },
+        "micro_pauses_ms": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Micro Pauses Ms",
+          "type": "array"
+        },
+        "start_ms": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Start Ms",
+          "type": "integer"
+        },
+        "target_duration_ms": {
+          "exclusiveMinimum": 0,
+          "title": "Target Duration Ms",
+          "type": "integer"
+        },
+        "overlap_ms": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Overlap Ms",
+          "type": "integer"
+        },
+        "interrupts_line_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Interrupts Line Id"
+        },
+        "subtext": {
+          "default": "",
+          "title": "Subtext",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "shot_id",
+        "character_id",
+        "voice_profile_id",
+        "text",
+        "spoken_text",
+        "target_duration_ms"
+      ],
+      "title": "PerformanceScriptLine",
+      "type": "object"
+    },
     "QCReport": {
       "properties": {
         "id": {
@@ -234,6 +412,18 @@
           "default": null,
           "title": "Audio Ready Ok"
         },
+        "voice_ready_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Voice Ready Ok"
+        },
         "lipsync_ok": {
           "anyOf": [
             {
@@ -257,6 +447,80 @@
           ],
           "default": null,
           "title": "Loudness Ok"
+        },
+        "voice_measurement_version": {
+          "default": "",
+          "title": "Voice Measurement Version",
+          "type": "string"
+        },
+        "speaker_similarity": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": -1,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Speaker Similarity"
+        },
+        "voice_project_consistency": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": -1,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Voice Project Consistency"
+        },
+        "voice_performance_consistency": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Voice Performance Consistency"
+        },
+        "lip_sync_confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lip Sync Confidence"
+        },
+        "audiovisual_offset_ms_p95": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audiovisual Offset Ms P95"
         },
         "reference_asset_ids": {
           "items": {
@@ -423,6 +687,311 @@
       ],
       "title": "TakeOrigin",
       "type": "string"
+    },
+    "VoiceClipPackage": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "project_id": {
+          "title": "Project Id",
+          "type": "string"
+        },
+        "shot_id": {
+          "title": "Shot Id",
+          "type": "string"
+        },
+        "take_id": {
+          "title": "Take Id",
+          "type": "string"
+        },
+        "voice_profile_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Voice Profile Ids",
+          "type": "array"
+        },
+        "generation_seeds": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Generation Seeds",
+          "type": "object"
+        },
+        "script": {
+          "$ref": "#/$defs/PerformanceScript"
+        },
+        "clean_dialogue_asset_id": {
+          "title": "Clean Dialogue Asset Id",
+          "type": "string"
+        },
+        "final_mix_asset_id": {
+          "title": "Final Mix Asset Id",
+          "type": "string"
+        },
+        "performance_metadata_asset_id": {
+          "title": "Performance Metadata Asset Id",
+          "type": "string"
+        },
+        "cache_key": {
+          "maxLength": 64,
+          "minLength": 64,
+          "title": "Cache Key",
+          "type": "string"
+        },
+        "synthesis_backend": {
+          "title": "Synthesis Backend",
+          "type": "string"
+        },
+        "embedding_backend": {
+          "title": "Embedding Backend",
+          "type": "string"
+        },
+        "alignment_backend": {
+          "title": "Alignment Backend",
+          "type": "string"
+        },
+        "video_sha256": {
+          "default": "",
+          "pattern": "^(?:|[0-9a-f]{64})$",
+          "title": "Video Sha256",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/VoiceRenderState",
+          "default": "planned"
+        },
+        "qc": {
+          "$ref": "#/$defs/VoiceQCReceipt"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "shot_id",
+        "take_id",
+        "voice_profile_ids",
+        "generation_seeds",
+        "script",
+        "clean_dialogue_asset_id",
+        "final_mix_asset_id",
+        "performance_metadata_asset_id",
+        "cache_key",
+        "synthesis_backend",
+        "embedding_backend",
+        "alignment_backend",
+        "qc"
+      ],
+      "title": "VoiceClipPackage",
+      "type": "object"
+    },
+    "VoiceQCReceipt": {
+      "properties": {
+        "measurement_version": {
+          "title": "Measurement Version",
+          "type": "string"
+        },
+        "speaker_similarity": {
+          "maximum": 1,
+          "minimum": -1,
+          "title": "Speaker Similarity",
+          "type": "number"
+        },
+        "speaker_similarity_min": {
+          "default": 0.92,
+          "maximum": 1,
+          "minimum": -1,
+          "title": "Speaker Similarity Min",
+          "type": "number"
+        },
+        "project_consistency": {
+          "maximum": 1,
+          "minimum": -1,
+          "title": "Project Consistency",
+          "type": "number"
+        },
+        "project_consistency_min": {
+          "default": 0.9,
+          "maximum": 1,
+          "minimum": -1,
+          "title": "Project Consistency Min",
+          "type": "number"
+        },
+        "snr_db": {
+          "title": "Snr Db",
+          "type": "number"
+        },
+        "snr_db_min": {
+          "default": 30.0,
+          "title": "Snr Db Min",
+          "type": "number"
+        },
+        "integrated_lufs": {
+          "title": "Integrated Lufs",
+          "type": "number"
+        },
+        "loudness_target_lufs": {
+          "title": "Loudness Target Lufs",
+          "type": "number"
+        },
+        "loudness_tolerance_lu": {
+          "default": 1.0,
+          "maximum": 3,
+          "minimum": 0,
+          "title": "Loudness Tolerance Lu",
+          "type": "number"
+        },
+        "true_peak_dbtp": {
+          "title": "True Peak Dbtp",
+          "type": "number"
+        },
+        "true_peak_ceiling_dbtp": {
+          "default": -1.0,
+          "title": "True Peak Ceiling Dbtp",
+          "type": "number"
+        },
+        "harshness_score": {
+          "default": 0.0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Harshness Score",
+          "type": "number"
+        },
+        "harshness_max": {
+          "default": 0.25,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Harshness Max",
+          "type": "number"
+        },
+        "sibilance_score": {
+          "default": 0.0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Sibilance Score",
+          "type": "number"
+        },
+        "sibilance_max": {
+          "default": 0.25,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Sibilance Max",
+          "type": "number"
+        },
+        "lip_sync_confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lip Sync Confidence"
+        },
+        "lip_sync_confidence_min": {
+          "default": 0.9,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Lip Sync Confidence Min",
+          "type": "number"
+        },
+        "audiovisual_offset_ms_p95": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audiovisual Offset Ms P95"
+        },
+        "audiovisual_offset_ms_max": {
+          "default": 40.0,
+          "exclusiveMinimum": 0,
+          "maximum": 100,
+          "title": "Audiovisual Offset Ms Max",
+          "type": "number"
+        },
+        "performance_consistency": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Performance Consistency"
+        },
+        "performance_consistency_min": {
+          "default": 0.9,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Performance Consistency Min",
+          "type": "number"
+        },
+        "audio_passed": {
+          "default": false,
+          "title": "Audio Passed",
+          "type": "boolean"
+        },
+        "animation_passed": {
+          "default": false,
+          "title": "Animation Passed",
+          "type": "boolean"
+        },
+        "passed": {
+          "default": false,
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "diagnostics": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Diagnostics",
+          "type": "array"
+        }
+      },
+      "required": [
+        "measurement_version",
+        "speaker_similarity",
+        "project_consistency",
+        "snr_db",
+        "integrated_lufs",
+        "loudness_target_lufs",
+        "true_peak_dbtp"
+      ],
+      "title": "VoiceQCReceipt",
+      "type": "object"
+    },
+    "VoiceRenderState": {
+      "enum": [
+        "planned",
+        "audio_locked",
+        "verified",
+        "failed"
+      ],
+      "title": "VoiceRenderState",
+      "type": "string"
     }
   },
   "properties": {
@@ -536,6 +1105,17 @@
       },
       "title": "Artifacts",
       "type": "array"
+    },
+    "voice_package": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VoiceClipPackage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

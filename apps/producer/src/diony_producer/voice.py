@@ -12,9 +12,11 @@ import json
 import math
 import os
 import shlex
+import shutil
 import struct
 import subprocess
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,6 +55,42 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _media_duration_seconds(path: Path) -> float:
+    """Measure a local reference clip without trusting caller-supplied duration."""
+    try:
+        with wave.open(str(path), "rb") as source:
+            rate = source.getframerate()
+            if rate > 0:
+                return source.getnframes() / rate
+    except (EOFError, OSError, wave.Error):
+        pass
+
+    ffprobe = os.environ.get("DIONY_FFPROBE", "").strip() or shutil.which("ffprobe")
+    if not ffprobe:
+        return 0.0
+    result = subprocess.run(
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if result.returncode != 0:
+        return 0.0
+    try:
+        return float(result.stdout.strip())
+    except ValueError:
+        return 0.0
 
 
 def _stable_seed(*parts: str) -> int:
@@ -124,13 +162,28 @@ class VoiceProfileRegistry:
         ]
         return max(versions, key=lambda profile: profile.version) if versions else None
 
-    def ensure_synthetic(self, character_id: str) -> VoiceProfile:
+    def ensure_synthetic(
+        self,
+        character_id: str,
+        descriptors: dict[str, str] | None = None,
+    ) -> VoiceProfile:
         current = self.current(character_id)
         if current is not None:
             return current
         character = _character(self.project, character_id)
-        seed = _stable_seed(self.project.id, character.id, character.name, "voice-v1")
-        descriptor = " ".join((character.name, character.notes, character.wardrobe)).strip()
+        details = descriptors or {}
+        seed = _stable_seed(character.id, character.name, "voice-v1")
+        descriptor = " ".join(
+            (
+                character.name,
+                character.notes,
+                character.wardrobe,
+                details.get("age", ""),
+                details.get("gender", ""),
+                details.get("accent", ""),
+                details.get("texture", ""),
+            )
+        ).strip()
         profile = VoiceProfile(
             id=f"voice-{character.id}-v1",
             project_id=self.project.id,
@@ -138,7 +191,7 @@ class VoiceProfileRegistry:
             version=1,
             source=VoiceProfileSource.SYNTHETIC,
             speaker_embedding_model="diony-synthetic-speaker-space-v1",
-            speaker_embedding=_stable_embedding(self.project.id, character.id, descriptor),
+            speaker_embedding=_stable_embedding(character.id, descriptor),
             prosody=ProsodySignature(
                 pitch_floor_hz=105,
                 pitch_ceiling_hz=310,
@@ -171,12 +224,15 @@ class VoiceProfileRegistry:
                     timbre="compressed breath with profile-locked texture",
                 ),
             ],
-            age_descriptor="Bible locked",
-            gender_descriptor="Bible locked",
-            accent_descriptor="project neutral until directed",
-            texture_descriptor="natural studio character voice",
+            age_descriptor=details.get("age", "Bible locked"),
+            gender_descriptor=details.get("gender", "Bible locked"),
+            accent_descriptor=details.get("accent", "project neutral until directed"),
+            texture_descriptor=details.get("texture", "natural studio character voice"),
             seed=seed,
-            style_lock=f"{self.project.id}:{character.id}:synthetic-v1",
+            style_lock=(
+                f"identity:{character.id}:synthetic-v1:"
+                f"{hashlib.sha256(descriptor.encode('utf-8')).hexdigest()[:16]}"
+            ),
             locked=True,
             locked_at=datetime.now(timezone.utc),
         )
@@ -217,8 +273,16 @@ class VoiceProfileRegistry:
             gender_descriptor=details.get("gender", "Bible locked"),
             accent_descriptor=details.get("accent", "reference locked"),
             texture_descriptor=details.get("texture", "reference locked"),
-            seed=_stable_seed(self.project.id, character.id, f"voice-v{version}"),
-            style_lock=f"{self.project.id}:{character.id}:reference-v{version}",
+            seed=_stable_seed(
+                character.id,
+                speaker_embedding_model,
+                _sha256_bytes(json.dumps(speaker_embedding).encode("utf-8")),
+                f"voice-v{version}",
+            ),
+            style_lock=(
+                f"identity:{character.id}:reference:"
+                f"{_sha256_bytes(json.dumps(speaker_embedding).encode('utf-8'))[:16]}"
+            ),
             locked=True,
             locked_at=datetime.now(timezone.utc),
         )
@@ -333,6 +397,16 @@ def optimize_voice_script(
         project_id=project.id,
         shot_id=shot.id,
         version=1,
+        narrative_context=(
+            project.brief.idea.strip()
+            if project.brief is not None and project.brief.idea.strip()
+            else project.bible.logline
+        ),
+        camera_language=(
+            f"{shot.camera_move.value}; {shot.focal_mm:g}mm at T{shot.t_stop:g}; "
+            f"{shot.lighting_ratio}; {shot.duration_frames} frames at {shot.fps:g} fps"
+        ),
+        pacing_target_ms=clip_ms,
         lines=lines,
     )
 
@@ -795,6 +869,7 @@ class VoicePerformancePipeline:
                 | {
                     "id": f"voicepkg-{take.id}-{cache_key[:12]}",
                     "take_id": take.id,
+                    "video_sha256": "",
                     "state": VoiceRenderState.AUDIO_LOCKED.value,
                     "qc": qc_payload,
                     "created_at": datetime.now(timezone.utc).isoformat(),
@@ -863,10 +938,25 @@ class VoicePerformancePipeline:
             retake_cap = min(5, max(1, int(os.environ.get("DIONY_VOICE_RETAKE_CAP", "3"))))
         except ValueError:
             retake_cap = 3
-        for index, line in enumerate(script.lines):
+
+        def synthesize_line(
+            indexed_line: tuple[int, PerformanceScriptLine],
+        ) -> tuple[
+            int,
+            Path,
+            PerformanceScriptLine,
+            float,
+            int,
+            list[dict[str, Any]],
+            dict[str, Any],
+        ]:
+            index, line = indexed_line
             profile = profile_by_id[line.voice_profile_id]
             raw: Path | None = None
             selected_score = -1.0
+            selected_seed = profile.seed
+            attempts: list[dict[str, Any]] = []
+            reference_paths = self._reference_paths(project, profile)
             for attempt in range(1, retake_cap + 1):
                 candidate = cache_root / f"line-{index + 1:02d}-{line.id}-a{attempt}.wav"
                 seed = profile.seed + (attempt - 1) * 1009
@@ -875,10 +965,10 @@ class VoicePerformancePipeline:
                     profile,
                     candidate,
                     seed=seed,
-                    reference_paths=self._reference_paths(project, profile),
+                    reference_paths=reference_paths,
                 )
                 if not candidate.is_file() or candidate.stat().st_size <= 44:
-                    audio_attempts.append(
+                    attempts.append(
                         {
                             "line_id": line.id,
                             "attempt": attempt,
@@ -890,7 +980,7 @@ class VoicePerformancePipeline:
                 observed = self.embedder.speaker_embedding(candidate, profile)
                 selected_score = _cosine(profile.speaker_embedding, observed)
                 if selected_score < 0.92:
-                    audio_attempts.append(
+                    attempts.append(
                         {
                             "line_id": line.id,
                             "attempt": attempt,
@@ -904,8 +994,8 @@ class VoicePerformancePipeline:
                     )
                     continue
                 raw = candidate
-                generation_seeds[profile.id] = seed
-                audio_attempts.append(
+                selected_seed = seed
+                attempts.append(
                     {
                         "line_id": line.id,
                         "attempt": attempt,
@@ -919,8 +1009,21 @@ class VoicePerformancePipeline:
                 raise VoicePipelineError(
                     f"Voice identity failed for {line.id} after {retake_cap} bounded attempts"
                 )
+            alignment = self.aligner.align(raw, line)
+            return index, raw, line, selected_score, selected_seed, attempts, alignment
+
+        try:
+            worker_cap = min(8, max(1, int(os.environ.get("DIONY_VOICE_WORKERS", "4"))))
+        except ValueError:
+            worker_cap = 4
+        worker_count = min(worker_cap, len(script.lines))
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="diony-voice") as pool:
+            line_results = list(pool.map(synthesize_line, enumerate(script.lines)))
+        for _, raw, line, selected_score, selected_seed, attempts, alignment in line_results:
+            generation_seeds[line.voice_profile_id] = selected_seed
+            audio_attempts.extend(attempts)
             speaker_scores.append(selected_score)
-            alignments.append(self.aligner.align(raw, line))
+            alignments.append(alignment)
             line_audio.append((raw, line))
 
         clean_path = cache_root / "clean-dialogue.wav"
@@ -1097,10 +1200,7 @@ class VoicePerformancePipeline:
         qc_payload = package.qc.model_dump(mode="json") | {
             "lip_sync_confidence": measurements.lip_sync_confidence,
             "audiovisual_offset_ms_p95": measurements.audiovisual_offset_ms_p95,
-            "project_consistency": min(
-                package.qc.project_consistency,
-                measurements.performance_consistency,
-            ),
+            "performance_consistency": measurements.performance_consistency,
             "animation_passed": animation_passed,
             "passed": bool(package.qc.audio_passed and animation_passed),
             "diagnostics": list(package.qc.diagnostics) + list(measurements.diagnostics),
@@ -1112,6 +1212,7 @@ class VoicePerformancePipeline:
                 "state": (
                     VoiceRenderState.VERIFIED.value if qc.passed else VoiceRenderState.FAILED.value
                 ),
+                "video_sha256": _sha256_file(video),
                 "qc": qc.model_dump(mode="json"),
             }
         )
@@ -1176,9 +1277,9 @@ def lock_reference_voice_profile(
         except (TypeError, ValueError):
             duration = 0
         if duration <= 0:
-            raise VoicePipelineError(
-                f"Voice reference {asset_id} needs measured duration_seconds metadata"
-            )
+            duration = _media_duration_seconds(path)
+        if duration <= 0:
+            raise VoicePipelineError(f"Voice reference duration could not be measured: {asset_id}")
         vector = [float(value) for value in backend.reference_embedding(path, model)]
         if vectors and len(vector) != len(vectors[0]):
             raise VoicePipelineError("Voice reference embedding dimensions do not match")

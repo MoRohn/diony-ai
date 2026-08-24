@@ -38,6 +38,21 @@ def test_registry_creates_one_project_scoped_locked_synthetic_profile() -> None:
     assert project.voice_profiles == [first]
 
 
+def test_same_character_lock_is_identical_across_episode_projects() -> None:
+    first_project, _, _ = _spoken_take()
+    second_project, _, _ = _spoken_take()
+    second_project.id = "ep-night-press-002"
+
+    first = VoiceProfileRegistry(first_project).ensure_synthetic("char-mara")
+    second = VoiceProfileRegistry(second_project).ensure_synthetic("char-mara")
+
+    assert first.project_id != second.project_id
+    assert first.identity_lineage_id == second.identity_lineage_id
+    assert first.seed == second.seed
+    assert first.style_lock == second.style_lock
+    assert first.speaker_embedding == second.speaker_embedding
+
+
 def test_voice_script_optimizer_is_deterministic_and_profile_aware() -> None:
     project, shot, _ = _spoken_take()
     profile = VoiceProfileRegistry(project).ensure_synthetic("char-mara")
@@ -50,6 +65,9 @@ def test_voice_script_optimizer_is_deterministic_and_profile_aware() -> None:
     assert first.lines[0].target_duration_ms <= round(shot.duration_frames / shot.fps * 1000)
     assert first.lines[0].breath_after_word_indices
     assert first.lines[0].intensity_curve
+    assert shot.camera_move.value in first.camera_language
+    assert first.pacing_target_ms == round(shot.duration_frames / shot.fps * 1000)
+    assert project.bible.logline in first.narrative_context
 
 
 def test_voice_pipeline_locks_audio_before_s2v_and_reuses_content_cache(tmp_path) -> None:
@@ -107,8 +125,10 @@ def test_audiovisual_qc_promotes_package_only_after_video_evidence(tmp_path) -> 
 
     assert verified.state == VoiceRenderState.VERIFIED
     assert verified.qc.passed is True
+    assert verified.video_sha256 == __import__("hashlib").sha256(negative.read_bytes()).hexdigest()
     assert verified.qc.lip_sync_confidence >= verified.qc.lip_sync_confidence_min
     assert verified.qc.audiovisual_offset_ms_p95 <= verified.qc.audiovisual_offset_ms_max
+    assert verified.qc.performance_consistency >= verified.qc.performance_consistency_min
 
 
 def test_multiple_dialogue_turns_keep_separate_voice_profiles_and_overlap_intent(tmp_path) -> None:
@@ -153,6 +173,42 @@ def test_multiple_dialogue_turns_keep_separate_voice_profiles_and_overlap_intent
     assert len(package.script.lines) == 2
     assert package.script.lines[1].overlap_ms == 300
     assert package.script.lines[1].interrupts_line_id == "turn-mara"
+    assert backend.synthesis_calls == 2
+
+
+def test_independent_dialogue_lines_synthesize_in_parallel(tmp_path) -> None:
+    import threading
+
+    from diony_contracts.models import Character, DialogueTurn
+
+    class RendezvousBackend(DeterministicVoiceTestBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rendezvous = threading.Barrier(2)
+
+        def synthesize(self, *args, **kwargs) -> None:
+            self.rendezvous.wait(timeout=2)
+            super().synthesize(*args, **kwargs)
+
+    project, shot, take = _spoken_take()
+    project.bible.characters.append(Character(id="char-editor", name="The Editor"))
+    shot.dialogue_turns = [
+        DialogueTurn(id="turn-mara", character_id="char-mara", text="Hold the presses."),
+        DialogueTurn(id="turn-editor", character_id="char-editor", text="The edition is locked."),
+    ]
+    backend = RendezvousBackend()
+    pipeline = VoicePerformancePipeline(
+        vault=tmp_path,
+        synthesizer=backend,
+        embedder=backend,
+        aligner=backend,
+        audio_processor=backend,
+        audiovisual_qc=backend,
+    )
+
+    package = pipeline.prepare_take(project, take)
+
+    assert package.qc.audio_passed is True
     assert backend.synthesis_calls == 2
 
 
@@ -264,6 +320,7 @@ def test_camera_qc_requires_verified_voice_performance(tmp_path, monkeypatch) ->
     assert take.qc.speaker_similarity >= 0.92
     assert take.qc.lip_sync_confidence >= 0.90
     assert take.qc.audiovisual_offset_ms_p95 <= 40
+    assert take.qc.voice_performance_consistency >= 0.90
     assert farm.qc_contract_valid(project, take) is True
 
 
@@ -445,6 +502,45 @@ def test_reference_voice_lock_builds_multi_emotion_few_shot_profile(tmp_path) ->
     assert project.bible.characters[0].voice_profile_id == profile.id
 
 
+def test_reference_voice_lock_measures_wav_duration_when_metadata_is_absent(tmp_path) -> None:
+    import wave
+
+    from diony_contracts.enums import AssetKind
+    from diony_contracts.models import Asset
+    from diony_producer.voice import lock_reference_voice_profile
+
+    project, _, _ = _spoken_take()
+    project.voice_profiles = []
+    project.bible.characters[0].voice_profile_id = ""
+    path = tmp_path / "mara-five-seconds.wav"
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(8000)
+        output.writeframes(b"\x00\x00" * 8000 * 5)
+    asset = Asset(
+        id="ast-mara-five-seconds",
+        kind=AssetKind.AUDIO,
+        filename=path.name,
+        mime="audio/wav",
+        bytes=path.stat().st_size,
+        path=path.name,
+        sha256=__import__("hashlib").sha256(path.read_bytes()).hexdigest(),
+    )
+    project.assets.append(asset)
+
+    profile = lock_reference_voice_profile(
+        project,
+        "char-mara",
+        [asset.id],
+        vault=tmp_path,
+        backend=DeterministicVoiceTestBackend(),
+    )
+
+    assert profile.source == VoiceProfileSource.ZERO_SHOT
+    assert profile.reference_samples[0].duration_seconds == 5.0
+
+
 def test_voice_registry_api_locks_synthetic_identity_once() -> None:
     from fastapi.testclient import TestClient
     from diony_producer.app import app
@@ -463,3 +559,4 @@ def test_voice_registry_api_locks_synthetic_identity_once() -> None:
     assert len(registry.json()["profiles"]) == 1
     assert registry.json()["profiles"][0]["locked"] is True
     assert registry.json()["profiles"][0]["project_id"] == locked.json()["project_id"]
+    assert registry.json()["profiles"][0]["texture_descriptor"] == "warm alto"

@@ -22,6 +22,43 @@ Sequential Dual-Spark: do not start `diony-wan` and brain together. Produce star
 
 Pages: **Idea** → **Production** → **Gallery**. Idea has a **Length** goal: 30s, 1m, 3m, 5m, 10m, 15m, 20m, 30m, 40m, 1hr (default 5m). That is a program TRT goal, not wall-clock. Each take stays on the Wan **5s quality lane**. **Sample** uses the current idea and attached references to make a selected 5s or 10s clip through the same camera, AutoQC, 1080 finish, mix, and verified Gallery path. Producer compiles Idea input autonomously into typed 80–140 word Wan plans in Subject → Motion → Camera → Aesthetic/Lighting → Environment Dynamics order; on-site DeepSeek may enrich motion, lighting, and environment dynamics but cannot rewrite subject or camera locks. Sequences longer than eight seconds use bounded segments and previous-final-frame I2V after the opening print. After Studio Sign the mast shows the site. Dual-Spark / B300 / B200 are sequential SPLIT — do not quote the Quad-Spark 2–5 day SLA. **Produce** farms Wan2.2 **720p negatives** (not 1080 masters) and opens Production. On a signed lease, Wan and `diony_sr_v1` run on GPU Producer via the Connect SSH line — not `/models` on this desk. Production then writes `finish_1080.mov` per take and `master_1080.mov` for the program or Sample, then mix. **Gallery** lists those finished clips. **Retake** cap 4. See Blueprints `04`, `06`, `12`, `13`, `14`, and `20`.
 
+## Voice and performance
+
+Spoken Shots do not use final-mix TTS. Producer resolves an immutable
+Project-scoped Character `VoiceProfile`, compiles a profile-aware
+`PerformanceScript`, performs bounded local identity synthesis and deterministic
+studio-audio processing, then routes the locked clean dialogue into Wan2.2 S2V.
+After the negative lands, lip confidence, p95 AV offset, and physical-performance
+consistency join speaker, SNR, LUFS, peak, harshness, and sibilance evidence in
+the Take's `VoiceClipPackage` and camera `QCReport`.
+
+Production requires a local modular backend:
+
+```bash
+export DIONY_VOICE_BACKEND_COMMAND=/diony/vault/runtime/voice/bin/diony-voice-backend
+export DIONY_SPEAKER_EMBEDDING_MODEL=cam++-local-v1
+export DIONY_VOICE_RETAKE_CAP=3
+export DIONY_VOICE_WORKERS=4
+```
+
+The command actions are `synthesize`, `embed`, `embed-reference`, `align`,
+`studio-audio`, and `audiovisual-qc`; their JSON/file contracts and thresholds
+are Blueprint `22`. Missing backend or evidence blocks the spoken Shot. The
+deterministic backend is enabled only by `DIONY_DRY_RUN=1` and is not media or
+signed-site quality proof.
+
+Registry APIs:
+
+- `GET /api/voice-profiles`
+- `POST /api/characters/{character_id}/voice-profiles/lock`
+
+Zero/few-shot locks require 5–30 seconds total of local reference audio; Producer
+measures WAV duration directly and uses local `ffprobe` for other media. Synthetic locks use a deterministic seed and style
+identity. Locked profiles are immutable; visual retakes reuse cached audio and
+must run audiovisual QC again against the exact new video SHA-256. Independent
+dialogue lines synthesize/embed/align through the bounded worker pool; the
+scene-level deterministic audio chain runs after ordered collection.
+
 Production also has a durable **STOP** control. Its modal offers **Keep** (save
 QC-passed completed clips as a stitched 720p incomplete result) or **Delete**
 (remove generated media in the current Project namespace). Both choices stop

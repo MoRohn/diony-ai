@@ -40,7 +40,7 @@ The configurable order is:
 5. Input safety and provenance check
 6. Optional image
 7. Video
-8. Optional voice
+8. Required voice identity/performance for spoken intent
 9. Optional sound
 10. Assembly
 11. Finish
@@ -60,7 +60,7 @@ For every stage:
 7. On failure, persist exponential backoff (`5s`, `10s`, `20s`, capped at `300s`) and actionable recovery choices.
 8. After the retry limit, fail visibly. Never invent a successful asset.
 
-Image, voice, and sound are optional until a provider is explicitly configured; their absence is a visible skip, not a hidden hosted call. DeepSeek, Wan, assembly, finish, and packaging are required production capabilities. The launch adapters checkpoint work owned by the existing Brain, FARM, Finish, and vault processes. Until an engine attaches `checkpoint_complete`, output asset IDs, and metadata through the stage checkpoint API, the run stays `waiting_provider`; neither the API nor worker synthesizes fake success or media.
+Image and non-dialogue sound are optional until explicitly requested. Voice is optional only for a Project with no spoken intent; any narration, dialogue, singing, or on-camera speech makes VoiceProfile, studio-audio, performance metadata, S2V/AV QC, and per-clip package evidence required. Their absence is a visible hold, never a hidden hosted call or skipped stage. DeepSeek, Wan, assembly, finish, packaging, and requested voice are required production capabilities. The launch adapters checkpoint work owned by the existing Brain, FARM, Finish, voice/performance, and vault processes. Until an engine attaches `checkpoint_complete`, output asset IDs, and metadata through the stage checkpoint API, the run stays `waiting_provider`; neither the API nor worker synthesizes fake success or media.
 
 ## Provider boundary
 

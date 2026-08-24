@@ -75,6 +75,8 @@ def passing_voice_qc() -> VoiceQCReceipt:
         lip_sync_confidence_min=0.90,
         audiovisual_offset_ms_p95=18.0,
         audiovisual_offset_ms_max=40.0,
+        performance_consistency=0.95,
+        performance_consistency_min=0.90,
         audio_passed=True,
         animation_passed=True,
         passed=True,
@@ -85,9 +87,12 @@ def test_locked_voice_profile_is_content_addressed_and_immutable() -> None:
     profile = synthetic_profile()
 
     assert len(profile.content_sha256) == 64
+    assert profile.identity_lineage_id.startswith("voice-identity-")
     assert profile.project_id == "project-night-press"
     with pytest.raises(ValidationError, match="frozen"):
         profile.seed = 9
+    with pytest.raises(TypeError):
+        profile.speaker_embedding[0] = 0.0
 
 
 def test_zero_shot_profile_requires_five_to_thirty_seconds_of_reference() -> None:
@@ -125,6 +130,12 @@ def test_passing_voice_qc_cannot_claim_metrics_below_locked_thresholds() -> None
             update={"speaker_similarity": 0.70},
         ).model_validate(
             passing_voice_qc().model_dump() | {"speaker_similarity": 0.70}
+        )
+
+    with pytest.raises(ValidationError, match="physical-performance consistency"):
+        VoiceQCReceipt.model_validate(
+            passing_voice_qc().model_dump()
+            | {"performance_consistency": 0.70}
         )
 
 
@@ -176,6 +187,7 @@ def test_clip_package_roundtrip_keeps_voice_script_performance_and_qc() -> None:
         synthesis_backend="cosyvoice2-local",
         embedding_backend="cam++-diony-v1",
         alignment_backend="forced-align-local-v1",
+        video_sha256="c" * 64,
         state=VoiceRenderState.VERIFIED,
         qc=passing_voice_qc(),
     )
@@ -194,4 +206,48 @@ def test_clip_package_roundtrip_keeps_voice_script_performance_and_qc() -> None:
     assert restored.voice_package.script.lines[0].subtext.startswith("She already")
     assert restored.voice_package.qc.passed is True
     assert restored.voice_package.voice_profile_ids == [profile.id]
+    assert restored.voice_package.video_sha256 == "c" * 64
 
+
+def test_verified_clip_package_requires_exact_video_lineage() -> None:
+    profile = synthetic_profile()
+    turn = DialogueTurn(
+        id="turn-mara",
+        character_id=profile.character_id,
+        text="Hold the presses.",
+    )
+    line = PerformanceScriptLine(
+        id=turn.id,
+        shot_id="sh-010",
+        character_id=turn.character_id,
+        voice_profile_id=profile.id,
+        text=turn.text,
+        spoken_text=turn.text,
+        target_duration_ms=1200,
+    )
+    script = PerformanceScript(
+        id="vscript-sh-010-v1",
+        project_id=profile.project_id,
+        shot_id="sh-010",
+        lines=[line],
+    )
+
+    with pytest.raises(ValidationError, match="exact rendered video hash"):
+        VoiceClipPackage(
+            id="voicepkg-sh-010-t1-v1",
+            project_id=profile.project_id,
+            shot_id="sh-010",
+            take_id="sh-010-t1",
+            voice_profile_ids=[profile.id],
+            generation_seeds={profile.id: profile.seed},
+            script=script,
+            clean_dialogue_asset_id="ast-dialogue-clean",
+            final_mix_asset_id="ast-dialogue-mix",
+            performance_metadata_asset_id="ast-performance-json",
+            cache_key="b" * 64,
+            synthesis_backend="voice-local",
+            embedding_backend="speaker-local",
+            alignment_backend="align-local",
+            state=VoiceRenderState.VERIFIED,
+            qc=passing_voice_qc(),
+        )
