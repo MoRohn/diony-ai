@@ -213,6 +213,8 @@ class VoiceQCReceipt(BaseModel):
     project_consistency_min: float = Field(default=0.90, ge=-1, le=1)
     snr_db: float
     snr_db_min: float = 30.0
+    speech_presence_score: float | None = Field(default=None, ge=0, le=1)
+    speech_presence_min: float = Field(default=0.20, ge=0, le=1)
     integrated_lufs: float
     loudness_target_lufs: float
     loudness_tolerance_lu: float = Field(default=1.0, ge=0, le=3)
@@ -249,6 +251,11 @@ class VoiceQCReceipt(BaseModel):
             (self.sibilance_score <= self.sibilance_max, "sibilance"),
         )
         if self.audio_passed:
+            if self.measurement_version == "diony-voice-qc-v2" and (
+                self.speech_presence_score is None
+                or self.speech_presence_score < self.speech_presence_min
+            ):
+                raise ValueError("audio cannot pass failed speech presence threshold")
             failed = next((label for ok, label in audio_checks if not ok), None)
             if failed:
                 raise ValueError(f"audio cannot pass failed {failed} threshold")

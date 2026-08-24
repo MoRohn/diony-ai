@@ -387,7 +387,8 @@ def test_camera_qc_requires_verified_voice_performance(tmp_path, monkeypatch) ->
     assert take.qc.voice_ready_ok is True
     assert take.qc.lipsync_ok is True
     assert take.qc.loudness_ok is True
-    assert take.qc.voice_measurement_version == "diony-voice-qc-v1"
+    assert take.qc.voice_measurement_version == "diony-voice-qc-v2"
+    assert take.qc.speech_presence_score >= 0.20
     assert take.qc.speaker_similarity >= 0.92
     assert take.qc.lip_sync_confidence >= 0.90
     assert take.qc.audiovisual_offset_ms_p95 <= 40

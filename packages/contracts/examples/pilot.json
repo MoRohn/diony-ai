@@ -171,6 +171,7 @@
         "loudness_ok": null,
         "voice_measurement_version": "",
         "speaker_similarity": null,
+        "speech_presence_score": null,
         "voice_project_consistency": null,
         "voice_performance_consistency": null,
         "lip_sync_confidence": null,
@@ -188,9 +189,9 @@
         "flicker_luma_p95": null,
         "measured_frame_count": 0,
         "notes": "Identity drift vs still-mara-wide. Retake.",
-        "created_at": "2026-08-24T10:54:27.581961Z"
+        "created_at": "2026-08-24T22:04:26.341619Z"
       },
-      "created_at": "2026-08-24T10:54:27.581975Z",
+      "created_at": "2026-08-24T22:04:26.341630Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -218,7 +219,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-08-24T10:54:27.581808Z"
+          "created_at": "2026-08-24T22:04:26.341469Z"
         }
       ],
       "voice_package": null,
@@ -252,6 +253,7 @@
         "loudness_ok": null,
         "voice_measurement_version": "",
         "speaker_similarity": null,
+        "speech_presence_score": null,
         "voice_project_consistency": null,
         "voice_performance_consistency": null,
         "lip_sync_confidence": null,
@@ -269,9 +271,9 @@
         "flicker_luma_p95": null,
         "measured_frame_count": 0,
         "notes": "",
-        "created_at": "2026-08-24T10:54:27.581987Z"
+        "created_at": "2026-08-24T22:04:26.341639Z"
       },
-      "created_at": "2026-08-24T10:54:27.581990Z",
+      "created_at": "2026-08-24T22:04:26.341642Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -299,7 +301,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-08-24T10:54:27.581980Z"
+          "created_at": "2026-08-24T22:04:26.341634Z"
         },
         {
           "id": "art-sh-010-t2-1080",
@@ -321,7 +323,7 @@
           "height": 1080,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-08-24T10:54:27.581983Z"
+          "created_at": "2026-08-24T22:04:26.341636Z"
         }
       ],
       "voice_package": null,
@@ -355,6 +357,7 @@
         "loudness_ok": null,
         "voice_measurement_version": "",
         "speaker_similarity": null,
+        "speech_presence_score": null,
         "voice_project_consistency": null,
         "voice_performance_consistency": null,
         "lip_sync_confidence": null,
@@ -372,9 +375,9 @@
         "flicker_luma_p95": null,
         "measured_frame_count": 0,
         "notes": "Paper stock slightly modern. Usable.",
-        "created_at": "2026-08-24T10:54:27.582001Z"
+        "created_at": "2026-08-24T22:04:26.341648Z"
       },
-      "created_at": "2026-08-24T10:54:27.582004Z",
+      "created_at": "2026-08-24T22:04:26.341650Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -402,7 +405,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 72,
-          "created_at": "2026-08-24T10:54:27.581998Z"
+          "created_at": "2026-08-24T22:04:26.341645Z"
         }
       ],
       "voice_package": null,
@@ -436,6 +439,7 @@
         "loudness_ok": null,
         "voice_measurement_version": "",
         "speaker_similarity": null,
+        "speech_presence_score": null,
         "voice_project_consistency": null,
         "voice_performance_consistency": null,
         "lip_sync_confidence": null,
@@ -453,9 +457,9 @@
         "flicker_luma_p95": null,
         "measured_frame_count": 0,
         "notes": "",
-        "created_at": "2026-08-24T10:54:27.582009Z"
+        "created_at": "2026-08-24T22:04:26.341655Z"
       },
-      "created_at": "2026-08-24T10:54:27.582012Z",
+      "created_at": "2026-08-24T22:04:26.341658Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -483,7 +487,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 168,
-          "created_at": "2026-08-24T10:54:27.582006Z"
+          "created_at": "2026-08-24T22:04:26.341653Z"
         }
       ],
       "voice_package": null,
@@ -495,7 +499,7 @@
       "id": "n-human-010",
       "author": "human",
       "body": "Hold her eyes on the nick in the case. Don't blink off it.",
-      "created_at": "2026-08-24T10:54:27.582025Z",
+      "created_at": "2026-08-24T22:04:26.341668Z",
       "shot_id": "sh-010",
       "take_id": null
     }
@@ -590,8 +594,8 @@
     "exception_by": "",
     "exception_at": null
   },
-  "created_at": "2026-08-24T10:54:27.582060Z",
-  "updated_at": "2026-08-24T10:54:27.582061Z",
+  "created_at": "2026-08-24T22:04:26.341695Z",
+  "updated_at": "2026-08-24T22:04:26.341695Z",
   "deleted_at": null,
   "production_started_at": null,
   "production_ended_at": null,

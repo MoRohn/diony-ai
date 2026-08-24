@@ -466,6 +466,7 @@ class QCReport(BaseModel):
     loudness_ok: bool | None = None
     voice_measurement_version: str = ""
     speaker_similarity: float | None = Field(default=None, ge=-1, le=1)
+    speech_presence_score: float | None = Field(default=None, ge=0, le=1)
     voice_project_consistency: float | None = Field(default=None, ge=-1, le=1)
     voice_performance_consistency: float | None = Field(default=None, ge=0, le=1)
     lip_sync_confidence: float | None = Field(default=None, ge=0, le=1)

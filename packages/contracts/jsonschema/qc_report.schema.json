@@ -161,6 +161,20 @@
       "default": null,
       "title": "Speaker Similarity"
     },
+    "speech_presence_score": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Speech Presence Score"
+    },
     "voice_project_consistency": {
       "anyOf": [
         {

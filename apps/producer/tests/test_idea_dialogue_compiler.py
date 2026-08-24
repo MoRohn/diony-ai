@@ -1,4 +1,10 @@
-from diony_contracts.enums import AssetKind, CustomerKind, Engine, VoiceRenderState
+from diony_contracts.enums import (
+    AssetKind,
+    CustomerKind,
+    Engine,
+    ProductionKind,
+    VoiceRenderState,
+)
 from diony_contracts.models import Asset, Brief, Take
 from diony_contracts.studio import expand_idea
 from diony_producer.voice import DeterministicVoiceTestBackend, VoicePerformancePipeline
@@ -145,6 +151,40 @@ def test_title_case_cues_and_curly_quotes_compile_without_stage_directions() -> 
     assert "neither of you can force me" not in picture_prompts
 
 
+def test_prose_speech_direction_with_curly_quote_compiles_as_authored_dialogue() -> None:
+    still = Asset(
+        id="ast-cyber-guardian",
+        kind=AssetKind.IMAGE,
+        filename="CyberGuardian.JPG",
+        mime="image/jpeg",
+        bytes=48,
+        path="assets/ast-cyber-guardian/CyberGuardian.JPG",
+    )
+    project = expand_idea(
+        Brief(
+            idea=(
+                "Character sways and glistens, she says in a synthetic and mysterious "
+                "tone, “Welcome to the future, it’s our time now.”"
+            ),
+            customer_kind=CustomerKind.SERIES,
+            target_minutes=0.5,
+            production_kind=ProductionKind.SAMPLE,
+            sample_seconds=10,
+            attachment_ids=[still.id],
+        ),
+        assets=[still],
+    )
+
+    turns = [turn for shot in project.shots for turn in shot.dialogue_turns]
+
+    assert [turn.text for turn in turns] == ["Welcome to the future, it’s our time now."]
+    assert len(project.voice_profiles) == 1
+    assert project.voice_profiles[0].character_id == turns[0].character_id
+    assert any(shot.keyframe_asset_ids == [still.id] for shot in project.shots if shot.dialogue_turns)
+    picture_prompts = " ".join(shot.prompt for shot in project.shots).casefold()
+    assert "welcome to the future" not in picture_prompts
+
+
 def test_long_authored_dialogue_is_distributed_without_truncation_across_five_second_shots() -> None:
     still = Asset(
         id="ast-kitchen-long-line",
@@ -174,6 +214,56 @@ def test_long_authored_dialogue_is_distributed_without_truncation_across_five_se
     assert all(len(turn.text.split()) <= 10 for turn in turns)
     assert " ".join(turn.text for turn in turns) == authored
     assert len({turn.character_id for turn in turns}) == 1
+
+
+def test_thirty_second_program_packs_turns_by_total_natural_speaking_time() -> None:
+    authored_turns = [
+        (
+            "Marcus",
+            "We are starting a daily gratitude circle. I’ll go first. I’m grateful "
+            "for hustle, vision, and the fact that I haven’t given up on you two.",
+        ),
+        ("Lila", "I’m grateful this will be over in under a minute."),
+        ("Marcus", "Hugo. Your turn. Be vulnerable."),
+        (
+            "Hugo",
+            "I am grateful that neither of you can legally force me to continue this.",
+        ),
+    ]
+    idea = "A clay ensemble performs in a shared kitchen.\n" + "\n".join(
+        f'{speaker}: “{text}”' for speaker, text in authored_turns
+    )
+
+    project = expand_idea(
+        Brief(
+            idea=idea,
+            customer_kind=CustomerKind.SERIES,
+            target_minutes=0.5,
+        )
+    )
+
+    characters_by_id = {
+        character.id: character.name for character in project.bible.characters
+    }
+    actual_word_stream = [
+        (characters_by_id[turn.character_id], word)
+        for shot in project.shots
+        for turn in shot.dialogue_turns
+        for word in turn.text.split()
+    ]
+    expected_word_stream = [
+        (speaker, word)
+        for speaker, text in authored_turns
+        for word in text.split()
+    ]
+
+    assert len(project.shots) == 6
+    assert len([shot for shot in project.shots if shot.dialogue_turns]) == 6
+    assert all(
+        sum(len(turn.text.split()) for turn in shot.dialogue_turns) <= 10
+        for shot in project.shots
+    )
+    assert actual_word_stream == expected_word_stream
 
 
 def test_dialogue_only_idea_never_falls_back_to_voice_text_for_picture() -> None:

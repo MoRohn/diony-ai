@@ -149,47 +149,6 @@ def _measure_stem(stem: Path, *, ffmpeg: str, target: float, peak: float) -> tup
     return round(measured, 2), round(true_peak, 2)
 
 
-def _write_room_tone(
-    destination: Path,
-    *,
-    ffmpeg: str,
-    duration: float,
-    target: float,
-    peak: float,
-) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    pending = destination.with_name(f".{destination.stem}.part.wav")
-    pending.unlink(missing_ok=True)
-    _run(
-        [
-            ffmpeg,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            "anoisesrc=color=pink:amplitude=0.08:sample_rate=48000:seed=10401",
-            "-t",
-            f"{duration:.6f}",
-            "-af",
-            f"highpass=f=80,lowpass=f=1200,loudnorm=I={target:g}:TP={peak:g}:LRA=7",
-            "-ar",
-            "48000",
-            "-ac",
-            "2",
-            "-c:a",
-            "pcm_s24le",
-            str(pending),
-        ],
-        label="room-tone stem bounce",
-    )
-    if not pending.is_file() or pending.stat().st_size <= 44:
-        raise MixError("room-tone stem bytes are missing")
-    os.replace(pending, destination)
-
-
 def _dialogue_script(project: Project) -> str:
     lines: list[str] = []
     for shot in project.shots:
@@ -231,6 +190,13 @@ def _locked_voice_sources(
             raise MixError(f"Required dialogue on {shot.id} has no locked voice package")
         if package.state.value != "verified" or not package.qc.passed:
             raise MixError(f"Required dialogue on {shot.id} has an unverified voice package")
+        if (
+            package.qc.speech_presence_score is None
+            or package.qc.speech_presence_score < package.qc.speech_presence_min
+        ):
+            raise MixError(
+                f"Required dialogue on {shot.id} has no measured speech-content evidence"
+            )
         try:
             asset = project.asset(package.final_mix_asset_id)
             metadata = project.asset(package.performance_metadata_asset_id)
@@ -357,7 +323,7 @@ def _mix_revision(project: Project) -> int:
 
 
 def bounce_mix(project: Project) -> None:
-    """Assemble locked per-clip voice mixes or an honest picture-only room-tone rail."""
+    """Assemble verified content audio; generated noise is never a soundtrack."""
     if project.mix is None or project.timeline is None or not project.timeline.preview_path:
         raise MixError("Mix needs a finished program timeline")
     master = abs_path(project.timeline.preview_path)
@@ -374,25 +340,27 @@ def bounce_mix(project: Project) -> None:
     peak = project.bible.true_peak_dbtp
     revision = _mix_revision(project)
     script = _dialogue_script(project)
-    voice_sources = _locked_voice_sources(project) if script else []
-    role = "dialogue_stem" if script else "room_tone_stem"
+    if not script:
+        raise MixError(
+            "No authored dialogue or verified content-bearing audio is available; "
+            "refusing a noise-only mix."
+        )
+    voice_sources = _locked_voice_sources(project)
+    role = "dialogue_stem"
     stem_rel = (
         f"projects/{project.id}/program/{project.timeline.id}/stems/"
-        f"{'dialogue' if script else 'room-tone'}-v{revision}.wav"
+        f"dialogue-v{revision}.wav"
     )
     stem = abs_path(stem_rel)
     duration = _duration_seconds(master, ffprobe)
-    if script:
-        _write_locked_voice_stem(
-            stem,
-            ffmpeg=ffmpeg,
-            sources=voice_sources,
-            duration=duration,
-            target=target,
-            peak=peak,
-        )
-    else:
-        _write_room_tone(stem, ffmpeg=ffmpeg, duration=duration, target=target, peak=peak)
+    _write_locked_voice_stem(
+        stem,
+        ffmpeg=ffmpeg,
+        sources=voice_sources,
+        duration=duration,
+        target=target,
+        peak=peak,
+    )
     measured, true_peak = _measure_stem(stem, ffmpeg=ffmpeg, target=target, peak=peak)
     if abs(measured - target) > 1.0:
         raise MixError(f"measured loudness {measured:g} LUFS missed the {target:g} LUFS target")

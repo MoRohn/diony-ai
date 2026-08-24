@@ -22,8 +22,10 @@ Bible Character
 
 Picture may never be generated first and given required dialogue afterward.
 Program Mix may assemble verified clip packages, but it may not synthesize raw
-TTS. A visual-only Shot remains visual-only; room tone is allowed only when the
-Project contains no spoken intent.
+TTS. A visual-only Shot remains visual-only. Generated room tone, white noise,
+pink noise, or a test tone is never accepted as a content-bearing soundtrack.
+If a Project has no verified dialogue, score, SFX, or recorded audio, Mix holds
+instead of manufacturing noise and representing it as finished audio.
 
 ## Contracts
 
@@ -35,7 +37,7 @@ Project contains no spoken intent.
 | `VoiceProfile` | Project/Character ids, revision, source, reference embeddings, speaker embedding, prosody, emotion map, descriptors, seed, style lock | content-addressed, frozen, and immutable |
 | `DialogueTurn` | Character, spoken text, emotion curve, subtext, start/overlap/interruption, pronunciation | explicit multi-character timing intent |
 | `PerformanceScript` | profile-aware lines, breaths, stress, pauses, timing, phonetics, emotion curve | deterministic content hash |
-| `VoiceQCReceipt` | identity, consistency, SNR, LUFS, true peak, harshness, sibilance, lip confidence, AV offset | cannot claim pass below a locked threshold |
+| `VoiceQCReceipt` | identity, consistency, voiced-speech presence, SNR, LUFS, true peak, harshness, sibilance, lip confidence, AV offset | cannot claim pass below a locked threshold |
 | `VoiceClipPackage` | profile ids, generation seeds, script, three Asset ids, backend versions, cache key, exact video SHA-256, QC | `verified` requires complete audio and animation evidence bound to the rendered negative |
 
 `Character.voice_profile_id` names the current locked Project identity.
@@ -113,7 +115,7 @@ Required actions:
 | `embed` | generated line WAV + locked embedding model | speaker vector JSON | dimensional mismatch blocks camera |
 | `embed-reference` | clean local reference + embedding model | speaker vector JSON | no Profile lock |
 | `align` | processed line + performance line | phoneme/viseme/co-articulation and face/body timing JSON | no S2V dispatch |
-| `studio-audio` | line WAVs/timing, duration, LUFS/peak, deterministic seed | clean dialogue WAV, final clip mix WAV, audio metrics JSON | bounded retry, then QC hold |
+| `studio-audio` | line WAVs/timing, duration, LUFS/peak, deterministic seed | clean dialogue WAV, final clip mix WAV, audio metrics JSON including voiced-speech presence | bounded retry, then QC hold |
 | `audiovisual-qc` | Wan negative, clean dialogue, performance metadata | lip confidence, p95 offset, performance consistency | immutable visual retake |
 
 The command is an adapter boundary, not permission to use a hosted service.
@@ -167,6 +169,7 @@ Default hard floors:
 |---|---|
 | speaker cosine similarity | ≥ 0.92 against locked Profile |
 | prior Project consistency | ≥ 0.90 |
+| voiced-speech presence | ≥ 0.20 of analysis frames |
 | dialogue SNR | ≥ 30 dB |
 | integrated loudness | target ±1 LU |
 | true peak | at or below Bible ceiling |
@@ -181,6 +184,11 @@ Identity synthesis and studio-audio processing retry automatically up to
 metrics, and diagnostic. A visual performance failure uses the normal immutable
 Take retake path and counts against the four camera Take cap. Infrastructure and
 missing-backend failures do not invent output.
+
+Voiced-speech presence measures energy-modulated periodic frames in the final
+clip mix. It is deliberately separate from SNR and loudness: steady generated
+noise can be loud and can report an excellent silence-floor SNR, but it cannot
+pass as dialogue without measured speech structure.
 
 Alignment also measures every synthesized line before studio audio. A line may
 not exceed its allocated window by more than 250 ms or 10 percent, whichever is

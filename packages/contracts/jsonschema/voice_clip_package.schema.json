@@ -219,6 +219,27 @@
           "title": "Snr Db Min",
           "type": "number"
         },
+        "speech_presence_score": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Speech Presence Score"
+        },
+        "speech_presence_min": {
+          "default": 0.2,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Speech Presence Min",
+          "type": "number"
+        },
         "integrated_lufs": {
           "title": "Integrated Lufs",
           "type": "number"

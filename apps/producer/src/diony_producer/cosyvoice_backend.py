@@ -141,6 +141,49 @@ def snr_db_from_frame_rms(frame_rms: list[float]) -> float:
     return round(min(96.0, max(0.0, 20 * math.log10(signal / max(noise, 1e-9)))), 2)
 
 
+def speech_presence_score(samples: Any, *, sample_rate: int) -> float:
+    """Measure energy-modulated voiced frames so steady noise cannot pass as dialogue."""
+    import numpy as np
+
+    signal = np.asarray(samples, dtype=np.float64).reshape(-1)
+    if sample_rate <= 0 or signal.size < max(400, round(sample_rate * 0.1)):
+        return 0.0
+    target_rate = 16_000
+    if sample_rate > target_rate:
+        stride = max(1, round(sample_rate / target_rate))
+        signal = signal[::stride]
+        sample_rate = round(sample_rate / stride)
+    frame_size = max(80, round(sample_rate * 0.025))
+    hop = max(40, round(sample_rate * 0.010))
+    if signal.size < frame_size:
+        return 0.0
+    frames = np.stack(
+        [
+            signal[start : start + frame_size]
+            for start in range(0, signal.size - frame_size + 1, hop)
+        ]
+    )
+    frames = frames - np.mean(frames, axis=1, keepdims=True)
+    frame_rms = np.sqrt(np.mean(frames * frames, axis=1))
+    quiet = float(np.percentile(frame_rms, 20))
+    active = frame_rms > max(1e-4, quiet * 2.5)
+    if not np.any(active):
+        return 0.0
+    lag_min = max(1, round(sample_rate / 400))
+    lag_max = min(frame_size - 1, round(sample_rate / 60))
+    voiced = 0
+    for frame in frames[active]:
+        correlation = np.correlate(frame, frame, mode="full")[frame_size - 1 :]
+        base = float(correlation[0])
+        periodicity = (
+            float(np.max(correlation[lag_min : lag_max + 1])) / base
+            if base > 1e-12 and lag_max >= lag_min
+            else 0.0
+        )
+        voiced += periodicity >= 0.25
+    return round(min(1.0, voiced / len(frames)), 4)
+
+
 def _cosy_worker() -> list[str]:
     worker = Path(__file__).with_name("cosyvoice_worker.py")
     if not worker.is_file():
@@ -258,7 +301,7 @@ def _enroll_synthetic(request: dict[str, Any], response: Path) -> dict[str, Any]
     }
 
 
-def _spectral_measurements(path: Path) -> tuple[float, float, float]:
+def _spectral_measurements(path: Path) -> tuple[float, float, float, float]:
     import numpy as np
 
     result = _run(
@@ -272,13 +315,19 @@ def _spectral_measurements(path: Path) -> tuple[float, float, float]:
     frames = samples[: frame_count * 1024].reshape(frame_count, 1024)
     frame_rms = np.sqrt(np.mean(frames * frames, axis=1))
     snr = snr_db_from_frame_rms(frame_rms.tolist())
+    speech_presence = speech_presence_score(samples, sample_rate=48_000)
     window = np.hanning(samples.size)
     spectrum = np.abs(np.fft.rfft(samples * window)) ** 2
     frequencies = np.fft.rfftfreq(samples.size, 1 / 48000)
     total = float(spectrum[(frequencies >= 80) & (frequencies <= 16000)].sum()) or 1.0
     harsh = math.sqrt(float(spectrum[(frequencies >= 3000) & (frequencies <= 8000)].sum()) / total)
     sibilance = math.sqrt(float(spectrum[(frequencies >= 5000) & (frequencies <= 10000)].sum()) / total)
-    return round(min(96.0, max(0.0, snr)), 2), round(harsh, 4), round(sibilance, 4)
+    return (
+        round(min(96.0, max(0.0, snr)), 2),
+        round(harsh, 4),
+        round(sibilance, 4),
+        speech_presence,
+    )
 
 
 def _loudness_report(path: Path, target: float, peak: float) -> dict[str, Any]:
@@ -423,9 +472,10 @@ def _studio_audio(request: dict[str, Any]) -> dict[str, Any]:
     if not clean_output.is_file() or not final_output.is_file():
         raise BackendError("studio audio did not write both required stems")
     integrated, true_peak = _loudness(final_output, target, peak)
-    snr, harshness, sibilance = _spectral_measurements(final_output)
+    snr, harshness, sibilance, speech_presence = _spectral_measurements(final_output)
     return {
         "snr_db": snr,
+        "speech_presence_score": speech_presence,
         "integrated_lufs": integrated,
         "true_peak_dbtp": true_peak,
         "harshness_score": harshness,

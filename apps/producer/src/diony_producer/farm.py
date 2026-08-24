@@ -1457,6 +1457,7 @@ def attach_negative(
         loudness_ok=loudness_ok,
         voice_measurement_version=(voice_package.qc.measurement_version if voice_package else ""),
         speaker_similarity=(voice_package.qc.speaker_similarity if voice_package else None),
+        speech_presence_score=(voice_package.qc.speech_presence_score if voice_package else None),
         voice_project_consistency=(voice_package.qc.project_consistency if voice_package else None),
         voice_performance_consistency=(
             voice_package.qc.performance_consistency if voice_package else None

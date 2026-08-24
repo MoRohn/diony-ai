@@ -33,7 +33,7 @@ Produce **1080p, high quality, state-of-the-art** television and feature-grade m
 
 - Voice identity is locked per Character and Project before synthesis. Speaker cosine similarity is at least 0.92 and prior-Project consistency at least 0.90.
 - Required dialogue is processed to a clean stem and final clip mix before picture; Wan S2V is conditioned on that locked audio. Final Mix never performs raw TTS.
-- Dialogue is intelligible with SNR ≥30 dB, loudness within ±1 LU, true peak at or below the Bible ceiling, and harshness/sibilance scores ≤0.25.
+- Dialogue is intelligible with measured voiced-speech presence ≥0.20, SNR ≥30 dB, loudness within ±1 LU, true peak at or below the Bible ceiling, and harshness/sibilance scores ≤0.25. White/pink noise, room tone, and test tones never satisfy the dialogue or finished-soundtrack contract.
 - Lip-sync confidence is at least 0.90 and p95 audiovisual offset on S2V is at most 40 ms. Brow, eye, cheek, jaw, head, and upper-body energy follow the same performance metadata and must pass consistency QC.
 - Score and SFX serve picture; they do not clip dialogue.
 - Mix to bible loudness: −24 LUFS broadcast or −16 LUFS streaming, true peak −1 dBTP.

@@ -1,12 +1,13 @@
-import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from diony_producer.cosyvoice_backend import (
     BackendError,
     alignment_payload,
     cosine_similarity,
+    speech_presence_score,
     snr_db_from_frame_rms,
     studio_audio_filters,
 )
@@ -52,6 +53,22 @@ def test_studio_audio_filters_keep_broadcast_loudness_and_peak_contract() -> Non
 def test_snr_uses_silent_noise_floor_not_quiet_speech_as_noise() -> None:
     assert snr_db_from_frame_rms([0.0008, 0.001, 0.09, 0.1, 0.11]) >= 30.0
     assert snr_db_from_frame_rms([0.0] * 6 + [0.007, 0.016, 0.036, 0.075, 0.1]) >= 60.0
+
+
+def test_speech_presence_rejects_noise_and_accepts_voiced_content() -> None:
+    sample_rate = 16_000
+    seconds = 3.0
+    t = np.arange(round(sample_rate * seconds), dtype=np.float64) / sample_rate
+    noise = np.random.default_rng(10401).normal(0.0, 0.08, t.shape)
+    syllables = np.maximum(0.0, np.sin(2 * np.pi * 2.2 * t)) ** 1.5
+    voiced = syllables * (
+        0.7 * np.sin(2 * np.pi * 155 * t)
+        + 0.2 * np.sin(2 * np.pi * 310 * t)
+        + 0.1 * np.sin(2 * np.pi * 465 * t)
+    )
+
+    assert speech_presence_score(noise, sample_rate=sample_rate) < 0.20
+    assert speech_presence_score(voiced, sample_rate=sample_rate) >= 0.20
 
 
 def test_cosine_similarity_rejects_dimension_drift() -> None:

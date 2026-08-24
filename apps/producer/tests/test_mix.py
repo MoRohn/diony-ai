@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from diony_contracts.enums import AssetKind, GateName, MixLockState
+from diony_contracts.enums import GateName, MixLockState
 from diony_contracts.fixture import demo_project
 from diony_producer.advance import reopen_picture_for_retake
 from diony_producer.mix import (
@@ -12,12 +12,11 @@ from diony_producer.mix import (
     _mux_program,
     bounce_mix,
     mix_evidence_blockers,
-    program_master_has_audio,
 )
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg is required")
-def test_bounce_mix_creates_measured_stem_and_audio_program_master(tmp_path, monkeypatch) -> None:
+def test_bounce_mix_refuses_a_noise_only_soundtrack(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DIONY_VAULT", str(tmp_path))
     monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path))
     project = demo_project()
@@ -57,19 +56,12 @@ def test_bounce_mix_creates_measured_stem_and_audio_program_master(tmp_path, mon
         check=True,
     )
 
-    bounce_mix(project)
+    with pytest.raises(MixError, match="refusing a noise-only mix"):
+        bounce_mix(project)
 
     assert project.mix.state == MixLockState.OPEN
-    assert len(project.mix.stem_asset_ids) == 1
-    stem = project.asset(project.mix.stem_asset_ids[0])
-    assert stem.kind == AssetKind.AUDIO
-    assert stem.role == "room_tone_stem"
-    assert (tmp_path / stem.path).is_file()
-    assert abs(project.mix.measured_lufs - (-24.0)) <= 1.0
-    assert project.mix.true_peak_dbtp <= project.bible.true_peak_dbtp
-    assert project.timeline.gallery_removed_at is None
-    assert program_master_has_audio(project) is True
-    assert mix_evidence_blockers(project, verify_program=True) == []
+    assert project.mix.stem_asset_ids == []
+    assert project.timeline.gallery_removed_at is not None
 
 
 def test_required_dialogue_never_falls_back_to_room_tone(tmp_path, monkeypatch) -> None:

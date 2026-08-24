@@ -615,12 +615,47 @@ _NON_CHARACTER_CUES = {
 def _visual_only_text(value: str) -> str:
     """Remove authored voice lines from every source used by the picture prompt."""
     cleaned = _SCREENPLAY_DIALOGUE.sub(" ", value)
+    for _speaker, _text, start, end in reversed(_prose_quoted_speech(cleaned)):
+        cleaned = cleaned[:start] + " " + cleaned[end:]
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
-def _script_dialogue(idea: str) -> list[ScriptDialogue]:
+_QUOTED_SPEECH = re.compile(r'["“](?P<text>[^"“”\n]+)["”]')
+_SPEECH_VERB = re.compile(
+    r"\b(?:asks?|calls?|exclaims?|replies|responds?|says?|speaks?|tells?|whispers?|yells?)\b",
+    re.IGNORECASE,
+)
+_SPEAKER_TOKEN = re.compile(
+    r"\b(?:[A-Z][A-Za-z0-9.'\N{RIGHT SINGLE QUOTATION MARK}-]*|"
+    r"[Cc]haracter|[Hh]e|[Ss]he|[Tt]hey)\b",
+)
+_GENERIC_SPEAKERS = {"character", "he", "she", "they"}
+
+
+def _prose_quoted_speech(idea: str) -> list[tuple[str | None, str, int, int]]:
+    """Find authored quotes attached to prose speech verbs without inventing words."""
+    found: list[tuple[str | None, str, int, int]] = []
+    for quote in _QUOTED_SPEECH.finditer(idea):
+        prefix = idea[max(0, quote.start() - 240) : quote.start()]
+        boundary = max(prefix.rfind("\n"), prefix.rfind("."), prefix.rfind("!"), prefix.rfind("?"))
+        clause = prefix[boundary + 1 :]
+        verbs = list(_SPEECH_VERB.finditer(clause))
+        if not verbs:
+            continue
+        verb = verbs[-1]
+        if len(clause) - verb.end() > 140:
+            continue
+        tokens = list(_SPEAKER_TOKEN.finditer(clause[: verb.start()]))
+        speaker = tokens[-1].group(0).strip() if tokens else None
+        text = re.sub(r"\s+", " ", quote.group("text")).strip()
+        if text:
+            found.append((speaker, text, quote.start(), quote.end()))
+    return found
+
+
+def _script_dialogue(idea: str, *, default_speaker: str = "Character") -> list[ScriptDialogue]:
     """Preserve explicitly authored screenplay lines without inventing speech."""
-    lines: list[ScriptDialogue] = []
+    addressed: list[tuple[int, ScriptDialogue]] = []
     for match in _SCREENPLAY_DIALOGUE.finditer(idea):
         raw_speaker = re.sub(r"\s+", " ", match.group("speaker")).strip(" .-")
         cue = raw_speaker.upper()
@@ -631,7 +666,23 @@ def _script_dialogue(idea: str) -> list[ScriptDialogue]:
         if not text:
             continue
         speaker = raw_speaker.title() if raw_speaker.isupper() else raw_speaker
-        lines.append(ScriptDialogue(speaker=speaker, text=text))
+        addressed.append((match.start(), ScriptDialogue(speaker=speaker, text=text)))
+    for raw_speaker, text, start, _end in _prose_quoted_speech(idea):
+        speaker = str(raw_speaker or "").strip()
+        if not speaker or speaker.casefold() in _GENERIC_SPEAKERS:
+            speaker = default_speaker
+        elif speaker.isupper():
+            speaker = speaker.title()
+        addressed.append((start, ScriptDialogue(speaker=speaker, text=text)))
+    addressed.sort(key=lambda row: row[0])
+    lines: list[ScriptDialogue] = []
+    seen: set[tuple[str, str]] = set()
+    for _start, line in addressed:
+        key = (line.speaker.casefold(), line.text.casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(line)
     return lines
 
 
@@ -640,14 +691,18 @@ def _fit_dialogue_to_shots(
     *,
     shot_count: int,
     seconds_per_shot: float,
-) -> list[ScriptDialogue]:
+) -> list[list[ScriptDialogue]]:
     """Split authored speech into natural-rate shot windows without rewriting it."""
     if not lines:
         return []
     max_words = max(1, int(seconds_per_shot * 2.0))
     fitted: list[ScriptDialogue] = []
-    for line in lines:
+    tokens: list[tuple[int, str, str]] = []
+    preferred_boundaries: set[int] = set()
+    for line_index, line in enumerate(lines):
         words = line.text.split()
+        line_start = len(tokens)
+        tokens.extend((line_index, line.speaker, word) for word in words)
         for start in range(0, len(words), max_words):
             fitted.append(
                 ScriptDialogue(
@@ -655,13 +710,75 @@ def _fit_dialogue_to_shots(
                     text=" ".join(words[start : start + max_words]),
                 )
             )
-    if len(fitted) > shot_count:
+            preferred_boundaries.add(
+                min(len(tokens), line_start + start + max_words)
+            )
+    preferred_boundaries.discard(len(tokens))
+    if len(fitted) <= shot_count:
+        return [[line] for line in fitted]
+
+    minimum_windows = math.ceil(len(tokens) / max_words)
+    if minimum_windows > shot_count:
         raise ValueError(
             "Authored dialogue needs "
-            f"{len(fitted)} natural-rate shot windows but this rundown has {shot_count}. "
+            f"{minimum_windows} natural-rate shot windows but this rundown has {shot_count}. "
             "Increase the program duration or shorten the authored dialogue before Production."
         )
-    return fitted
+
+    # Short authored turns should not each consume a whole 5s take when their
+    # combined natural speaking time fits the rundown. Prefer existing turn and
+    # ten-word boundaries, then split the minimum number of turns necessary.
+    cache: dict[tuple[int, int], tuple[int, tuple[int, ...]] | None] = {}
+
+    def partition(start: int, windows_left: int) -> tuple[int, tuple[int, ...]] | None:
+        key = (start, windows_left)
+        if key in cache:
+            return cache[key]
+        remaining = len(tokens) - start
+        if remaining < windows_left or remaining > windows_left * max_words:
+            cache[key] = None
+            return None
+        if windows_left == 1:
+            result = (0, (len(tokens),))
+            cache[key] = result
+            return result
+
+        best: tuple[int, tuple[int, ...]] | None = None
+        minimum_size = max(1, remaining - (windows_left - 1) * max_words)
+        maximum_size = min(max_words, remaining - (windows_left - 1))
+        for size in range(minimum_size, maximum_size + 1):
+            end = start + size
+            tail = partition(end, windows_left - 1)
+            if tail is None:
+                continue
+            cost = (0 if end in preferred_boundaries else 1) + tail[0]
+            candidate = (cost, (end, *tail[1]))
+            if best is None or candidate[0] < best[0]:
+                best = candidate
+        cache[key] = best
+        return best
+
+    packed_partition = partition(0, shot_count)
+    if packed_partition is None:  # Defensive: minimum_windows already proves capacity.
+        raise ValueError("Authored dialogue could not be assigned to this rundown.")
+
+    windows: list[list[ScriptDialogue]] = []
+    start = 0
+    for end in packed_partition[1]:
+        fragments: list[tuple[int, str, list[str]]] = []
+        for line_index, speaker, word in tokens[start:end]:
+            if fragments and fragments[-1][0] == line_index:
+                fragments[-1][2].append(word)
+            else:
+                fragments.append((line_index, speaker, [word]))
+        windows.append(
+            [
+                ScriptDialogue(speaker=speaker, text=" ".join(words))
+                for _, speaker, words in fragments
+            ]
+        )
+        start = end
+    return windows
 
 
 def _character_id(name: str) -> str:
@@ -1029,12 +1146,12 @@ def expand_idea(
     image_ids = [a.id for a in held if a.kind == AssetKind.IMAGE]
     video_ids = [a.id for a in held if a.kind == AssetKind.VIDEO]
     audio_ids = [a.id for a in held if a.kind == AssetKind.AUDIO]
-    screenplay_dialogue = _fit_dialogue_to_shots(
-        _script_dialogue(brief.idea),
+    dialogue_windows = _fit_dialogue_to_shots(
+        _script_dialogue(brief.idea, default_speaker=book.lead_name),
         shot_count=n,
         seconds_per_shot=min(float(recipe["seconds"]) for recipe in recipes),
     )
-    sound_requested = bool(screenplay_dialogue) or _asks_for_sound(idea)
+    sound_requested = bool(dialogue_windows) or _asks_for_sound(idea)
     spoken_direction = _spoken_direction_script(brief.idea)
     spoken_direction_assigned = False
     synced_performance = bool(audio_ids) and _asks_for_synced_performance(idea)
@@ -1045,12 +1162,16 @@ def expand_idea(
     scene_schedule = _scene_schedule(scenes, n)
     sample_camera = _explicit_sample_camera(brief.idea) if is_sample else {}
     stills = subject_image_ids or image_ids[:2] or ["still-lead-wide", "still-lead-close"]
-    character_names = list(dict.fromkeys(line.speaker for line in screenplay_dialogue))
+    character_names = list(
+        dict.fromkeys(
+            line.speaker for window in dialogue_windows for line in window
+        )
+    )
     if not character_names:
         character_names = [book.lead_name]
     characters = [
         Character(
-            id=_character_id(name) if screenplay_dialogue else "char-lead",
+            id=_character_id(name) if dialogue_windows else "char-lead",
             name=name,
             still_asset_ids=stills,
             wardrobe=book.lead_wardrobe,
@@ -1062,14 +1183,14 @@ def expand_idea(
     voice_profiles = [
         _synthetic_voice_profile(pid, character)
         for character in characters
-        if screenplay_dialogue
+        if dialogue_windows
     ]
     for character, profile in zip(characters, voice_profiles):
         character.voice_profile_id = profile.id
     dialogue_by_shot: dict[int, list[ScriptDialogue]] = {}
-    for index, line in enumerate(screenplay_dialogue):
-        shot_index = min(n - 1, (index * n) // len(screenplay_dialogue))
-        dialogue_by_shot.setdefault(shot_index, []).append(line)
+    for index, window in enumerate(dialogue_windows):
+        shot_index = min(n - 1, (index * n) // len(dialogue_windows))
+        dialogue_by_shot.setdefault(shot_index, []).extend(window)
     visual_idea = (
         _visual_only_text(idea)
         or "A Bible-locked performance in the authored setting."

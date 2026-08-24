@@ -139,6 +139,17 @@ def test_passing_voice_qc_cannot_claim_metrics_below_locked_thresholds() -> None
         )
 
 
+def test_voice_qc_v2_cannot_claim_pass_without_measured_speech_content() -> None:
+    with pytest.raises(ValidationError, match="speech presence"):
+        VoiceQCReceipt.model_validate(
+            passing_voice_qc().model_dump()
+            | {
+                "measurement_version": "diony-voice-qc-v2",
+                "speech_presence_score": 0.05,
+            }
+        )
+
+
 def test_clip_package_roundtrip_keeps_voice_script_performance_and_qc() -> None:
     profile = synthetic_profile()
     turn = DialogueTurn(

@@ -37,8 +37,8 @@ from diony_contracts.voice import (
 )
 
 
-VOICE_QC_VERSION = "diony-voice-qc-v1"
-VOICE_PIPELINE_VERSION = "diony-voice-performance-v2"
+VOICE_QC_VERSION = "diony-voice-qc-v2"
+VOICE_PIPELINE_VERSION = "diony-voice-performance-v3"
 
 
 class VoicePipelineError(RuntimeError):
@@ -459,6 +459,7 @@ class AudioMeasurements:
     true_peak_dbtp: float
     harshness_score: float
     sibilance_score: float
+    speech_presence_score: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -607,6 +608,7 @@ class DeterministicVoiceTestBackend:
             true_peak_dbtp=true_peak_dbtp - 0.2,
             harshness_score=0.04,
             sibilance_score=0.05,
+            speech_presence_score=1.0,
         )
 
     def verify_audiovisual(
@@ -784,6 +786,7 @@ class LocalVoiceCommandBackend:
             true_peak_dbtp=float(payload["true_peak_dbtp"]),
             harshness_score=float(payload["harshness_score"]),
             sibilance_score=float(payload["sibilance_score"]),
+            speech_presence_score=float(payload["speech_presence_score"]),
         )
 
     def verify_audiovisual(
@@ -1210,6 +1213,7 @@ class VoicePerformancePipeline:
             post_passed = all(
                 (
                     candidate.snr_db >= 30,
+                    candidate.speech_presence_score >= 0.20,
                     abs(candidate.integrated_lufs - target_lufs) <= 1.0,
                     candidate.true_peak_dbtp <= project.bible.true_peak_dbtp,
                     candidate.harshness_score <= 0.25,
@@ -1222,6 +1226,7 @@ class VoicePerformancePipeline:
                     "attempt": attempt,
                     "seed": post_seed,
                     "snr_db": candidate.snr_db,
+                    "speech_presence_score": candidate.speech_presence_score,
                     "integrated_lufs": candidate.integrated_lufs,
                     "true_peak_dbtp": candidate.true_peak_dbtp,
                     "harshness_score": candidate.harshness_score,
@@ -1299,6 +1304,7 @@ class VoicePerformancePipeline:
                 speaker_similarity >= 0.92,
                 project_consistency >= 0.90,
                 measurements.snr_db >= 30,
+                measurements.speech_presence_score >= 0.20,
                 abs(measurements.integrated_lufs - target_lufs) <= 1.0,
                 measurements.true_peak_dbtp <= project.bible.true_peak_dbtp,
                 measurements.harshness_score <= 0.25,
@@ -1310,6 +1316,7 @@ class VoicePerformancePipeline:
             speaker_similarity=speaker_similarity,
             project_consistency=project_consistency,
             snr_db=measurements.snr_db,
+            speech_presence_score=measurements.speech_presence_score,
             integrated_lufs=measurements.integrated_lufs,
             loudness_target_lufs=target_lufs,
             true_peak_dbtp=measurements.true_peak_dbtp,
