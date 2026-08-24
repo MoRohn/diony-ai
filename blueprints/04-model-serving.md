@@ -157,7 +157,15 @@ Not an upstream model. Pipeline in Blueprint `06`. Worker: `diony-finish` (`apps
 
 ## Weight placement
 
-`infra/models/manifest.yaml` lists ids, approximate bytes, destination `/models/...`. Checksums filled when first pulled. Pull with `huggingface-cli` **on spark-01**, then replicate or NFS-export only if bandwidth allows; prefer local NVMe copies per node for Wan lanes.
+`infra/models/manifest.yaml` locks repository revisions, measured payload bytes,
+the durable destination under `/diony/vault/models`, and the compatible
+`/models/...` path. Local Spark nodes retain replicated NVMe model trees. Leased
+B200/B300 sites keep the canonical pack on the attached `/workspace` volume,
+expose it through `/models`, and use a verified, bounded 320 GiB overlay hot tier
+for the active Wan family. The hot tier may accelerate loads; it never becomes
+the only copy. Pulls use pinned `huggingface_hub` revisions with two repository
+workers and four file workers per repository. Identical shared T5/VAE objects are
+hard-linked only after their Hugging Face metadata ETags and byte sizes match.
 
 ## Failure modes
 

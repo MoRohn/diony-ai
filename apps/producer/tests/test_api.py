@@ -823,3 +823,44 @@ def test_reference_locked_retake_refreshes_strict_camera_direction() -> None:
     assert "television coverage" not in refreshed["prompt"].casefold()
     assert refreshed["camera_move"] == "static"
     assert "title card" in refreshed["negative_prompt"].casefold()
+
+
+def test_studio_open_reports_prompt_budget_rejection_as_client_error(monkeypatch) -> None:
+    module = importlib.import_module("diony_producer.app")
+
+    def reject_prompt(*_args, **_kwargs):
+        raise ValueError("Wan prompt compiler produced an invalid plan: prompt exceeds the 140-word attention budget")
+
+    monkeypatch.setattr(module, "expand_idea", reject_prompt)
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.post(
+        "/api/studio/open",
+        json={
+            "idea": "A tightly authored cinematic sample.",
+            "customer_kind": "feature",
+            "production_kind": "sample",
+            "sample_seconds": 5,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "attention budget" in response.json()["detail"]
+
+
+def test_signed_gpu_mutation_fails_closed_when_remote_control_plane_is_not_ready(
+    monkeypatch,
+) -> None:
+    module = importlib.import_module("diony_producer.app")
+    monkeypatch.setattr(module, "should_proxy", lambda: True)
+    monkeypatch.setattr(module, "gpu_producer_ready_base", lambda: None)
+    monkeypatch.setattr(module, "_start_gpu_reconcile", lambda: None)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/assets",
+        files={"file": ("reference.png", b"reference", "image/png")},
+        data={"role": "idea_ref"},
+    )
+
+    assert response.status_code == 503
+    assert "GPU control plane" in response.json()["detail"]

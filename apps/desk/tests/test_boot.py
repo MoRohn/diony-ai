@@ -632,7 +632,7 @@ def test_wizard_state_ok_rejects_500(monkeypatch) -> None:
 
 @pytest.mark.parametrize(
     ("check", "stamp"),
-    ((wizard_html_ok, "brand11"), (producer_html_ok, "brand6")),
+    ((wizard_html_ok, "brand11"), (producer_html_ok, "brand7")),
 )
 def test_ui_health_check_reads_version_marker_after_20kb(
     monkeypatch, check, stamp: str
@@ -714,7 +714,7 @@ def test_producer_state_ok_accepts_a_large_project_payload(monkeypatch) -> None:
 
 def test_producer_ui_stamp_matches_html() -> None:
     stamp = producer_ui_stamp()
-    assert stamp == "brand6"
+    assert stamp == "brand7"
     html = repo_root() / "apps" / "producer" / "src" / "diony_producer" / "static" / "index.html"
     assert f"app.js?v={stamp}" in html.read_text(encoding="utf-8")
     assert f"app.css?v={stamp}" in html.read_text(encoding="utf-8")

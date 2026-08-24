@@ -31,6 +31,29 @@ def test_runtime_contract_includes_upstream_omission() -> None:
     assert ("Wan2.2", "wan") in runtime.REQUIRED_IMPORTS
 
 
+def test_runtime_cli_can_require_every_installed_model_engine(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        runtime,
+        "probe_runtime",
+        lambda: {
+            "ok": True,
+            "capabilities": {
+                "t2v": {"available": True, "missing": []},
+                "i2v": {"available": True, "missing": []},
+                "s2v": {"available": True, "missing": []},
+                "animate": {"available": False, "missing": ["SAM-2"]},
+            },
+        },
+    )
+
+    code = runtime.main(["--require-capability", "s2v", "--require-capability", "animate"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert code == 1
+    assert payload["required_capabilities"] == ["s2v", "animate"]
+    assert payload["required_capabilities_ready"] is False
+
+
 def test_runtime_report_writes_are_isolated_when_validations_overlap(
     tmp_path: Path, monkeypatch
 ) -> None:

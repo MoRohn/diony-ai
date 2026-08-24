@@ -166,6 +166,9 @@ class VoiceProfileRegistry:
         self,
         character_id: str,
         descriptors: dict[str, str] | None = None,
+        *,
+        speaker_embedding: list[float] | None = None,
+        speaker_embedding_model: str | None = None,
     ) -> VoiceProfile:
         current = self.current(character_id)
         if current is not None:
@@ -190,8 +193,14 @@ class VoiceProfileRegistry:
             character_id=character.id,
             version=1,
             source=VoiceProfileSource.SYNTHETIC,
-            speaker_embedding_model="diony-synthetic-speaker-space-v1",
-            speaker_embedding=_stable_embedding(character.id, descriptor),
+            speaker_embedding_model=(
+                speaker_embedding_model or "diony-synthetic-speaker-space-v1"
+            ),
+            speaker_embedding=(
+                list(speaker_embedding)
+                if speaker_embedding is not None
+                else _stable_embedding(character.id, descriptor)
+            ),
             prosody=ProsodySignature(
                 pitch_floor_hz=105,
                 pitch_ceiling_hz=310,
@@ -289,6 +298,38 @@ class VoiceProfileRegistry:
         self.project.voice_profiles.append(profile)
         character.voice_profile_id = profile.id
         return profile
+
+    def enroll_synthetic_render(
+        self,
+        profile: VoiceProfile,
+        *,
+        speaker_embedding: list[float],
+        speaker_embedding_model: str,
+    ) -> VoiceProfile:
+        """Finalize an unreferenced synthetic identity from its first measured render."""
+        current = self.current(profile.character_id)
+        if current is None or current.id != profile.id:
+            raise VoicePipelineError("synthetic voice enrollment profile is no longer current")
+        if profile.source != VoiceProfileSource.SYNTHETIC or profile.reference_samples:
+            raise VoicePipelineError("only an unreferenced synthetic profile can be enrolled")
+        if len(speaker_embedding) != len(profile.speaker_embedding):
+            raise VoicePipelineError("synthetic enrollment embedding dimensions do not match")
+        payload = profile.model_dump(mode="python")
+        payload.update(
+            {
+                "identity_lineage_id": "",
+                "speaker_embedding_model": speaker_embedding_model,
+                "speaker_embedding": speaker_embedding,
+                "content_sha256": "",
+                "locked_at": datetime.now(timezone.utc),
+            }
+        )
+        enrolled = VoiceProfile.model_validate(payload)
+        for index, candidate in enumerate(self.project.voice_profiles):
+            if candidate.id == profile.id:
+                self.project.voice_profiles[index] = enrolled
+                break
+        return enrolled
 
 
 def _dialogue_turns(project: Project, shot: Shot) -> list[DialogueTurn]:
@@ -641,6 +682,28 @@ class LocalVoiceCommandBackend:
         if output.stat().st_size <= 44:
             raise VoicePipelineError("local voice synthesis returned empty audio")
 
+    def enroll_synthetic(
+        self,
+        line: PerformanceScriptLine,
+        profile: VoiceProfile,
+        output: Path,
+    ) -> list[float]:
+        response = output.with_suffix(".enrollment.json")
+        payload = self._invoke(
+            "enroll-synthetic",
+            {
+                "line": line.model_dump(mode="json"),
+                "profile": profile.model_dump(mode="json"),
+                "seed": profile.seed,
+                "output": str(output),
+            },
+            response,
+        )
+        embedding = payload.get("embedding")
+        if not isinstance(embedding, list) or len(embedding) != len(profile.speaker_embedding):
+            raise VoicePipelineError("synthetic enrollment embedding dimensions do not match")
+        return [float(value) for value in embedding]
+
     def speaker_embedding(self, audio: Path, profile: VoiceProfile) -> list[float]:
         response = audio.with_suffix(".embedding.json")
         payload = self._invoke(
@@ -783,15 +846,83 @@ class VoicePerformancePipeline:
             paths.append(path)
         return paths
 
-    @staticmethod
-    def _profiles(project: Project, shot: Shot) -> list[VoiceProfile]:
+    def _profiles(self, project: Project, shot: Shot) -> list[VoiceProfile]:
         registry = VoiceProfileRegistry(project)
         ordered: list[VoiceProfile] = []
         for turn in _dialogue_turns(project, shot):
-            profile = registry.current(turn.character_id) or registry.ensure_synthetic(turn.character_id)
+            profile = registry.current(turn.character_id)
+            if profile is None:
+                prompt_path = Path(os.environ.get("DIONY_COSYVOICE_PROMPT_AUDIO", ""))
+                measured_embedding: list[float] | None = None
+                measured_model: str | None = None
+                reference_embedding = getattr(self.embedder, "reference_embedding", None)
+                rendered_enrollment = getattr(self.synthesizer, "enroll_synthetic", None)
+                if (
+                    not callable(rendered_enrollment)
+                    and prompt_path.is_file()
+                    and callable(reference_embedding)
+                ):
+                    measured_model = os.environ.get(
+                        "DIONY_SPEAKER_EMBEDDING_MODEL",
+                        "cosyvoice-campplus-v1",
+                    ).strip()
+                    measured_embedding = list(reference_embedding(prompt_path, measured_model))
+                profile = registry.ensure_synthetic(
+                    turn.character_id,
+                    speaker_embedding=measured_embedding,
+                    speaker_embedding_model=measured_model,
+                )
             if profile.id not in {item.id for item in ordered}:
                 ordered.append(profile)
         return ordered
+
+    def _enroll_synthetic_profiles(
+        self,
+        project: Project,
+        script: PerformanceScript,
+        profiles: list[VoiceProfile],
+    ) -> list[VoiceProfile]:
+        enroll = getattr(self.synthesizer, "enroll_synthetic", None)
+        if not callable(enroll):
+            return profiles
+        registry = VoiceProfileRegistry(project)
+        enrolled_profiles: list[VoiceProfile] = []
+        marker = ":synthetic-enrollment-v1"
+        for profile in profiles:
+            if profile.source != VoiceProfileSource.SYNTHETIC or profile.speaker_embedding_model.endswith(marker):
+                enrolled_profiles.append(profile)
+                continue
+            line = next(
+                (item for item in script.lines if item.voice_profile_id == profile.id),
+                None,
+            )
+            if line is None:
+                raise VoicePipelineError(f"synthetic voice {profile.id} has no enrollment line")
+            output = (
+                self.vault
+                / "projects"
+                / project.id
+                / "voice"
+                / "profiles"
+                / profile.id
+                / "synthetic-enrollment.wav"
+            )
+            output.parent.mkdir(parents=True, exist_ok=True)
+            embedding = [float(value) for value in enroll(line, profile, output)]
+            if not output.is_file() or output.stat().st_size <= 44:
+                raise VoicePipelineError("synthetic voice enrollment returned no audio evidence")
+            model = os.environ.get(
+                "DIONY_SPEAKER_EMBEDDING_MODEL",
+                "cosyvoice-campplus-v1",
+            ).strip()
+            enrolled_profiles.append(
+                registry.enroll_synthetic_render(
+                    profile,
+                    speaker_embedding=embedding,
+                    speaker_embedding_model=f"{model}{marker}",
+                )
+            )
+        return enrolled_profiles
 
     @staticmethod
     def _cache_key(script: PerformanceScript, profiles: list[VoiceProfile]) -> str:
@@ -918,6 +1049,8 @@ class VoicePerformancePipeline:
         if not turns:
             raise VoicePipelineError(f"{shot.id} has no dialogue")
         profiles = self._profiles(project, shot)
+        script = optimize_voice_script(project, shot, profiles)
+        profiles = self._enroll_synthetic_profiles(project, script, profiles)
         script = optimize_voice_script(project, shot, profiles)
         cache_key = self._cache_key(script, profiles)
         if self._cached_package_valid(project, take, cache_key):

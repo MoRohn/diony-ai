@@ -66,7 +66,7 @@ Laptop pytest and unsigned fabric stay **dry-run** (`DIONY_DRY_RUN=1`). Netplan 
 | Wrong lease SKU | RTX / H100 / H200 / single GB10 | START HERE: Dual-Spark is a 2-node GB10 pair; B300 is one B300; B200 is one B200 |
 | B200 vs B300 site | Picked the other Blackwell GPU | Fail Site. Match the GPU you Deployed |
 | B200 Instant Cluster as Dual-Spark | Recorded a B200 cluster as Dual-Spark | Fail. Dual-Spark is GB10 |
-| Runpod Deploy at 30 GB / Volume disk 50 GB / Network Volume 10 GB | Left Storage defaults | Container disk ≥800 GB. Dual-Spark Network Volume ≥1000 GB, or B200/B300 Volume disk ≥1000 GB at `/workspace`. Stop wipes `/models`. Terminate wipes Volume disk |
+| Runpod Deploy at 30 GB / Volume disk 50 GB / Network Volume 10 GB | Left Storage defaults | Container disk ≥800 GB. Dual-Spark Network Volume ≥1000 GB, or B200/B300 Volume disk ≥2000 GB at `/workspace`. On B200/B300 `/models` resolves into that persistent volume; Stop clears only the bounded hot tier. Terminate deletes Volume disk |
 | Runpod every GPU Out of capacity after Network Volume | Volume is in a data center with no GPU right now | START HERE §3: B200/B300 skip Network Volume and use Volume disk. Dual-Spark still needs a shared Network Volume in that DC. Do not substitute RTX |
 | Pasted `ssh root@IP -p PORT -i KEY` | Full Runpod TCP line | Paste it into **Runpod quick connect**. Studio separates the connection values. Never paste it into one manual field |
 | ssh.runpod.io as Host | Used the proxy SSH line | Host is the IP before `-p` on **SSH over exposed TCP** |

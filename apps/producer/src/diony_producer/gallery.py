@@ -14,7 +14,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from diony_contracts.enums import ArtifactKind, GalleryCompositionStatus
+from diony_contracts.enums import (
+    ArtifactKind,
+    GalleryCompositionStatus,
+    ProductionStopDisposition,
+)
 from diony_contracts.models import Asset, Project
 from diony_contracts.stitch import program_master_rel, stitch_events
 from diony_contracts.wan_prompt import prompt_receipt_sha256
@@ -316,17 +320,47 @@ def _program_lineage_ok(project: Project) -> bool:
         return False
 
 
+def _retained_stop_lineage_ok(project: Project) -> bool:
+    """A Keep result is Gallery-safe as clearly labeled incomplete 720p media."""
+    receipt = project.production_stop
+    timeline = project.timeline
+    if (
+        receipt is None
+        or receipt.disposition != ProductionStopDisposition.KEEP
+        or not receipt.completed_take_ids
+        or not receipt.result_path
+        or receipt.result_error
+        or receipt.result_width != 1280
+        or receipt.result_height != 720
+        or timeline is None
+        or timeline.gallery_removed_at is not None
+        or timeline.preview_path != receipt.result_path
+    ):
+        return False
+    try:
+        result = abs_path(receipt.result_path)
+        return (
+            result.is_file()
+            and result.stat().st_size > 32
+            and _sha256_file(result) == receipt.result_sha256
+        )
+    except (OSError, ValueError):
+        return False
+
+
 def _program_card(project: Project, *, current: bool) -> dict | None:
     """Only a real program file. Stub title cards are not clips."""
     if project.timeline and project.timeline.gallery_removed_at is not None:
         return None
-    if not _program_lineage_ok(project):
+    final_lineage = _program_lineage_ok(project)
+    retained_stop = _retained_stop_lineage_ok(project)
+    if not final_lineage and not retained_stop:
         return None
     rel = _preview_rel(project)
     playable = _media_ok(rel)
     if not playable:
         return None
-    finished = "master_1080" in (rel or "")
+    finished = final_lineage and "master_1080" in (rel or "")
     if finished and playable:
         plate = "1080 program"
     elif playable:
@@ -345,7 +379,11 @@ def _program_card(project: Project, *, current: bool) -> dict | None:
     production_kind = project.brief.production_kind.value if project.brief else "program"
     sample_seconds = project.brief.sample_seconds if project.brief else None
     item_id = f"program-{project.id}"
-    cache_key = project.timeline.program_sha256[:16]
+    cache_key = (
+        project.timeline.program_sha256[:16]
+        if final_lineage
+        else project.production_stop.result_sha256[:16]
+    )
     master_url = f"/api/projects/{project.id}/program/file"
     file_url = f"/api/projects/{project.id}/program/preview?v={cache_key}"
     return {
@@ -364,7 +402,11 @@ def _program_card(project: Project, *, current: bool) -> dict | None:
         "file_url": file_url,
         "playable": playable,
         "finished": finished,
-        "plate": "1080 sample" if production_kind == "sample" else plate,
+        "plate": (
+            "720 incomplete · not final"
+            if retained_stop
+            else "1080 sample" if production_kind == "sample" else plate
+        ),
         "program": True,
         "width": int(media["width"]),
         "height": int(media["height"]),
@@ -429,7 +471,7 @@ def gallery_media_source(current: Project, clip_id: str) -> tuple[Project, str]:
             if (
                 project.timeline
                 and project.timeline.gallery_removed_at is None
-                and _program_lineage_ok(project)
+                and (_program_lineage_ok(project) or _retained_stop_lineage_ok(project))
             ):
                 rel = _preview_rel(project)
                 if _media_ok(rel):
@@ -564,7 +606,7 @@ def gallery_program_preview_path(current: Project, project_id: str) -> Path:
             continue
         if project.timeline and project.timeline.gallery_removed_at is not None:
             break
-        if not _program_lineage_ok(project):
+        if not (_program_lineage_ok(project) or _retained_stop_lineage_ok(project)):
             break
         rel = _preview_rel(project)
         if not _media_ok(rel):

@@ -1864,10 +1864,11 @@ function render() {
 
 async function load() {
   const requestedBay = new URLSearchParams(location.search).get("bay");
-  const [p, c, s] = await Promise.all([
+  const [p, c, s, r] = await Promise.all([
     fetch("/api/project"),
     fetch("/api/catalog"),
     fetch("/api/site"),
+    fetch("/api/run", { cache: "no-store" }).catch(() => null),
   ]);
   project = await p.json();
   const cat = await c.json();
@@ -1877,12 +1878,17 @@ async function load() {
   }
   cameraLive = Boolean(cat.live);
   site = (await s.json()) || cat.site || null;
+  run = r?.ok ? await r.json() : null;
   written = Boolean(project.shots?.length && project.takes?.length && project.id !== "ep-blank");
   if (project.brief && typeof project.brief.target_minutes === "number" && !written) {
     targetMinutes = project.brief.target_minutes;
   }
   render();
-  showBay(requestedBay === "gallery" ? "gallery" : "idea");
+  const requested = ["production", "gallery"].includes(requestedBay) ? requestedBay : "";
+  const productionActive = Boolean(
+    run?.rolling || run?.can_stop || run?.farm?.busy || run?.finish?.busy || run?.mix?.busy
+  );
+  showBay(requested || (productionActive ? "production" : "idea"));
 }
 
 function pollFinish() {
@@ -2105,23 +2111,41 @@ function stopRunWatch() {
   bench = [];
 }
 
-async function refreshStudio() {
+function refreshProductionPage() {
   const btn = document.getElementById("run-refresh");
   const refreshLabel = btn ? btn.querySelector("[data-run-refresh-label]") : null;
-  const mast = document.getElementById("start-over");
   if (btn) {
     btn.disabled = true;
     btn.setAttribute("aria-busy", "true");
   }
   if (refreshLabel) refreshLabel.textContent = "Refreshing…";
+  stopRunWatch();
+  window.location.replace("/?bay=production&r=" + Date.now());
+}
+
+async function startOverStudio() {
+  const mast = document.getElementById("start-over");
+  if (run?.can_stop) {
+    openProductionStop();
+    return;
+  }
   if (mast) mast.disabled = true;
   stopRunWatch();
   try {
-    await fetch("/api/studio/new", { method: "POST", cache: "no-store" });
+    const res = await fetch("/api/studio/new", { method: "POST", cache: "no-store" });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      if (errEl) {
+        errEl.textContent = body.detail || "Start over cannot interrupt an active production. Use STOP.";
+      }
+      return;
+    }
+    window.location.replace("/?r=" + Date.now());
   } catch {
-    /* reload anyway */
+    if (errEl) errEl.textContent = "Start over could not reach Producer. Nothing was changed.";
+  } finally {
+    if (mast) mast.disabled = false;
   }
-  window.location.replace("/?r=" + Date.now());
 }
 
 function openProductionStop() {
@@ -2177,8 +2201,8 @@ productionStopDialog?.addEventListener("click", (event) => {
   if (choice) submitProductionStop(choice.dataset.stopDisposition);
 });
 
-document.getElementById("run-refresh")?.addEventListener("click", () => refreshStudio());
-document.getElementById("start-over")?.addEventListener("click", () => refreshStudio());
+document.getElementById("run-refresh")?.addEventListener("click", refreshProductionPage);
+document.getElementById("start-over")?.addEventListener("click", startOverStudio);
 
 document.getElementById("sample-length")?.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-sample-seconds]");

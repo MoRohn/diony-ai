@@ -98,7 +98,7 @@ def test_runpod_plan_is_the_diony_site_contract() -> None:
     assert b300["gpu_type_id"] == "NVIDIA B300 SXM6 AC"
     assert b300["gpu_count"] == 1
     assert b300["container_disk_gb"] == 800
-    assert b300["volume_gb"] == 1000
+    assert b300["volume_gb"] == 2000
     assert b300["volume_mount_path"] == "/workspace"
     assert b300["ports"] == ["22/tcp"]
     assert b300["profile"] == "b300-v1"
@@ -107,6 +107,7 @@ def test_runpod_plan_is_the_diony_site_contract() -> None:
     assert b200["gpu_type_id"] == "NVIDIA B200"
     assert b200["profile"] == "b200-v1"
     assert b200["container_disk_gb"] == 800
+    assert b200["volume_gb"] == 2000
     assert b200["interruptible"] is False
 
 
@@ -135,7 +136,7 @@ def test_runpod_provisioning_is_resumable_and_never_returns_secrets() -> None:
     deploying = service.advance({"action": "deploy"})
     assert deploying["status"] == "working"
     assert deploying["resource_id"] == "pod-diony-1"
-    assert fake.created[0]["volume_gb"] == 1000
+    assert fake.created[0]["volume_gb"] == 2000
 
     waiting = service.refresh()
     assert waiting["status"] == "working"
@@ -259,6 +260,9 @@ def test_compute_ui_has_grouped_choices_confirmation_and_agent_progress() -> Non
     assert 'aria-live="polite"' in html
     assert "function openComputeConfirmation" in js
     assert "function paintProvisioning" in js
+    assert "const standaloneError = normalizedError && normalizedError !== normalizedDetail" in js
+    assert "function setProvisionError" in js
+    assert "provisionError.hidden = !detail" in js
     assert "/api/provision/start" in js
     assert "/api/provision/adopt" in js
     assert ".compute-group" in css

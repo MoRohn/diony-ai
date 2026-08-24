@@ -57,6 +57,33 @@ def test_camera_disk_floor_blocks_before_overlay_exhaustion(tmp_path, monkeypatc
     assert "14 GB free" in message
 
 
+def test_camera_disk_floor_uses_configured_volume_quota_when_fuse_df_is_global(
+    tmp_path, monkeypatch
+) -> None:
+    from collections import namedtuple
+
+    from diony_producer import farm
+
+    Usage = namedtuple("Usage", "total used free")
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("DIONY_VOLUME_CAPACITY_GB", "1200")
+    monkeypatch.setenv("DIONY_VOLUME_MIN_FREE_GB", "100")
+    monkeypatch.setattr(farm, "_volume_used_bytes", lambda _path: 1110 * 1024**3)
+    monkeypatch.setattr(
+        farm.shutil,
+        "disk_usage",
+        lambda path: Usage(600 * 1024**3, 2 * 1024**3, 598 * 1024**3)
+        if str(path) == "/"
+        else Usage(658_000 * 1024**3, 320_000 * 1024**3, 338_000 * 1024**3),
+    )
+
+    message = farm.camera_disk_block()
+
+    assert "Vault has 90 GB free" in message
+    assert "100 GB safety floor" in message
+
+
 def test_camera_disk_hold_is_infrastructure_not_take_qc(monkeypatch) -> None:
     from diony_producer import farm
 
@@ -154,6 +181,22 @@ def test_generate_process_scan_ignores_shell_commands_that_only_quote_the_camera
 
     assert [job["pid"] for job in jobs] == [202]
     assert jobs[0]["take_id"] == "sh-010-t1"
+
+
+def test_s2v_expected_passes_match_the_padded_five_second_audio_contract(tmp_path) -> None:
+    import wave
+
+    from diony_producer.farm import _s2v_expected_passes
+
+    audio = tmp_path / "clean-dialogue.wav"
+    with wave.open(str(audio), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(48_000)
+        output.writeframes(b"\x00\x00" * (48_000 * 5))
+
+    assert _s2v_expected_passes("s2v-14B", str(audio), 80) == 2
+    assert _s2v_expected_passes("t2v-A14B", str(audio), 80) == 1
 
 
 def _live_env(tmp_path, monkeypatch, script: str) -> None:
@@ -302,7 +345,7 @@ def test_farm_busy_before_clip_lands(tmp_path, monkeypatch) -> None:
         time.sleep(0.2)
 
 
-def test_studio_new_aborts_a_slow_farm(tmp_path, monkeypatch) -> None:
+def test_studio_new_cannot_bypass_explicit_stop_for_a_slow_farm(tmp_path, monkeypatch) -> None:
     _live_env(tmp_path, monkeypatch, SLOW_GENERATE)
     client = TestClient(app)
     client.post("/api/reset")
@@ -318,10 +361,11 @@ def test_studio_new_aborts_a_slow_farm(tmp_path, monkeypatch) -> None:
     assert rolled.status_code == 200
     assert client.get("/api/farm").json()["busy"] is True
     fresh = client.post("/api/studio/new")
-    assert fresh.status_code == 200
-    body = fresh.json()
-    assert body["shots"] == []
-    assert body["bible"]["title"] == "Untitled"
+    assert fresh.status_code == 409
+    assert "STOP" in fresh.json()["detail"]
+    assert client.get("/api/project").json()["shots"]
+    stopped = client.post("/api/production/stop", json={"disposition": "delete"})
+    assert stopped.status_code == 200
     deadline = time.time() + 8
     while time.time() < deadline:
         if not client.get("/api/farm").json()["busy"]:
@@ -330,7 +374,7 @@ def test_studio_new_aborts_a_slow_farm(tmp_path, monkeypatch) -> None:
     else:
         raise AssertionError("Refresh left the farm busy")
     assert client.get("/api/farm").json()["queued"] == 0
-    assert client.get("/api/project").json()["id"] != "ep-pilot-night-press"
+    assert client.get("/api/project").json()["production_stop"] is not None
 
 
 def test_farm_prove_fail_stamps_every_take_once(tmp_path, monkeypatch) -> None:

@@ -126,12 +126,25 @@ def _write_report(path: str, report: dict) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate Diony Wan host Python")
     parser.add_argument("--write", default="", help="Persist a versioned JSON readiness report")
+    parser.add_argument(
+        "--require-capability",
+        action="append",
+        choices=sorted(OPTIONAL_ENGINE_IMPORTS),
+        default=[],
+        help="Fail readiness when an installed optional model engine cannot import.",
+    )
     args = parser.parse_args(argv)
     report = probe_runtime()
+    required = list(dict.fromkeys(args.require_capability))
+    report["required_capabilities"] = required
+    report["required_capabilities_ready"] = all(
+        bool(report.get("capabilities", {}).get(name, {}).get("available"))
+        for name in required
+    )
     if args.write:
         _write_report(args.write, report)
     print(json.dumps(report, separators=(",", ":")))
-    return 0 if report["ok"] else 1
+    return 0 if report["ok"] and report["required_capabilities_ready"] else 1
 
 
 if __name__ == "__main__":

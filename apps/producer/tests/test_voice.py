@@ -38,6 +38,20 @@ def test_registry_creates_one_project_scoped_locked_synthetic_profile() -> None:
     assert project.voice_profiles == [first]
 
 
+def test_registry_can_lock_a_measured_local_synthetic_prompt_embedding() -> None:
+    project, _, _ = _spoken_take()
+    measured = [0.1, 0.2, 0.3, 0.4]
+
+    profile = VoiceProfileRegistry(project).ensure_synthetic(
+        "char-mara",
+        speaker_embedding=measured,
+        speaker_embedding_model="cosyvoice-campplus-v1",
+    )
+
+    assert list(profile.speaker_embedding) == measured
+    assert profile.speaker_embedding_model == "cosyvoice-campplus-v1"
+
+
 def test_same_character_lock_is_identical_across_episode_projects() -> None:
     first_project, _, _ = _spoken_take()
     second_project, _, _ = _spoken_take()
@@ -104,6 +118,58 @@ def test_voice_pipeline_locks_audio_before_s2v_and_reuses_content_cache(tmp_path
         first.final_mix_asset_id,
         first.performance_metadata_asset_id,
     ))
+
+
+def test_local_synthetic_voice_enrolls_from_a_render_before_identity_qc(
+    tmp_path, monkeypatch
+) -> None:
+    class RenderedEnrollmentBackend(DeterministicVoiceTestBackend):
+        name = "measured-local-voice"
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.enrollment_calls = 0
+            self.enrolled_embedding = []
+
+        def reference_embedding(self, audio, model):
+            del audio, model
+            return [1.0, 0.0]
+
+        def enroll_synthetic(self, line, profile, output):
+            self.enrollment_calls += 1
+            self.synthesize(line, profile, output, seed=profile.seed, reference_paths=[])
+            self.enrolled_embedding = [0.0] * len(profile.speaker_embedding)
+            self.enrolled_embedding[1] = 1.0
+            return self.enrolled_embedding
+
+        def speaker_embedding(self, audio, profile):
+            del audio, profile
+            return self.enrolled_embedding
+
+    prompt = tmp_path / "conditioning-prompt.wav"
+    prompt.write_bytes(b"RIFF" + b"0" * 128)
+    monkeypatch.setenv("DIONY_COSYVOICE_PROMPT_AUDIO", str(prompt))
+    monkeypatch.setenv("DIONY_SPEAKER_EMBEDDING_MODEL", "cosyvoice-campplus-v1")
+    project, _, take = _spoken_take()
+    backend = RenderedEnrollmentBackend()
+    pipeline = VoicePerformancePipeline(
+        vault=tmp_path,
+        synthesizer=backend,
+        embedder=backend,
+        aligner=backend,
+        audio_processor=backend,
+        audiovisual_qc=backend,
+    )
+
+    package = pipeline.prepare_take(project, take)
+
+    profile = project.voice_profiles[0]
+    assert backend.enrollment_calls == 1
+    assert backend.synthesis_calls == 2
+    assert profile.speaker_embedding == tuple(backend.enrolled_embedding)
+    assert profile.speaker_embedding_model == "cosyvoice-campplus-v1:synthetic-enrollment-v1"
+    assert package.qc.speaker_similarity == 1.0
+    assert package.qc.speaker_similarity_min == 0.92
 
 
 def test_audiovisual_qc_promotes_package_only_after_video_evidence(tmp_path) -> None:
@@ -212,7 +278,7 @@ def test_independent_dialogue_lines_synthesize_in_parallel(tmp_path) -> None:
     assert backend.synthesis_calls == 2
 
 
-def test_run_one_locks_voice_before_camera_preflight(monkeypatch) -> None:
+def test_run_one_refreshes_creative_contract_then_locks_voice_before_camera(monkeypatch) -> None:
     from diony_contracts.enums import QCVerdict
     from diony_contracts.models import QCReport
     from diony_producer import farm
@@ -245,6 +311,11 @@ def test_run_one_locks_voice_before_camera_preflight(monkeypatch) -> None:
             voice_ready_ok=True,
         )
 
+    monkeypatch.setattr(
+        farm,
+        "refresh_reference_shot",
+        lambda *_args: order.append("contract"),
+    )
     monkeypatch.setattr(farm, "prepare_voice_for_take", prepare)
     monkeypatch.setattr(farm, "camera_task_for", preflight)
     monkeypatch.setattr(farm, "generate_clip", lambda *_args, **_kwargs: None)
@@ -259,7 +330,7 @@ def test_run_one_locks_voice_before_camera_preflight(monkeypatch) -> None:
 
     farm.run_one(project, take)
 
-    assert order[:2] == ["voice", "camera"]
+    assert order[:3] == ["contract", "voice", "camera"]
 
 
 def test_camera_qc_requires_verified_voice_performance(tmp_path, monkeypatch) -> None:

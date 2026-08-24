@@ -1,5 +1,6 @@
 from diony_contracts.enums import (
     AssetKind,
+    CameraMove,
     ComputePath,
     ContinuityMode,
     CustomerKind,
@@ -492,6 +493,79 @@ def test_attached_character_sample_locks_every_shot_and_boundary() -> None:
     assert "previous final frame" in project.shots[1].prompt.casefold()
     assert all("title card" in shot.negative_prompt.casefold() for shot in project.shots)
     assert all("cartoon" not in shot.negative_prompt.casefold() for shot in project.shots)
+
+
+def test_sample_respects_explicit_camera_and_lighting_direction() -> None:
+    still = Asset(
+        id="ast-heroine",
+        kind=AssetKind.IMAGE,
+        filename="heroine.png",
+        mime="image/png",
+        bytes=12,
+        path="assets/ast-heroine/heroine.png",
+    )
+    project = expand_idea(
+        Brief(
+            idea=(
+                "Exact attached heroine in the moonlit grove. Continuous 50mm close-up. "
+                "She speaks while teal filaments pulse. "
+                "Slow dolly-in; T2.8; cool key; warm rim. Narration: Every frame begins with light."
+            ),
+            customer_kind=CustomerKind.FEATURE,
+            target_minutes=5 / 60,
+            production_kind="sample",
+            sample_seconds=5,
+            attachment_ids=[still.id],
+        ),
+        assets=[still],
+    )
+
+    shot = project.shots[0]
+    assert shot.focal_mm == 50
+    assert shot.t_stop == 2.8
+    assert shot.camera_move == CameraMove.DOLLY_IN
+    assert shot.lighting_ratio == "cool key, warm rim"
+    assert shot.prompt_plan.camera == "close-up, 50mm lens at T2.8, slow steady push-in"
+    assert "wide shot" not in shot.prompt
+    assert "static camera" not in shot.prompt
+
+
+def test_dispatch_refresh_upgrades_a_prefixed_sample_camera_contract() -> None:
+    still = Asset(
+        id="ast-heroine",
+        kind=AssetKind.IMAGE,
+        filename="heroine.png",
+        mime="image/png",
+        bytes=12,
+        path="assets/ast-heroine/heroine.png",
+    )
+    project = expand_idea(
+        Brief(
+            idea=(
+                "Exact attached heroine. Continuous 50mm close-up. Slow dolly-in; "
+                "T2.8; cool key; warm rim."
+            ),
+            customer_kind=CustomerKind.FEATURE,
+            target_minutes=5 / 60,
+            production_kind="sample",
+            sample_seconds=5,
+            attachment_ids=[still.id],
+        ),
+        assets=[still],
+    )
+    shot = project.shots[0]
+    shot.focal_mm = 24
+    shot.t_stop = 4
+    shot.camera_move = CameraMove.STATIC
+    shot.lighting_ratio = "open sky or wide practical, even"
+
+    refresh_reference_shot(project, shot)
+
+    assert shot.focal_mm == 50
+    assert shot.t_stop == 2.8
+    assert shot.camera_move == CameraMove.DOLLY_IN
+    assert shot.lighting_ratio == "cool key, warm rim"
+    assert shot.prompt_plan.camera == "close-up, 50mm lens at T2.8, slow steady push-in"
 
 
 def test_attached_team_of_characters_is_a_binding_reference() -> None:

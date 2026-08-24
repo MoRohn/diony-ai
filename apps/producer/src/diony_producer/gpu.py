@@ -41,10 +41,13 @@ GPU_STAMP_FILES = (
     "apps/producer/src/diony_producer/finish.py",
     "apps/producer/src/diony_producer/mix.py",
     "apps/producer/src/diony_producer/voice.py",
+    "apps/producer/src/diony_producer/cosyvoice_backend.py",
     "apps/producer/src/diony_producer/cosyvoice_worker.py",
     "apps/finish/src/diony_finish/rrdb.py",
     "apps/finish/src/diony_finish/pipeline.py",
     "apps/wan/src/diony_wan/runner.py",
+    "apps/wan/src/diony_wan/runtime.py",
+    "apps/wan/src/diony_wan/storage.py",
     "packages/contracts/src/diony_contracts/studio.py",
 )
 
@@ -440,6 +443,39 @@ def _code_stamp() -> str:
     return digest.hexdigest() if found else ""
 
 
+def _remote_code_matches(conn: dict, root: Path) -> bool:
+    """Prove every runtime-critical source file matches before trusting a sync stamp."""
+    manifest: list[str] = []
+    for rel in GPU_STAMP_FILES:
+        source = root / rel
+        if not source.is_file():
+            return False
+        try:
+            digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        except OSError:
+            return False
+        manifest.append(f"{digest}  /opt/diony-ai/{rel}")
+    if not manifest:
+        return False
+    command = [
+        "ssh",
+        *_ssh_args(conn["ssh_port"]),
+        f"{conn['ssh_user']}@{conn['host']}",
+        "sha256sum",
+        "-c",
+        "-",
+    ]
+    proc = subprocess.run(
+        command,
+        input="\n".join(manifest) + "\n",
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    return proc.returncode == 0
+
+
 def _remote_producer_busy(conn: dict) -> bool:
     """Fail closed when remote FARM/Finish state cannot prove an idle boundary."""
     script = r'''
@@ -533,8 +569,9 @@ def _sync_gpu_apps(conn: dict) -> None:
     ]
     marked = subprocess.run(seen, capture_output=True, text=True, timeout=12, check=False)
     if marked.returncode == 0 and (marked.stdout or "").strip() == stamp:
-        _synced_stamp = stamp
-        return
+        if _remote_code_matches(conn, root):
+            _synced_stamp = stamp
+            return
     if _remote_producer_busy(conn):
         return
     remote = [
@@ -573,6 +610,12 @@ def _sync_gpu_apps(conn: dict) -> None:
         if proc.returncode != 0:
             _set_error((proc.stderr or proc.stdout or "rsync failed")[:800])
             return
+    if not _remote_code_matches(conn, root):
+        _set_error(
+            "GPU sync integrity check failed: one or more runtime source files "
+            "are missing or do not match their local SHA-256 digest."
+        )
+        return
     mark = [
         "ssh",
         *_ssh_args(conn["ssh_port"]),
@@ -585,7 +628,7 @@ def _sync_gpu_apps(conn: dict) -> None:
         "mkdir -p /diony/vault/.cluster\n"
         f"printf '%s\\n' {shlex.quote(stamp)} > /diony/vault/.cluster/desk.stamp\n"
     )
-    subprocess.run(
+    marked = subprocess.run(
         mark,
         input=mark_script,
         capture_output=True,
@@ -593,6 +636,9 @@ def _sync_gpu_apps(conn: dict) -> None:
         timeout=15,
         check=False,
     )
+    if marked.returncode != 0:
+        _set_error((marked.stderr or marked.stdout or "GPU sync stamp write failed")[:800])
+        return
     _synced_stamp = stamp
     _restart_gpu_producer_bind(conn)
 
@@ -629,6 +675,11 @@ fi
 export DIONY_VAULT=/diony/vault
 export DIONY_BIND=0.0.0.0
 export DIONY_WAN_REPO=/opt/wan22
+export DIONY_VOLUME_CAPACITY_GB="${DIONY_VOLUME_CAPACITY_GB:-1200}"
+export DIONY_VOLUME_MIN_FREE_GB="${DIONY_VOLUME_MIN_FREE_GB:-100}"
+export DIONY_MODEL_HOT_CACHE="${DIONY_MODEL_HOT_CACHE:-auto}"
+export DIONY_MODEL_HOT_CACHE_GB="${DIONY_MODEL_HOT_CACHE_GB:-320}"
+export DIONY_MODEL_HOT_CACHE_MIN_FREE_GB="${DIONY_MODEL_HOT_CACHE_MIN_FREE_GB:-64}"
 unset DIONY_DRY_RUN
 unset DIONY_WAN_RESIDENT DIONY_WAN_RESIDENT_RECEIPT DIONY_WAN_KERNEL_MODE DIONY_WAN_RESIDENT_CANARY_PERCENT DIONY_WAN_ATTENTION_BACKEND
 REGIONAL_RECEIPT=/diony/vault/qualification/wan-regional-compile-validation.json
@@ -644,15 +695,23 @@ elif [ -f "$EAGER_RECEIPT" ]; then
   export DIONY_WAN_KERNEL_MODE=eager
   export DIONY_WAN_RESIDENT_CANARY_PERCENT=10
 fi
-HOST_PY=""
+SYSTEM_PY=""
 for CANDIDATE in "${DIONY_PYTHON:-}" /usr/bin/python3 /usr/local/bin/python "$(command -v python3 2>/dev/null || true)"; do
   [ -n "$CANDIDATE" ] || continue
   if "$CANDIDATE" -c "import torch" >/dev/null 2>&1; then
-    HOST_PY="$CANDIDATE"
+    SYSTEM_PY="$CANDIDATE"
     break
   fi
 done
-[ -n "$HOST_PY" ] || { echo GPU_HOST_PYTHON_WITH_TORCH_MISSING; exit 13; }
+[ -n "$SYSTEM_PY" ] || { echo GPU_HOST_PYTHON_WITH_TORCH_MISSING; exit 13; }
+WAN_PY=/diony/vault/runtime/wan/venv/bin/python
+WAN_VENV="${WAN_PY%/bin/python}"
+if [ ! -x "$WAN_VENV/bin/python" ]; then
+  mkdir -p "$(dirname "$WAN_VENV")"
+  "$SYSTEM_PY" -m venv --system-site-packages "$WAN_VENV"
+fi
+HOST_PY="$WAN_VENV/bin/python"
+"$HOST_PY" -c "import torch" >/dev/null 2>&1 || { echo GPU_HOST_PYTHON_WITH_TORCH_MISSING; exit 13; }
 export DIONY_PYTHON="$HOST_PY"
 if [ -x /diony/vault/runtime/cosyvoice/venv/bin/python ] && \
    [ -d /diony/vault/runtime/cosyvoice/CosyVoice ] && \
@@ -661,6 +720,10 @@ if [ -x /diony/vault/runtime/cosyvoice/venv/bin/python ] && \
   export DIONY_COSYVOICE_ROOT=/diony/vault/runtime/cosyvoice/CosyVoice
   export DIONY_COSYVOICE_MODEL=/diony/vault/models/audio/CosyVoice2-0.5B
   export DIONY_COSYVOICE_PROMPT_AUDIO=/opt/wan22/examples/zero_shot_prompt.wav
+  if [ -f /opt/diony-ai/apps/producer/src/diony_producer/cosyvoice_backend.py ]; then
+    export DIONY_VOICE_BACKEND_COMMAND="/opt/diony-ai/.venv/bin/python /opt/diony-ai/apps/producer/src/diony_producer/cosyvoice_backend.py"
+    export DIONY_SPEAKER_EMBEDDING_MODEL=cosyvoice-campplus-v1
+  fi
 fi
 if [ -x /diony/vault/runtime/voice/bin/diony-voice-backend ]; then
   export DIONY_VOICE_BACKEND_COMMAND=/diony/vault/runtime/voice/bin/diony-voice-backend
@@ -681,7 +744,9 @@ if [ -x "$VPY" ]; then
 fi
 _diony_wan_host_ready() {
   [ -f "$RUNTIME_PROBE" ] && [ -f "$RUNTIME_OVERLAY" ] && \
-    PYTHONPATH=/opt/wan22 "$HOST_PY" "$RUNTIME_PROBE" --write "$RUNTIME_REPORT" >/dev/null 2>&1
+    PYTHONPATH=/opt/wan22 "$HOST_PY" "$RUNTIME_PROBE" \
+      --require-capability s2v --require-capability animate \
+      --write "$RUNTIME_REPORT" >/dev/null 2>&1
 }
 if ! _diony_wan_host_ready; then
   [ -f "$RUNTIME_PROBE" ] || { echo "GPU_RUNTIME_PROBE_MISSING"; exit 13; }
@@ -698,6 +763,24 @@ if ! _diony_wan_host_ready; then
       --upgrade-strategy only-if-needed -r /tmp/diony-wan-req.txt -r "$RUNTIME_OVERLAY"
 fi
 if ! _diony_wan_host_ready; then
+  if [ -f /opt/wan22/requirements_s2v.txt ]; then
+    PIP_BREAK_SYSTEM_PACKAGES=1 PIP_ROOT_USER_ACTION=ignore \
+      "$HOST_PY" -m pip install --disable-pip-version-check \
+        --upgrade-strategy only-if-needed -r /opt/wan22/requirements_s2v.txt
+  fi
+  if [ -f /opt/wan22/requirements_animate.txt ]; then
+    grep -viE '^[[:space:]]*-e[[:space:]]+git\+https://github.com/facebookresearch/sam2' \
+      /opt/wan22/requirements_animate.txt > /tmp/diony-wan-animate-req.txt || true
+    PIP_BREAK_SYSTEM_PACKAGES=1 PIP_ROOT_USER_ACTION=ignore \
+      "$HOST_PY" -m pip install --disable-pip-version-check \
+        --upgrade-strategy only-if-needed ninja -r /tmp/diony-wan-animate-req.txt
+    PIP_BREAK_SYSTEM_PACKAGES=1 PIP_ROOT_USER_ACTION=ignore \
+      "$HOST_PY" -m pip install --disable-pip-version-check \
+        --no-build-isolation --upgrade-strategy only-if-needed \
+        -e 'git+https://github.com/facebookresearch/sam2.git@0e78a118995e66bb27d78518c4bd9a3e95b4e266#egg=SAM-2'
+  fi
+fi
+if ! _diony_wan_host_ready; then
   echo GPU_RUNTIME_MISSING
   exit 13
 fi
@@ -708,20 +791,76 @@ if [ -x "$VPY" ] && [ -n "${DIONY_PYTHON:-}" ] && ! "$VPY" -c "import torch" >/d
     printf '%s\n' "$ROOT" > "$SP/diony-system-torch.pth"
   fi
 fi
-if curl -sf --max-time 2 http://127.0.0.1:8788/api/site >/dev/null; then
+_diony_8788_pid() {
+  local pid=""
+  if command -v fuser >/dev/null 2>&1; then
+    pid=$(fuser 8788/tcp 2>/dev/null | awk '{print $1}')
+  elif command -v ss >/dev/null 2>&1; then
+    pid=$(ss -ltnp 'sport = :8788' 2>/dev/null | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -1)
+  fi
+  case "$pid" in
+    *[!0-9]*|'') return 1 ;;
+  esac
+  printf '%s\n' "$pid"
+}
+_diony_existing_producer_ready() {
+  curl -sf --max-time 2 http://127.0.0.1:8788/api/site >/dev/null || return 1
+  PRODUCER_PID=$(_diony_8788_pid) || return 1
+  [ -r "/proc/$PRODUCER_PID/environ" ] || return 1
+  local active_env
+  active_env=$(tr '\000' '\n' < "/proc/$PRODUCER_PID/environ")
+  printf '%s\n' "$active_env" | grep -Fqx "DIONY_PYTHON=$DIONY_PYTHON" || return 1
+  printf '%s\n' "$active_env" | grep -Fqx "DIONY_VOLUME_CAPACITY_GB=$DIONY_VOLUME_CAPACITY_GB" || return 1
+  printf '%s\n' "$active_env" | grep -Fqx "DIONY_VOLUME_MIN_FREE_GB=$DIONY_VOLUME_MIN_FREE_GB" || return 1
+  printf '%s\n' "$active_env" | grep -Fqx "DIONY_MODEL_HOT_CACHE=$DIONY_MODEL_HOT_CACHE" || return 1
+  printf '%s\n' "$active_env" | grep -Fqx "DIONY_MODEL_HOT_CACHE_GB=$DIONY_MODEL_HOT_CACHE_GB" || return 1
+  printf '%s\n' "$active_env" | grep -Fqx "DIONY_MODEL_HOT_CACHE_MIN_FREE_GB=$DIONY_MODEL_HOT_CACHE_MIN_FREE_GB" || return 1
+  if [ -n "${DIONY_COSYVOICE_PYTHON:-}" ]; then
+    printf '%s\n' "$active_env" | grep -Fqx "DIONY_COSYVOICE_PYTHON=$DIONY_COSYVOICE_PYTHON" || return 1
+  fi
+  if [ -n "${DIONY_VOICE_BACKEND_COMMAND:-}" ]; then
+    printf '%s\n' "$active_env" | grep -Fqx "DIONY_VOICE_BACKEND_COMMAND=$DIONY_VOICE_BACKEND_COMMAND" || return 1
+    printf '%s\n' "$active_env" | grep -Fqx "DIONY_SPEAKER_EMBEDDING_MODEL=$DIONY_SPEAKER_EMBEDDING_MODEL" || return 1
+  fi
+}
+if _diony_existing_producer_ready; then
   echo GPU_PRODUCER_OK
   exit 0
 fi
-if command -v fuser >/dev/null 2>&1; then
-  fuser -k 8788/tcp >/dev/null 2>&1 || true
-  sleep 1
+if OLD_PRODUCER_PID=$(_diony_8788_pid); then
+  kill "$OLD_PRODUCER_PID" >/dev/null 2>&1 || true
+  for _diony_stop_wait in 1 2 3 4 5; do
+    kill -0 "$OLD_PRODUCER_PID" >/dev/null 2>&1 || break
+    sleep 1
+  done
+  if kill -0 "$OLD_PRODUCER_PID" >/dev/null 2>&1; then
+    echo GPU_PRODUCER_STOP_FAILED
+    exit 14
+  fi
 fi
 nohup env -u DIONY_DRY_RUN PATH="$PATH" DIONY_VAULT=/diony/vault DIONY_BIND=0.0.0.0 DIONY_WAN_REPO=/opt/wan22 \
-  DIONY_PYTHON="${DIONY_PYTHON:-/usr/bin/python3}" \
+  DIONY_PYTHON="$DIONY_PYTHON" \
+  DIONY_VOLUME_CAPACITY_GB="$DIONY_VOLUME_CAPACITY_GB" \
+  DIONY_VOLUME_MIN_FREE_GB="$DIONY_VOLUME_MIN_FREE_GB" \
+  DIONY_MODEL_HOT_CACHE="$DIONY_MODEL_HOT_CACHE" \
+  DIONY_MODEL_HOT_CACHE_GB="$DIONY_MODEL_HOT_CACHE_GB" \
+  DIONY_MODEL_HOT_CACHE_MIN_FREE_GB="$DIONY_MODEL_HOT_CACHE_MIN_FREE_GB" \
+  DIONY_VOICE_BACKEND_COMMAND="${DIONY_VOICE_BACKEND_COMMAND:-}" \
+  DIONY_SPEAKER_EMBEDDING_MODEL="${DIONY_SPEAKER_EMBEDDING_MODEL:-}" \
+  DIONY_COSYVOICE_PYTHON="${DIONY_COSYVOICE_PYTHON:-}" \
+  DIONY_COSYVOICE_ROOT="${DIONY_COSYVOICE_ROOT:-}" \
+  DIONY_COSYVOICE_MODEL="${DIONY_COSYVOICE_MODEL:-}" \
+  DIONY_COSYVOICE_PROMPT_AUDIO="${DIONY_COSYVOICE_PROMPT_AUDIO:-}" \
   "$PRODUCER_BIN" >/diony/vault/.cluster/producer.log 2>&1 &
-sleep 2
-curl -sf --max-time 4 http://127.0.0.1:8788/api/site >/dev/null
-echo GPU_PRODUCER_OK
+for _diony_start_wait in 1 2 3 4 5 6 7 8 9 10; do
+  sleep 1
+  if _diony_existing_producer_ready; then
+    echo GPU_PRODUCER_OK
+    exit 0
+  fi
+done
+echo GPU_PRODUCER_ENV_MISMATCH
+exit 14
 """
 
 
@@ -734,12 +873,12 @@ def _start_gpu_producer(conn: dict) -> None:
             input=script,
             capture_output=True,
             text=True,
-            timeout=45,
+            timeout=900,
             check=False,
         )
     except subprocess.TimeoutExpired:
         _set_error(
-            f"GPU Producer startup timed out on {conn['host']} after 45 seconds. "
+            f"GPU Producer startup timed out on {conn['host']} after 15 minutes. "
             "The local Producer remains open; check Studio Connect and retry Produce."
         )
         return

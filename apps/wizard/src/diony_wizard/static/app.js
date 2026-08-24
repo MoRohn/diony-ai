@@ -55,12 +55,12 @@ const COMPUTE_META = {
   },
   b300: {
     provider: "Runpod",
-    hardware: "1× NVIDIA B300 · 1 TB persistent volume",
+    hardware: "1× NVIDIA B300 · 2 TB persistent volume",
     handoff: "Diony checks live stock and price before the billing confirmation, then deploys by API.",
   },
   b200: {
     provider: "Runpod",
-    hardware: "1× NVIDIA B200 · 1 TB persistent volume",
+    hardware: "1× NVIDIA B200 · 2 TB persistent volume",
     handoff: "Diony checks live stock and price before the billing confirmation, then deploys by API.",
   },
 };
@@ -1665,6 +1665,13 @@ function paintProvisionBusy(label, detail) {
   }
 }
 
+function setProvisionError(message = "") {
+  if (!provisionError) return;
+  const detail = String(message || "").trim();
+  provisionError.textContent = detail;
+  provisionError.hidden = !detail;
+}
+
 function paintProvisioning(next) {
   provision = next;
   const setupInProgress = next.status === "working" || next.status === "ready";
@@ -1708,7 +1715,10 @@ function paintProvisioning(next) {
     detail += ` Live price: $${Number(next.quote.hourly).toFixed(2)}/hour · ${next.quote.stock || "Unknown"} stock.`;
   }
   setText(document.getElementById("provision-detail"), detail);
-  if (provisionError) provisionError.textContent = next.error || "";
+  const normalizedDetail = String(detail || "").trim();
+  const normalizedError = String(next.error || "").trim();
+  const standaloneError = normalizedError && normalizedError !== normalizedDetail ? normalizedError : "";
+  setProvisionError(standaloneError);
 
   const timeline = document.getElementById("provision-timeline");
   if (timeline) {
@@ -1781,7 +1791,7 @@ function pollProvisioning() {
       paintProvisioning(next);
       if (next.status !== "working") stopProvisionPoll();
     } catch {
-      if (provisionError) provisionError.textContent = "Provider status is temporarily unavailable. Diony will retry.";
+      setProvisionError("Provider status is temporarily unavailable. Diony will retry.");
     }
   };
   provisionTimer = setInterval(tick, 2500);
@@ -1790,7 +1800,7 @@ function pollProvisioning() {
 
 async function startProvisioning(path) {
   stopProvisionPoll();
-  if (provisionError) provisionError.textContent = "";
+  setProvisionError();
   const res = await fetch("/api/provision/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1806,7 +1816,7 @@ async function startProvisioning(path) {
 
 async function startExistingCompute(scope) {
   stopProvisionPoll();
-  if (provisionError) provisionError.textContent = "";
+  setProvisionError();
   const res = await fetch("/api/provision/existing/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1845,14 +1855,14 @@ async function advanceProvisioning() {
       const body = await res.json();
       if (!res.ok) {
         paintProvisioning(provision);
-        if (provisionError) provisionError.textContent = body.detail || "Existing compute retry could not start.";
+        setProvisionError(body.detail || "Existing compute retry could not start.");
         return;
       }
       state = body;
       provision = body.provision || provision;
       paintProvisioning(provision);
     }
-    if (provisionError) provisionError.textContent = "Rechecking the corrected site…";
+    setProvisionError("Rechecking the corrected site…");
     pollExistingValidation();
     return;
   }
@@ -1884,7 +1894,7 @@ async function advanceProvisioning() {
           ? ["Compute allocation in progress", "Waiting for the provider to assign GPU, storage, IP, and SSH."]
           : ["Setup checkpoint in progress", "Diony is validating this checkpoint before continuing."];
   provisionContinue.disabled = true;
-  if (provisionError) provisionError.textContent = "";
+  setProvisionError();
   paintProvisionBusy(busyCopy[0], busyCopy[1]);
   let res;
   let body;
@@ -1897,9 +1907,7 @@ async function advanceProvisioning() {
     body = await res.json();
   } catch {
     paintProvisioning(provision);
-    if (provisionError) {
-      provisionError.textContent = "The setup request could not be reached. Check the connection and retry.";
-    }
+    setProvisionError("The setup request could not be reached. Check the connection and retry.");
     return;
   }
   provisionContinue.disabled = false;
@@ -1911,7 +1919,7 @@ async function advanceProvisioning() {
     } catch {
       /* Keep the current checkpoint visible. */
     }
-    if (provisionError) provisionError.textContent = detail;
+    setProvisionError(detail);
     return;
   }
   paintProvisioning(body);
@@ -1925,12 +1933,12 @@ async function adoptProvisionedSite() {
     "Securing Studio handoff",
     "Recording the verified SSH and vault contract, then starting final site validation."
   );
-  if (provisionError) provisionError.textContent = "Recording the provider connection in Studio…";
+  setProvisionError("Recording the provider connection in Studio…");
   try {
     const res = await fetch("/api/provision/adopt", { method: "POST", cache: "no-store" });
     const body = await res.json();
     if (!res.ok) {
-      if (provisionError) provisionError.textContent = body.detail || "Studio could not adopt this site.";
+      setProvisionError(body.detail || "Studio could not adopt this site.");
       return;
     }
     provision = body.provision || { status: "complete" };
@@ -1979,7 +1987,7 @@ function pollExistingValidation() {
       }
     } catch (error) {
       stopProvisionPoll();
-      if (provisionError) provisionError.textContent = error.message || "Existing compute validation failed.";
+      setProvisionError(error.message || "Existing compute validation failed.");
     } finally {
       existingFinalizeBusy = false;
     }

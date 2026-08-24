@@ -21,9 +21,31 @@ def test_gpu_producer_start_repairs_and_validates_wan_host_python() -> None:
     assert "ensure_optional_engine_lazy_imports" in script
     assert "GPU_HOST_PYTHON_WITH_TORCH_MISSING" in script
     assert "/usr/local/bin/python" in script
+    assert "/diony/vault/runtime/wan/venv/bin/python" in script
+    assert "--system-site-packages" in script
     assert "/opt/diony-ai/.venv/bin/diony-producer" in script
     assert "GPU_RUNTIME_OVERLAY_REPAIR" in script
+    assert "--require-capability s2v --require-capability animate" in script
+    assert "/opt/wan22/requirements_s2v.txt" in script
+    assert "/opt/wan22/requirements_animate.txt" in script
+    assert "diony-wan-animate-req.txt" in script
+    assert "--no-build-isolation" in script
+    assert "SAM-2" in script
+    assert "DIONY_VOLUME_CAPACITY_GB" in script
+    assert "DIONY_VOLUME_MIN_FREE_GB" in script
+    assert "DIONY_MODEL_HOT_CACHE_GB" in script
+    assert "DIONY_MODEL_HOT_CACHE_MIN_FREE_GB" in script
+    assert "/proc/$PRODUCER_PID/environ" in script
+    assert 'grep -Fqx "DIONY_PYTHON=$DIONY_PYTHON"' in script
+    assert script.find("_diony_existing_producer_ready") < script.find("GPU_PRODUCER_OK")
+    assert 'OLD_PRODUCER_PID=$(_diony_8788_pid)' in script
+    assert 'kill "$OLD_PRODUCER_PID"' in script
+    assert 'if _diony_existing_producer_ready; then' in script
+    assert "GPU_PRODUCER_ENV_MISMATCH" in script
     assert "DIONY_COSYVOICE_PYTHON" in script
+    assert "diony_producer/cosyvoice_backend.py" in script
+    assert "DIONY_VOICE_BACKEND_COMMAND" in script
+    assert "DIONY_SPEAKER_EMBEDDING_MODEL" in script
     assert "/diony/vault/models/audio/CosyVoice2-0.5B" in script
     assert script.find('"$RUNTIME_OVERLAY"') < script.find("/tmp/diony-wan-req.txt")
     assert script.find("_diony_wan_host_ready") < script.find("GPU_PRODUCER_OK")
@@ -64,6 +86,26 @@ def test_gpu_restart_falls_back_to_the_verified_8788_owner_without_fuser(monkeyp
     assert "apps/producer/src/diony_producer/gpu.py" in gpu.GPU_STAMP_FILES
 
 
+def test_gpu_start_allows_persistent_optional_runtime_repair(monkeypatch) -> None:
+    import diony_producer.gpu as gpu
+
+    observed: dict[str, int] = {}
+
+    def fake_run(command, **kwargs):
+        observed["timeout"] = kwargs["timeout"]
+        return type(
+            "Result",
+            (),
+            {"returncode": 0, "stdout": "GPU_PRODUCER_OK\n", "stderr": ""},
+        )()
+
+    monkeypatch.setattr(gpu.subprocess, "run", fake_run)
+
+    gpu._start_gpu_producer({"ssh_port": "28869", "ssh_user": "root", "host": "gpu"})
+
+    assert observed["timeout"] >= 600
+
+
 def test_gpu_code_stamp_hashes_content_not_package_mtime(tmp_path, monkeypatch) -> None:
     import os
     import diony_producer.gpu as gpu
@@ -80,6 +122,69 @@ def test_gpu_code_stamp_hashes_content_not_package_mtime(tmp_path, monkeypatch) 
 
     assert first == second
     assert gpu._code_stamp() != first
+
+
+def test_gpu_code_stamp_tracks_storage_and_runtime_contracts() -> None:
+    import diony_producer.gpu as gpu
+
+    assert "apps/wan/src/diony_wan/storage.py" in gpu.GPU_STAMP_FILES
+    assert "apps/wan/src/diony_wan/runtime.py" in gpu.GPU_STAMP_FILES
+
+
+def test_gpu_remote_code_manifest_verifies_every_stamped_file(tmp_path, monkeypatch) -> None:
+    import hashlib
+    import diony_producer.gpu as gpu
+
+    first = tmp_path / "first.py"
+    second = tmp_path / "nested" / "second.py"
+    second.parent.mkdir()
+    first.write_text("first\n")
+    second.write_text("second\n")
+    observed = {}
+
+    def fake_run(command, **kwargs):
+        observed["command"] = command
+        observed["input"] = kwargs["input"]
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(gpu, "GPU_STAMP_FILES", ("first.py", "nested/second.py"))
+    monkeypatch.setattr(gpu.subprocess, "run", fake_run)
+
+    assert gpu._remote_code_matches(
+        {"ssh_port": "28869", "ssh_user": "root", "host": "gpu"}, tmp_path
+    ) is True
+    assert observed["command"][-3:] == ["sha256sum", "-c", "-"]
+    assert (
+        f"{hashlib.sha256(first.read_bytes()).hexdigest()}  /opt/diony-ai/first.py"
+        in observed["input"]
+    )
+    assert (
+        f"{hashlib.sha256(second.read_bytes()).hexdigest()}  /opt/diony-ai/nested/second.py"
+        in observed["input"]
+    )
+
+
+def test_gpu_matching_stamp_does_not_hide_partial_remote_sync(tmp_path, monkeypatch) -> None:
+    import diony_producer.gpu as gpu
+
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return type("Result", (), {"returncode": 0, "stdout": "same-stamp\n", "stderr": ""})()
+
+    monkeypatch.setattr(gpu, "in_pytest", lambda: False)
+    monkeypatch.setattr(gpu, "_code_stamp", lambda: "same-stamp")
+    monkeypatch.setattr(gpu, "desk_repo", lambda: tmp_path)
+    monkeypatch.setattr(gpu, "_remote_code_matches", lambda _conn, _root: False)
+    monkeypatch.setattr(gpu, "_remote_producer_busy", lambda _conn: True)
+    monkeypatch.setattr(gpu.subprocess, "run", fake_run)
+    monkeypatch.setattr(gpu, "_synced_stamp", "")
+
+    gpu._sync_gpu_apps({"ssh_port": "28869", "ssh_user": "root", "host": "gpu"})
+
+    assert len(calls) == 1
+    assert gpu._synced_stamp == ""
 
 
 def test_gpu_sync_defers_remote_replacement_while_production_is_working(tmp_path, monkeypatch) -> None:
@@ -137,6 +242,7 @@ def test_gpu_sync_writes_content_stamp_through_stdin_script(tmp_path, monkeypatc
     monkeypatch.setattr(gpu, "_code_stamp", lambda: "new-content-stamp")
     monkeypatch.setattr(gpu, "desk_repo", lambda: tmp_path)
     monkeypatch.setattr(gpu, "GPU_SYNC_TREES", ())
+    monkeypatch.setattr(gpu, "_remote_code_matches", lambda _conn, _root: True)
     monkeypatch.setattr(gpu, "_remote_producer_busy", lambda _conn: False)
     monkeypatch.setattr(gpu, "_restart_gpu_producer_bind", lambda _conn: None)
     monkeypatch.setattr(gpu.subprocess, "run", fake_run)

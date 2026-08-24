@@ -36,7 +36,7 @@ _RUNPOD_PLANS: dict[str, dict[str, Any]] = {
         "gpu_type_id": "NVIDIA B300 SXM6 AC",
         "gpu_count": 1,
         "container_disk_gb": 800,
-        "volume_gb": 1000,
+        "volume_gb": 2000,
         "volume_mount_path": "/workspace",
         "ports": ["22/tcp"],
         "interruptible": False,
@@ -48,7 +48,7 @@ _RUNPOD_PLANS: dict[str, dict[str, Any]] = {
         "gpu_type_id": "NVIDIA B200",
         "gpu_count": 1,
         "container_disk_gb": 800,
-        "volume_gb": 1000,
+        "volume_gb": 2000,
         "volume_mount_path": "/workspace",
         "ports": ["22/tcp"],
         "interruptible": False,
@@ -326,6 +326,11 @@ class RunpodClient:
             "env": {
                 "DIONY_PROFILE": plan["profile"],
                 "DIONY_VAULT": "/diony/vault",
+                "DIONY_VOLUME_CAPACITY_GB": str(plan["volume_gb"]),
+                "DIONY_VOLUME_MIN_FREE_GB": "100",
+                "DIONY_MODEL_HOT_CACHE": "auto",
+                "DIONY_MODEL_HOT_CACHE_GB": "320",
+                "DIONY_MODEL_HOT_CACHE_MIN_FREE_GB": "64",
             },
         }
         try:
@@ -637,7 +642,7 @@ class ProvisioningService:
         )
         self._state["events"][-1]["status"] = "passed"
         self._state["events"][-1]["detail"] = "Billing approved. Pod launch sent."
-        self._event("GPU + storage", "800 GB container · 1 TB persistent /workspace", "active")
+        self._event("GPU + storage", "800 GB container · 2 TB persistent /workspace", "active")
         return self.public()
 
     def _enverge_requested(self, values: dict[str, Any]) -> dict[str, Any]:

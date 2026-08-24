@@ -1,10 +1,12 @@
 import os
+import subprocess
 import sys
 
 from fastapi.testclient import TestClient
 
 from diony_wizard.app import app
 from diony_wizard.apply import (
+    apply_exception_text,
     apply_fail_text,
     apply_progress_text,
     ensure_apply,
@@ -78,6 +80,20 @@ def test_hf_pack_includes_wan_and_sr(monkeypatch) -> None:
     assert "requirements_s2v.txt" in script
     assert "COSYVOICE_OK" in script
     assert "from modelscope import snapshot_download" not in script
+    assert "ThreadPoolExecutor" in script
+    assert "DIONY_MODEL_PULL_WORKERS" in script
+    assert "revision=revision" in script
+    assert "max_workers=file_workers" in script
+    assert "requirements_animate.txt" in script
+    assert "diony-wan-animate-req.txt" in script
+    assert "--no-build-isolation" in script
+    assert "SAM-2" in script
+    assert "_DIONY_WAN_RUNTIME=/diony/vault/runtime/wan" in script
+    assert '_DIONY_WAN_PYTHON="$_DIONY_WAN_RUNTIME/venv/bin/python"' in script
+    assert "DIONY_VOLUME_CAPACITY_GB" in script
+    assert "DIONY_VOLUME_MIN_FREE_GB" in script
+    assert "DIONY_MODEL_HOT_CACHE_GB" in script
+    assert "DIONY_MODEL_HOT_CACHE_MIN_FREE_GB" in script
 
 
 def test_apply_fail_text_skips_pip_already_satisfied() -> None:
@@ -165,7 +181,9 @@ def test_remote_setup_runpod_vault_and_venv(monkeypatch) -> None:
     assert "WAN_HOST_OVERLAY_REPAIR" in producer
 
 
-def test_remote_setup_resumes_an_incomplete_cosyvoice_snapshot() -> None:
+def test_remote_setup_resumes_an_incomplete_cosyvoice_snapshot(monkeypatch) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
     script = remote_setup_script("/opt/diony-ai", "/workspace")
 
     assert "any(os.scandir(dest))" not in script
@@ -173,7 +191,7 @@ def test_remote_setup_resumes_an_incomplete_cosyvoice_snapshot() -> None:
     assert "flow.pt" in script
     assert "hift.pt" in script
     assert "speech_tokenizer_v2.onnx" in script
-    assert "snapshot_download(repo_id=repo_id, local_dir=dest)" in script
+    assert "snapshot_download(repo_id=repo_id, revision=revision, local_dir=dest" in script
 
 
 def test_apply_progress_text_exposes_remote_setup_stages() -> None:
@@ -207,17 +225,43 @@ def test_site_readiness_probe_checks_the_complete_pack_before_any_pull() -> None
     ):
         assert path in script
     assert "DIONY_SITE_STATE" in script
-    assert '"diony_wan" / "runtime.py"' in script
+    assert '/diony/vault/.cluster/wan-host-runtime.json' in script
+    assert '"required_capabilities_ready"' in script
+    assert '"schema_version"' in script
+    assert '"checked_at"' in script
+    assert 'from cosyvoice.cli.cosyvoice import CosyVoice2' not in script
+    assert '"--require-capability"' not in script
+    assert "subprocess.PIPE" not in script
     assert '"wan_runtime"' in script
     assert '"model_volume"' in script
     assert 'cosy_root / ".git"' in script
     assert '"cosy_runtime"' in script
+    assert '"voice_backend"' in script
     assert 'volume_root = Path("/diony/vault/models").resolve()' in script
     assert '(Path("/models") / kind).resolve() == volume_root / kind' in script
     assert "cosy_required" in script
     assert "llm.pt" in script
     assert "speech_tokenizer_v2.onnx" in script
+    assert '"snapshot_complete"' in script
+    assert '"snapshot_pinned"' in script
+    assert '"optional_engines"' in script
+    assert ".incomplete" in script
     assert "huggingface" not in script.lower()
+
+
+def test_apply_exception_text_humanizes_ssh_readiness_timeout() -> None:
+    error = subprocess.TimeoutExpired(
+        ["ssh", "-p", "49135", "root@198.13.252.71", "bash", "-s"],
+        90,
+    )
+
+    message = apply_exception_text(error)
+
+    assert "read-only readiness check" in message
+    assert "90 seconds" in message
+    assert "did not stop or restart Producer" in message
+    assert "['ssh'" not in message
+    assert "198.13.252.71" not in message
 
 
 def test_prepared_site_skips_the_model_pull(monkeypatch) -> None:
@@ -251,7 +295,7 @@ def test_prepared_site_skips_the_model_pull(monkeypatch) -> None:
     assert "HF_START" not in commands[0]
 
 
-def test_prepared_site_repairs_host_runtime_without_model_pull(monkeypatch) -> None:
+def test_prepared_site_defers_runtime_repair_while_producer_is_active(monkeypatch) -> None:
     from types import SimpleNamespace
     from diony_wizard import apply as apply_mod
 
@@ -265,6 +309,34 @@ def test_prepared_site_repairs_host_runtime_without_model_pull(monkeypatch) -> N
             state = (
                 '{"prepared":true,"pack":true,"wan_repo":true,'
                 '"wan_runtime":false,"producer_installed":true,"producer_running":true}'
+            )
+            return SimpleNamespace(ok=True, stdout=f"DIONY_SITE_STATE {state}\n", stderr="", code=0, text=state)
+        raise AssertionError("Active Producer must not be restarted during Connect validation")
+
+    monkeypatch.setattr(apply_mod, "exec_host", fake_exec)
+    monkeypatch.setattr(apply_mod, "apply_local", lambda _host: True)
+    apply_mod._run_apply("b200", ["localhost"], "/workspace", epoch)
+
+    state = public_apply()
+    assert state["ok"] is False
+    assert len(commands) == 1
+    assert "Diony did not interrupt Producer" in state["error"]
+
+
+def test_prepared_site_repairs_host_runtime_when_producer_is_idle(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from diony_wizard import apply as apply_mod
+
+    reset_apply()
+    epoch = apply_mod._apply_epoch
+    commands: list[str] = []
+
+    def fake_exec(_host: str, command: str, **_kwargs):
+        commands.append(command)
+        if "DIONY_SITE_STATE" in command:
+            state = (
+                '{"prepared":true,"pack":true,"wan_repo":true,'
+                '"wan_runtime":false,"producer_installed":true,"producer_running":false}'
             )
             return SimpleNamespace(ok=True, stdout=f"DIONY_SITE_STATE {state}\n", stderr="", code=0, text=state)
         assert "HF_START" not in command

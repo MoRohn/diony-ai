@@ -57,22 +57,47 @@ def _measured_progress_value(value: str) -> str:
     return clean
 
 
-def parse_wan_progress(text: str) -> dict:
-    """Last denoise tqdm line. Ignore checkpoint shard bars (6/6)."""
+def parse_wan_progress(text: str, *, expected_passes: int = 1) -> dict:
+    """Last denoise progress, folded across repeated S2V clip passes."""
     best: dict = {}
     blob = (text or "").replace("\r", "\n")
+    expected_passes = max(int(expected_passes), 1)
+    completed_steps = 0
+    pass_index = 1
+    previous_step: int | None = None
+    previous_total: int | None = None
     for match in _PROGRESS.finditer(blob):
         total = int(match.group("total"))
         if total < 8:
             continue
+        step = int(match.group("step"))
+        if (
+            previous_step is not None
+            and previous_total == total
+            and previous_step >= previous_total
+            and step < previous_step
+        ):
+            completed_steps += previous_total
+            pass_index += 1
+        pass_total = max(expected_passes, pass_index)
+        overall_step = completed_steps + step
+        overall_total = total * pass_total
         best = {
-            "step": int(match.group("step")),
-            "total": total,
-            "pct": int(match.group("pct")),
+            "step": overall_step,
+            "total": overall_total,
+            "pct": round(100 * overall_step / overall_total),
             "elapsed": match.group("elapsed").strip(),
-            "eta": _measured_progress_value(match.group("eta")),
+            "eta": (
+                _measured_progress_value(match.group("eta"))
+                if pass_index == pass_total
+                else ""
+            ),
             "rate": _measured_progress_value(match.group("rate")),
+            "pass_index": pass_index,
+            "pass_total": pass_total,
         }
+        previous_step = step
+        previous_total = total
     return best
 
 
@@ -84,11 +109,32 @@ def progress_label(row: dict) -> str:
     rate = row.get("rate") or ""
     eta = row.get("eta") or ""
     bits = ["Denoise starting" if not step else f"Denoise {step}/{total}"]
+    if row.get("pass_total", 1) > 1:
+        bits.append(f"pass {row.get('pass_index', 1)} of {row['pass_total']}")
     if rate:
         bits.append(rate)
     if eta:
         bits.append(f"{eta} left")
     return " · ".join(bits)
+
+
+def start_wan_attempt_log(log_path: Path) -> Path | None:
+    """Start one observable attempt without mixing progress from an earlier retry."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    archive: Path | None = None
+    if log_path.is_file() and log_path.stat().st_size:
+        for index in range(1, 10_000):
+            candidate = log_path.with_name(
+                f"{log_path.stem}.attempt-{index:03d}{log_path.suffix}"
+            )
+            if not candidate.exists():
+                log_path.replace(candidate)
+                archive = candidate
+                break
+        else:
+            raise WanError(f"Wan attempt log archive is full for {log_path}")
+    log_path.touch(exist_ok=True)
+    return archive
 
 
 _PROGRESS_LINE = re.compile(
@@ -215,12 +261,13 @@ def spark_argv(
     quality_lora_ids: list[str] | tuple[str, ...] | None = None,
     offload: bool | None = None,
     steps: int = 24,
+    checkpoint: Path | None = None,
 ) -> list[str]:
     if task not in TASKS:
         task = "t2v-A14B"
     if "dashscope" in prompt.lower() or "qwen-plus" in prompt.lower():
         raise WanError("Prompt must not request hosted extend.")
-    ckpt = ckpt_dir(task)
+    ckpt = checkpoint or ckpt_dir(task)
     py = generate_py()
     if not py.is_file():
         raise WanError(
@@ -651,6 +698,9 @@ def run_generate(
     ensure_attention_fallback()
     ensure_negative_prompt_input()
     offload = wan_needs_offload()
+    from diony_wan.storage import prepare_checkpoint
+
+    checkpoint = prepare_checkpoint(task, source=ckpt_dir(task))
     cmd = spark_argv(
         task=task,
         prompt=prompt,
@@ -664,11 +714,12 @@ def run_generate(
         quality_lora_ids=quality_lora_ids,
         offload=offload,
         steps=steps,
+        checkpoint=checkpoint,
     )
     env, py_root = _wan_env(attention_backend=attention_backend)
     limit = timeout or int(os.environ.get("DIONY_WAN_TIMEOUT", "7200"))
     log_path = save_file.with_suffix(".wan.log")
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    start_wan_attempt_log(log_path)
     decision = resident_decision(task=task, offload=offload)
     resident_compatible = (
         decision.enabled
@@ -685,7 +736,7 @@ def run_generate(
     if resident_compatible:
         payload = resident_job_payload(
             task=task,
-            checkpoint=ckpt_dir(task),
+            checkpoint=checkpoint,
             prompt=prompt,
             negative_prompt=negative_prompt,
             seed=seed,

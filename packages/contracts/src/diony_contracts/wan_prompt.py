@@ -283,7 +283,25 @@ def _framing(focal_mm: float) -> str:
     return "close-up"
 
 
-def _camera_layer(camera_move: CameraMove, focal_mm: float, t_stop: float) -> str:
+def _explicit_framing(idea: str) -> str:
+    lowered = idea.casefold()
+    framing = (
+        ("extreme close-up", r"\bextreme[\s-]+close[\s-]*up\b"),
+        ("medium close-up", r"\bmedium[\s-]+close[\s-]*up\b"),
+        ("close-up", r"\bclose[\s-]*up\b"),
+        ("medium shot", r"\bmedium[\s-]+shot\b"),
+        ("wide shot", r"\bwide[\s-]+shot\b"),
+    )
+    return next((label for label, pattern in framing if re.search(pattern, lowered)), "")
+
+
+def _camera_layer(
+    camera_move: CameraMove,
+    focal_mm: float,
+    t_stop: float,
+    *,
+    framing: str = "",
+) -> str:
     moves = {
         CameraMove.STATIC: "static camera with no movement",
         CameraMove.PAN: "slow steady pan right",
@@ -297,7 +315,7 @@ def _camera_layer(camera_move: CameraMove, focal_mm: float, t_stop: float) -> st
         CameraMove.ZOOM: "slow optical zoom in",
     }
     return (
-        f"{_framing(focal_mm)}, {focal_mm:g}mm lens at T{t_stop:g}, "
+        f"{framing or _framing(focal_mm)}, {focal_mm:g}mm lens at T{t_stop:g}, "
         f"{moves[camera_move]}"
     )
 
@@ -514,7 +532,12 @@ def compile_wan_prompt_plan(
         subject=subject,
         identity_anchors=identity_anchors,
         motion=_motion_layer(idea, shot_index),
-        camera=_camera_layer(camera_move, focal_mm, t_stop),
+        camera=_camera_layer(
+            camera_move,
+            focal_mm,
+            t_stop,
+            framing=_explicit_framing(idea),
+        ),
         scene=scene,
         environment_dynamics=environment_dynamics,
         high_noise_plan=(

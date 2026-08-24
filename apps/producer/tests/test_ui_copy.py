@@ -43,15 +43,26 @@ def test_producer_floors_are_idea_production_gallery() -> None:
     assert 'class="clap"' in html
     assert 'id="cast"' in html
     assert 'id="site-line"' in html
-    assert 'href="/static/app.css?v=brand6"' in html
-    assert 'src="/static/app.js?v=brand6"' in html
+    assert 'href="/static/app.css?v=brand7"' in html
+    assert 'src="/static/app.js?v=brand7"' in html
     assert "v=run30" not in html
     assert "Unsigned" not in html
     assert "Unsigned" not in js
     assert 'id="run-refresh"' in html
     assert 'id="start-over"' in html
     assert "/api/studio/new" in js
-    assert "function refreshStudio" in js
+    assert "Start over cannot interrupt an active production. Use STOP" in js
+    refresh_body = js[js.index("function refreshProductionPage") : js.index("async function startOverStudio")]
+    assert "/api/studio/new" not in refresh_body
+    assert "window.location.replace" in refresh_body
+    assert "bay=production" in refresh_body
+    assert '["production", "gallery"].includes(requestedBay)' in js
+    assert 'fetch("/api/run"' in js
+    assert "const productionActive = Boolean(" in js
+    assert 'showBay(requested || (productionActive ? "production" : "idea"))' in js
+    assert 'getElementById("run-refresh")?.addEventListener("click", refreshProductionPage)' in js
+    assert 'getElementById("start-over")?.addEventListener("click", startOverStudio)' in js
+    assert "function refreshProductionPage" in js
     assert "res.status === 409" in js
     assert "dropped tunnel" in js
     assert "function stopRunWatch" in js
@@ -172,6 +183,17 @@ def test_producer_actions_share_the_studio_capsule_language() -> None:
     gallery_start = css.rindex(".gallery-card-actions button,")
     gallery_rule = css[gallery_start : css.index("}", gallery_start)]
     assert "border-radius: var(--action-pill-radius);" in gallery_rule
+
+
+def test_idea_length_controls_have_breathing_room_and_team_header_label() -> None:
+    html = (STATIC / "index.html").read_text()
+    css = (STATIC / "app.css").read_text()
+
+    assert '<button type="button" id="studio-control" class="word studio-control">Team</button>' in html
+    assert '>Studio</button>' not in html
+
+    pick_rules = re.findall(r"\.allotment-picks\s*\{([^}]*)\}", css)
+    assert any("margin-top: 0.65rem;" in rule for rule in pick_rules)
 
 
 def test_selected_header_page_is_emphasized_without_a_capsule() -> None:
@@ -354,7 +376,7 @@ def test_gallery_can_be_opened_by_a_fresh_cache_busted_url() -> None:
     js = (STATIC / "app.js").read_text()
 
     assert 'new URLSearchParams(location.search).get("bay")' in js
-    assert 'showBay(requestedBay === "gallery" ? "gallery" : "idea")' in js
+    assert '["production", "gallery"].includes(requestedBay)' in js
 
 
 def test_gallery_library_remains_available_when_the_active_project_is_blank() -> None:
@@ -420,8 +442,8 @@ def test_production_header_and_idea_body_explain_the_working_state() -> None:
     assert ".reference-hint" in css
     assert ".reference-hint-label" in css
     assert 'stageEl.addEventListener("drop"' in js
-    assert 'href="/static/app.css?v=brand6"' in html
-    assert 'src="/static/app.js?v=brand6"' in html
+    assert 'href="/static/app.css?v=brand7"' in html
+    assert 'src="/static/app.js?v=brand7"' in html
     assert "v=run30" not in html
 
 

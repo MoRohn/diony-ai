@@ -25,6 +25,8 @@ def test_argv_is_720p_official_and_never_dashscope(tmp_path, monkeypatch) -> Non
         frame_num=81,
     )
     joined = " ".join(cmd)
+    assert cmd[1] == str(gen)
+    assert cmd.count(str(gen)) == 1
     assert "--task t2v-A14B" in joined
     assert "--size 1280*720" in joined
     assert "--offload_model True" in joined
@@ -72,6 +74,30 @@ def test_argv_is_720p_official_and_never_dashscope(tmp_path, monkeypatch) -> Non
         image=clip,
     )
     assert "--image" not in no_img
+
+
+def test_argv_accepts_only_a_verified_hot_checkpoint_override(tmp_path, monkeypatch) -> None:
+    gen = tmp_path / "generate.py"
+    gen.write_text("# fake\n")
+    source = tmp_path / "volume" / "Wan2.2-T2V-A14B"
+    hot = tmp_path / "overlay" / "Wan2.2-T2V-A14B"
+    source.mkdir(parents=True)
+    hot.mkdir(parents=True)
+    (source / "weights.safetensors").write_bytes(b"source")
+    (hot / "weights.safetensors").write_bytes(b"hot")
+    monkeypatch.setenv("DIONY_WAN_GENERATE", str(gen))
+    monkeypatch.setenv("WAN_CKPT_T2V", str(source))
+
+    command = spark_argv(
+        task="t2v-A14B",
+        prompt="A locked studio master.",
+        seed=42,
+        save_file=tmp_path / "out.mp4",
+        frame_num=81,
+        checkpoint=hot,
+    )
+
+    assert command[command.index("--ckpt_dir") + 1] == str(hot)
 
 
 def test_native_s2v_and_animate_argv_preserve_their_conditioning_inputs(
@@ -384,6 +410,26 @@ def test_parse_wan_progress_reads_denoise_not_shards() -> None:
     assert parse_wan_progress("Loading checkpoint shards: 100%|█| 6/6") == {}
 
 
+def test_new_wan_attempt_rotates_prior_progress_log(tmp_path) -> None:
+    from diony_wan.runner import start_wan_attempt_log
+
+    log = tmp_path / "negative_720.wan.log"
+    log.write_text("prior attempt\r100%|x| 24/24 [14:00<00:00, 35s/it]\n")
+
+    archive = start_wan_attempt_log(log)
+
+    assert archive == tmp_path / "negative_720.wan.attempt-001.log"
+    assert archive.read_text().startswith("prior attempt")
+    assert log.read_bytes() == b""
+
+    log.write_text("second attempt\n")
+    second_archive = start_wan_attempt_log(log)
+
+    assert second_archive == tmp_path / "negative_720.wan.attempt-002.log"
+    assert second_archive.read_text() == "second attempt\n"
+    assert log.read_bytes() == b""
+
+
 def test_wan_progress_hides_unmeasured_rate_and_eta() -> None:
     from diony_wan.runner import parse_wan_progress, progress_label
 
@@ -393,6 +439,31 @@ def test_wan_progress_hides_unmeasured_rate_and_eta() -> None:
     assert row["eta"] == ""
     assert progress_label(row) == "Denoise starting"
     assert "?" not in progress_label(row)
+
+
+def test_s2v_progress_combines_repeated_denoise_passes_monotonically() -> None:
+    from diony_wan.runner import parse_wan_progress, progress_label
+
+    first_pass = " 50%|█████| 12/24 [07:12<07:12, 36.00s/it]\n"
+    second_pass = (
+        first_pass
+        + "100%|██████████| 24/24 [14:24<00:00, 36.00s/it]\n"
+        + "  8%|▊| 2/24 [01:12<13:12, 36.00s/it]\n"
+    )
+
+    first = parse_wan_progress(first_pass, expected_passes=2)
+    second = parse_wan_progress(second_pass, expected_passes=2)
+
+    assert first["step"] == 12
+    assert first["total"] == 48
+    assert first["pct"] == 25
+    assert second["step"] == 26
+    assert second["total"] == 48
+    assert second["pct"] == 54
+    assert second["pass_index"] == 2
+    assert second["pass_total"] == 2
+    assert "26/48" in progress_label(second)
+    assert "pass 2 of 2" in progress_label(second)
 
 
 def test_prove_generate_is_a_noop_in_pytest() -> None:

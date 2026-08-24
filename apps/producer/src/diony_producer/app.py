@@ -75,6 +75,7 @@ from diony_producer.farm import (
     enter_farm,
     farm_status,
     new_generation_take,
+    read_camera_lock,
     reset_farm,
     request_pause_after_current,
     resume_camera,
@@ -101,7 +102,6 @@ from diony_producer.gallery_join import (
 )
 from diony_producer.mix import abort_mix, mix_status, reset_mix, start_mix
 from diony_producer.gpu import (
-    abort_gpu_camera,
     apply_ssh_env,
     backfill_connect_from_wizard,
     cached_gpu_monitor,
@@ -177,6 +177,17 @@ def _advance_legacy_once() -> None:
             drive_remote_advance(base)
             gpu_monitor()
         return
+    pause = _project.production_pause
+    if pause is not None and pause.reason == "stop_keep":
+        if camera_rolling() or bool(farm_status().get("busy")):
+            return
+        _project.production_pause = None
+        record_production_stop(_project, ProductionStopDisposition.KEEP)
+        abort_farm()
+        abort_finish()
+        abort_mix()
+        finalize_production_stop(_project)
+        return
     maybe_advance_run(_project)
 
 
@@ -237,6 +248,7 @@ _DESK_API_FALLBACK = frozenset({"/api/gallery"})
 async def gpu_api_proxy(request: Request, call_next):
     """Signed lease: this desk is the UI. Wan farms on GPU Producer via the Connect SSH line."""
     path = request.url.path
+    mutating = request.method.upper() not in {"GET", "HEAD", "OPTIONS"}
     if (
         not path.startswith("/api/")
         or path.startswith("/api/v1/")
@@ -246,11 +258,19 @@ async def gpu_api_proxy(request: Request, call_next):
         return await call_next(request)
     if not should_proxy():
         return await call_next(request)
-    if path == "/api/studio/new" and request.method == "POST":
-        abort_gpu_camera()
     base = gpu_producer_ready_base()
     if not base:
         _start_gpu_reconcile()
+        if mutating:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": (
+                        "GPU control plane is not ready. Diony did not apply this mutation "
+                        "to the local fallback; retry when Compute is connected."
+                    )
+                },
+            )
         return await call_next(request)
     url = f"{base}{path}"
     if request.url.query:
@@ -262,6 +282,16 @@ async def gpu_api_proxy(request: Request, call_next):
         async with httpx.AsyncClient(timeout=timeout) as client:
             res = await client.request(request.method, url, headers=headers, content=body)
     except httpx.HTTPError:
+        if mutating:
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "detail": (
+                        "GPU control plane did not accept the request. Diony did not apply "
+                        "this mutation to the local fallback."
+                    )
+                },
+            )
         return await call_next(request)
     if res.status_code == 404 and path in _DESK_API_FALLBACK:
         return await call_next(request)
@@ -667,6 +697,30 @@ def stop_production(body: ProductionStopIn) -> dict:
                 ),
             )
         return run_payload(_project)
+    if (
+        body.disposition == ProductionStopDisposition.KEEP
+        and _project.production_pause is not None
+        and _project.production_pause.reason == "stop_keep"
+    ):
+        return run_payload(_project)
+    if body.disposition == ProductionStopDisposition.KEEP and camera_rolling():
+        lock = read_camera_lock()
+        take_id = str(lock.get("take_id") or "")
+        try:
+            request_pause_after_current(
+                _project,
+                reason="stop_keep",
+                after_take_id=take_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(409, f"Keep could not identify the active clip: {exc}") from exc
+        record_activity(
+            "run",
+            f"STOP Keep requested · {take_id} will land before Production stops",
+            level="info",
+            shot_id=_project.take(take_id).shot_id,
+        )
+        return run_payload(_project)
     try:
         record_production_stop(_project, body.disposition)
     except ValueError as exc:
@@ -789,7 +843,11 @@ def studio_open(body: StudioOpenIn) -> dict:
             409,
             "Wan2.2 is already rolling a 720p negative. Refresh starts a new Idea. Do not Produce a second show on this GPU.",
         )
-    _project = expand_idea(brief, held, compute=site_from_lock())
+    try:
+        candidate = expand_idea(brief, held, compute=site_from_lock())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    _project = candidate
     abort_farm()
     reset_farm()
     persist_project(_project)
@@ -798,8 +856,23 @@ def studio_open(body: StudioOpenIn) -> dict:
 
 @app.post("/api/studio/new")
 def studio_new() -> dict:
-    """Blank Idea. Not Night Press. Stops Wan and 1080 queues on this box."""
+    """Blank Idea. Active production must use the explicit STOP workflow first."""
     global _project, _assets
+    active = (
+        camera_rolling()
+        or bool(farm_status().get("busy"))
+        or bool(finish_status().get("busy"))
+        or bool(mix_status().get("busy"))
+        or (
+            _project.production_pause is not None
+            and _project.production_pause.reason == "stop_keep"
+        )
+    )
+    if active:
+        raise HTTPException(
+            409,
+            "Start over cannot interrupt an active production. Use STOP, choose Keep or Delete, then start over.",
+        )
     abort_farm()
     abort_finish()
     abort_mix()

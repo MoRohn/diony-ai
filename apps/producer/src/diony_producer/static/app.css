@@ -2791,6 +2791,7 @@ body.join-open > #studio-drawer {
 
 .allotment-picks {
   gap: 0.35rem;
+  margin-top: 0.65rem;
 }
 
 .allotment-picks button {

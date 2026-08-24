@@ -155,10 +155,10 @@ Primary — Runpod: Deploy one Pod
 
   4. Storage (bottom of the page)
        Container disk        800 GB
-                             (weights at /models; erased on Stop)
-       Persistent storage    Volume disk, 1000 GB
-                             (vault at /workspace)
-                             2000 GB is fine. Not 30 GB / 50 GB.
+                             (bounded hot models + runtime; erased on Stop)
+       Persistent storage    Volume disk, 2000 GB
+                             (canonical models + vault at /workspace)
+                             Not 30 GB / 50 GB / 1000 GB.
                              Stop keeps this. Terminate deletes it.
 
        Skip Network volume unless it is already in this B300’s
@@ -199,16 +199,17 @@ Primary — Runpod: Deploy one Pod
      Details check:
           GPU         1x B300  (must match Studio Site Leased B300)
           Template    Runpod PyTorch
-          Container disk  ≥800 GB  (/models; wiped on Stop)
-          Volume disk     ≥1000 GB, Mount path /workspace
+          Container disk  ≥800 GB  (bounded hot cache; wiped on Stop)
+          Volume disk     ≥2000 GB, Mount path /workspace
           Location / cost are not Studio fields.
 
      Identity is ~/.ssh/id_ed25519 (the public key from section 3).
-     Container disk /models is weights. Stop wipes it.
-     Volume disk survives Stop. Terminate deletes Volume disk.
+     /models resolves into the persistent /workspace model pack.
+     Container disk holds only the bounded hot tier. Stop wipes that cache.
+     Volume disk survives Stop. Terminate deletes models and vault.
 
-  Do not Stop until Studio App Continue has pulled the pack
-  (Stop wipes container disk / models).
+  Do not Stop during App Continue or Production. A later Stop preserves the
+  canonical model pack but clears the disposable hot tier.
 
 Secondary — Enverge
 
@@ -241,10 +242,10 @@ Primary — Runpod: Deploy one Pod
 
   4. Storage (bottom of the page)
        Container disk        800 GB
-                             (weights at /models; erased on Stop)
-       Persistent storage    Volume disk, 1000 GB
-                             (vault at /workspace)
-                             2000 GB is fine. Not 30 GB / 50 GB.
+                             (bounded hot models + runtime; erased on Stop)
+       Persistent storage    Volume disk, 2000 GB
+                             (canonical models + vault at /workspace)
+                             Not 30 GB / 50 GB / 1000 GB.
                              Stop keeps this. Terminate deletes it.
 
        Skip Network volume unless it is already in this B200’s
@@ -285,16 +286,17 @@ Primary — Runpod: Deploy one Pod
      Details check:
           GPU         1x B200  (must match Studio Site Leased B200)
           Template    Runpod PyTorch
-          Container disk  ≥800 GB  (/models; wiped on Stop)
-          Volume disk     ≥1000 GB, Mount path /workspace
+          Container disk  ≥800 GB  (bounded hot cache; wiped on Stop)
+          Volume disk     ≥2000 GB, Mount path /workspace
           Location / cost are not Studio fields.
 
      Identity is ~/.ssh/id_ed25519 (the public key from section 3).
-     Container disk /models is weights. Stop wipes it.
-     Volume disk survives Stop. Terminate deletes Volume disk.
+     /models resolves into the persistent /workspace model pack.
+     Container disk holds only the bounded hot tier. Stop wipes that cache.
+     Volume disk survives Stop. Terminate deletes models and vault.
 
-  Do not Stop until Studio App Continue has pulled the pack
-  (Stop wipes container disk / models).
+  Do not Stop during App Continue or Production. A later Stop preserves the
+  canonical model pack but clears the disposable hot tier.
 
   DeepSeek weights are ~155.4 GiB. This card is 180 GB. Studio pins
   brain max_model_len 16384. Do not paste the B300 1M command here.

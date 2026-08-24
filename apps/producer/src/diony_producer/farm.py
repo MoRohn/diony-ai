@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import threading
 import time
+import wave
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -75,6 +76,7 @@ _INFRASTRUCTURE_QC_PREFIXES = (
 )
 _PERFORMANCE = PerformanceJournal()
 _ATTENTION_RECEIPT_NAME = "wan-cudnn-sdpa-validation.json"
+_VOLUME_USAGE_CACHE: dict[str, float | int] = {"path": "", "at": 0.0, "used": 0}
 
 
 class CameraResourceBlocked(RuntimeError):
@@ -333,13 +335,52 @@ def clear_camera_lock() -> None:
         pass
 
 
+def _volume_used_bytes(path: Path) -> int | None:
+    """Physical Pod-volume use; FUSE statvfs reports the provider's global pool."""
+    now = time.monotonic()
+    raw = str(path)
+    if _VOLUME_USAGE_CACHE["path"] == raw and now - float(_VOLUME_USAGE_CACHE["at"]) < 60:
+        return int(_VOLUME_USAGE_CACHE["used"])
+    try:
+        result = subprocess.run(
+            ["du", "-s", "-B1", "--", raw],
+            capture_output=True,
+            text=True,
+            timeout=45,
+            check=False,
+        )
+        used = int((result.stdout or "").split()[0]) if result.returncode == 0 else 0
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return None
+    if used <= 0:
+        return None
+    _VOLUME_USAGE_CACHE.update({"path": raw, "at": now, "used": used})
+    return used
+
+
 def camera_disk_block() -> str:
     """Refuse a clip when the vault or overlay cannot hold a 720p negative."""
     try:
         vault = shutil.disk_usage(str(vault_root()))
     except OSError:
         return ""
-    if vault.free < 2 * 1024**3:
+    try:
+        configured_capacity_gb = float(os.environ.get("DIONY_VOLUME_CAPACITY_GB", "0"))
+        vault_floor_gb = max(2, int(os.environ.get("DIONY_VOLUME_MIN_FREE_GB", "100")))
+    except ValueError:
+        configured_capacity_gb = 0
+        vault_floor_gb = 100
+    if configured_capacity_gb > 0:
+        used = _volume_used_bytes(vault_root())
+        if used is not None:
+            free = max(0, int(configured_capacity_gb * 1024**3) - used)
+            if free < vault_floor_gb * 1024**3:
+                gb = max(0, free // (1024**3))
+                return (
+                    f"Vault has {gb} GB free; the {vault_floor_gb} GB safety floor is required. "
+                    "Models and masters share the persistent Pod volume."
+                )
+    elif vault.free < 2 * 1024**3:
         gb = max(0, vault.free // (1024**3))
         return f"Vault has {gb} GB free. Wan needs room for a 720p negative on /diony/vault."
     try:
@@ -703,6 +744,18 @@ def _is_wan_generate_command(args: str) -> bool:
     return Path(parts[1]).name == "generate.py" and "--task" in parts[2:]
 
 
+def _s2v_expected_passes(task: str, audio_path: str, infer_frames: int) -> int:
+    """Mirror Wan S2V's audio-bucket repeat count without loading its model stack."""
+    if task != "s2v-14B" or not audio_path or infer_frames <= 0:
+        return 1
+    try:
+        with wave.open(audio_path, "rb") as audio:
+            duration = audio.getnframes() / audio.getframerate()
+    except (OSError, EOFError, wave.Error, ZeroDivisionError):
+        return 1
+    return max(1, int(duration * 16 / infer_frames) + 1)
+
+
 def list_generate_jobs() -> list[dict]:
     """Live official generate.py --task processes. Pytest never scans the laptop."""
     if os.environ.get("PYTEST_CURRENT_TEST"):
@@ -739,6 +792,12 @@ def list_generate_jobs() -> list[dict]:
         proj_hit = re.search(r"projects/([^/]+)/takes/", save)
         if proj_hit:
             project_id = proj_hit.group(1)
+        task_hit = re.search(r"--task\s+(\S+)", args)
+        task = task_hit.group(1) if task_hit else ""
+        audio_hit = re.search(r"--audio\s+(\S+)", args)
+        audio_path = audio_hit.group(1) if audio_hit else ""
+        frames_hit = re.search(r"--infer_frames\s+(\d+)", args)
+        infer_frames = int(frames_hit.group(1)) if frames_hit else 0
         jobs.append(
             {
                 "pid": pid,
@@ -747,6 +806,8 @@ def list_generate_jobs() -> list[dict]:
                 "seed": seed,
                 "take_id": take_id,
                 "project_id": project_id,
+                "task": task,
+                "expected_passes": _s2v_expected_passes(task, audio_path, infer_frames),
                 "args": args,
             }
         )
@@ -761,7 +822,7 @@ def camera_rolling() -> bool:
     return bool(list_generate_jobs())
 
 
-def _progress_for_save(save: str) -> dict:
+def _progress_for_save(save: str, *, expected_passes: int = 1) -> dict:
     if not save:
         return {}
     log = Path(save).with_suffix(".wan.log")
@@ -770,7 +831,10 @@ def _progress_for_save(save: str) -> dict:
     try:
         from diony_wan.runner import parse_wan_progress
 
-        return parse_wan_progress(log.read_text(errors="replace")[-8000:])
+        return parse_wan_progress(
+            log.read_text(errors="replace")[-65_536:],
+            expected_passes=expected_passes,
+        )
     except (OSError, ImportError):
         return {}
 
@@ -886,7 +950,9 @@ def adopt_live_farm(project: Project) -> None:
         while True:
             if farm_cancelled() or project.production_stop is not None:
                 return
-            progress = _progress_for_save(str(dest))
+            progress = _progress_for_save(
+                str(dest), expected_passes=int(job.get("expected_passes") or 1)
+            )
             if progress:
                 from diony_wan.runner import progress_label
 
@@ -1016,7 +1082,10 @@ def farm_status() -> dict:
     progress: dict = {}
     if jobs:
         job = jobs[0]
-        progress = _progress_for_save(str(job.get("save") or ""))
+        progress = _progress_for_save(
+            str(job.get("save") or ""),
+            expected_passes=int(job.get("expected_passes") or 1),
+        )
         if not busy:
             busy = True
             take_id = str(job.get("take_id") or "")
@@ -1346,6 +1415,7 @@ def run_one(
     token = farm_generation()
     started = time.monotonic()
     shot = project.shot(take.shot_id)
+    refresh_reference_shot(project, shot)
     prepare_voice_for_take(project, take)
     persist_project(project)
     _shot_id = shot.id
@@ -1543,6 +1613,34 @@ def start_farm(project: Project, takes: list[Take]) -> None:
                     take = _pending.pop(0)
                 if farm_cancelled():
                     break
+                try:
+                    from diony_contracts.live import ckpt_dir
+                    from diony_wan.storage import prepare_checkpoint, prefetch_checkpoint
+
+                    active_task = camera_task_for(project, project.shot(take.shot_id))
+                    _detail = f"Staging {active_task} on the GPU hot tier · {take.shot_id}"
+                    source_checkpoint = ckpt_dir(active_task)
+                    active_checkpoint = prepare_checkpoint(active_task, source=source_checkpoint)
+                    if active_checkpoint != source_checkpoint:
+                        record_activity(
+                            "wan",
+                            f"{take.shot_id} · {active_task} verified in bounded overlay hot cache",
+                            level="live",
+                            shot_id=take.shot_id,
+                        )
+                    with _lock:
+                        upcoming = _pending[0] if _pending else None
+                    if upcoming is not None:
+                        upcoming_task = camera_task_for(
+                            project,
+                            project.shot(upcoming.shot_id),
+                        )
+                        if upcoming_task != active_task:
+                            prefetch_checkpoint(upcoming_task, source=ckpt_dir(upcoming_task))
+                except (ImportError, OSError, RuntimeError, ValueError):
+                    # The persistent checkpoint remains the exact fallback. A
+                    # speculative hot-tier miss must never consume the queue.
+                    pass
                 attention_backend, attention_canary, attention_receipt = _attention_plan(
                     project,
                     take,

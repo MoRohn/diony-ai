@@ -227,6 +227,54 @@ def _sample_recipes(kind: CustomerKind, seconds: int) -> list[dict]:
     return recipes
 
 
+def _explicit_sample_camera(idea: str) -> dict:
+    """Honor camera facts the operator typed instead of replacing them with coverage defaults."""
+    overrides: dict = {}
+    focal = re.search(r"(?<![\d.])(\d{1,3}(?:\.\d+)?)\s*mm\b", idea, re.I)
+    if focal:
+        value = float(focal.group(1))
+        if 8 <= value <= 300:
+            overrides["focal_mm"] = value
+    stop = re.search(r"\bT\s*/?\s*(\d+(?:\.\d+)?)\b", idea, re.I)
+    if stop:
+        value = float(stop.group(1))
+        if 0.7 <= value <= 32:
+            overrides["t_stop"] = value
+    lowered = idea.casefold()
+    moves = (
+        (CameraMove.DOLLY_IN, r"\b(?:dolly|push)[\s-]*in\b"),
+        (CameraMove.DOLLY_OUT, r"\b(?:dolly|pull)[\s-]*(?:out|back)\b"),
+        (CameraMove.STEADICAM, r"\bsteadicam\b"),
+        (CameraMove.HANDHELD, r"\bhandheld\b"),
+        (CameraMove.TRACK, r"\btrack(?:ing)?\b"),
+        (CameraMove.CRANE, r"\bcrane\b"),
+        (CameraMove.PAN, r"\bpan(?:ning)?\b"),
+        (CameraMove.TILT, r"\btilt(?:ing)?\b"),
+        (CameraMove.ZOOM, r"\bzoom(?:ing)?\b"),
+        (CameraMove.STATIC, r"\b(?:static|locked[\s-]*off)\b|\bno camera movement\b"),
+    )
+    for move, pattern in moves:
+        if re.search(pattern, lowered):
+            overrides["camera_move"] = move
+            break
+    lighting_cues = (
+        "cool key",
+        "warm key",
+        "soft key",
+        "hard key",
+        "cool rim",
+        "warm rim",
+        "soft fill",
+        "hard fill",
+    )
+    found = sorted(
+        (lowered.index(cue), cue) for cue in lighting_cues if cue in lowered
+    )
+    if found:
+        overrides["lighting_ratio"] = ", ".join(cue for _, cue in found)
+    return overrides
+
+
 def _recipes(kind: CustomerKind) -> list[dict]:
     """Ordered coverage patterns. Extra slots loop from the middle."""
     base: list[dict] = [
@@ -707,7 +755,13 @@ def refresh_reference_shot(project: Project, shot: Shot) -> Shot:
     and same-world camera lock instead of replaying stale creative direction.
     """
     _upgrade_binding_reference_contract(project)
-    if shot.reference_lock == ReferenceLock.NONE:
+    sample_camera = (
+        _explicit_sample_camera(project.brief.idea)
+        if project.brief is not None
+        and project.brief.production_kind == ProductionKind.SAMPLE
+        else {}
+    )
+    if shot.reference_lock == ReferenceLock.NONE and not sample_camera:
         return shot
     try:
         index = next(i for i, item in enumerate(project.shots) if item.id == shot.id)
@@ -719,6 +773,10 @@ def refresh_reference_shot(project: Project, shot: Shot) -> Shot:
         shot.t_stop = anchor.t_stop
         shot.lighting_ratio = anchor.lighting_ratio
         shot.camera_move = CameraMove.STATIC
+    shot.focal_mm = sample_camera.get("focal_mm", shot.focal_mm)
+    shot.t_stop = sample_camera.get("t_stop", shot.t_stop)
+    shot.lighting_ratio = sample_camera.get("lighting_ratio", shot.lighting_ratio)
+    shot.camera_move = sample_camera.get("camera_move", shot.camera_move)
     idea = (
         _idea_body(project.brief, project.assets)
         if project.brief is not None
@@ -800,6 +858,7 @@ def expand_idea(
     subject_image_ids = _subject_image_ids(brief.idea, image_ids) if image_is_subject else []
     scenes = _script_scenes(brief.idea)
     scene_schedule = _scene_schedule(scenes, n)
+    sample_camera = _explicit_sample_camera(brief.idea) if is_sample else {}
     char_id = "char-lead"
     stills = subject_image_ids or image_ids[:2] or ["still-lead-wide", "still-lead-close"]
     character = Character(
@@ -866,6 +925,10 @@ def expand_idea(
             t_stop = anchor["t_stop"]
             lighting_ratio = anchor["lighting_ratio"]
             camera_move = CameraMove.STATIC
+        focal_mm = sample_camera.get("focal_mm", focal_mm)
+        t_stop = sample_camera.get("t_stop", t_stop)
+        lighting_ratio = sample_camera.get("lighting_ratio", lighting_ratio)
+        camera_move = sample_camera.get("camera_move", camera_move)
         continuity_mode = ContinuityMode.REFERENCE if i == 0 and keys else ContinuityMode.INDEPENDENT
         overlap_frames = 0
         if reference_lock != ReferenceLock.NONE:

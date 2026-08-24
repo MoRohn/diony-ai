@@ -101,6 +101,60 @@ def test_stop_keep_cancels_future_camera_and_saves_a_stitched_incomplete_result(
     ]
     assert client.post("/api/studio/roll").status_code == 409
     assert client.get("/api/run").json()["phase"] == "stopped"
+    gallery = client.get("/api/gallery").json()
+    kept = next(item for item in gallery["items"] if item["project_id"] == project.id)
+    assert kept["id"] == f"program-{project.id}"
+    assert kept["playable"] is True
+    assert kept["finished"] is False
+    assert kept["plate"] == "720 incomplete · not final"
+    assert kept["file_url"].startswith(f"/api/projects/{project.id}/program/preview")
+
+
+def test_stop_keep_drains_the_active_clip_then_publishes_it_to_gallery(
+    tmp_path, monkeypatch
+) -> None:
+    app_module = import_module("diony_producer.app")
+    farm_module = import_module("diony_producer.farm")
+    stop_module = import_module("diony_producer.production_stop")
+    client = TestClient(app_module.app)
+    project = _opened_project(client)
+    app_module._project = project
+    farm_module.reset_farm()
+    active_take_id = project.shots[0].selected_take_id or ""
+    rolling = {"value": True}
+    monkeypatch.setattr(app_module, "should_proxy", lambda: False)
+    monkeypatch.setattr(app_module, "camera_rolling", lambda: rolling["value"])
+    monkeypatch.setattr(app_module, "read_camera_lock", lambda: {"take_id": active_take_id})
+
+    requested = client.post("/api/production/stop", json={"disposition": "keep"})
+
+    assert requested.status_code == 200
+    assert project.production_stop is None
+    assert project.production_pause is not None
+    assert project.production_pause.reason == "stop_keep"
+    assert project.production_pause.after_take_id == active_take_id
+
+    landed = _land_completed_negatives(project, tmp_path, 1)
+
+    def fake_stitch(clips, destination, fps):
+        assert [row[0] for row in clips] == landed
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"kept" * 160)
+        return destination
+
+    monkeypatch.setattr(stop_module, "stitch_masters", fake_stitch)
+    monkeypatch.setattr(app_module, "abort_farm", lambda: None)
+    monkeypatch.setattr(app_module, "abort_finish", lambda: None)
+    monkeypatch.setattr(app_module, "abort_mix", lambda: None)
+    rolling["value"] = False
+
+    app_module._advance_legacy_once()
+
+    assert project.production_pause is None
+    assert project.production_stop is not None
+    assert project.production_stop.completed_take_ids == [active_take_id]
+    gallery = client.get("/api/gallery").json()
+    assert any(item["id"] == f"program-{project.id}" for item in gallery["items"])
 
 
 def test_stop_delete_removes_generated_project_media_and_is_idempotent(tmp_path) -> None:

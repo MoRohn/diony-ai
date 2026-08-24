@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import subprocess
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,18 +27,70 @@ from diony_wizard.remote import (
 )
 
 HF_PACK = [
-    ("deepseek-ai/DeepSeek-V4-Flash-0731", "/models/deepseek/DeepSeek-V4-Flash-0731", ""),
-    ("Wan-AI/Wan2.2-T2V-A14B", "/models/wan/Wan2.2-T2V-A14B", ""),
-    ("Wan-AI/Wan2.2-I2V-A14B", "/models/wan/Wan2.2-I2V-A14B", ""),
-    ("Wan-AI/Wan2.2-S2V-14B", "/models/wan/Wan2.2-S2V-14B", ""),
-    ("Wan-AI/Wan2.2-Animate-14B", "/models/wan/Wan2.2-Animate-14B", ""),
-    ("alibaba-pai/Wan2.2-VACE-Fun-A14B", "/models/wan/Wan2.2-VACE-Fun-A14B", ""),
-    ("ai-forever/Real-ESRGAN", "/models/diony/diony_sr_v1", "RealESRGAN_x2.pth"),
+    (
+        "deepseek-ai/DeepSeek-V4-Flash-0731",
+        "/models/deepseek/DeepSeek-V4-Flash-0731",
+        "",
+        "7872f01b1d1fe23eabc4c98b48bffcef5a386062",
+        74,
+        166898661074,
+    ),
+    (
+        "Wan-AI/Wan2.2-T2V-A14B",
+        "/models/wan/Wan2.2-T2V-A14B",
+        "",
+        "c8c270b13ee05bfa474194ac9fb07a5868a97cea",
+        32,
+        126201624837,
+    ),
+    (
+        "Wan-AI/Wan2.2-I2V-A14B",
+        "/models/wan/Wan2.2-I2V-A14B",
+        "",
+        "206a9ee1b7bfaaf8f7e4d81335650533490646a3",
+        33,
+        126205359703,
+    ),
+    (
+        "Wan-AI/Wan2.2-S2V-14B",
+        "/models/wan/Wan2.2-S2V-14B",
+        "",
+        "dab4e9c55bbe4c8c4d03db1c2c98c7f0ac9c454b",
+        49,
+        49148820007,
+    ),
+    (
+        "Wan-AI/Wan2.2-Animate-14B",
+        "/models/wan/Wan2.2-Animate-14B",
+        "",
+        "cb93a225fbaf1ca100f54e79da8f994995b689b3",
+        444,
+        72376533926,
+    ),
+    (
+        "alibaba-pai/Wan2.2-VACE-Fun-A14B",
+        "/models/wan/Wan2.2-VACE-Fun-A14B",
+        "",
+        "4438caabbfdd7437bbb0283d86cb200d1b7223ba",
+        14,
+        81241676782,
+    ),
+    (
+        "ai-forever/Real-ESRGAN",
+        "/models/diony/diony_sr_v1",
+        "RealESRGAN_x2.pth",
+        "8110204ebf8d25c031b66c26c2d1098aa831157e",
+        1,
+        67061725,
+    ),
 ]
 
 COSYVOICE_MODEL = (
     "FunAudioLLM/CosyVoice2-0.5B",
     "/diony/vault/models/audio/CosyVoice2-0.5B",
+    "eec1ae6c79877dbd9379285cf8789c9e0879293d",
+    19,
+    4856505002,
 )
 
 _lock = threading.RLock()
@@ -116,20 +169,31 @@ def _log(line: str, epoch: int | None = None) -> None:
 
 def hf_download_lines() -> list[str]:
     lines = []
-    for repo, dest, filename in HF_PACK:
+    for repo, dest, filename, revision, _files, _bytes in HF_PACK:
         lines.append(f"mkdir -p {dest}")
         if filename:
             lines.append(
-                f"huggingface-cli download {repo} {filename} --local-dir {dest}"
+                f"huggingface-cli download {repo} {filename} --revision {revision} --local-dir {dest}"
             )
         else:
-            lines.append(f"huggingface-cli download {repo} --local-dir {dest}")
+            lines.append(f"huggingface-cli download {repo} --revision {revision} --local-dir {dest}")
     return lines
 
 
 def site_readiness_script(repo: str) -> str:
-    """Read-only remote probe used before setup or any model download."""
+    """Fast read-only remote probe used before setup or any model download.
+
+    GPU runtime imports are deliberately excluded here. Setup writes a versioned
+    receipt after performing that expensive validation under the exact Wan
+    interpreter; Connect verifies the receipt and filesystem contract instead.
+    """
     quoted_repo = repr(repo)
+    expected_snapshots = {
+        dest: (revision, files, payload_bytes)
+        for _repo, dest, _filename, revision, files, payload_bytes in HF_PACK
+    }
+    expected_snapshots[COSYVOICE_MODEL[1]] = COSYVOICE_MODEL[2:]
+    quoted_snapshots = repr(expected_snapshots)
     return f"""
 python3 - <<'PY'
 import json
@@ -139,6 +203,7 @@ import subprocess
 from pathlib import Path
 
 repo = Path({quoted_repo})
+expected_snapshots = {quoted_snapshots}
 
 def populated(raw):
     path = Path(raw)
@@ -147,14 +212,52 @@ def populated(raw):
     except OSError:
         return False
 
-required = [
-    "/models/deepseek/DeepSeek-V4-Flash-0731",
-    "/models/wan/Wan2.2-T2V-A14B",
-    "/models/wan/Wan2.2-I2V-A14B",
-    "/models/wan/Wan2.2-S2V-14B",
-    "/models/wan/Wan2.2-Animate-14B",
-    "/models/wan/Wan2.2-VACE-Fun-A14B",
-]
+def snapshot_state(raw, expected):
+    expected_revision, expected_files, expected_bytes = expected
+    root = Path(raw)
+    if not root.is_dir():
+        return {{"complete": False, "pinned": False, "revision": ""}}
+    if any(root.rglob("*.incomplete")):
+        return {{"complete": False, "pinned": False, "revision": ""}}
+    metadata = sorted(root.rglob("*.metadata"))
+    revisions = set()
+    complete = bool(metadata)
+    payload_bytes = 0
+    payload_files = 0
+    for meta in metadata:
+        try:
+            lines = meta.read_text(errors="replace").splitlines()
+            revision = lines[0].strip() if lines else ""
+            revisions.add(revision)
+            download = meta.parent
+            while download.name != "download" and download != root:
+                download = download.parent
+            relative = meta.relative_to(download)
+            target = root / str(relative).removesuffix(".metadata")
+            complete = complete and target.is_file() and target.stat().st_size > 0
+            if target.is_file():
+                payload_files += 1
+                payload_bytes += target.stat().st_size
+        except (OSError, ValueError):
+            complete = False
+    revision = next(iter(revisions)) if len(revisions) == 1 else ""
+    return {{
+        "complete": (
+            complete
+            and bool(revision)
+            and payload_files == expected_files
+            and payload_bytes == expected_bytes
+        ),
+        "pinned": complete and revision == expected_revision,
+        "revision": revision,
+    }}
+
+snapshot_states = {{
+    path: snapshot_state(path, expected)
+    for path, expected in expected_snapshots.items()
+}}
+snapshot_complete = all(row["complete"] for row in snapshot_states.values())
+snapshot_pinned = all(row["pinned"] for row in snapshot_states.values())
 sr = Path("/models/diony/diony_sr_v1")
 cosy_model = Path("/diony/vault/models/audio/CosyVoice2-0.5B")
 cosy_required = (
@@ -170,35 +273,40 @@ model_volume = all(
     (Path("/models") / kind).resolve() == volume_root / kind
     for kind in ("deepseek", "wan", "diony", "audio")
 )
-pack = all(populated(path) for path in required) and (
+pack = snapshot_complete and snapshot_pinned and (
     (sr / "RealESRGAN_x2.pth").is_file() or bool(list(sr.glob("*.pth")))
 ) and cosy_ready
 wan_repo = Path("/opt/wan22/.git").is_dir()
 cosy_root = Path("/diony/vault/runtime/cosyvoice/CosyVoice")
 cosy_python = Path("/diony/vault/runtime/cosyvoice/venv/bin/python")
 cosy_repo = (cosy_root / ".git").is_dir()
-cosy_env = os.environ.copy()
-cosy_env["PYTHONPATH"] = str(cosy_root) + ":" + str(
-    cosy_root / "third_party" / "Matcha-TTS"
+cosy_runtime = all((cosy_root / relative).exists() for relative in (
+    "cosyvoice/cli/cosyvoice.py",
+    "third_party/Matcha-TTS",
+)) and cosy_repo and cosy_python.is_file()
+voice_backend = (
+    repo / "apps" / "producer" / "src" / "diony_producer" / "cosyvoice_backend.py"
+).is_file()
+runtime_receipt_path = Path("/diony/vault/.cluster/wan-host-runtime.json")
+try:
+    runtime_report = json.loads(runtime_receipt_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError, TypeError):
+    runtime_report = {{}}
+optional_engines = {{
+    name: bool(runtime_report.get("capabilities", {{}}).get(name, {{}}).get("available"))
+    for name in ("s2v", "animate")
+}}
+runtime_python = Path(str(runtime_report.get("python") or ""))
+runtime_roots = str(runtime_report.get("wan_repo") or "").split(os.pathsep)
+wan_runtime = bool(
+    runtime_report.get("schema_version") == 1
+    and runtime_report.get("ok") is True
+    and runtime_report.get("required_capabilities_ready") is True
+    and str(runtime_report.get("checked_at") or "").strip()
+    and "/opt/wan22" in runtime_roots
+    and runtime_python.is_file()
+    and all(optional_engines.values())
 )
-cosy_runtime = cosy_repo and cosy_python.is_file() and subprocess.run(
-    [str(cosy_python), "-c", "from cosyvoice.cli.cosyvoice import CosyVoice2"],
-    stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL,
-    env=cosy_env,
-    check=False,
-).returncode == 0
-runtime_probe = repo / "apps" / "wan" / "src" / "diony_wan" / "runtime.py"
-host_python = Path("/usr/bin/python3")
-runtime_env = os.environ.copy()
-runtime_env["PYTHONPATH"] = "/opt/wan22"
-wan_runtime = wan_repo and runtime_probe.is_file() and host_python.is_file() and subprocess.run(
-    [str(host_python), str(runtime_probe)],
-    stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL,
-    env=runtime_env,
-    check=False,
-).returncode == 0
 producer_installed = bool(shutil.which("diony-producer")) or (
     repo / ".venv" / "bin" / "diony-producer"
 ).is_file()
@@ -208,15 +316,19 @@ producer_running = subprocess.run(
     stderr=subprocess.DEVNULL,
     check=False,
 ).returncode == 0
-prepared = pack and model_volume and wan_repo and cosy_runtime
+prepared = pack and model_volume and wan_repo and cosy_runtime and voice_backend
 print("DIONY_SITE_STATE " + json.dumps({{
     "prepared": prepared,
     "ready": prepared and wan_runtime and producer_installed and producer_running,
     "pack": pack,
+    "snapshot_complete": snapshot_complete,
+    "snapshot_pinned": snapshot_pinned,
+    "optional_engines": optional_engines,
     "model_volume": model_volume,
     "wan_repo": wan_repo,
     "cosy_repo": cosy_repo,
     "cosy_runtime": cosy_runtime,
+    "voice_backend": voice_backend,
     "wan_runtime": wan_runtime,
     "producer_installed": producer_installed,
     "producer_running": producer_running,
@@ -258,6 +370,13 @@ for _diony_candidate in "${{DIONY_PYTHON:-}}" /usr/bin/python3 /usr/local/bin/py
   fi
 done
 [ -n "$_DIONY_HOST_PYTHON" ] || {{ echo WAN_HOST_PYTHON_WITH_TORCH_MISSING >&2; exit 13; }}
+_DIONY_WAN_RUNTIME=/diony/vault/runtime/wan
+_DIONY_WAN_PYTHON="$_DIONY_WAN_RUNTIME/venv/bin/python"
+mkdir -p "$_DIONY_WAN_RUNTIME"
+if [ ! -x "$_DIONY_WAN_PYTHON" ]; then
+  "$_DIONY_HOST_PYTHON" -m venv --system-site-packages "$_DIONY_WAN_RUNTIME/venv"
+fi
+[ -x "$_DIONY_WAN_PYTHON" ] || {{ echo WAN_PERSISTENT_RUNTIME_MISSING >&2; exit 13; }}
 mkdir -p "$_diony_repo"
 if [ ! -x "$_diony_venv/bin/python" ]; then
   python3 -m venv "$_diony_venv" || python3 -m venv "$_diony_venv" --without-pip || true
@@ -287,31 +406,51 @@ if [ -x "$_diony_venv/bin/pip" ]; then
 fi
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 export PIP_ROOT_USER_ACTION=ignore
-export DIONY_PYTHON="${{DIONY_PYTHON:-$_DIONY_HOST_PYTHON}}"
+export DIONY_PYTHON="${{DIONY_PYTHON:-$_DIONY_WAN_PYTHON}}"
+export DIONY_VOLUME_CAPACITY_GB="${{DIONY_VOLUME_CAPACITY_GB:-1200}}"
+export DIONY_VOLUME_MIN_FREE_GB="${{DIONY_VOLUME_MIN_FREE_GB:-100}}"
+export DIONY_MODEL_HOT_CACHE="${{DIONY_MODEL_HOT_CACHE:-auto}}"
+export DIONY_MODEL_HOT_CACHE_GB="${{DIONY_MODEL_HOT_CACHE_GB:-320}}"
+export DIONY_MODEL_HOT_CACHE_MIN_FREE_GB="${{DIONY_MODEL_HOT_CACHE_MIN_FREE_GB:-64}}"
 _diony_host_wan_pip() {{
   [ -f /opt/wan22/requirements.txt ] || return 0
   local probe="$_diony_repo/apps/wan/src/diony_wan/runtime.py"
   local overlay="$_diony_repo/infra/runtime/wan-host-overlay.txt"
   local report="/diony/vault/.cluster/wan-host-runtime.json"
+  local wan_py="$DIONY_PYTHON"
+  local -a required=(--require-capability s2v --require-capability animate)
   [ -f "$probe" ] || {{ echo "WAN_RUNTIME_PROBE_MISSING $probe" >&2; return 14; }}
   [ -f "$overlay" ] || {{ echo "WAN_RUNTIME_OVERLAY_MISSING $overlay" >&2; return 14; }}
-  if PYTHONPATH=/opt/wan22 "$_DIONY_HOST_PYTHON" "$probe" --write "$report" >/dev/null 2>&1; then
+  if PYTHONPATH=/opt/wan22 "$wan_py" "$probe" "${{required[@]}}" --write "$report" >/dev/null 2>&1; then
     echo WAN_HOST_PYTHON_OK
     return 0
   fi
   echo WAN_HOST_OVERLAY_REPAIR
-  PIP_BREAK_SYSTEM_PACKAGES=1 PIP_ROOT_USER_ACTION=ignore \\
-    "$_DIONY_HOST_PYTHON" -m pip install --disable-pip-version-check \\
+  PIP_ROOT_USER_ACTION=ignore \\
+    "$wan_py" -m pip install --disable-pip-version-check \\
       --upgrade-strategy only-if-needed -r "$overlay"
-  if PYTHONPATH=/opt/wan22 "$_DIONY_HOST_PYTHON" "$probe" --write "$report" >/dev/null 2>&1; then
+  if PYTHONPATH=/opt/wan22 "$wan_py" "$probe" "${{required[@]}}" --write "$report" >/dev/null 2>&1; then
     echo WAN_HOST_PYTHON_OK
     return 0
   fi
   grep -viE '^[[:space:]]*(flash_attn|numpy)|^[[:space:]]*#' /opt/wan22/requirements.txt > /tmp/diony-wan-req.txt || true
-  PIP_BREAK_SYSTEM_PACKAGES=1 PIP_ROOT_USER_ACTION=ignore \\
-    "$_DIONY_HOST_PYTHON" -m pip install --disable-pip-version-check \\
+  PIP_ROOT_USER_ACTION=ignore \\
+    "$wan_py" -m pip install --disable-pip-version-check \\
       --upgrade-strategy only-if-needed -r /tmp/diony-wan-req.txt -r "$overlay"
-  PYTHONPATH=/opt/wan22 "$_DIONY_HOST_PYTHON" "$probe" --write "$report"
+  if [ -f /opt/wan22/requirements_s2v.txt ]; then
+    PIP_ROOT_USER_ACTION=ignore "$wan_py" -m pip install --disable-pip-version-check \\
+      --upgrade-strategy only-if-needed -r /opt/wan22/requirements_s2v.txt
+  fi
+  if [ -f /opt/wan22/requirements_animate.txt ]; then
+    grep -viE '^[[:space:]]*-e[[:space:]]+git\\+https://github.com/facebookresearch/sam2' \\
+      /opt/wan22/requirements_animate.txt > /tmp/diony-wan-animate-req.txt || true
+    PIP_ROOT_USER_ACTION=ignore "$wan_py" -m pip install --disable-pip-version-check \\
+      --upgrade-strategy only-if-needed ninja -r /tmp/diony-wan-animate-req.txt
+    PIP_ROOT_USER_ACTION=ignore "$wan_py" -m pip install --disable-pip-version-check \\
+      --no-build-isolation --upgrade-strategy only-if-needed \\
+      -e 'git+https://github.com/facebookresearch/sam2.git@0e78a118995e66bb27d78518c4bd9a3e95b4e266#egg=SAM-2'
+  fi
+  PYTHONPATH=/opt/wan22 "$wan_py" "$probe" "${{required[@]}}" --write "$report"
   echo WAN_HOST_PYTHON_OK
 }}
 _diony_link_system_torch() {{
@@ -410,11 +549,21 @@ _diony_hardlink_identical() {
   local canonical="$1"
   shift
   [ -f "$canonical" ] || return 0
-  local candidate pending
+  local candidate pending basename canonical_meta candidate_meta canonical_etag candidate_etag
+  basename=$(basename "$canonical")
+  canonical_meta="$(dirname "$canonical")/.cache/huggingface/download/${basename}.metadata"
+  canonical_etag=$(sed -n '2p' "$canonical_meta" 2>/dev/null || true)
   for candidate in "$@"; do
     [ -f "$candidate" ] || continue
     [ "$canonical" -ef "$candidate" ] && continue
-    cmp -s "$canonical" "$candidate" || continue
+    candidate_meta="$(dirname "$candidate")/.cache/huggingface/download/${basename}.metadata"
+    candidate_etag=$(sed -n '2p' "$candidate_meta" 2>/dev/null || true)
+    if [ -n "$canonical_etag" ] && [ -n "$candidate_etag" ]; then
+      [ "$canonical_etag" = "$candidate_etag" ] || continue
+      [ "$(stat -c '%s' "$canonical")" = "$(stat -c '%s' "$candidate")" ] || continue
+    else
+      cmp -s "$canonical" "$candidate" || continue
+    fi
     pending="${candidate}.diony-link"
     ln -f "$canonical" "$pending"
     mv -f "$pending" "$candidate"
@@ -538,23 +687,46 @@ mkdir -p /diony/vault/.cluster
 {hub}
 echo HF_START
 _diony_python - <<'PY'
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from huggingface_hub import hf_hub_download, snapshot_download
 import os
 import sys
 PACK = {pack}
-for item in PACK:
-    repo_id, dest, filename = item
+try:
+    pull_workers = min(4, max(1, int(os.environ.get("DIONY_MODEL_PULL_WORKERS", "2"))))
+    file_workers = min(8, max(1, int(os.environ.get("DIONY_HF_FILE_WORKERS", "4"))))
+except ValueError:
+    pull_workers, file_workers = 2, 4
+
+def pull(item):
+    repo_id, dest, filename, revision, _expected_files, _expected_bytes = item
     print(f"HF_PULL {{repo_id}} -> {{dest}}", flush=True)
     os.makedirs(dest, exist_ok=True)
     try:
         if filename:
-            hf_hub_download(repo_id=repo_id, filename=filename, local_dir=dest)
+            hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                revision=revision,
+                local_dir=dest,
+            )
         else:
-            snapshot_download(repo_id=repo_id, local_dir=dest)
+            snapshot_download(
+                repo_id=repo_id,
+                revision=revision,
+                local_dir=dest,
+                max_workers=file_workers,
+            )
     except Exception as exc:
         print(f"HF_FAIL {{repo_id}}: {{exc}}", file=sys.stderr, flush=True)
         raise
-    print(f"HF_DONE {{repo_id}}", flush=True)
+    return repo_id
+
+with ThreadPoolExecutor(max_workers=min(pull_workers, len(PACK))) as pool:
+    futures = [pool.submit(pull, item) for item in PACK]
+    for future in as_completed(futures):
+        repo_id = future.result()
+        print(f"HF_DONE {{repo_id}}", flush=True)
 print("HF_OK", flush=True)
 PY
 {dedupe}
@@ -588,15 +760,21 @@ if ! PYTHONPATH="$COSY_ROOT:$COSY_ROOT/third_party/Matcha-TTS" "$COSY_PY" -c "fr
       --upgrade-strategy only-if-needed -r /opt/wan22/requirements_s2v.txt
 fi
 PYTHONPATH="$COSY_ROOT:$COSY_ROOT/third_party/Matcha-TTS" "$COSY_PY" -c "from cosyvoice.cli.cosyvoice import CosyVoice2; import modelscope"
+export DIONY_COSYVOICE_PYTHON="$COSY_PY"
+export DIONY_COSYVOICE_ROOT="$COSY_ROOT"
+export DIONY_COSYVOICE_MODEL=/diony/vault/models/audio/CosyVoice2-0.5B
+export DIONY_COSYVOICE_PROMPT_AUDIO=/opt/wan22/examples/zero_shot_prompt.wav
+export DIONY_VOICE_BACKEND_COMMAND="$_diony_venv/bin/python $_diony_repo/apps/producer/src/diony_producer/cosyvoice_backend.py"
+export DIONY_SPEAKER_EMBEDDING_MODEL=cosyvoice-campplus-v1
 _diony_python - <<'PY'
 import os
 from huggingface_hub import snapshot_download
-repo_id, dest = {cosy_model}
+repo_id, dest, revision, _expected_files, _expected_bytes = {cosy_model}
 os.makedirs(dest, exist_ok=True)
 required = ("cosyvoice2.yaml", "llm.pt", "flow.pt", "hift.pt", "speech_tokenizer_v2.onnx")
 if not all(os.path.isfile(os.path.join(dest, name)) for name in required):
     print(f"COSYVOICE_PULL {{repo_id}} -> {{dest}}", flush=True)
-    snapshot_download(repo_id=repo_id, local_dir=dest)
+    snapshot_download(repo_id=repo_id, revision=revision, local_dir=dest, max_workers=4)
 missing = [name for name in required if not os.path.isfile(os.path.join(dest, name))]
 if missing:
     raise RuntimeError(f"CosyVoice snapshot incomplete: {{', '.join(missing)}}")
@@ -892,6 +1070,18 @@ def ensure_producer(path: str, hosts: list[str], *, nas: str = "") -> dict:
     return public_apply()
 
 
+def apply_exception_text(exc: Exception) -> str:
+    """Return an actionable public error without exposing an SSH argv or key path."""
+    if isinstance(exc, subprocess.TimeoutExpired):
+        seconds = int(float(exc.timeout))
+        return (
+            "The compute connection was recorded, but the read-only readiness check did not "
+            f"finish within {seconds} seconds. Diony did not stop or restart Producer. "
+            "Retry validation when the active workload has settled."
+        )
+    return str(exc)[:2000]
+
+
 def _run_producer(path: str, hosts: list[str], nas: str, epoch: int) -> None:
     primary = hosts[0] if hosts else "spark-01"
     repo = os.environ.get("DIONY_REPO", "").strip() or (
@@ -910,7 +1100,7 @@ def _run_producer(path: str, hosts: list[str], nas: str, epoch: int) -> None:
         _log("Producer is up. Sign writes site.json, then open it.", epoch)
         _commit_job(epoch, ok=True, running=False, error="", detail="producer started")
     except Exception as exc:  # noqa: BLE001
-        err = str(exc)[:2000]
+        err = apply_exception_text(exc)
         if not _commit_job(epoch, ok=False, running=False, error=err, detail=err):
             return
         _log(f"FAIL {err}", epoch)
@@ -927,12 +1117,17 @@ def _run_apply(path: str, hosts: list[str], nas: str, epoch: int) -> None:
         _log("Check Site before any model pull", epoch)
         readiness: list[dict] = []
         for host in hosts or [primary]:
-            result = exec_host(host, site_readiness_script(repo), timeout=45)
+            result = exec_host(host, site_readiness_script(repo), timeout=90)
             readiness.append(parse_site_readiness(result))
         primary_state = readiness[0] if readiness else {}
         if primary_state.get("prepared"):
             _log("Site already prepared. Model pull skipped.", epoch)
-            if not primary_state.get("producer_running") or not primary_state.get("wan_runtime"):
+            if primary_state.get("producer_running") and not primary_state.get("wan_runtime"):
+                raise RuntimeError(
+                    "Producer is active, but its last verified Wan runtime receipt is missing or invalid. "
+                    "Finish or stop the active production, then retry validation. Diony did not interrupt Producer."
+                )
+            if not primary_state.get("producer_running"):
                 if not apply_local(primary):
                     primed = exec_host(primary, f"mkdir -p {shlex.quote(repo)}", timeout=30)
                     if not primed.ok:
@@ -1033,7 +1228,7 @@ def _run_apply(path: str, hosts: list[str], nas: str, epoch: int) -> None:
             pull_skipped=False,
         )
     except Exception as exc:  # noqa: BLE001 — apply must surface the miss
-        err = str(exc)[:2000]
+        err = apply_exception_text(exc)
         if not _commit_job(epoch, ok=False, running=False, error=err, detail=err):
             return
         _log(f"FAIL {err}", epoch)
