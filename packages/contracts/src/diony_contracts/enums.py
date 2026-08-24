@@ -173,3 +173,16 @@ class GalleryCompositionStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     SUPERSEDED = "superseded"
+
+
+class VoiceProfileSource(StrEnum):
+    ZERO_SHOT = "zero_shot"
+    FEW_SHOT = "few_shot"
+    SYNTHETIC = "synthetic"
+
+
+class VoiceRenderState(StrEnum):
+    PLANNED = "planned"
+    AUDIO_LOCKED = "audio_locked"
+    VERIFIED = "verified"
+    FAILED = "failed"

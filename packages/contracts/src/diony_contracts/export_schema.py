@@ -24,6 +24,10 @@ from diony_contracts.models import (
     Take,
     Timeline,
     WanPromptPlan,
+    PerformanceScript,
+    VoiceClipPackage,
+    VoiceProfile,
+    VoiceQCReceipt,
 )
 from diony_contracts.launch import (
     InvitationEmailDelivery,
@@ -72,6 +76,10 @@ def main() -> None:
         "qc_report": QCReport,
         "timeline": Timeline,
         "wan_prompt_plan": WanPromptPlan,
+        "voice_profile": VoiceProfile,
+        "performance_script": PerformanceScript,
+        "voice_clip_package": VoiceClipPackage,
+        "voice_qc_receipt": VoiceQCReceipt,
         "mix_lock": MixLock,
         "deliverable": Deliverable,
         "note": Note,

@@ -17,6 +17,7 @@ from pathlib import Path
 
 from diony_contracts.enums import AssetKind
 from diony_contracts.models import Asset, Project
+from diony_contracts.voice import VoiceClipPackage
 from diony_finish.pipeline import FinishError, finished_media_has_picture, verify_finished_media
 
 from diony_producer.gallery_join import resolve_media_tool
@@ -192,96 +193,99 @@ def _write_room_tone(
 def _dialogue_script(project: Project) -> str:
     lines: list[str] = []
     for shot in project.shots:
-        line = " ".join(str(shot.audio_line or "").split()).strip()
-        if line and line not in lines:
-            lines.append(line)
+        candidates = [turn.text for turn in shot.dialogue_turns]
+        if shot.audio_line:
+            candidates.insert(0, shot.audio_line)
+        for candidate in candidates:
+            line = " ".join(str(candidate or "").split()).strip()
+            if line and line not in lines:
+                lines.append(line)
     return " ".join(lines)
 
 
-def _write_dialogue_stem(
+def _selected_take_for_shot(project: Project, shot_id: str):
+    shot = project.shot(shot_id)
+    if shot.selected_take_id:
+        try:
+            return project.take(shot.selected_take_id)
+        except KeyError:
+            return None
+    takes = project.takes_for(shot_id)
+    return takes[-1] if takes else None
+
+
+def _locked_voice_sources(
+    project: Project,
+) -> list[tuple[Path, float, VoiceClipPackage]]:
+    """Resolve verified per-clip mixes at their frame-authoritative timeline starts."""
+    if project.timeline is None:
+        raise MixError("Required dialogue needs a locked timeline")
+    starts = {event.shot_id: event.start_frame / project.timeline.fps for event in project.timeline.events}
+    sources: list[tuple[Path, float, VoiceClipPackage]] = []
+    for shot in project.shots:
+        if not shot.audio_line and not shot.dialogue_turns:
+            continue
+        take = _selected_take_for_shot(project, shot.id)
+        package = take.voice_package if take is not None else None
+        if package is None:
+            raise MixError(f"Required dialogue on {shot.id} has no locked voice package")
+        if package.state.value != "verified" or not package.qc.passed:
+            raise MixError(f"Required dialogue on {shot.id} has an unverified voice package")
+        try:
+            asset = project.asset(package.final_mix_asset_id)
+            metadata = project.asset(package.performance_metadata_asset_id)
+        except KeyError as exc:
+            raise MixError(f"Required dialogue on {shot.id} has incomplete voice package assets") from exc
+        audio = abs_path(asset.path)
+        timing = abs_path(metadata.path)
+        if not audio.is_file() or audio.stat().st_size <= 44:
+            raise MixError(f"Required dialogue on {shot.id} has no final mixed audio bytes")
+        if not timing.is_file() or timing.stat().st_size <= 32:
+            raise MixError(f"Required dialogue on {shot.id} has no performance timing metadata")
+        sources.append((audio, max(0.0, starts.get(shot.id, 0.0)), package))
+    return sorted(sources, key=lambda row: (row[1], row[2].shot_id))
+
+
+def _write_locked_voice_stem(
     destination: Path,
     *,
     ffmpeg: str,
-    ffprobe: str,
+    sources: list[tuple[Path, float, VoiceClipPackage]],
     duration: float,
     target: float,
     peak: float,
-    script: str,
 ) -> None:
-    """Render local CosyVoice speech, then conform it as a measured program stem."""
-    root = Path(os.environ.get("DIONY_COSYVOICE_ROOT", "/opt/wan22/CosyVoice"))
-    model = Path(
-        os.environ.get("DIONY_COSYVOICE_MODEL", "/models/audio/CosyVoice2-0.5B")
-    )
-    prompt_audio = Path(
-        os.environ.get(
-            "DIONY_COSYVOICE_PROMPT_AUDIO",
-            "/opt/wan22/examples/zero_shot_prompt.wav",
-        )
-    )
-    missing = [
-        label
-        for label, path in (
-            ("CosyVoice runtime", root),
-            ("CosyVoice model", model),
-            ("voice prompt", prompt_audio),
-        )
-        if not path.exists()
-    ]
-    if missing:
-        raise MixError(
-            "Required dialogue is planned, but local CosyVoice is not prepared: "
-            + ", ".join(missing)
-        )
-    host_python = os.environ.get(
-        "DIONY_COSYVOICE_PYTHON",
-        os.environ.get("DIONY_PYTHON", "/usr/bin/python3"),
-    ).strip()
-    worker = Path(__file__).with_name("cosyvoice_worker.py")
+    """Assemble already-produced clip mixes; synthesis never occurs at final mix."""
+    if not sources:
+        raise MixError("Required dialogue has no verified per-clip voice packages")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    raw = destination.with_name(f".{destination.stem}.voice.part.wav")
     pending = destination.with_name(f".{destination.stem}.part.wav")
-    raw.unlink(missing_ok=True)
     pending.unlink(missing_ok=True)
-    _run(
-        [
-            host_python,
-            str(worker),
-            "--root",
-            str(root),
-            "--model",
-            str(model),
-            "--prompt-audio",
-            str(prompt_audio),
-            "--text",
-            script,
-            "--output",
-            str(raw),
-        ],
-        label="local CosyVoice dialogue render",
-        timeout=900,
-    )
-    if not raw.is_file() or raw.stat().st_size <= 44:
-        raise MixError("Required dialogue render returned no audio bytes")
-    speech_duration = _duration_seconds(raw, ffprobe)
-    if speech_duration + 0.25 > duration:
-        raise MixError(
-            f"Required dialogue is {speech_duration:.2f}s but picture is only {duration:.2f}s"
+    command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+    for audio, _start, _package in sources:
+        command.extend(["-i", str(audio)])
+    filters: list[str] = []
+    labels: list[str] = []
+    for index, (_audio, start_seconds, _package) in enumerate(sources):
+        delay_ms = max(0, round(start_seconds * 1000))
+        label = f"voice{index}"
+        filters.append(
+            f"[{index}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+            f"adelay={delay_ms}|{delay_ms}[{label}]"
         )
-    _run(
+        labels.append(f"[{label}]")
+    filters.append(
+        "".join(labels)
+        + f"amix=inputs={len(labels)}:normalize=0:dropout_transition=0,"
+        + f"apad,atrim=0:{duration:.6f},"
+        + f"loudnorm=I={target:g}:TP={peak:g}:LRA=7[out]"
+    )
+    command.extend(
         [
-            ffmpeg,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-i",
-            str(raw),
-            "-af",
-            (
-                f"adelay=250:all=1,apad,atrim=0:{duration:.6f},"
-                f"loudnorm=I={target:g}:TP={peak:g}:LRA=7"
-            ),
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            "[out]",
             "-ar",
             "48000",
             "-ac",
@@ -289,12 +293,11 @@ def _write_dialogue_stem(
             "-c:a",
             "pcm_s24le",
             str(pending),
-        ],
-        label="dialogue stem conform",
+        ]
     )
-    raw.unlink(missing_ok=True)
+    _run(command, label="locked voice stem assembly")
     if not pending.is_file() or pending.stat().st_size <= 44:
-        raise MixError("Required dialogue stem bytes are missing")
+        raise MixError("Locked per-clip voice assembly returned no audio bytes")
     os.replace(pending, destination)
 
 
@@ -354,7 +357,7 @@ def _mix_revision(project: Project) -> int:
 
 
 def bounce_mix(project: Project) -> None:
-    """Bounce measured local dialogue or an honest picture-only room-tone rail."""
+    """Assemble locked per-clip voice mixes or an honest picture-only room-tone rail."""
     if project.mix is None or project.timeline is None or not project.timeline.preview_path:
         raise MixError("Mix needs a finished program timeline")
     master = abs_path(project.timeline.preview_path)
@@ -371,6 +374,7 @@ def bounce_mix(project: Project) -> None:
     peak = project.bible.true_peak_dbtp
     revision = _mix_revision(project)
     script = _dialogue_script(project)
+    voice_sources = _locked_voice_sources(project) if script else []
     role = "dialogue_stem" if script else "room_tone_stem"
     stem_rel = (
         f"projects/{project.id}/program/{project.timeline.id}/stems/"
@@ -379,14 +383,13 @@ def bounce_mix(project: Project) -> None:
     stem = abs_path(stem_rel)
     duration = _duration_seconds(master, ffprobe)
     if script:
-        _write_dialogue_stem(
+        _write_locked_voice_stem(
             stem,
             ffmpeg=ffmpeg,
-            ffprobe=ffprobe,
+            sources=voice_sources,
             duration=duration,
             target=target,
             peak=peak,
-            script=script,
         )
     else:
         _write_room_tone(stem, ffmpeg=ffmpeg, duration=duration, target=target, peak=peak)
@@ -420,6 +423,11 @@ def bounce_mix(project: Project) -> None:
             "measured_lufs": measured,
             "true_peak_dbtp": true_peak,
             "script_sha256": hashlib.sha256(script.encode("utf-8")).hexdigest() if script else "",
+            "voice_package_count": len(voice_sources),
+            "voice_pipeline": "locked_per_clip" if voice_sources else "none",
+            "voice_package_sha256": hashlib.sha256(
+                "|".join(package.cache_key for _, _, package in voice_sources).encode("utf-8")
+            ).hexdigest() if voice_sources else "",
         },
     )
     project.assets.append(asset)

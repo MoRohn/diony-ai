@@ -29,8 +29,10 @@ from diony_desk.boot import (
     should_open_studio_after_work,
     user_data_dir,
     producer_state_ok,
+    producer_html_ok,
     producer_ui_stamp,
     product_names_live,
+    wizard_html_ok,
     wizard_state_ok,
     wizard_ui_stamp,
     work,
@@ -117,6 +119,20 @@ def test_ready_studio_reuses_an_open_lobby_instead_of_opening_another_page() -> 
     assert should_open_studio_after_work(lobby_opened=True, phase="ready") is False
     assert should_open_studio_after_work(lobby_opened=False, phase="ready") is True
     assert should_open_studio_after_work(lobby_opened=False, phase="error") is False
+
+
+def test_duplicate_launch_exits_without_opening_another_browser_page(monkeypatch) -> None:
+    opened: list[str] = []
+    monkeypatch.setattr("diony_desk.boot.claim_desk_port", lambda root=None: True)
+    monkeypatch.setattr("diony_desk.boot.desk_already_installed", lambda root=None: True)
+    monkeypatch.setattr("diony_desk.boot.ensure_product_names", lambda root=None: True)
+    monkeypatch.setattr("diony_desk.boot.product_names_live", lambda: True)
+    monkeypatch.setattr("diony_desk.boot.open_browser", opened.append)
+
+    from diony_desk.boot import main
+
+    assert main([]) == 0
+    assert opened == []
 
 
 def test_diagnostics_use_safe_metadata_and_persistent_log_paths(
@@ -502,6 +518,42 @@ def test_wizard_state_ok_rejects_500(monkeypatch) -> None:
 
     monkeypatch.setattr("diony_desk.boot.http.client.HTTPConnection", lambda *_a, **_k: Conn())
     assert wizard_state_ok() is False
+
+
+@pytest.mark.parametrize(
+    ("check", "stamp"),
+    ((wizard_html_ok, "brand11"), (producer_html_ok, "brand6")),
+)
+def test_ui_health_check_reads_version_marker_after_20kb(
+    monkeypatch, check, stamp: str
+) -> None:
+    payload = b"x" * 30000 + f'app.js?v={stamp}'.encode()
+
+    class Resp:
+        status = 200
+
+        def read(self, amount: int | None = None) -> bytes:
+            return payload if amount is None else payload[:amount]
+
+    class Conn:
+        def request(self, *_a, **_k) -> None:
+            return None
+
+        def getresponse(self) -> Resp:
+            return Resp()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("diony_desk.boot.http.client.HTTPConnection", lambda *_a, **_k: Conn())
+    monkeypatch.setattr(
+        "diony_desk.boot.wizard_ui_stamp"
+        if check is wizard_html_ok
+        else "diony_desk.boot.producer_ui_stamp",
+        lambda root=None: stamp,
+    )
+
+    assert check() is True
 
 
 def test_producer_state_ok_requires_a_real_project_payload(monkeypatch) -> None:

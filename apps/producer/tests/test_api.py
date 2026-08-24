@@ -50,15 +50,14 @@ def test_mix_before_picture_refused() -> None:
     assert res.status_code == 400
 
 
-def test_picture_lock_after_selects() -> None:
+def test_picture_lock_refuses_spoken_selects_without_voice_performance_qc() -> None:
     client = TestClient(app)
     client.post("/api/reset")
     client.post("/api/shots/sh-020/select/sh-020-t1")
     client.post("/api/shots/sh-030/select/sh-030-t1")
     res = client.post("/api/gates/picture/lock", json={"locked_by": "test"})
-    assert res.status_code == 200
-    project = res.json()
-    assert project["timeline"]["picture_lock"] == "locked"
+    assert res.status_code == 400
+    assert "without current reference/continuity QC" in res.json()["detail"]
 
 
 def test_picture_lock_refuses_a_selected_take_that_failed_autoqc(monkeypatch) -> None:

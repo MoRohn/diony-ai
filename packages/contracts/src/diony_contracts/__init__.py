@@ -46,6 +46,8 @@ from diony_contracts.enums import (
     QCVerdict,
     ReferenceLock,
     TakeOrigin,
+    VoiceProfileSource,
+    VoiceRenderState,
 )
 from diony_contracts.fixture import demo_project
 from diony_contracts.models import (
@@ -74,6 +76,17 @@ from diony_contracts.models import (
     Timeline,
     TimelineEvent,
     WanPromptPlan,
+)
+from diony_contracts.voice import (
+    DialogueTurn,
+    EmotionPerformance,
+    PerformanceScript,
+    PerformanceScriptLine,
+    ProsodySignature,
+    VoiceClipPackage,
+    VoiceProfile,
+    VoiceQCReceipt,
+    VoiceReferenceSample,
 )
 from diony_contracts.stitch import assemble_program, program_master_rel, program_view, stitch_events
 from diony_contracts.studio import (
@@ -150,6 +163,17 @@ __all__ = [
     "Shot",
     "Take",
     "TakeOrigin",
+    "VoiceProfileSource",
+    "VoiceRenderState",
+    "DialogueTurn",
+    "EmotionPerformance",
+    "PerformanceScript",
+    "PerformanceScriptLine",
+    "ProsodySignature",
+    "VoiceClipPackage",
+    "VoiceProfile",
+    "VoiceQCReceipt",
+    "VoiceReferenceSample",
     "Timeline",
     "TimelineEvent",
     "WanPromptPlan",

@@ -513,7 +513,7 @@ def wizard_html_ok(root: Path | None = None, host: str = "127.0.0.1", port: int 
         conn.request("GET", "/")
         resp = conn.getresponse()
         code = resp.status
-        raw = resp.read(20000)
+        raw = resp.read()
         conn.close()
     except OSError:
         return False
@@ -580,7 +580,7 @@ def producer_html_ok(
         conn.request("GET", "/")
         resp = conn.getresponse()
         code = resp.status
-        raw = resp.read(20000)
+        raw = resp.read()
         conn.close()
     except OSError:
         return False
@@ -1096,8 +1096,6 @@ def main(argv: list[str] | None = None) -> int:
                 ensure_product_names()
         except Exception:
             pass
-        target = STUDIO_URL if product_names_live() else lobby_url()
-        open_browser(target)
         print(f"Diony AI is already open — {STUDIO_URL}", flush=True)
         print(f"Producer is {PRODUCER_URL}", flush=True)
         return 0

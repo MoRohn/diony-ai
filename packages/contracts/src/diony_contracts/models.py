@@ -28,6 +28,17 @@ from diony_contracts.enums import (
     ReferenceLock,
     TakeOrigin,
 )
+from diony_contracts.voice import (
+    DialogueTurn,
+    EmotionPerformance,
+    PerformanceScript,
+    PerformanceScriptLine,
+    ProsodySignature,
+    VoiceClipPackage,
+    VoiceProfile,
+    VoiceQCReceipt,
+    VoiceReferenceSample,
+)
 
 
 def _now() -> datetime:
@@ -308,6 +319,7 @@ class Character(BaseModel):
     still_asset_ids: list[str] = Field(default_factory=list)
     wardrobe: str = ""
     notes: str = ""
+    voice_profile_id: str = ""
 
 
 class Bible(BaseModel):
@@ -395,6 +407,7 @@ class Shot(BaseModel):
     engine: Engine
     finish: FinishIntent
     audio_line: str | None = None
+    dialogue_turns: list[DialogueTurn] = Field(default_factory=list, max_length=32)
     overlap_frames: int = 8
     max_takes: int = 4
     selected_take_id: str | None = None
@@ -421,8 +434,11 @@ class Shot(BaseModel):
         if self.continuity_mode == ContinuityMode.PREVIOUS_FRAME and self.overlap_frames < 1:
             raise ValueError("previous-frame continuity requires an overlap window")
         if self.engine == Engine.S2V_14B:
-            if not self.keyframe_asset_ids or not self.audio_asset_ids:
-                raise ValueError("S2V requires a reference image and recorded audio")
+            if (
+                not self.keyframe_asset_ids
+                and self.continuity_mode != ContinuityMode.PREVIOUS_FRAME
+            ) or not self.audio_asset_ids:
+                raise ValueError("S2V requires a reference image or prior frame, plus locked audio")
         if self.engine == Engine.ANIMATE_14B:
             if not self.keyframe_asset_ids or not self.motion_reference_asset_ids:
                 raise ValueError("Animate requires a character image and driving video")
@@ -444,8 +460,14 @@ class QCReport(BaseModel):
     lighting_ok: bool | None = None
     production_clean_ok: bool | None = None
     audio_ready_ok: bool | None = None
+    voice_ready_ok: bool | None = None
     lipsync_ok: bool | None = None
     loudness_ok: bool | None = None
+    voice_measurement_version: str = ""
+    speaker_similarity: float | None = Field(default=None, ge=-1, le=1)
+    voice_project_consistency: float | None = Field(default=None, ge=-1, le=1)
+    lip_sync_confidence: float | None = Field(default=None, ge=0, le=1)
+    audiovisual_offset_ms_p95: float | None = Field(default=None, ge=0)
     reference_asset_ids: list[str] = Field(default_factory=list)
     reference_similarity: float | None = None
     reference_similarities: dict[str, float] = Field(default_factory=dict)
@@ -478,6 +500,7 @@ class QCReport(BaseModel):
                 self.lighting_ok,
                 self.production_clean_ok,
                 self.audio_ready_ok,
+                self.voice_ready_ok,
             )
             if value is not None
         )
@@ -512,6 +535,7 @@ class Take(BaseModel):
     origin: TakeOrigin = TakeOrigin.GENERATION
     label: str = ""
     artifacts: list[Artifact] = Field(default_factory=list)
+    voice_package: VoiceClipPackage | None = None
 
     @model_validator(mode="after")
     def deliverable_needs_1080(self) -> Take:
@@ -678,6 +702,7 @@ class Project(BaseModel):
     assets: list[Asset] = Field(default_factory=list)
     edits: list[ClipEdit] = Field(default_factory=list)
     compositions: list[ClipComposition] = Field(default_factory=list)
+    voice_profiles: list[VoiceProfile] = Field(default_factory=list)
     timeline: Timeline | None = None
     mix: MixLock | None = None
     deliverables: list[Deliverable] = Field(default_factory=list)
@@ -721,6 +746,12 @@ class Project(BaseModel):
             if a.id == asset_id:
                 return a
         raise KeyError(asset_id)
+
+    def voice_profile(self, profile_id: str) -> VoiceProfile:
+        for profile in self.voice_profiles:
+            if profile.id == profile_id:
+                return profile
+        raise KeyError(profile_id)
 
     def mark_production_start(self) -> None:
         """First Produce/roll. Later rolls and retakes keep the same start."""

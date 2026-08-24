@@ -21,6 +21,10 @@ def test_picture_lock_writes_1080_master(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
     client = TestClient(app)
     client.post("/api/reset")
+    module = importlib.import_module("diony_producer.app")
+    for shot in module._project.shots:
+        shot.audio_line = None
+        shot.dialogue_turns = []
     sample = client.get("/api/project").json()
     module = importlib.import_module("diony_producer.app")
     # This test owns picture/finish lifecycle only. Required dialogue has its own
@@ -248,6 +252,10 @@ def test_picture_lock_refuses_live_without_sr(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
     client = TestClient(app)
     client.post("/api/reset")
+    module = importlib.import_module("diony_producer.app")
+    for shot in module._project.shots:
+        shot.audio_line = None
+        shot.dialogue_turns = []
     sample = client.get("/api/project").json()
     for shot in sample["shots"]:
         if shot.get("selected_take_id"):
@@ -283,6 +291,9 @@ def test_finish_model_failure_stays_visible_and_blocks_mix(tmp_path, monkeypatch
     client.post("/api/reset")
     sample = client.get("/api/project").json()
     module = importlib.import_module("diony_producer.app")
+    for shot in module._project.shots:
+        shot.audio_line = None
+        shot.dialogue_turns = []
     from diony_producer import farm as farm_module
 
     monkeypatch.setattr(farm_module, "_reference_similarity", lambda *args: 1.0)

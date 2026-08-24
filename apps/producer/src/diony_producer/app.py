@@ -36,6 +36,7 @@ from diony_contracts.enums import (
     ProjectStatus,
     QCVerdict,
     TakeOrigin,
+    VoiceProfileSource,
 )
 from diony_contracts.fixture import demo_project
 from diony_contracts.launch import MembershipRole
@@ -131,6 +132,12 @@ from diony_producer.vault import (
     save_upload,
     vault_root,
     write_stub,
+)
+from diony_producer.voice import (
+    VoicePipelineError,
+    VoiceProfileRegistry,
+    default_voice_backend,
+    lock_reference_voice_profile,
 )
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -408,6 +415,12 @@ class ProductionInfrastructureRecoveryIn(BaseModel):
     reason: str = "gpu_service_restart"
 
 
+class VoiceProfileLockIn(BaseModel):
+    source: VoiceProfileSource = VoiceProfileSource.SYNTHETIC
+    reference_asset_ids: list[str] = []
+    descriptors: dict[str, str] = {}
+
+
 def _gate(name: GateName) -> Gate:
     for g in _project.gates:
         if g.name == name:
@@ -478,6 +491,47 @@ def get_project() -> dict:
     # a transient blank process during GPU restart to replace current.json.
     _apply_site(_project)
     return _project.model_dump(mode="json")
+
+
+@app.get("/api/voice-profiles")
+def get_voice_profiles() -> dict:
+    return {
+        "project_id": _project.id,
+        "profiles": [profile.model_dump(mode="json") for profile in _project.voice_profiles],
+    }
+
+
+@app.post("/api/characters/{character_id}/voice-profiles/lock")
+def lock_voice_profile(character_id: str, body: VoiceProfileLockIn) -> dict:
+    try:
+        registry = VoiceProfileRegistry(_project)
+        current = registry.current(character_id)
+        if current is not None:
+            if body.source == VoiceProfileSource.SYNTHETIC and current.source == body.source:
+                return current.model_dump(mode="json")
+            raise HTTPException(
+                409,
+                "This character already has a locked Project voice. Create a new Project or versioned Bible to change identity.",
+            )
+        if body.source == VoiceProfileSource.SYNTHETIC:
+            if body.reference_asset_ids:
+                raise HTTPException(400, "Synthetic voice lock does not accept reference audio")
+            profile = registry.ensure_synthetic(character_id)
+        else:
+            profile = lock_reference_voice_profile(
+                _project,
+                character_id,
+                body.reference_asset_ids,
+                vault=vault_root(),
+                backend=default_voice_backend(),
+                descriptors=body.descriptors,
+            )
+        persist_project(_project)
+        return profile.model_dump(mode="json")
+    except HTTPException:
+        raise
+    except (KeyError, VoicePipelineError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/projects/{project_id}/activate")

@@ -45,6 +45,7 @@ from diony_producer.gallery_join import probe_media, resolve_media_tool
 from diony_producer.performance import PerformanceJournal
 from diony_producer.quality import MEASUREMENT_VERSION, measure_negative_quality
 from diony_producer.vault import persist_project, record_activity, vault_root
+from diony_producer.voice import prepare_voice_for_take, verify_voice_animation
 
 _lock = threading.Lock()
 _busy = False
@@ -63,6 +64,9 @@ _AUTO_RETAKE_QC_PREFIXES = (
     "Measured motion failed",
     "Measured temporal coherence failed",
     "Measured flicker failed",
+    "Voice identity failed",
+    "Voice performance failed",
+    "Voice audio failed",
 )
 _INFRASTRUCTURE_QC_PREFIXES = (
     "GPU overlay has less than",
@@ -209,6 +213,16 @@ def qc_contract_valid(project: Project, take: Take) -> bool:
         return False
     qc = take.qc
     if qc is None or qc.verdict != QCVerdict.PASS or take.engine != shot.engine:
+        return False
+    dialogue_required = bool(shot.audio_line or shot.dialogue_turns)
+    if dialogue_required and (
+        take.voice_package is None
+        or not take.voice_package.qc.passed
+        or take.voice_package.state.value != "verified"
+        or qc.voice_ready_ok is not True
+        or qc.lipsync_ok is not True
+        or qc.loudness_ok is not True
+    ):
         return False
     measured_required = os.environ.get("DIONY_MEASURED_QC_REQUIRED", "").strip().lower() in {
         "1",
@@ -1109,7 +1123,26 @@ def attach_negative(
     )
     camera_ok = morph_ok
     lighting_ok = flicker_ok
-    audio_ready_ok = shot.engine != Engine.S2V_14B or bool(shot.audio_asset_ids)
+    dialogue_required = bool(shot.audio_line or shot.dialogue_turns)
+    voice_failure = ""
+    voice_package = take.voice_package
+    if dialogue_required and not err and dest.is_file():
+        try:
+            voice_package = verify_voice_animation(project, take, dest)
+        except Exception as exc:  # noqa: BLE001 — missing AV evidence is a hard clip gate
+            voice_failure = f"Voice performance failed: {exc}"
+    voice_ready_ok = (
+        bool(voice_package and voice_package.qc.passed)
+        if dialogue_required
+        else None
+    )
+    audio_ready_ok = (
+        bool(shot.audio_asset_ids and voice_package and voice_package.qc.audio_passed)
+        if dialogue_required
+        else shot.engine != Engine.S2V_14B or bool(shot.audio_asset_ids)
+    )
+    lipsync_ok = bool(voice_package and voice_package.qc.animation_passed) if dialogue_required else None
+    loudness_ok = bool(voice_package and voice_package.qc.audio_passed) if dialogue_required else None
     # Camera negatives are legalized by Finish. At this boundary `legal_ok`
     # means the native media contract was measured and is structurally valid;
     # final Rec.709 tags/range are verified after the mandatory 1080 pass.
@@ -1187,6 +1220,7 @@ def attach_negative(
         and camera_ok
         and lighting_ok
         and audio_ready_ok
+        and voice_ready_ok is not False
         and legal_ok
     )
     production_clean_ok = bool(
@@ -1197,7 +1231,18 @@ def attach_negative(
         and flicker_ok
         and legal_ok
     )
-    failure = err
+    failure = err or voice_failure
+    if not failure and dialogue_required and not voice_ready_ok:
+        if voice_package and voice_package.qc.speaker_similarity < voice_package.qc.speaker_similarity_min:
+            failure = (
+                "Voice identity failed: speaker similarity "
+                f"{voice_package.qc.speaker_similarity:.4f} is below "
+                f"{voice_package.qc.speaker_similarity_min:.2f}."
+            )
+        elif voice_package and not voice_package.qc.audio_passed:
+            failure = "Voice audio failed locked studio-audio QC."
+        else:
+            failure = "Voice performance failed: audiovisual timing evidence is missing or below threshold."
     if not failure and size > 32 and not dimensions_ok:
         width = int(media.get("width") or 0)
         height = int(media.get("height") or 0)
@@ -1246,6 +1291,16 @@ def attach_negative(
         lighting_ok=lighting_ok,
         production_clean_ok=production_clean_ok,
         audio_ready_ok=audio_ready_ok,
+        voice_ready_ok=voice_ready_ok,
+        lipsync_ok=lipsync_ok,
+        loudness_ok=loudness_ok,
+        voice_measurement_version=(voice_package.qc.measurement_version if voice_package else ""),
+        speaker_similarity=(voice_package.qc.speaker_similarity if voice_package else None),
+        voice_project_consistency=(voice_package.qc.project_consistency if voice_package else None),
+        lip_sync_confidence=(voice_package.qc.lip_sync_confidence if voice_package else None),
+        audiovisual_offset_ms_p95=(
+            voice_package.qc.audiovisual_offset_ms_p95 if voice_package else None
+        ),
         reference_asset_ids=reference_ids,
         reference_similarity=similarity,
         reference_similarities=similarities,
@@ -1288,6 +1343,8 @@ def run_one(
     token = farm_generation()
     started = time.monotonic()
     shot = project.shot(take.shot_id)
+    prepare_voice_for_take(project, take)
+    persist_project(project)
     _shot_id = shot.id
     task = camera_task_for(project, shot)
     _detail = f"Generating 720p · {task} · {shot.id}"

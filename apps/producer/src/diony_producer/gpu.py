@@ -40,6 +40,7 @@ GPU_STAMP_FILES = (
     "apps/producer/src/diony_producer/run.py",
     "apps/producer/src/diony_producer/finish.py",
     "apps/producer/src/diony_producer/mix.py",
+    "apps/producer/src/diony_producer/voice.py",
     "apps/producer/src/diony_producer/cosyvoice_worker.py",
     "apps/finish/src/diony_finish/rrdb.py",
     "apps/finish/src/diony_finish/pipeline.py",
@@ -660,6 +661,9 @@ if [ -x /diony/vault/runtime/cosyvoice/venv/bin/python ] && \
   export DIONY_COSYVOICE_ROOT=/diony/vault/runtime/cosyvoice/CosyVoice
   export DIONY_COSYVOICE_MODEL=/diony/vault/models/audio/CosyVoice2-0.5B
   export DIONY_COSYVOICE_PROMPT_AUDIO=/opt/wan22/examples/zero_shot_prompt.wav
+fi
+if [ -x /diony/vault/runtime/voice/bin/diony-voice-backend ]; then
+  export DIONY_VOICE_BACKEND_COMMAND=/diony/vault/runtime/voice/bin/diony-voice-backend
 fi
 RUNTIME_PROBE=/opt/diony-ai/apps/wan/src/diony_wan/runtime.py
 RUNTIME_OVERLAY=/opt/diony-ai/infra/runtime/wan-host-overlay.txt

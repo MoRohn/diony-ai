@@ -26,3 +26,4 @@ Numbered operational constitution for Diony AI. Read `00` first. Coding agents: 
 | 19 | [19-producer-final-production-standard.md](19-producer-final-production-standard.md) | Definitive Idea-to-Production golden path, strict 1080 master standard, recovery, and completion checklist |
 | 20 | [20-wan22-prompt-intelligence.md](20-wan22-prompt-intelligence.md) | Autonomous typed Wan2.2 prompt planning, validation, guarded refinement, QC repair, and receipts |
 | 21 | [21-production-performance-assurance.md](21-production-performance-assurance.md) | Exact-quality Wan residency, streaming Finish, measured QC, durable latency evidence, canary, and rollback gates |
+| 22 | [22-voice-performance-system.md](22-voice-performance-system.md) | Immutable Character voices, performance scripts, studio audio, S2V conditioning, AV QC, cache, and backend qualification |
