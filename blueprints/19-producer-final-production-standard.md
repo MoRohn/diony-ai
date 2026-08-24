@@ -344,10 +344,12 @@ failed checks, stable references, and recommended repair route.
   and p95 dialogue offset is within 40 ms; facial and upper-body performance
   must pass the same timed performance receipt;
 - dialogue, score, and SFX are separate stems when present;
-- a picture-only request does not invent dialogue or route a template beat to
-  S2V; Producer bounces a versioned, content-neutral stereo room-tone stem so
-  the program still has honest measured audio evidence;
-- room tone is never a fallback for required dialogue;
+- a picture-only request does not invent dialogue, route a template beat to
+  S2V, or synthesize noise merely to populate a soundtrack; without authored
+  dialogue or verified content-bearing audio, Mix remains open and blocks the
+  deliverable;
+- room tone, white noise, pink noise, test tones, and silence never satisfy
+  dialogue or finished-soundtrack evidence;
 - final Mix assembles verified per-clip VoiceClipPackages and never invokes synthesis;
 - broadcast target is −24 LUFS, streaming target is −16 LUFS;
 - true peak is −1 dBTP;

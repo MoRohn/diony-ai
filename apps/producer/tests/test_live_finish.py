@@ -123,29 +123,17 @@ def test_picture_lock_writes_1080_master(tmp_path, monkeypatch) -> None:
                 break
         time.sleep(0.2)
     assert master_file is not None, "picture lock should stitch a 1080 program master"
-    idle = time.time() + 20
-    while time.time() < idle:
-        project = client.get("/api/project").json()
-        mix_gate = next(gate for gate in project["gates"] if gate["name"] == "mix")
-        if not mix_gate["open"]:
-            assert project["mix"]["state"] == "locked"
-            assert len(project["mix"]["stem_asset_ids"]) == 1
-            assert abs(project["mix"]["measured_lufs"] - (-24.0)) <= 1.0
-            assert project["mix"]["true_peak_dbtp"] <= -1.0
-            run = client.get("/api/run").json()
-            assert run["phase"] == "distribution"
-            assert run["waiting"] == "distribution"
-            mix_step = next(step for step in run["steps"] if step["id"] == "mix")
-            assert mix_step == {"id": "mix", "label": "Mix", "state": "done", "note": "locked"}
-            gallery = client.get("/api/gallery").json()
-            assert gallery["items"]
-            assert gallery["items"][0]["playable"] is True
-            assert gallery["items"][0]["kind"] == "program"
-            return
-        status = client.get("/api/mix").json()
-        assert not status["error"], status["error"]
+    deadline = time.time() + 5
+    status = client.get("/api/mix").json()
+    while time.time() < deadline and not status["error"]:
         time.sleep(0.2)
-    raise AssertionError("mix did not lock")
+        status = client.get("/api/mix").json()
+    assert "refusing a noise-only mix" in status["error"]
+    project = client.get("/api/project").json()
+    mix_gate = next(gate for gate in project["gates"] if gate["name"] == "mix")
+    assert mix_gate["open"] is True
+    assert project["mix"]["state"] == "open"
+    assert project["mix"]["stem_asset_ids"] == []
 
 
 def test_finish_never_accepts_a_legacy_cross_project_master(tmp_path, monkeypatch) -> None:
