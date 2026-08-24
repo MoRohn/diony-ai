@@ -24,6 +24,31 @@ ROOT_FILES = (
     "START HERE.txt",
 )
 PRODUCT_TREES = ("apps", "packages", "infra", "blueprints")
+FEATURE_FILE_SETS = {
+    "voice_performance": (
+        Path("apps/desk/src/diony_desk/boot.py"),
+        Path("apps/producer/src/diony_producer/app.py"),
+        Path("apps/producer/src/diony_producer/farm.py"),
+        Path("apps/producer/src/diony_producer/gpu.py"),
+        Path("apps/producer/src/diony_producer/mix.py"),
+        Path("apps/producer/src/diony_producer/voice.py"),
+        Path("packages/contracts/src/diony_contracts/__init__.py"),
+        Path("packages/contracts/src/diony_contracts/enums.py"),
+        Path("packages/contracts/src/diony_contracts/export_schema.py"),
+        Path("packages/contracts/src/diony_contracts/models.py"),
+        Path("packages/contracts/src/diony_contracts/voice.py"),
+        Path("packages/contracts/jsonschema/bible.schema.json"),
+        Path("packages/contracts/jsonschema/performance_script.schema.json"),
+        Path("packages/contracts/jsonschema/project.schema.json"),
+        Path("packages/contracts/jsonschema/qc_report.schema.json"),
+        Path("packages/contracts/jsonschema/shot.schema.json"),
+        Path("packages/contracts/jsonschema/take.schema.json"),
+        Path("packages/contracts/jsonschema/voice_clip_package.schema.json"),
+        Path("packages/contracts/jsonschema/voice_profile.schema.json"),
+        Path("packages/contracts/jsonschema/voice_qc_receipt.schema.json"),
+        Path("blueprints/22-voice-performance-system.md"),
+    ),
+}
 EXCLUDED_PARTS = {
     ".benchmarks",
     ".git",
@@ -89,6 +114,23 @@ def _payload_digest(root: Path, files: list[Path]) -> str:
     return digest.hexdigest()
 
 
+def _feature_receipts(source: Path) -> dict[str, dict[str, Any]]:
+    receipts: dict[str, dict[str, Any]] = {}
+    for feature, relatives in FEATURE_FILE_SETS.items():
+        paths = [source / relative for relative in relatives]
+        missing = [relative.as_posix() for relative, path in zip(relatives, paths) if not path.is_file()]
+        if missing:
+            raise ValueError(
+                f"desktop feature {feature} is incomplete; missing " + ", ".join(missing)
+            )
+        receipts[feature] = {
+            "files": len(paths),
+            "paths": [relative.as_posix() for relative in relatives],
+            "sha256": _payload_digest(source, paths),
+        }
+    return receipts
+
+
 def stage_product(source: Path, target: Path, *, version: str) -> dict[str, Any]:
     """Copy the redistributable product tree without tests, state, logs, or secrets."""
     source = source.resolve()
@@ -100,6 +142,7 @@ def stage_product(source: Path, target: Path, *, version: str) -> dict[str, Any]
     source_files = _payload_files(source)
     if not source_files:
         raise ValueError(f"no Diony product files found in {source}")
+    features = _feature_receipts(source)
     for source_path in source_files:
         relative = source_path.relative_to(source)
         destination = target / relative
@@ -115,6 +158,7 @@ def stage_product(source: Path, target: Path, *, version: str) -> dict[str, Any]
         "version": version.strip(),
         "files": len(staged_files),
         "payload_sha256": _payload_digest(target, staged_files),
+        "features": features,
     }
     (target / "desktop-release.json").write_bytes(_json_bytes(report))
     return report
@@ -161,6 +205,7 @@ def build_development_report(
         "apple_notarized": False,
         "payload_files": int(payload.get("files") or 0),
         "payload_sha256": str(payload.get("payload_sha256") or ""),
+        "features": payload.get("features", {}),
         "bundle_files": len(files),
         "bundle_bytes": sum(path.stat().st_size for path in files),
         "bundle_sha256": _payload_digest(app, files),

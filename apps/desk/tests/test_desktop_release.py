@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from diony_desk.release import (
+    FEATURE_FILE_SETS,
     build_development_report,
     build_download_manifest,
     stage_product,
@@ -133,6 +134,10 @@ def test_stage_product_is_complete_but_excludes_machine_state(tmp_path: Path) ->
     (source / "packages" / "contracts" / "pyproject.toml").write_text("[project]\n")
     (source / "infra" / "profiles" / "spark-4x-v1.yaml").write_text("sku: spark\n")
     (source / "blueprints" / "00-product-constitution.md").write_text("truth\n")
+    for relative in FEATURE_FILE_SETS["voice_performance"]:
+        feature_file = source / relative
+        feature_file.parent.mkdir(parents=True, exist_ok=True)
+        feature_file.write_text(f"packaged feature: {relative.as_posix()}\n")
     (source / ".env").write_text("TOKEN=must-not-ship\n")
 
     target = tmp_path / "payload"
@@ -169,6 +174,55 @@ def test_stage_product_preserves_wan_prompt_intelligence_exactly(tmp_path: Path)
         assert (target / relative).read_bytes() == (root / relative).read_bytes()
 
 
+def test_stage_product_preserves_voice_performance_system_exactly(tmp_path: Path) -> None:
+    """Desktop payloads must carry the complete reviewed voice system and receipt."""
+    root = Path(__file__).resolve().parents[3]
+    target = tmp_path / "payload"
+    required = (
+        Path("apps/desk/src/diony_desk/boot.py"),
+        Path("apps/producer/src/diony_producer/app.py"),
+        Path("apps/producer/src/diony_producer/farm.py"),
+        Path("apps/producer/src/diony_producer/gpu.py"),
+        Path("apps/producer/src/diony_producer/mix.py"),
+        Path("apps/producer/src/diony_producer/voice.py"),
+        Path("packages/contracts/src/diony_contracts/__init__.py"),
+        Path("packages/contracts/src/diony_contracts/enums.py"),
+        Path("packages/contracts/src/diony_contracts/export_schema.py"),
+        Path("packages/contracts/src/diony_contracts/models.py"),
+        Path("packages/contracts/src/diony_contracts/voice.py"),
+        Path("packages/contracts/jsonschema/bible.schema.json"),
+        Path("packages/contracts/jsonschema/performance_script.schema.json"),
+        Path("packages/contracts/jsonschema/project.schema.json"),
+        Path("packages/contracts/jsonschema/qc_report.schema.json"),
+        Path("packages/contracts/jsonschema/shot.schema.json"),
+        Path("packages/contracts/jsonschema/take.schema.json"),
+        Path("packages/contracts/jsonschema/voice_clip_package.schema.json"),
+        Path("packages/contracts/jsonschema/voice_profile.schema.json"),
+        Path("packages/contracts/jsonschema/voice_qc_receipt.schema.json"),
+        Path("blueprints/22-voice-performance-system.md"),
+    )
+
+    stage_product(root, target, version="test-voice-performance")
+
+    for relative in required:
+        assert (target / relative).read_bytes() == (root / relative).read_bytes()
+    metadata = json.loads((target / "desktop-release.json").read_text())
+    receipt = metadata["features"]["voice_performance"]
+    assert receipt["paths"] == [path.as_posix() for path in required]
+    assert receipt["files"] == len(required)
+    assert len(receipt["sha256"]) == 64
+
+
+def test_stage_product_rejects_an_incomplete_voice_performance_feature(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    product = source / "apps" / "wizard" / "src" / "wizard.py"
+    product.parent.mkdir(parents=True)
+    product.write_text("PRODUCT = True\n")
+
+    with pytest.raises(ValueError, match="voice_performance"):
+        stage_product(source, tmp_path / "payload", version="1.2.3")
+
+
 def test_development_report_marks_local_app_as_non_publishable(tmp_path: Path) -> None:
     app = tmp_path / "Diony AI.app"
     executable = app / "Contents" / "MacOS" / "Diony AI"
@@ -177,7 +231,8 @@ def test_development_report_marks_local_app_as_non_publishable(tmp_path: Path) -
     payload = tmp_path / "payload" / "desktop-release.json"
     payload.parent.mkdir()
     payload.write_text(
-        '{"version":"1.2.3","files":42,"payload_sha256":"payload-hash"}\n'
+        '{"version":"1.2.3","files":42,"payload_sha256":"payload-hash",'
+        '"features":{"voice_performance":{"files":21,"sha256":"voice-hash"}}}\n'
     )
 
     report = build_development_report(
@@ -195,6 +250,7 @@ def test_development_report_marks_local_app_as_non_publishable(tmp_path: Path) -
     assert report["version"] == "1.2.3"
     assert report["architecture"] == "arm64"
     assert report["payload_sha256"] == "payload-hash"
+    assert report["features"]["voice_performance"]["sha256"] == "voice-hash"
     assert report["bundle_bytes"] == len(b"frozen local app")
     assert len(report["bundle_sha256"]) == 64
 
