@@ -1096,6 +1096,7 @@ def main(argv: list[str] | None = None) -> int:
                 ensure_product_names()
         except Exception:
             pass
+        open_browser(STUDIO_URL)
         print(f"Diony AI is already open — {STUDIO_URL}", flush=True)
         print(f"Producer is {PRODUCER_URL}", flush=True)
         return 0

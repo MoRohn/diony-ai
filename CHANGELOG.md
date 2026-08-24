@@ -23,7 +23,7 @@ All notable changes to Diony AI are documented here.
 ### Added
 
 - Wizard `ready31` replaces the undersized navigation and floating 3D notebook treatment with a 112px stage mast, 288px desktop cue rail, and integrated production-folio workspace; the exact B200 form and 390px mobile layout remain unclipped while Wizard objectives and site choices are unchanged.
-- Repository-root `Build Diony AI.command` creates or reuses a deterministic native Mac development app, selects the stable `dist/desktop/{version}/development/Diony AI.app` path in Finder, and emits explicit non-publishable local proof without confusing it with Developer ID/notarization.
+- Repository-root `Build Diony AI.command` creates or reuses a deterministic native Mac development app, selects the stable `dist/desktop/{version}/development/Diony.app` path in Finder, and emits explicit non-publishable local proof without confusing it with Developer ID/notarization.
 - Self-contained desktop release path for the future two-button webpage: notarized/stapled/Gatekeeper-verified Universal Mac DMG and Authenticode-signed/timestamped Windows installer, deterministic secret-free payload staging, and a stable manifest that refuses incomplete platform proof.
 - Installed-app startup hardening: bundled service dispatch with no system Python or first-run `pip`, standard per-user state directories, immediate Desk feedback, semantic Wizard/Producer health and UI-stamp checks, safe unknown-port handling, persistent logs, and downloadable secret-free diagnostics. Blueprint 17 defines the acquisition, install, startup, trust, and publish gates.
 

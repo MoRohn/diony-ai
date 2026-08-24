@@ -74,13 +74,13 @@ collection = COLLECT(
 if sys.platform == "darwin":
     app = BUNDLE(
         collection,
-        name="Diony AI.app",
+        name="Diony.app",
         icon=str(MAC_ICON),
         bundle_identifier="ai.diony.desktop",
         version=VERSION,
         info_plist={
-            "CFBundleDisplayName": "Diony AI",
-            "CFBundleName": "Diony AI",
+            "CFBundleDisplayName": "Diony",
+            "CFBundleName": "Diony",
             "CFBundleShortVersionString": VERSION,
             "CFBundleVersion": VERSION,
             "LSMinimumSystemVersion": "13.0",

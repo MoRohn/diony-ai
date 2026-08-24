@@ -121,7 +121,7 @@ def test_ready_studio_reuses_an_open_lobby_instead_of_opening_another_page() -> 
     assert should_open_studio_after_work(lobby_opened=False, phase="error") is False
 
 
-def test_duplicate_launch_exits_without_opening_another_browser_page(monkeypatch) -> None:
+def test_duplicate_launch_brings_studio_back_to_the_user(monkeypatch) -> None:
     opened: list[str] = []
     monkeypatch.setattr("diony_desk.boot.claim_desk_port", lambda root=None: True)
     monkeypatch.setattr("diony_desk.boot.desk_already_installed", lambda root=None: True)
@@ -132,7 +132,7 @@ def test_duplicate_launch_exits_without_opening_another_browser_page(monkeypatch
     from diony_desk.boot import main
 
     assert main([]) == 0
-    assert opened == []
+    assert opened == [STUDIO_URL]
 
 
 def test_diagnostics_use_safe_metadata_and_persistent_log_paths(

@@ -71,8 +71,8 @@ export DIONY_MAC_ARCH="universal2"
 "$PY" -m PyInstaller --clean --noconfirm \
   --distpath "$BUILD_ROOT/dist" --workpath "$BUILD_ROOT/work" \
   "$ROOT/packaging/desktop/diony.spec"
-APP="$BUILD_ROOT/dist/Diony AI.app"
-[[ -d "$APP" ]] || { echo "PyInstaller did not produce Diony AI.app" >&2; exit 1; }
+APP="$BUILD_ROOT/dist/Diony.app"
+[[ -d "$APP" ]] || { echo "PyInstaller did not produce Diony.app" >&2; exit 1; }
 
 while IFS= read -r -d '' item; do
   if /usr/bin/file "$item" | /usr/bin/grep -q "Mach-O"; then
@@ -84,7 +84,7 @@ done < <(/usr/bin/find "$APP/Contents" -type f -print0)
 
 DMG_STAGE="$BUILD_ROOT/dmg"
 /bin/mkdir -p "$DMG_STAGE"
-/bin/cp -R "$APP" "$DMG_STAGE/Diony AI.app"
+/bin/cp -R "$APP" "$DMG_STAGE/Diony.app"
 /bin/ln -s /Applications "$DMG_STAGE/Applications"
 /bin/mkdir -p "$OUTPUT"
 /usr/bin/hdiutil create -volname "Diony AI" -srcfolder "$DMG_STAGE" \

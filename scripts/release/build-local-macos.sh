@@ -35,7 +35,8 @@ fi
 
 OUTPUT="$ROOT/dist/desktop/$VERSION/development"
 BUILDS="$OUTPUT/builds"
-STABLE_APP="$OUTPUT/Diony AI.app"
+STABLE_APP="$OUTPUT/Diony.app"
+LEGACY_STABLE_APP="$OUTPUT/Diony AI.app"
 STABLE_REPORT="$OUTPUT/development-build.json"
 if [[ -e "$STABLE_APP" && ! -L "$STABLE_APP" ]]; then
   echo "Refusing to replace a non-managed app: $STABLE_APP" >&2
@@ -43,6 +44,10 @@ if [[ -e "$STABLE_APP" && ! -L "$STABLE_APP" ]]; then
 fi
 if [[ -e "$STABLE_REPORT" && ! -L "$STABLE_REPORT" ]]; then
   echo "Refusing to replace a non-managed report: $STABLE_REPORT" >&2
+  exit 2
+fi
+if [[ -e "$LEGACY_STABLE_APP" && ! -L "$LEGACY_STABLE_APP" ]]; then
+  echo "Refusing to remove a non-managed legacy app: $LEGACY_STABLE_APP" >&2
   exit 2
 fi
 
@@ -57,6 +62,9 @@ PAYLOAD_SHA="$("$LOCAL_PYTHON" -c 'import json, pathlib, sys; print(json.loads(p
 if [[ -L "$STABLE_APP" && -f "$STABLE_REPORT" ]]; then
   if "$LOCAL_PYTHON" -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); raise SystemExit(0 if r.get("version") == sys.argv[2] and r.get("architecture") == sys.argv[3] and r.get("payload_sha256") == sys.argv[4] and r.get("build_recipe") == sys.argv[5] else 1)' \
     "$STABLE_REPORT" "$VERSION" "$ARCH" "$PAYLOAD_SHA" "$BUILD_RECIPE"; then
+    if [[ -L "$LEGACY_STABLE_APP" ]]; then
+      /bin/unlink "$LEGACY_STABLE_APP"
+    fi
     echo "Local Diony AI $VERSION is already current."
     echo "$STABLE_APP"
     exit 0
@@ -80,9 +88,9 @@ export DIONY_MAC_ARCH="$ARCH"
 "$PY" -m PyInstaller --clean --noconfirm \
   --distpath "$BUILD_ROOT/dist" --workpath "$BUILD_ROOT/work" \
   "$ROOT/packaging/desktop/diony.spec"
-BUILT_APP="$BUILD_ROOT/dist/Diony AI.app"
+BUILT_APP="$BUILD_ROOT/dist/Diony.app"
 [[ -x "$BUILT_APP/Contents/MacOS/Diony AI" ]] || {
-  echo "PyInstaller did not produce an executable Diony AI.app." >&2
+  echo "PyInstaller did not produce an executable Diony.app." >&2
   exit 1
 }
 
@@ -94,16 +102,19 @@ if [[ -e "$FINAL_DIR" ]]; then
   exit 2
 fi
 /bin/mkdir -p "$FINAL_DIR"
-/bin/mv "$BUILT_APP" "$FINAL_DIR/Diony AI.app"
+/bin/mv "$BUILT_APP" "$FINAL_DIR/Diony.app"
 "$PY" -m diony_desk.release development-report \
-  --app "$FINAL_DIR/Diony AI.app" \
+  --app "$FINAL_DIR/Diony.app" \
   --payload-metadata "$PAYLOAD/desktop-release.json" \
   --version "$VERSION" --architecture "$ARCH" --built-at "$BUILT_AT" \
   --output "$FINAL_DIR/development-build.json"
 
 /bin/mkdir -p "$OUTPUT"
-/bin/ln -sfn "builds/$BUILD_ID/Diony AI.app" "$STABLE_APP"
+/bin/ln -sfn "builds/$BUILD_ID/Diony.app" "$STABLE_APP"
 /bin/ln -sfn "builds/$BUILD_ID/development-build.json" "$STABLE_REPORT"
+if [[ -L "$LEGACY_STABLE_APP" ]]; then
+  /bin/unlink "$LEGACY_STABLE_APP"
+fi
 
 echo "Built local-only Diony AI $VERSION for $ARCH."
 echo "This app is not Developer ID-signed, notarized, or publishable."

@@ -40,7 +40,7 @@ North Star: 1920×1080, 23.976 or 24.000 fps, Rec.709 legal, dialogue + score + 
 
 Customer first open: install the signed Mac DMG or signed Windows Setup artifact and open Diony AI. The application bundles its runtime and never asks for Python or `pip`. Until those artifacts are published, open **START HERE.txt**, then use the source launcher (`Open Diony AI.command`, `open-diony.sh`, or `Open Diony AI.bat`). START HERE names hardware: Local Quad-Spark crate, or a lease from Runpod first (`https://www.runpod.io/`) then Enverge (`https://enverge.ai/`) for Dual-Spark / B300 / B200. Both paths open the Desk lobby, then Continue is Studio at `http://studio.diony.local`.
 
-Mac packaged-process check: double-click **Build Diony AI.command**. It builds or reuses `dist/desktop/{version}/development/Diony AI.app` and opens that exact build as a new instance; the Desk replaces an older local build and its services automatically. This is an ad-hoc local development artifact, not a publishable or notarized DMG.
+Mac packaged-process check: double-click **Build Diony AI.command**. It builds or reuses `dist/desktop/{version}/development/Diony.app` and opens that exact build as a new instance; the Desk replaces an older local build and its services automatically. This is an ad-hoc local development artifact, not a publishable or notarized DMG.
 
 Engineers:
 

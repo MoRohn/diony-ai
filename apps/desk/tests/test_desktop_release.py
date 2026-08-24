@@ -68,6 +68,10 @@ def test_desktop_and_home_surfaces_use_the_bar_mark_logo_and_app_icon() -> None:
     assert first_scanline[1:5] == bytes((0, 0, 0, 0))  # transparent tile corner
     assert mac_icon.read_bytes().startswith(b"icns")
     assert windows_icon.read_bytes().startswith(b"\x00\x00\x01\x00")
+    assert 'name="Diony.app"' in spec
+    assert '"CFBundleDisplayName": "Diony"' in spec
+    assert '"CFBundleName": "Diony"' in spec
+    assert 'name="Diony AI.app"' not in spec
     assert 'MAC_ICON = ICONS / "diony-ai-app-icon.icns"' in spec
     assert 'WINDOWS_ICON = ICONS / "diony-ai-app-icon.ico"' in spec
     assert "icon=str(DESKTOP_ICON)" in spec
@@ -326,6 +330,9 @@ def test_desktop_release_scripts_enforce_platform_trust_checks() -> None:
     assert "spctl" in mac
     assert "codesign --verify" in mac
     assert "codesign --deep" not in mac
+    assert 'APP="$BUILD_ROOT/dist/Diony.app"' in mac
+    assert '"$DMG_STAGE/Diony.app"' in mac
+    assert "Diony AI.app" not in mac
     assert 'Invoke-Checked $SignTool @("sign"' in windows
     assert '"/fd", "SHA256"' in windows
     assert '"/tr"' in windows and '"/td", "SHA256"' in windows
@@ -377,7 +384,13 @@ def test_local_mac_builder_creates_a_stable_in_repo_app_without_release_claims()
     assert "notarytool submit" not in builder_text
     assert "gatekeeper_verified" not in builder_text
     assert "/bin/ln -sfn" in builder_text
-    assert ".Diony AI.app.next" not in builder_text
+    assert 'STABLE_APP="$OUTPUT/Diony.app"' in builder_text
+    assert 'BUILT_APP="$BUILD_ROOT/dist/Diony.app"' in builder_text
+    assert 'LEGACY_STABLE_APP="$OUTPUT/Diony AI.app"' in builder_text
+    assert '[[ -L "$LEGACY_STABLE_APP" ]]' in builder_text
+    assert '/bin/unlink "$LEGACY_STABLE_APP"' in builder_text
+    assert 'APP="$ROOT/dist/desktop/$VERSION/development/Diony.app"' in command_text
+    assert "Diony AI.app was not created" not in command_text
 
 
 def test_release_builders_do_not_mutate_the_hashed_payload_during_wheel_builds() -> None:
