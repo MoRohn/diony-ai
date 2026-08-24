@@ -5,6 +5,7 @@ Stdlib only until the venv exists. Double-click Open Diony AI — no pip in the 
 
 from __future__ import annotations
 
+import atexit
 import http.client
 import json
 import os
@@ -58,6 +59,84 @@ _state: dict = {
     "log": [],
 }
 _lock = threading.Lock()
+
+
+class DeskInstanceLock:
+    """A held per-user lock; closing it allows the next Desk launch to start."""
+
+    def __init__(self, handle) -> None:  # noqa: ANN001 - binary file handle
+        self._handle = handle
+
+    def close(self) -> None:
+        handle = self._handle
+        if handle is None:
+            return
+        self._handle = None
+        try:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        finally:
+            handle.close()
+
+
+def instance_lock_path() -> Path:
+    """One startup authority shared by source and packaged launches for this user."""
+    explicit = os.environ.get("DIONY_DESK_LOCK_DIR", "").strip()
+    root = Path(explicit).expanduser() if explicit else user_data_dir()
+    return root / "desk.instance.lock"
+
+
+def acquire_instance_lock(
+    path: Path | None = None, *, timeout: float = 0.0
+) -> DeskInstanceLock | None:
+    """Acquire the Desk startup lock once, with an optional bounded handoff wait."""
+    destination = path or instance_lock_path()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + max(0.0, timeout)
+    while True:
+        handle = destination.open("a+b")
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError:
+                handle.close()
+            else:
+                break
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                handle.close()
+            else:
+                break
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(0.05)
+    handle.seek(0)
+    handle.truncate()
+    handle.write(
+        (json.dumps({"pid": os.getpid(), "started": int(time.time())}) + "\n").encode()
+    )
+    handle.flush()
+    return DeskInstanceLock(handle)
 
 
 def is_frozen() -> bool:
@@ -707,12 +786,25 @@ def stop_listener(port: int) -> None:
         time.sleep(0.15)
 
 
+def stop_legacy_duplicate_desks() -> None:
+    """Remove only proven Diony Desk listeners from the retired fallback ports."""
+    for port in range(DESK_PORT + 1, DESK_PORT + 5):
+        if not port_open(port):
+            continue
+        if not desk_state_ok(port=port) or not listener_is_desk(port):
+            continue
+        say(f"A duplicate Diony Desk is open on port {port}. Stopping it.")
+        stop_listener(port)
+
+
 def claim_desk_port(root: Path | None = None) -> bool:
     """Return true for a current Desk; replace an older Diony Desk safely."""
     if not desk_state_ok():
+        stop_legacy_duplicate_desks()
         return False
     root = root or repo_root()
     if desk_is_current(root):
+        stop_legacy_duplicate_desks()
         return True
     if not listener_is_desk(DESK_PORT):
         raise RuntimeError(
@@ -723,6 +815,7 @@ def claim_desk_port(root: Path | None = None) -> bool:
     stop_listener(DESK_PORT)
     if port_open(DESK_PORT):
         raise RuntimeError("The previous Diony Desk did not close. Open Diony AI again.")
+    stop_legacy_duplicate_desks()
     for service_port in (WIZARD_PORT, PRODUCER_PORT):
         if port_open(service_port) and listener_is_diony(service_port):
             stop_listener(service_port)
@@ -856,6 +949,28 @@ def open_browser(url: str) -> None:
         webbrowser.open(url)
     except Exception:
         pass
+
+
+def handoff_to_existing_desk(*, timeout: float = 2.0) -> None:
+    """Wake the one existing Desk without repeating any of its startup work."""
+    target = ""
+    deadline = time.monotonic() + max(0.0, timeout)
+    while True:
+        if product_names_live():
+            target = STUDIO_URL
+            break
+        if desk_state_ok():
+            target = lobby_url()
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.1)
+    if target:
+        open_browser(target)
+    print(
+        "Diony AI is already open or opening. This duplicate launch is stopping.",
+        flush=True,
+    )
 
 
 def ensure_running(root: Path) -> None:
@@ -1022,15 +1137,7 @@ class DeskHandler(SimpleHTTPRequestHandler):
 def serve(port: int = DESK_PORT) -> ThreadingHTTPServer:
     handler = partial(DeskHandler, directory=str(STATIC))
     ThreadingHTTPServer.allow_reuse_address = True
-    last_error: OSError | None = None
-    for candidate in range(port, port + 5):
-        try:
-            server = ThreadingHTTPServer(("127.0.0.1", candidate), handler)
-            break
-        except OSError as exc:
-            last_error = exc
-    else:
-        raise last_error or OSError(f"Could not bind desk opener near {port}")
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     thread = threading.Thread(target=server.serve_forever, name="diony-desk", daemon=True)
     thread.start()
     return server
@@ -1092,14 +1199,22 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr, flush=True)
         return 1
     if current_desk_open:
-        try:
-            if desk_already_installed():
-                ensure_product_names()
-        except Exception:
-            pass
-        open_browser(STUDIO_URL)
-        print(f"Diony AI is already open — {STUDIO_URL}", flush=True)
-        print(f"Producer is {PRODUCER_URL}", flush=True)
+        handoff_to_existing_desk()
+        return 0
+    instance_lock = acquire_instance_lock(timeout=1.5)
+    if instance_lock is None:
+        handoff_to_existing_desk()
+        return 0
+    atexit.register(instance_lock.close)
+    try:
+        current_desk_open = claim_desk_port()
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr, flush=True)
+        instance_lock.close()
+        return 1
+    if current_desk_open:
+        handoff_to_existing_desk()
+        instance_lock.close()
         return 0
     set_state(
         phase="looking",

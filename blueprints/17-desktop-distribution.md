@@ -38,12 +38,14 @@ Startup performs these checks in order:
 
 1. Verify the bundled product payload and required cluster profiles.
 2. Resolve the user-owned state and vault directories.
-3. Probe Studio semantically (`/api/state` plus the shipped UI stamp), not only port 8787.
-4. Probe Producer semantically (`/api/project` plus the shipped UI stamp), not only port 8788.
-5. Restart a stale Diony-owned process once.
-6. Never terminate an unknown process occupying a product port. Explain the collision and leave it untouched.
-7. Lay `studio.diony.local` and `producer.diony.local`; request OS elevation only for that machine-level name boundary.
-8. Open Studio only after both services and the product-name gateway are healthy.
+3. Probe an existing Desk semantically. An exact current Desk receives the handoff and the duplicate launcher exits without repeating setup.
+4. Acquire one per-user OS startup lock before creating the lobby or starting services. If another launch is still in progress, wait only for the bounded handoff, then exit; never bind a second Desk port or start another worker.
+5. Probe Studio semantically (`/api/state` plus the shipped UI stamp), not only port 8787.
+6. Probe Producer semantically (`/api/project` plus the shipped UI stamp), not only port 8788.
+7. Restart a stale Diony-owned process once.
+8. Never terminate an unknown process occupying a product port. Explain the collision and leave it untouched.
+9. Lay `studio.diony.local` and `producer.diony.local`; request OS elevation only for that machine-level name boundary. Only the lock-owning Desk may run this setup.
+10. Open Studio only after both services and the product-name gateway are healthy.
 
 Failures write an atomic, secret-free `diagnostics.json` plus persistent Studio and Producer logs. The Desk offers a diagnostics download suitable for support. Environment variables, BYOK values, tokens, and media contents never enter that report.
 

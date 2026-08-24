@@ -1,4 +1,5 @@
 import ast
+import socket
 from pathlib import Path
 
 import pytest
@@ -126,7 +127,6 @@ def test_duplicate_launch_brings_studio_back_to_the_user(monkeypatch) -> None:
     opened: list[str] = []
     monkeypatch.setattr("diony_desk.boot.claim_desk_port", lambda root=None: True)
     monkeypatch.setattr("diony_desk.boot.desk_already_installed", lambda root=None: True)
-    monkeypatch.setattr("diony_desk.boot.ensure_product_names", lambda root=None: True)
     monkeypatch.setattr("diony_desk.boot.product_names_live", lambda: True)
     monkeypatch.setattr("diony_desk.boot.open_browser", opened.append)
 
@@ -134,6 +134,79 @@ def test_duplicate_launch_brings_studio_back_to_the_user(monkeypatch) -> None:
 
     assert main([]) == 0
     assert opened == [STUDIO_URL]
+
+
+def test_duplicate_launch_does_not_repeat_startup_work(monkeypatch) -> None:
+    opened: list[str] = []
+    monkeypatch.setattr("diony_desk.boot.claim_desk_port", lambda root=None: True)
+    monkeypatch.setattr("diony_desk.boot.product_names_live", lambda: False)
+    monkeypatch.setattr("diony_desk.boot.desk_state_ok", lambda: True)
+    monkeypatch.setattr(
+        "diony_desk.boot.ensure_product_names",
+        lambda root=None: pytest.fail("a duplicate launch repeated startup work"),
+    )
+    monkeypatch.setattr("diony_desk.boot.open_browser", opened.append)
+
+    from diony_desk.boot import main
+
+    assert main([]) == 0
+    assert opened == ["http://127.0.0.1:8765/"]
+
+
+def test_launch_in_progress_exits_before_starting_another_desk(
+    monkeypatch, tmp_path: Path
+) -> None:
+    handoffs: list[bool] = []
+    monkeypatch.setattr("diony_desk.boot.configure_runtime_environment", lambda root=None: tmp_path)
+    monkeypatch.setattr("diony_desk.boot.claim_desk_port", lambda root=None: False)
+    monkeypatch.setattr(
+        "diony_desk.boot.acquire_instance_lock", lambda **kwargs: None, raising=False
+    )
+    monkeypatch.setattr(
+        "diony_desk.boot.handoff_to_existing_desk",
+        lambda: handoffs.append(True),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "diony_desk.boot.serve",
+        lambda: pytest.fail("a second Desk server was started"),
+    )
+
+    from diony_desk.boot import main
+
+    assert main([]) == 0
+    assert handoffs == [True]
+
+
+def test_instance_lock_allows_only_one_desk_startup(tmp_path: Path) -> None:
+    from diony_desk.boot import acquire_instance_lock
+
+    lock_path = tmp_path / "desk.instance.lock"
+    first = acquire_instance_lock(lock_path)
+    assert first is not None
+    try:
+        assert acquire_instance_lock(lock_path) is None
+    finally:
+        first.close()
+    replacement = acquire_instance_lock(lock_path)
+    assert replacement is not None
+    replacement.close()
+
+
+def test_desk_server_never_falls_back_to_a_second_port() -> None:
+    holder = socket.socket()
+    holder.bind(("127.0.0.1", 0))
+    holder.listen()
+    port = holder.getsockname()[1]
+    unexpected = None
+    try:
+        with pytest.raises(OSError):
+            unexpected = serve(port)
+    finally:
+        holder.close()
+        if unexpected is not None:
+            unexpected.shutdown()
+            unexpected.server_close()
 
 
 def test_diagnostics_use_safe_metadata_and_persistent_log_paths(
@@ -238,6 +311,28 @@ def test_claim_desk_port_stops_old_bundle_services(monkeypatch, tmp_path: Path) 
 
     assert claim_desk_port(tmp_path) is False
     assert stopped == [8765, 8787, 8788]
+
+
+def test_claim_current_desk_stops_legacy_duplicate_desk_listeners(
+    monkeypatch, tmp_path: Path
+) -> None:
+    stopped: list[int] = []
+    monkeypatch.setattr(
+        "diony_desk.boot.desk_state_ok",
+        lambda host="127.0.0.1", port=8765: port in {8765, 8766, 8768},
+    )
+    monkeypatch.setattr("diony_desk.boot.desk_is_current", lambda root=None: True)
+    monkeypatch.setattr(
+        "diony_desk.boot.listener_is_desk", lambda port=8765: port in {8765, 8766}
+    )
+    monkeypatch.setattr(
+        "diony_desk.boot.port_open",
+        lambda port, host="127.0.0.1": port in {8765, 8766, 8768},
+    )
+    monkeypatch.setattr("diony_desk.boot.stop_listener", stopped.append)
+
+    assert claim_desk_port(tmp_path) is True
+    assert stopped == [8766]
 
 
 def test_find_python_accepts_this_interpreter() -> None:
