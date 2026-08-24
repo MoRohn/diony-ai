@@ -14,6 +14,7 @@ import importlib.util
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -108,9 +109,18 @@ def probe_runtime() -> dict:
 def _write_report(path: str, report: dict) -> None:
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    temporary = dest.with_suffix(dest.suffix + ".tmp")
-    temporary.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(dest)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=dest.parent,
+        prefix=f"{dest.name}.",
+        suffix=".tmp",
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        temporary.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(dest)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -267,6 +267,19 @@ def test_compute_ui_has_grouped_choices_confirmation_and_agent_progress() -> Non
     assert "margin-left: auto" in css
 
 
+def test_existing_compute_progress_updates_the_active_validation_event() -> None:
+    service = ProvisioningService(runpod=FakeRunpod(), inspector=FakeExistingInspector())
+    service.start_existing("lease")
+    service.mark_existing_validating()
+
+    state = service.mark_existing_progress("Downloading CosyVoice2 voice model")
+
+    assert state["status"] == "working"
+    assert state["detail"] == "Downloading CosyVoice2 voice model"
+    assert state["events"][-1]["status"] == "active"
+    assert state["events"][-1]["detail"] == "Downloading CosyVoice2 voice model"
+
+
 def test_setup_agent_owns_action_area_until_validation_is_complete() -> None:
     client = TestClient(wizard_app.app)
     html = client.get("/").text
@@ -298,7 +311,7 @@ def test_connect_page_reports_waiting_working_ready_and_attention_states() -> No
     css = client.get("/static/app.css").text
     js = client.get("/static/app.js").text
 
-    assert '/static/app.js?v=brand11' in html
+    assert '/static/app.js?v=brand12' in html
     assert 'id="provision-live-status"' in html
     assert 'id="provision-live-label"' in html
     assert 'id="provision-live-detail"' in html
@@ -478,6 +491,47 @@ def test_existing_compute_is_validated_signed_and_handed_to_producer(monkeypatch
     assert "id_ed25519" not in str(state)
 
 
+def test_failed_existing_validation_starts_a_real_retry(monkeypatch) -> None:
+    service = ProvisioningService(
+        runpod=FakeRunpod(), inspector=FakeExistingInspector(path="b200", prepared=True)
+    )
+    monkeypatch.setattr(wizard_app, "_provisioner", service)
+    monkeypatch.setenv("DIONY_APPLY_FAKE", "1")
+    client = TestClient(wizard_app.app)
+    client.post("/api/reset")
+    client.post("/api/provision/existing/start", json={"scope": "lease"})
+    inspected = client.post(
+        "/api/provision/advance",
+        json={
+            "action": "inspect_existing",
+            "provider": "Runpod",
+            "signer": "Rohn Springfield",
+            "hosts": "198.51.100.42",
+            "ssh_user": "root",
+            "ssh_port": "30422",
+            "nas_ip": "/workspace",
+        },
+    )
+    assert inspected.status_code == 200
+    assert client.post("/api/provision/adopt").status_code == 200
+    service.mark_existing_attention("Voice model download failed.")
+    captured: dict = {}
+
+    def fake_retry(path, hosts, *, nas="", workbook=None):
+        captured.update(path=path, hosts=hosts, nas=nas, workbook=workbook)
+        return {"running": True, "ok": False, "detail": "Checking the pinned model pack"}
+
+    monkeypatch.setattr(wizard_app, "retry_apply", fake_retry)
+
+    retried = client.post("/api/provision/existing/retry")
+
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["provision"]["status"] == "working"
+    assert captured["path"] == "b200"
+    assert captured["hosts"] == ["198.51.100.42"]
+    assert captured["nas"] == "/workspace"
+
+
 def test_existing_local_quad_spark_skips_crate_steps_only_after_four_host_validation(monkeypatch) -> None:
     service = ProvisioningService(
         runpod=FakeRunpod(), inspector=FakeExistingInspector(path="local", prepared=True)
@@ -526,6 +580,7 @@ def test_connect_to_existing_compute_is_available_at_bottom_of_both_groups() -> 
     assert "function startExistingCompute" in js
     assert "/api/provision/existing/start" in js
     assert "/api/provision/existing/finalize" in js
+    assert "/api/provision/existing/retry" in js
     assert "Retry validation" in js
     assert "Vault auto-discovery" in js
     assert "Diony identifies private storage through this SSH connection" in js

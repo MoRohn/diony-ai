@@ -6,6 +6,8 @@ import os
 import shlex
 import socket
 import subprocess
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -96,12 +98,97 @@ def ssh_args() -> list[str]:
     return args
 
 
-def exec_host(host: str, script: str, *, timeout: int = 3600) -> RemoteResult:
+def _exec_streaming(
+    host: str,
+    cmd: list[str],
+    script: str,
+    *,
+    timeout: int,
+    env: dict[str, str],
+    remote: bool,
+    on_output: Callable[[str], None],
+) -> RemoteResult:
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE if remote else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+        env=env,
+    )
+    if remote and proc.stdin is not None:
+        proc.stdin.write(script)
+        proc.stdin.close()
+
+    stdout: list[str] = []
+    stderr: list[str] = []
+
+    def drain(pipe, bucket: list[str]) -> None:
+        if pipe is None:
+            return
+        for line in iter(pipe.readline, ""):
+            bucket.append(line)
+            try:
+                on_output(line.rstrip("\r\n"))
+            except Exception:
+                continue
+        pipe.close()
+
+    readers = [
+        threading.Thread(target=drain, args=(proc.stdout, stdout), daemon=True),
+        threading.Thread(target=drain, args=(proc.stderr, stderr), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    try:
+        code = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        for reader in readers:
+            reader.join(timeout=2)
+        raise subprocess.TimeoutExpired(
+            cmd,
+            timeout,
+            output="".join(stdout),
+            stderr="".join(stderr),
+        )
+    for reader in readers:
+        reader.join(timeout=2)
+    return RemoteResult(host, code == 0, code, "".join(stdout), "".join(stderr))
+
+
+def exec_host(
+    host: str,
+    script: str,
+    *,
+    timeout: int = 3600,
+    on_output: Callable[[str], None] | None = None,
+) -> RemoteResult:
     """Run bash on host. Local when this process is that box; else SSH BatchMode."""
     env = os.environ.copy()
     env.pop("DASH_API_KEY", None)
     env.pop("DASHSCOPE_API_KEY", None)
-    if apply_local(host):
+    local = apply_local(host)
+    if on_output is not None:
+        command = ["bash", "-lc", script] if local else [
+            "ssh",
+            *ssh_args(),
+            f"{ssh_user()}@{host}",
+            "bash",
+            "-s",
+        ]
+        return _exec_streaming(
+            host,
+            command,
+            script,
+            timeout=timeout,
+            env=env,
+            remote=not local,
+            on_output=on_output,
+        )
+    if local:
         proc = subprocess.run(
             ["bash", "-lc", script],
             capture_output=True,

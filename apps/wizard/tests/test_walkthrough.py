@@ -999,7 +999,7 @@ def test_compute_page_uses_balanced_readable_responsive_layout() -> None:
     js = client.get("/static/app.js").text
     css = client.get("/static/app.css").text
 
-    assert '/static/app.css?v=brand11' in html
+    assert '/static/app.css?v=brand12' in html
     assert 'class="compute-group compute-group-local"' in html
     assert 'class="compute-group compute-group-lease"' in html
     assert 'group.className = `compute-group compute-group-${label.toLowerCase()}`;' in js
@@ -1032,11 +1032,23 @@ def test_compute_page_uses_balanced_readable_responsive_layout() -> None:
     final_provision_heading_rule = css[css.rindex(".provision-panel h3 {") :]
     final_provision_heading_rule = final_provision_heading_rule[: final_provision_heading_rule.index("}")]
     assert "color: var(--light);" in final_provision_heading_rule
-    assert "font-size: clamp(1.8rem, 2.25vw, 2.7rem);" in final_provision_heading_rule
+    assert "font-size: clamp(2.5rem, 2.75vw, 3.65rem);" in final_provision_heading_rule
 
     assert 'body[data-provision="active"] .provision-form:has(.runpod-command-entry) label.wide textarea' in css
     assert "min-height: 3rem;" in css
     assert 'body[data-provision="active"] .provision-actions' in css
+
+    wide_start = css.index("@media (min-width: 1600px)")
+    wide_css = css[wide_start:]
+    assert 'body[data-provision="active"] .sheet.production-folio' in wide_css
+    assert 'body[data-provision="active"] .production-folio .do' in wide_css
+    assert "max-width: none;" in wide_css
+    assert "grid-template-columns: repeat(3, minmax(0, 1fr));" in wide_css
+    assert "max-height: 16rem;" in wide_css
+
+    assert 'id="provision-provider-link"' not in html
+    assert "Open provider" not in html
+    assert 'document.getElementById("provision-provider-link")' not in js
 
     final_refresh_rule = css[css.rindex('body[data-step="path"] .site-refresh {') :]
     final_refresh_rule = final_refresh_rule[: final_refresh_rule.index("}")]

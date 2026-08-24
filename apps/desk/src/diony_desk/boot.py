@@ -677,6 +677,7 @@ def listener_is_desk(port: int = DESK_PORT) -> bool:
         "diony_desk.boot",
         "diony-desk",
         "diony ai.app/contents/macos/diony ai",
+        "diony.app/contents/macos/diony ai",
     )
     commands = [process_command(pid).lower() for pid in listener_pids(port)]
     return bool(commands) and all(any(mark in command for mark in signatures) for command in commands)

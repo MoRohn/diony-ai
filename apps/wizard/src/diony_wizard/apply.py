@@ -35,7 +35,10 @@ HF_PACK = [
     ("ai-forever/Real-ESRGAN", "/models/diony/diony_sr_v1", "RealESRGAN_x2.pth"),
 ]
 
-COSYVOICE_MODEL = ("iic/CosyVoice2-0.5B", "/models/audio/CosyVoice2-0.5B")
+COSYVOICE_MODEL = (
+    "FunAudioLLM/CosyVoice2-0.5B",
+    "/diony/vault/models/audio/CosyVoice2-0.5B",
+)
 
 _lock = threading.RLock()
 _apply_epoch = 0
@@ -153,12 +156,38 @@ required = [
     "/models/wan/Wan2.2-VACE-Fun-A14B",
 ]
 sr = Path("/models/diony/diony_sr_v1")
-cosy_model = Path("/models/audio/CosyVoice2-0.5B")
+cosy_model = Path("/diony/vault/models/audio/CosyVoice2-0.5B")
+cosy_required = (
+    "cosyvoice2.yaml",
+    "llm.pt",
+    "flow.pt",
+    "hift.pt",
+    "speech_tokenizer_v2.onnx",
+)
+cosy_ready = all((cosy_model / name).is_file() for name in cosy_required)
+volume_root = Path("/diony/vault/models").resolve()
+model_volume = all(
+    (Path("/models") / kind).resolve() == volume_root / kind
+    for kind in ("deepseek", "wan", "diony", "audio")
+)
 pack = all(populated(path) for path in required) and (
     (sr / "RealESRGAN_x2.pth").is_file() or bool(list(sr.glob("*.pth")))
-) and populated(cosy_model)
+) and cosy_ready
 wan_repo = Path("/opt/wan22/.git").is_dir()
-cosy_repo = Path("/opt/wan22/CosyVoice/.git").is_dir()
+cosy_root = Path("/diony/vault/runtime/cosyvoice/CosyVoice")
+cosy_python = Path("/diony/vault/runtime/cosyvoice/venv/bin/python")
+cosy_repo = (cosy_root / ".git").is_dir()
+cosy_env = os.environ.copy()
+cosy_env["PYTHONPATH"] = str(cosy_root) + ":" + str(
+    cosy_root / "third_party" / "Matcha-TTS"
+)
+cosy_runtime = cosy_repo and cosy_python.is_file() and subprocess.run(
+    [str(cosy_python), "-c", "from cosyvoice.cli.cosyvoice import CosyVoice2"],
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+    env=cosy_env,
+    check=False,
+).returncode == 0
 runtime_probe = repo / "apps" / "wan" / "src" / "diony_wan" / "runtime.py"
 host_python = Path("/usr/bin/python3")
 runtime_env = os.environ.copy()
@@ -179,13 +208,15 @@ producer_running = subprocess.run(
     stderr=subprocess.DEVNULL,
     check=False,
 ).returncode == 0
-prepared = pack and wan_repo and cosy_repo
+prepared = pack and model_volume and wan_repo and cosy_runtime
 print("DIONY_SITE_STATE " + json.dumps({{
     "prepared": prepared,
     "ready": prepared and wan_runtime and producer_installed and producer_running,
     "pack": pack,
+    "model_volume": model_volume,
     "wan_repo": wan_repo,
     "cosy_repo": cosy_repo,
+    "cosy_runtime": cosy_runtime,
     "wan_runtime": wan_runtime,
     "producer_installed": producer_installed,
     "producer_running": producer_running,
@@ -313,6 +344,64 @@ fi
 """
 
 
+def _persistent_model_storage() -> str:
+    """Keep reusable model weights on the attached vault, preserving /models APIs."""
+    return r'''
+echo MODEL_VOLUME_START
+_diony_persist_model_dir() {
+  local kind="$1"
+  local volume="/diony/vault/models/$kind"
+  local legacy="/models/$kind"
+  local backup="/models/.${kind}.diony-overlay"
+  local current pending volume_real
+  local -a sync_filters=()
+  mkdir -p "$volume" /models
+  volume_real=$(readlink -f "$volume")
+  if [ "$kind" = audio ]; then
+    sync_filters+=(--exclude '*.incomplete' --exclude '.cache')
+  fi
+  if [ -L "$legacy" ]; then
+    current=$(readlink -f "$legacy" || true)
+    [ "$current" = "$volume_real" ] || {
+      echo "MODEL_VOLUME_ERROR $kind points to $current" >&2
+      return 1
+    }
+    return 0
+  fi
+  if [ -e "$legacy" ] && [ ! -d "$legacy" ]; then
+    echo "MODEL_VOLUME_ERROR $legacy is not a directory" >&2
+    return 1
+  fi
+  if [ -d "$legacy" ] && [ -n "$(find "$legacy" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+    echo "MODEL_VOLUME_MIGRATE $kind"
+    [ ! -e "$backup" ] || {
+      echo "MODEL_VOLUME_ERROR stale migration backup $backup" >&2
+      return 1
+    }
+    rsync -a "${sync_filters[@]}" -- "$legacy/" "$volume/"
+    pending=$(rsync -rlni --size-only "${sync_filters[@]}" -- "$legacy/" "$volume/")
+    [ -z "$pending" ] || {
+      echo "MODEL_VOLUME_ERROR verification failed for $kind" >&2
+      return 1
+    }
+    mv "$legacy" "$backup"
+    ln -s "$volume" "$legacy"
+    [ "$(readlink -f "$legacy")" = "$volume_real" ] || return 1
+    rm -rf -- "$backup"
+  else
+    [ ! -d "$legacy" ] || rmdir "$legacy"
+    ln -s "$volume" "$legacy"
+  fi
+  echo "MODEL_VOLUME_READY $kind"
+}
+_diony_persist_model_dir deepseek
+_diony_persist_model_dir wan
+_diony_persist_model_dir diony
+_diony_persist_model_dir audio
+echo MODEL_VOLUME_OK
+'''
+
+
 def _model_pack_dedupe() -> str:
     """Hard-link byte-identical shared Wan assets without changing model paths."""
     return """
@@ -352,6 +441,19 @@ def apply_fail_text(result) -> str:
     err = getattr(result, "stderr", "") or ""
     code = getattr(result, "code", None)
     blob = f"{out}\n{err}".strip()
+    if "diony_wan/runtime.py" in blob and "_write_report" in blob:
+        cause = next(
+            (
+                line.strip()
+                for line in reversed(blob.splitlines())
+                if line.strip() and not line.strip().startswith("^")
+            ),
+            "Runtime report write failed.",
+        )
+        return (
+            "Wan runtime readiness report could not be finalized. "
+            f"Retry validation. {cause[-600:]}"
+        )
     pip_noise = "Requirement already satisfied" in blob or (
         "huggingface_hub" in blob and "site-packages" in blob and "Traceback" not in blob
     )
@@ -366,6 +468,38 @@ def apply_fail_text(result) -> str:
             return blob[idx:][-2000:]
     tail = blob[-2000:] or (f"apply exited {code}" if code is not None else "apply failed")
     return tail
+
+
+def apply_progress_text(line: str) -> str:
+    """Translate streamed setup markers into concise, non-secret Studio status."""
+    clean = str(line or "").strip()
+    if not clean:
+        return ""
+    if clean.startswith("HF_PULL "):
+        repo = clean.removeprefix("HF_PULL ").split(" -> ", 1)[0]
+        return f"Downloading {repo.rsplit('/', 1)[-1]}"
+    if clean.startswith("HF_DONE "):
+        repo = clean.removeprefix("HF_DONE ").strip()
+        return f"{repo.rsplit('/', 1)[-1]} ready"
+    stages = {
+        "HF_START": "Checking the pinned model pack",
+        "HF_OK": "Pinned model pack ready",
+        "MODEL_VOLUME_START": "Preparing attached-volume model storage",
+        "MODEL_VOLUME_OK": "Attached-volume model storage ready",
+        "PACK_DEDUPE_START": "Consolidating shared model assets",
+        "PACK_DEDUPE_OK": "Shared model assets ready",
+        "COSYVOICE_RUNTIME_INSTALL": "Installing the CosyVoice2 runtime",
+        "COSYVOICE_OK": "CosyVoice2 voice model ready",
+        "WAN_HOST_OVERLAY_REPAIR": "Repairing the Wan host runtime",
+        "WAN_HOST_PYTHON_OK": "Wan host runtime ready",
+        "APPLY_OK": "Compute setup complete",
+    }
+    if clean.startswith("COSYVOICE_PULL "):
+        return "Downloading CosyVoice2 voice model"
+    if clean.startswith("MODEL_VOLUME_MIGRATE "):
+        kind = clean.removeprefix("MODEL_VOLUME_MIGRATE ").strip()
+        return f"Moving existing {kind} models to the attached volume"
+    return stages.get(clean, "")
 
 
 def remote_setup_script(repo: str, nas: str = "") -> str:
@@ -383,6 +517,7 @@ def remote_setup_script(repo: str, nas: str = "") -> str:
     mount = "\n".join(vault_mount_lines(nas))
     py = _python_bootstrap(repo)
     hub = _ensure_huggingface_hub()
+    model_storage = _persistent_model_storage()
     dedupe = _model_pack_dedupe()
     # Keep the token out of Studio logs. It rides SSH stdin only.
     # Vault before .cluster. Venv before pip. Sequential SKU: Producer only.
@@ -398,6 +533,7 @@ export DIONY_REPO={quoted_repo}
 mkdir -p /models/deepseek /models/wan /models/diony /opt
 {mount}
 mkdir -p /diony/vault/.cluster
+{model_storage}
 {py}
 {hub}
 echo HF_START
@@ -426,21 +562,44 @@ test -d /opt/wan22/.git || git clone --depth 1 https://github.com/Wan-Video/Wan2
 _diony_pip install -e "$DIONY_REPO/packages/contracts" -e "$DIONY_REPO/apps/wan" -e "$DIONY_REPO/apps/finish" -e "$DIONY_REPO/apps/producer" -e "$DIONY_REPO/apps/wizard"
 _diony_python -c "from pathlib import Path; from diony_wan.runner import ensure_attention_fallback, ensure_optional_engine_lazy_imports; ensure_attention_fallback(Path('/opt/wan22')); ensure_optional_engine_lazy_imports(Path('/opt/wan22'))"
 _diony_host_wan_pip
-test -d /opt/wan22/CosyVoice/.git || git clone --depth 1 --recursive https://github.com/FunAudioLLM/CosyVoice.git /opt/wan22/CosyVoice
-if ! PYTHONPATH=/opt/wan22/CosyVoice:/opt/wan22/CosyVoice/third_party/Matcha-TTS "$_DIONY_HOST_PYTHON" -c "from cosyvoice.cli.cosyvoice import CosyVoice2; import modelscope" >/dev/null 2>&1; then
+COSY_RUNTIME=/diony/vault/runtime/cosyvoice
+COSY_ROOT="$COSY_RUNTIME/CosyVoice"
+COSY_PY="$COSY_RUNTIME/venv/bin/python"
+mkdir -p "$COSY_RUNTIME"
+if [ ! -d "$COSY_ROOT/.git" ]; then
+  if [ -d /opt/wan22/CosyVoice/.git ] && [ ! -L /opt/wan22/CosyVoice ]; then
+    rsync -a -- /opt/wan22/CosyVoice/ "$COSY_ROOT/"
+  else
+    git clone --depth 1 --recursive https://github.com/FunAudioLLM/CosyVoice.git "$COSY_ROOT"
+  fi
+fi
+test -d "$COSY_ROOT/.git"
+if [ -d /opt/wan22/CosyVoice ] && [ ! -L /opt/wan22/CosyVoice ]; then
+  rm -rf -- /opt/wan22/CosyVoice
+fi
+ln -sfn "$COSY_ROOT" /opt/wan22/CosyVoice
+if [ ! -x "$COSY_PY" ]; then
+  "$_DIONY_HOST_PYTHON" -m venv --system-site-packages "$COSY_RUNTIME/venv"
+fi
+if ! PYTHONPATH="$COSY_ROOT:$COSY_ROOT/third_party/Matcha-TTS" "$COSY_PY" -c "from cosyvoice.cli.cosyvoice import CosyVoice2; import modelscope" >/dev/null 2>&1; then
   echo COSYVOICE_RUNTIME_INSTALL
   PIP_BREAK_SYSTEM_PACKAGES=1 PIP_ROOT_USER_ACTION=ignore \
-    "$_DIONY_HOST_PYTHON" -m pip install --disable-pip-version-check \
+    "$COSY_PY" -m pip install --disable-pip-version-check \
       --upgrade-strategy only-if-needed -r /opt/wan22/requirements_s2v.txt
 fi
-"$_DIONY_HOST_PYTHON" - <<'PY'
+PYTHONPATH="$COSY_ROOT:$COSY_ROOT/third_party/Matcha-TTS" "$COSY_PY" -c "from cosyvoice.cli.cosyvoice import CosyVoice2; import modelscope"
+_diony_python - <<'PY'
 import os
-from modelscope import snapshot_download
+from huggingface_hub import snapshot_download
 repo_id, dest = {cosy_model}
 os.makedirs(dest, exist_ok=True)
-if not any(os.scandir(dest)):
+required = ("cosyvoice2.yaml", "llm.pt", "flow.pt", "hift.pt", "speech_tokenizer_v2.onnx")
+if not all(os.path.isfile(os.path.join(dest, name)) for name in required):
     print(f"COSYVOICE_PULL {{repo_id}} -> {{dest}}", flush=True)
-    snapshot_download(repo_id, local_dir=dest)
+    snapshot_download(repo_id=repo_id, local_dir=dest)
+missing = [name for name in required if not os.path.isfile(os.path.join(dest, name))]
+if missing:
+    raise RuntimeError(f"CosyVoice snapshot incomplete: {{', '.join(missing)}}")
 print("COSYVOICE_OK", flush=True)
 PY
 test -d /models/wan/Wan2.2-T2V-A14B
@@ -462,6 +621,7 @@ def producer_only_script(repo: str, nas: str = "") -> str:
     quoted_repo = shlex.quote(repo)
     mount = "\n".join(vault_mount_lines(nas))
     py = _python_bootstrap(repo)
+    model_storage = _persistent_model_storage()
     return f"""
 set -euo pipefail
 unset DASH_API_KEY DASHSCOPE_API_KEY
@@ -472,6 +632,7 @@ export PYTHONPATH=/opt/wan22${{PYTHONPATH:+:$PYTHONPATH}}
 export DIONY_REPO={quoted_repo}
 {mount}
 mkdir -p /diony/vault/.cluster
+{model_storage}
 {py}
 _diony_pip install -e "$DIONY_REPO/packages/contracts" -e "$DIONY_REPO/apps/wan" -e "$DIONY_REPO/apps/finish" -e "$DIONY_REPO/apps/producer"
 _diony_python -c "from pathlib import Path; from diony_wan.runner import ensure_attention_fallback, ensure_optional_engine_lazy_imports; ensure_attention_fallback(Path('/opt/wan22')); ensure_optional_engine_lazy_imports(Path('/opt/wan22'))"
@@ -836,7 +997,17 @@ def _run_apply(path: str, hosts: list[str], nas: str, epoch: int) -> None:
             return
         _log("Mount vault, pull pack + Wan2.2 + diony_sr_v1, install, start Producer", epoch)
         timeout = int(os.environ.get("DIONY_APPLY_TIMEOUT", "21600"))
-        result = exec_host(primary, remote_setup_script(repo, nas), timeout=timeout)
+        def progress(line: str) -> None:
+            detail = apply_progress_text(line)
+            if detail:
+                _log(detail, epoch)
+
+        result = exec_host(
+            primary,
+            remote_setup_script(repo, nas),
+            timeout=timeout,
+            on_output=progress,
+        )
         if not _still(epoch):
             return
         if not result.ok or "APPLY_OK" not in (result.stdout or ""):

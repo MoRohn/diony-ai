@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from diony_wizard.app import app
 from diony_wizard.apply import (
     apply_fail_text,
+    apply_progress_text,
     ensure_apply,
     hf_download_lines,
     producer_only_script,
@@ -66,11 +67,17 @@ def test_hf_pack_includes_wan_and_sr(monkeypatch) -> None:
     assert "ln -f" in script
     assert script.find('print("HF_OK"') < script.find("PACK_DEDUPE_START")
     assert "huggingface_hub already present" in script
-    assert "iic/CosyVoice2-0.5B" in script
-    assert "/models/audio/CosyVoice2-0.5B" in script
+    assert "FunAudioLLM/CosyVoice2-0.5B" in script
+    assert "/diony/vault/models/audio/CosyVoice2-0.5B" in script
     assert "FunAudioLLM/CosyVoice.git" in script
+    assert "COSY_RUNTIME=/diony/vault/runtime/cosyvoice" in script
+    assert 'COSY_ROOT="$COSY_RUNTIME/CosyVoice"' in script
+    assert 'COSY_PY="$COSY_RUNTIME/venv/bin/python"' in script
+    assert "--system-site-packages" in script
+    assert "git clone --depth 1 --recursive https://github.com/FunAudioLLM/CosyVoice.git /opt/wan22/CosyVoice" not in script
     assert "requirements_s2v.txt" in script
     assert "COSYVOICE_OK" in script
+    assert "from modelscope import snapshot_download" not in script
 
 
 def test_apply_fail_text_skips_pip_already_satisfied() -> None:
@@ -93,15 +100,61 @@ def test_apply_fail_text_skips_pip_already_satisfied() -> None:
     assert "Retry Pull pack" in msg
 
 
-def test_remote_setup_runpod_vault_and_venv() -> None:
+def test_apply_fail_text_summarizes_runtime_report_traceback() -> None:
+    from types import SimpleNamespace
+
+    traceback = """Traceback (most recent call last):
+  File "/opt/diony-ai/apps/wan/src/diony_wan/runtime.py", line 128, in <module>
+    raise SystemExit(main())
+  File "/opt/diony-ai/apps/wan/src/diony_wan/runtime.py", line 122, in main
+    _write_report(args.write, report)
+  File "/opt/diony-ai/apps/wan/src/diony_wan/runtime.py", line 113, in _write_report
+    temporary.replace(dest)
+FileNotFoundError: [Errno 2] shared readiness temporary file was already moved
+"""
+    result = SimpleNamespace(
+        ok=False,
+        code=1,
+        stdout="",
+        stderr=traceback,
+        text=traceback,
+    )
+
+    message = apply_fail_text(result)
+
+    assert message.startswith("Wan runtime readiness report could not be finalized.")
+    assert "Retry validation." in message
+    assert "FileNotFoundError:" in message
+    assert "Traceback" not in message
+    assert "raise SystemExit" not in message
+
+
+def test_remote_setup_runpod_vault_and_venv(monkeypatch) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
     script = remote_setup_script("/opt/diony-ai", "/workspace")
     assert "_diony_ensure_vault /workspace /diony/vault" in script
     assert "mount --bind" in script
     assert "ln -sfn" in script
+    assert "MODEL_VOLUME_START" in script
+    assert "MODEL_VOLUME_OK" in script
+    assert "/diony/vault/models/$kind" in script
+    assert 'rsync -a "${sync_filters[@]}" --' in script
+    assert 'rsync -rlni --size-only "${sync_filters[@]}" --' in script
+    assert "--exclude '*.incomplete' --exclude '.cache'" in script
+    assert "ln -s \"$volume\" \"$legacy\"" in script
+    assert script.find("_diony_ensure_vault /workspace /diony/vault") < script.find(
+        "MODEL_VOLUME_START"
+    )
+    assert script.find("MODEL_VOLUME_OK") < script.find("HF_START")
     assert "python3 -m venv" in script
     assert "_diony_pip install" in script
     assert "--break-system-packages" in script
     producer = producer_only_script("/opt/diony-ai", "/workspace")
+    assert "MODEL_VOLUME_START" in producer
+    assert producer.find("_diony_ensure_vault /workspace /diony/vault") < producer.find(
+        "MODEL_VOLUME_START"
+    )
     assert "python3 -m venv" in producer
     assert "_diony_pip install" in producer
     assert "_diony_host_wan_pip" in producer
@@ -110,6 +163,31 @@ def test_remote_setup_runpod_vault_and_venv() -> None:
     assert "wan-host-runtime.json" in producer
     assert "ensure_optional_engine_lazy_imports" in producer
     assert "WAN_HOST_OVERLAY_REPAIR" in producer
+
+
+def test_remote_setup_resumes_an_incomplete_cosyvoice_snapshot() -> None:
+    script = remote_setup_script("/opt/diony-ai", "/workspace")
+
+    assert "any(os.scandir(dest))" not in script
+    assert "llm.pt" in script
+    assert "flow.pt" in script
+    assert "hift.pt" in script
+    assert "speech_tokenizer_v2.onnx" in script
+    assert "snapshot_download(repo_id=repo_id, local_dir=dest)" in script
+
+
+def test_apply_progress_text_exposes_remote_setup_stages() -> None:
+    assert apply_progress_text("HF_PULL Wan-AI/Wan2.2-S2V-14B -> /models/wan") == (
+        "Downloading Wan2.2-S2V-14B"
+    )
+    assert apply_progress_text("COSYVOICE_PULL FunAudioLLM/CosyVoice2-0.5B -> /diony/vault/models/audio") == (
+        "Downloading CosyVoice2 voice model"
+    )
+    assert apply_progress_text("COSYVOICE_OK") == "CosyVoice2 voice model ready"
+    assert apply_progress_text("MODEL_VOLUME_MIGRATE wan") == (
+        "Moving existing wan models to the attached volume"
+    )
+    assert apply_progress_text("random dependency noise") == ""
 
 
 def test_site_readiness_probe_checks_the_complete_pack_before_any_pull() -> None:
@@ -122,14 +200,23 @@ def test_site_readiness_probe_checks_the_complete_pack_before_any_pull() -> None
         "/models/wan/Wan2.2-Animate-14B",
         "/models/wan/Wan2.2-VACE-Fun-A14B",
         "/models/diony/diony_sr_v1",
-        "/models/audio/CosyVoice2-0.5B",
+        "/diony/vault/models/audio/CosyVoice2-0.5B",
         "/opt/wan22/.git",
-        "/opt/wan22/CosyVoice/.git",
+        "/diony/vault/runtime/cosyvoice/CosyVoice",
+        "/diony/vault/runtime/cosyvoice/venv/bin/python",
     ):
         assert path in script
     assert "DIONY_SITE_STATE" in script
     assert '"diony_wan" / "runtime.py"' in script
     assert '"wan_runtime"' in script
+    assert '"model_volume"' in script
+    assert 'cosy_root / ".git"' in script
+    assert '"cosy_runtime"' in script
+    assert 'volume_root = Path("/diony/vault/models").resolve()' in script
+    assert '(Path("/models") / kind).resolve() == volume_root / kind' in script
+    assert "cosy_required" in script
+    assert "llm.pt" in script
+    assert "speech_tokenizer_v2.onnx" in script
     assert "huggingface" not in script.lower()
 
 

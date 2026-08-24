@@ -1727,12 +1727,6 @@ function paintProvisioning(next) {
       (next.required_inputs || []).map(provisionField).join("") +
       provisionVaultDiscovery(next);
   }
-  const link = document.getElementById("provision-provider-link");
-  if (link) {
-    link.hidden = !next.action_url;
-    link.href = next.action_url || "#";
-    link.textContent = next.action_label || "Open provider";
-  }
   if (provisionProgress) {
     provisionProgress.hidden = !setupInProgress;
     provisionProgress.classList.toggle("hidden", !setupInProgress);
@@ -1842,6 +1836,22 @@ async function advanceProvisioning() {
   }
   if (provision.checkpoint === "validating_existing") {
     provisionContinue.disabled = true;
+    if (provision.status === "attention") {
+      paintProvisionBusy("Retrying validation", "Restarting from the last completed setup stage.");
+      const res = await fetch("/api/provision/existing/retry", {
+        method: "POST",
+        cache: "no-store",
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        paintProvisioning(provision);
+        if (provisionError) provisionError.textContent = body.detail || "Existing compute retry could not start.";
+        return;
+      }
+      state = body;
+      provision = body.provision || provision;
+      paintProvisioning(provision);
+    }
     if (provisionError) provisionError.textContent = "Rechecking the corrected site…";
     pollExistingValidation();
     return;

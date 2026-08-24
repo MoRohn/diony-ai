@@ -634,6 +634,8 @@ def provision_existing_finalize() -> dict:
         raise HTTPException(400, "Existing compute is not in validation.")
     apply = public_apply()
     if apply.get("running"):
+        detail = str(apply.get("detail") or "Diony is completing the detected site.")
+        current = _provisioner.mark_existing_progress(detail)
         payload = _state()
         payload["provision"] = current
         return payload
@@ -673,6 +675,30 @@ def provision_existing_finalize() -> dict:
     _seal_site()
     handoff = producer_href(_dry_run, path, _workbook)
     _provisioner.mark_existing_complete(handoff)
+    payload = _state()
+    payload["provision"] = _provisioner.public()
+    return payload
+
+
+@app.post("/api/provision/existing/retry")
+def provision_existing_retry() -> dict:
+    """Restart a failed existing-site apply without discarding the connection."""
+    current = _provisioner.public()
+    if current.get("mode") != "existing" or current.get("checkpoint") != "validating_existing":
+        raise HTTPException(400, "Existing compute is not in validation.")
+    if current.get("status") != "attention":
+        raise HTTPException(400, "Existing compute validation is not waiting for a retry.")
+    hosts = site_nodes(_compute_path, _workbook)
+    bind_ssh_env(_workbook.get("connect") or {})
+    job = retry_apply(
+        _compute_path,
+        hosts,
+        nas=vault_export(_workbook),
+        workbook=_workbook,
+    )
+    _provisioner.mark_existing_validating()
+    if job.get("detail"):
+        _provisioner.mark_existing_progress(str(job["detail"]))
     payload = _state()
     payload["provision"] = _provisioner.public()
     return payload

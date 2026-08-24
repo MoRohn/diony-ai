@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from diony_wizard.prep import bind_ssh_env
-from diony_wizard.remote import rsync_repo, ssh_args
+from diony_wizard.remote import exec_host, rsync_repo, ssh_args
 
 
 def test_ssh_args_include_identity(monkeypatch) -> None:
@@ -50,6 +50,22 @@ def test_rsync_uses_ssh_identity(monkeypatch) -> None:
     assert "-i" in transport
     assert "/tmp/diony_id" in transport
     assert "spark@spark-01:" in cmd[-1]
+
+
+def test_exec_host_streams_local_output_to_the_progress_callback(monkeypatch) -> None:
+    monkeypatch.setenv("DIONY_APPLY_LOCAL", "1")
+    lines: list[str] = []
+
+    result = exec_host(
+        "localhost",
+        "printf 'HF_START\\nCOSYVOICE_OK\\n'",
+        timeout=5,
+        on_output=lines.append,
+    )
+
+    assert result.ok is True
+    assert result.stdout == "HF_START\nCOSYVOICE_OK\n"
+    assert lines == ["HF_START", "COSYVOICE_OK"]
 
 
 def test_ssh_args_include_port(monkeypatch) -> None:

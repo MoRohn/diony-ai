@@ -18,6 +18,7 @@ from diony_desk.boot import (
     find_python,
     finish_open,
     diagnostic_snapshot,
+    listener_is_desk,
     listener_is_diony,
     public_state,
     python_help_url,
@@ -187,6 +188,20 @@ def test_running_desk_without_the_current_payload_identity_is_stale(
     )
 
     assert desk_is_current(tmp_path) is False
+
+
+def test_renamed_diony_app_is_recognized_as_the_existing_desk(monkeypatch) -> None:
+    monkeypatch.setattr("diony_desk.boot.listener_pids", lambda port: [4242])
+    monkeypatch.setattr(
+        "diony_desk.boot.process_command",
+        lambda pid: (
+            "/Applications/Diony.app/Contents/MacOS/Diony AI"
+            if pid == 4242
+            else ""
+        ),
+    )
+
+    assert listener_is_desk() is True
 
 
 def test_claim_desk_port_replaces_a_stale_diony_desk(monkeypatch, tmp_path: Path) -> None:
@@ -612,7 +627,7 @@ def test_producer_ui_stamp_matches_html() -> None:
 
 def test_wizard_ui_stamp_matches_html() -> None:
     stamp = wizard_ui_stamp()
-    assert stamp == "brand11"
+    assert stamp == "brand12"
     html = repo_root() / "apps" / "wizard" / "src" / "diony_wizard" / "static" / "index.html"
     assert f"app.js?v={stamp}" in html.read_text(encoding="utf-8")
     assert f"app.css?v={stamp}" in html.read_text(encoding="utf-8")

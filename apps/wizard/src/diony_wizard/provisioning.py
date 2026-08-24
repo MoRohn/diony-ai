@@ -754,6 +754,14 @@ class ProvisioningService:
             self._event("Validation + setup", "Diony is completing the detected site.", "active")
             return self.public()
 
+    def mark_existing_progress(self, detail: str) -> dict[str, Any]:
+        with self._lock:
+            clean = self._sanitize(detail) or "Diony is completing the detected site."
+            self._state["detail"] = clean
+            if self._state["events"]:
+                self._state["events"][-1].update({"status": "active", "detail": clean})
+            return self.public()
+
     def mark_existing_attention(self, detail: str) -> dict[str, Any]:
         with self._lock:
             self._state.update({"status": "attention", "detail": self._sanitize(detail), "error": self._sanitize(detail)})
