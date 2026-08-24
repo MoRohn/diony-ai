@@ -45,7 +45,6 @@ let allotments = [
 let site = null;
 let customerKind = "series";
 let targetMinutes = 5;
-let sampleSeconds = 5;
 let bay = "idea";
 let bench = [];
 let written = false;
@@ -2211,17 +2210,27 @@ productionStopDialog?.addEventListener("click", (event) => {
 document.getElementById("run-refresh")?.addEventListener("click", refreshProductionPage);
 document.getElementById("start-over")?.addEventListener("click", startOverStudio);
 
+function selectSampleSeconds(value) {
+  const seconds = Number(value) === 10 ? 10 : 5;
+  document.querySelectorAll("[data-sample-seconds]").forEach((choice) => {
+    choice.setAttribute("aria-checked", String(Number(choice.dataset.sampleSeconds) === seconds));
+  });
+  return seconds;
+}
+
+function selectedSampleSeconds() {
+  const selected = document.querySelector('[data-sample-seconds][aria-checked="true"]');
+  return Number(selected?.dataset.sampleSeconds) === 10 ? 10 : 5;
+}
+
 document.getElementById("sample-length")?.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-sample-seconds]");
   if (!button) return;
-  sampleSeconds = Number(button.dataset.sampleSeconds) === 10 ? 10 : 5;
-  document.querySelectorAll("[data-sample-seconds]").forEach((choice) => {
-    choice.setAttribute("aria-checked", String(Number(choice.dataset.sampleSeconds) === sampleSeconds));
-  });
+  selectSampleSeconds(button.dataset.sampleSeconds);
 });
 
 document.getElementById("make-sample")?.addEventListener("click", () => {
-  makeStudio({ production_kind: "sample", sample_seconds: sampleSeconds });
+  makeStudio({ production_kind: "sample", sample_seconds: selectedSampleSeconds() });
 });
 
 document.getElementById("open-gallery")?.addEventListener("click", () => {

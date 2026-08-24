@@ -43,8 +43,8 @@ def test_producer_floors_are_idea_production_gallery() -> None:
     assert 'class="clap"' in html
     assert 'id="cast"' in html
     assert 'id="site-line"' in html
-    assert 'href="/static/app.css?v=brand9"' in html
-    assert 'src="/static/app.js?v=brand9"' in html
+    assert 'href="/static/app.css?v=brand10"' in html
+    assert 'src="/static/app.js?v=brand10"' in html
     assert "v=run30" not in html
     assert "Unsigned" not in html
     assert "Unsigned" not in js
@@ -448,8 +448,8 @@ def test_production_header_and_idea_body_explain_the_working_state() -> None:
     assert ".reference-hint" in css
     assert ".reference-hint-label" in css
     assert 'stageEl.addEventListener("drop"' in js
-    assert 'href="/static/app.css?v=brand9"' in html
-    assert 'src="/static/app.js?v=brand9"' in html
+    assert 'href="/static/app.css?v=brand10"' in html
+    assert 'src="/static/app.js?v=brand10"' in html
     assert "v=run30" not in html
 
 

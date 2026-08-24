@@ -83,13 +83,16 @@ def test_idea_page_presents_sample_as_an_input_driven_generation_action() -> Non
 
     assert 'id="make-sample"' in html
     assert 'aria-label="Sample length"' in html
-    assert 'data-sample-seconds="5"' in html
-    assert 'data-sample-seconds="10"' in html
+    assert 'data-sample-seconds="5">5s</button>' in html
+    assert 'data-sample-seconds="10">10s</button>' in html
     assert "finished 5–10s clip" in html
     assert 'production_kind: "sample"' in js
-    assert "sample_seconds: sampleSeconds" in js
+    assert "function selectedSampleSeconds()" in js
     assert 'document.getElementById("make-sample")' in js
-    sample_handler = js[js.index('document.getElementById("make-sample")') :]
+    sample_handler = js[
+        js.index('document.getElementById("make-sample")?.addEventListener') :
+    ]
+    assert "sample_seconds: selectedSampleSeconds()" in sample_handler[:700]
     assert "/api/reset" not in sample_handler[:700]
 
 
