@@ -5776,3 +5776,220 @@ h1[tabindex="-1"]:focus,
 h2[tabindex="-1"]:focus {
   outline: none;
 }
+
+/* Diony capsule controls — shared with Studio and shaped from the logo bars. */
+:root {
+  --action-pill-radius: 999px;
+  --action-card-radius: 28px;
+  --action-border: rgba(246, 246, 246, 0.2);
+  --action-surface: rgba(246, 246, 246, 0.055);
+  --action-surface-hover: rgba(246, 246, 246, 0.1);
+  --action-glow: 0 10px 28px rgba(0, 0, 0, 0.24);
+  --action-accent-glow: 0 12px 30px rgba(255, 64, 47, 0.24);
+}
+
+button {
+  border-radius: var(--action-pill-radius);
+}
+
+.word {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.55rem;
+  padding: 0.66rem 1rem;
+  border: 1px solid var(--action-border);
+  border-radius: var(--action-pill-radius);
+  background: var(--action-surface);
+  color: var(--ink);
+  box-shadow: none;
+  text-decoration: none;
+  transition: color 150ms ease, background 150ms ease, border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+}
+
+.word:hover,
+.word:focus-visible {
+  border-color: rgba(255, 162, 58, 0.62);
+  background: var(--action-surface-hover);
+  color: var(--light);
+  transform: translateY(-1px);
+}
+
+.bays {
+  gap: 0.45rem;
+}
+
+.bays button {
+  min-height: 2.5rem;
+  padding: 0.62rem 0.95rem;
+  border: 1px solid transparent;
+  border-radius: var(--action-pill-radius);
+  background: transparent;
+  box-shadow: none;
+}
+
+.bays button:hover,
+.bays button:focus-visible {
+  border-color: var(--action-border);
+  background: var(--action-surface);
+  color: var(--light);
+}
+
+.bays button.on {
+  border-color: transparent;
+  background: transparent;
+  color: var(--light);
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.allotment-picks button {
+  min-width: 3rem;
+  min-height: 2.35rem;
+  padding: 0.52rem 0.74rem;
+  border-radius: var(--action-pill-radius);
+  background: var(--action-surface);
+}
+
+.allotment-picks button[aria-selected="true"] {
+  background: linear-gradient(105deg, var(--flare), var(--signal));
+  box-shadow: 0 7px 18px rgba(255, 64, 47, 0.2);
+}
+
+.sample-timecodes {
+  border-radius: var(--action-pill-radius);
+}
+
+.sample-timecodes button {
+  border-radius: var(--action-pill-radius);
+}
+
+.clap {
+  flex-basis: auto;
+  width: auto;
+  min-width: 10.2rem;
+  padding: 0;
+  border-radius: var(--action-pill-radius);
+  filter: none;
+  transform: none;
+}
+
+.clap-stick {
+  display: none;
+}
+
+.clap-slate {
+  height: 3.4rem;
+  padding: 0 1.6rem;
+  border: 1px solid rgba(255, 162, 58, 0.52);
+  border-radius: var(--action-pill-radius);
+  background: linear-gradient(105deg, var(--flare), var(--signal));
+  box-shadow: var(--action-accent-glow), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+
+.clap:hover,
+.clap:focus-visible {
+  filter: none;
+  transform: translateY(-2px);
+}
+
+.sample-action.word {
+  border-radius: var(--action-pill-radius);
+  background: rgba(255, 64, 47, 0.08);
+}
+
+.invite-send {
+  border-radius: var(--action-pill-radius);
+  background: linear-gradient(105deg, var(--flare), var(--signal));
+  box-shadow: var(--action-accent-glow);
+}
+
+.invite-send-action {
+  border: 1px solid rgba(255, 162, 58, 0.5);
+  border-radius: var(--action-pill-radius);
+  background:
+    linear-gradient(90deg, rgba(255, 122, 47, 0.14), rgba(255, 64, 47, 0.04) 68%),
+    var(--void);
+  box-shadow: var(--action-glow), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.run-stop-action {
+  border-radius: var(--action-pill-radius);
+  background: rgba(255, 64, 47, 0.07);
+}
+
+.run-refresh-action {
+  border: 1px solid rgba(255, 162, 58, 0.46);
+  border-radius: var(--action-pill-radius);
+  background:
+    linear-gradient(90deg, rgba(255, 122, 47, 0.14), rgba(255, 64, 47, 0.035) 70%),
+    var(--void);
+  box-shadow: var(--action-glow), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.run-refresh-action:hover:not(:disabled) {
+  box-shadow: var(--action-accent-glow);
+  transform: translateY(-2px);
+}
+
+.gallery-card-actions {
+  gap: 0.4rem;
+  padding: 0.55rem;
+  border-top: 1px solid rgba(246, 246, 246, 0.12);
+  background: var(--void);
+}
+
+.gallery-card-actions button,
+.gallery-card-actions a {
+  min-height: 2.4rem;
+  padding: 0.62rem 0.72rem;
+  border: 1px solid var(--action-border);
+  border-radius: var(--action-pill-radius);
+  background: var(--action-surface);
+}
+
+.gallery-card-actions > :last-child {
+  border-right: 1px solid var(--action-border);
+}
+
+.join-actions .word {
+  border-radius: var(--action-pill-radius);
+}
+
+.join-actions .create-join:not(:disabled) {
+  background: linear-gradient(105deg, var(--flare), var(--signal));
+  box-shadow: var(--action-accent-glow);
+}
+
+.production-stop-choice {
+  border-radius: var(--action-card-radius);
+  background: var(--action-surface);
+  box-shadow: var(--action-glow);
+}
+
+.production-stop-choice.keep,
+.production-stop-choice.delete {
+  border-top-width: 1px;
+}
+
+.production-stop-choice.keep {
+  border-color: rgba(255, 162, 58, 0.56);
+}
+
+.production-stop-choice.delete {
+  border-color: rgba(255, 64, 47, 0.58);
+}
+
+@media (max-width: 700px) {
+  .bays {
+    width: 100%;
+  }
+
+  .bays button {
+    flex: 1 1 0;
+  }
+
+  .word {
+    min-height: 2.75rem;
+  }
+}

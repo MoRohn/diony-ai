@@ -43,8 +43,8 @@ def test_producer_floors_are_idea_production_gallery() -> None:
     assert 'class="clap"' in html
     assert 'id="cast"' in html
     assert 'id="site-line"' in html
-    assert 'href="/static/app.css?v=brand3"' in html
-    assert 'src="/static/app.js?v=brand3"' in html
+    assert 'href="/static/app.css?v=brand6"' in html
+    assert 'src="/static/app.js?v=brand6"' in html
     assert "v=run30" not in html
     assert "Unsigned" not in html
     assert "Unsigned" not in js
@@ -145,6 +145,49 @@ def test_producer_floors_are_idea_production_gallery() -> None:
     assert ".join-workspace" in css
     assert ".splice-rail" in css
     assert ".join-junction" in css
+
+
+def test_producer_actions_share_the_studio_capsule_language() -> None:
+    css = (STATIC / "app.css").read_text()
+
+    assert "--action-pill-radius: 999px;" in css
+    for selector in (
+        ".word",
+        ".bays button",
+        ".allotment-picks button",
+        ".clap-slate",
+        ".sample-action.word",
+        ".invite-send",
+        ".invite-send-action",
+        ".run-stop-action",
+        ".run-refresh-action",
+    ):
+        rules = re.findall(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
+        assert any("border-radius: var(--action-pill-radius);" in rule for rule in rules)
+
+    stop_start = css.rindex(".production-stop-choice {")
+    stop_rule = css[stop_start : css.index("}", stop_start)]
+    assert "border-radius: var(--action-card-radius);" in stop_rule
+
+    gallery_start = css.rindex(".gallery-card-actions button,")
+    gallery_rule = css[gallery_start : css.index("}", gallery_start)]
+    assert "border-radius: var(--action-pill-radius);" in gallery_rule
+
+
+def test_selected_header_page_is_emphasized_without_a_capsule() -> None:
+    css = (STATIC / "app.css").read_text()
+
+    active_start = css.rindex(".bays button.on {")
+    active_rule = css[active_start : css.index("}", active_start)]
+    assert "border-color: transparent;" in active_rule
+    assert "background: transparent;" in active_rule
+    assert "font-weight: 700;" in active_rule
+    assert "box-shadow: none;" in active_rule
+
+    underline_start = css.rindex(".bays button.on::after {")
+    underline_rule = css[underline_start : css.index("}", underline_start)]
+    assert "height: 3px;" in underline_rule
+    assert "background: var(--signal);" in underline_rule
 
 
 def test_production_monitor_scales_to_the_window_with_quiet_scrollbars() -> None:
@@ -377,8 +420,8 @@ def test_production_header_and_idea_body_explain_the_working_state() -> None:
     assert ".reference-hint" in css
     assert ".reference-hint-label" in css
     assert 'stageEl.addEventListener("drop"' in js
-    assert 'href="/static/app.css?v=brand3"' in html
-    assert 'src="/static/app.js?v=brand3"' in html
+    assert 'href="/static/app.css?v=brand6"' in html
+    assert 'src="/static/app.js?v=brand6"' in html
     assert "v=run30" not in html
 
 

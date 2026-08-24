@@ -13,7 +13,7 @@
       href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/app.css?v=brand3" />
+    <link rel="stylesheet" href="/static/app.css?v=brand11" />
     <link rel="stylesheet" href="/static/folio.css?v=brand3" />
   </head>
   <body data-product-surface="studio" data-step="path" data-entry="loading">
@@ -117,22 +117,15 @@
             <article class="entry-path">
               <p class="entry-label">START NEW</p>
               <div class="entry-portrait entry-motion" data-motion-state="still" aria-hidden="true">
-                <img
-                  class="entry-motion-still"
-                  src="/static/studio-maker-motion-first.jpg?v=entrymotion3"
-                  width="1080"
-                  height="1136"
-                  alt=""
-                />
                 <video
                   class="entry-motion-video"
                   muted
                   playsinline
                   preload="auto"
-                  poster="/static/studio-maker-motion-first.jpg?v=entrymotion3"
+                  poster="/static/studio-maker-motion-first.jpg?v=entrymotion8"
                   tabindex="-1"
                 >
-                  <source src="/static/studio-maker-motion.mp4?v=entrymotion3" type="video/mp4" />
+                  <source src="/static/studio-maker-motion.mp4?v=entrymotion8" type="video/mp4" />
                 </video>
               </div>
               <p>Name the Studio. Sign its production site. You become the first owner and Cost/Budgetary Admin.</p>
@@ -142,22 +135,15 @@
             <article class="entry-path">
               <p class="entry-label">JOIN</p>
               <div class="entry-portrait entry-portrait-team entry-motion" data-motion-state="still" aria-hidden="true">
-                <img
-                  class="entry-motion-still"
-                  src="/static/studio-team-motion-first.jpg?v=entrymotion3"
-                  width="1080"
-                  height="1050"
-                  alt=""
-                />
                 <video
                   class="entry-motion-video"
                   muted
                   playsinline
                   preload="auto"
-                  poster="/static/studio-team-motion-first.jpg?v=entrymotion3"
+                  poster="/static/studio-team-motion-first.jpg?v=entrymotion8"
                   tabindex="-1"
                 >
-                  <source src="/static/studio-team-motion.mp4?v=entrymotion3" type="video/mp4" />
+                  <source src="/static/studio-team-motion.mp4?v=entrymotion8" type="video/mp4" />
                 </video>
               </div>
               <p>Use an invite from a Studio you trust. Your Profile Name and personal Cost Center travel with your work.</p>
@@ -194,7 +180,7 @@
                 <div class="field compute-field">
                   <input type="hidden" name="site" value="" />
                   <div class="compute-groups">
-                    <section class="compute-group" aria-labelledby="compute-local-label">
+                    <section class="compute-group compute-group-local" aria-labelledby="compute-local-label">
                       <p id="compute-local-label" class="compute-group-label">LOCAL</p>
                       <div class="choice">
                         <button type="button" data-site="local">DGX Quad-Spark Cluster</button>
@@ -233,7 +219,7 @@
                         <b class="existing-compute-arrow" aria-hidden="true">↗</b>
                       </button>
                     </section>
-                    <section class="compute-group" aria-labelledby="compute-lease-label">
+                    <section class="compute-group compute-group-lease" aria-labelledby="compute-lease-label">
                       <p id="compute-lease-label" class="compute-group-label">LEASE</p>
                       <div class="choice">
                         <button type="button" data-site="dual">Enverge DGX Dual-Spark Cluster</button>
@@ -256,6 +242,19 @@
                 </div>
                 <h3 id="provision-title">Preparing compute</h3>
                 <p id="provision-detail" class="provision-detail"></p>
+                <div id="provision-live-status" class="provision-live-status" data-state="waiting" role="status" aria-live="polite">
+                  <span class="provision-live-signal" aria-hidden="true"><i></i></span>
+                  <div class="provision-live-copy">
+                    <div class="provision-live-head">
+                      <strong id="provision-live-label">Waiting for connection</strong>
+                      <span id="provision-live-count">0 of 0 checks complete</span>
+                    </div>
+                    <p id="provision-live-detail">Add the connection details to begin read-only inspection.</p>
+                    <div id="provision-live-track" class="provision-live-track" role="progressbar" aria-label="Setup progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                      <span id="provision-live-bar"></span>
+                    </div>
+                  </div>
+                </div>
                 <ol id="provision-timeline" class="provision-timeline"></ol>
                 <form id="provision-form" class="provision-form"></form>
                 <p id="provision-error" class="err" role="alert"></p>
@@ -263,7 +262,7 @@
                   <a id="provision-provider-link" class="word" href="#" target="_blank" rel="noopener noreferrer">Open provider</a>
                   <div id="provision-progress" class="provision-progress hidden" hidden role="progressbar" aria-label="Setup in progress" aria-valuetext="Diony is completing this site">
                     <span class="provision-progress-turn" aria-hidden="true"></span>
-                    <span class="provision-progress-copy"><strong>SETUP IN PROGRESS</strong><small id="provision-progress-detail">Diony is completing this site.</small></span>
+                    <span class="provision-progress-copy"><strong id="provision-progress-label">SETUP IN PROGRESS</strong><small id="provision-progress-detail">Diony is completing this site.</small></span>
                   </div>
                   <button type="button" id="provision-continue" class="agent-continue">Continue</button>
                 </div>
@@ -346,6 +345,6 @@
         </div>
       </form>
     </dialog>
-    <script src="/static/app.js?v=brand3"></script>
+    <script src="/static/app.js?v=brand11"></script>
   </body>
 </html>

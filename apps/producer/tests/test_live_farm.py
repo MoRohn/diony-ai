@@ -1,5 +1,6 @@
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 from diony_producer.app import app
@@ -53,6 +54,80 @@ def test_camera_disk_floor_blocks_before_overlay_exhaustion(tmp_path, monkeypatc
 
     assert "overlay" in message.casefold()
     assert "15 GB" in message
+    assert "14 GB free" in message
+
+
+def test_camera_disk_hold_is_infrastructure_not_take_qc(monkeypatch) -> None:
+    from diony_producer import farm
+
+    project = demo_project()
+    take = project.takes[0]
+    take.qc.verdict = QCVerdict.WARN
+    take.qc.notes = "Queued for Wan2.2."
+    monkeypatch.setattr(
+        farm,
+        "camera_disk_block",
+        lambda: "GPU overlay has 14 GB free; 15 GB required.",
+    )
+    monkeypatch.setattr(farm, "camera_task_for", lambda *_args: "i2v-A14B")
+    monkeypatch.setattr(farm, "persist_project", lambda *_args: None)
+    monkeypatch.setattr(farm, "record_activity", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(farm._PERFORMANCE, "record", lambda **_kwargs: None)
+
+    with pytest.raises(farm.CameraResourceBlocked, match="14 GB free"):
+        farm.run_one(project, take)
+
+    assert take.qc is not None
+    assert take.qc.verdict != QCVerdict.FAIL
+
+
+def test_farm_waits_for_storage_and_retries_without_consuming_queue(monkeypatch) -> None:
+    from diony_producer import farm
+
+    project = demo_project()
+    take = project.takes[0]
+    message = "GPU overlay has 14 GB free; 15 GB required."
+    checks = iter([message, message, ""])
+    disk_checks: list[str] = []
+    calls: list[str] = []
+    activity: list[str] = []
+
+    def disk_block() -> str:
+        value = next(checks, "")
+        disk_checks.append(value)
+        return value
+
+    def pass_take(_project, current, **_kwargs) -> None:
+        calls.append(current.id)
+        current.qc.verdict = QCVerdict.PASS
+
+    farm.reset_farm()
+    monkeypatch.setenv("DIONY_INFRA_RETRY_SECONDS", "0.01")
+    monkeypatch.setattr("diony_wan.runner.prove_generate", lambda: None)
+    monkeypatch.setattr(farm, "camera_disk_block", disk_block)
+    monkeypatch.setattr(farm, "_attention_plan", lambda *_args: (None, False, None))
+    monkeypatch.setattr(farm, "run_one", pass_take)
+    monkeypatch.setattr(
+        farm,
+        "record_activity",
+        lambda _src, text, **_kwargs: activity.append(text),
+    )
+    monkeypatch.setattr("diony_producer.advance.maybe_advance_run", lambda _project: None)
+
+    farm.start_farm(project, [take])
+
+    deadline = time.time() + 5
+    status = farm.farm_status()
+    while status["busy"] and time.time() < deadline:
+        time.sleep(0.01)
+        status = farm.farm_status()
+
+    assert len(disk_checks) >= 3
+    assert any("retrying automatically" in row for row in activity)
+    assert calls == [take.id]
+    assert status["done"] == 1
+    assert status["queued"] == 0
+    assert status["error"] == ""
 
 SLOW_GENERATE = """#!/usr/bin/env python3
 import sys, time
@@ -318,6 +393,40 @@ def test_resume_camera_does_not_spawn_a_farm(monkeypatch) -> None:
     out = resume_camera(project)
     assert out.id == "studio-resume"
     assert started == []
+
+
+def test_resume_camera_requeues_an_infrastructure_held_run(monkeypatch) -> None:
+    from diony_producer import farm
+
+    project = demo_project()
+    project.mark_production_start()
+    project.mark_production_end()
+    selected = project.take(project.shots[0].selected_take_id)
+    selected.qc.verdict = QCVerdict.FAIL
+    selected.qc.notes = (
+        "GPU overlay has less than the 15 GB safety floor. "
+        "Scratch stays on the vault; free container disk before Wan loads another clip."
+    )
+    queued: list[list[str]] = []
+    monkeypatch.setattr(farm, "project_matching_generate", lambda current: None)
+    monkeypatch.setattr(farm, "adopt_live_farm", lambda current: None)
+    monkeypatch.setattr(farm, "reclaim_landed_negatives", lambda current: 0)
+    monkeypatch.setattr(farm, "list_generate_jobs", lambda: [])
+    monkeypatch.setattr(farm, "live_camera", lambda: True)
+    monkeypatch.setattr(farm, "enter_farm", lambda: None)
+    monkeypatch.setattr(
+        farm,
+        "start_farm",
+        lambda current, takes: queued.append([take.id for take in takes]),
+    )
+
+    resumed = farm.resume_camera(project)
+
+    expected = [take.id for take in farm._selected_missing_takes(resumed, exclude_ids=set())]
+    assert expected
+    assert queued == [expected]
+    assert resumed.production_ended_at is None
+    assert selected.qc.verdict == QCVerdict.WARN
 
 
 def test_camera_disk_block_when_vault_is_full(monkeypatch) -> None:

@@ -35,7 +35,7 @@ _RUNPOD_PLANS: dict[str, dict[str, Any]] = {
         "label": "Leased B300",
         "gpu_type_id": "NVIDIA B300 SXM6 AC",
         "gpu_count": 1,
-        "container_disk_gb": 400,
+        "container_disk_gb": 800,
         "volume_gb": 1000,
         "volume_mount_path": "/workspace",
         "ports": ["22/tcp"],
@@ -47,7 +47,7 @@ _RUNPOD_PLANS: dict[str, dict[str, Any]] = {
         "label": "Leased B200",
         "gpu_type_id": "NVIDIA B200",
         "gpu_count": 1,
-        "container_disk_gb": 400,
+        "container_disk_gb": 800,
         "volume_gb": 1000,
         "volume_mount_path": "/workspace",
         "ports": ["22/tcp"],
@@ -637,7 +637,7 @@ class ProvisioningService:
         )
         self._state["events"][-1]["status"] = "passed"
         self._state["events"][-1]["detail"] = "Billing approved. Pod launch sent."
-        self._event("GPU + storage", "400 GB container · 1 TB persistent /workspace", "active")
+        self._event("GPU + storage", "800 GB container · 1 TB persistent /workspace", "active")
         return self.public()
 
     def _enverge_requested(self, values: dict[str, Any]) -> dict[str, Any]:

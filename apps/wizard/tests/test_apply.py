@@ -16,7 +16,9 @@ from diony_wizard.apply import (
 )
 
 
-def test_hf_pack_includes_wan_and_sr() -> None:
+def test_hf_pack_includes_wan_and_sr(monkeypatch) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
     joined = "\n".join(hf_download_lines())
     assert "Wan-AI/Wan2.2-T2V-A14B" in joined
     assert "DeepSeek-V4-Flash-0731" in joined
@@ -58,6 +60,11 @@ def test_hf_pack_includes_wan_and_sr() -> None:
     assert "PIP_OK" in script
     assert "HF_START" in script
     assert "HF_PULL" in script
+    assert "PACK_DEDUPE_START" in script
+    assert "PACK_DEDUPE_OK" in script
+    assert "cmp -s" in script
+    assert "ln -f" in script
+    assert script.find('print("HF_OK"') < script.find("PACK_DEDUPE_START")
     assert "huggingface_hub already present" in script
     assert "iic/CosyVoice2-0.5B" in script
     assert "/models/audio/CosyVoice2-0.5B" in script

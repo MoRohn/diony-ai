@@ -356,7 +356,7 @@ def test_lobby_is_startup_only_and_hands_off_in_the_same_page() -> None:
     assert "Volume disk" in start.read_text()
     assert "Network volume" in start.read_text() or "Network Volume" in start.read_text()
     assert "Deploy Pod" in start.read_text()
-    assert "400 GB" in start.read_text()
+    assert "800 GB" in start.read_text()
     assert "10 GB" in start.read_text()
     assert "1000 GB" in start.read_text()
     assert "recommended" in start.read_text().lower()
@@ -552,7 +552,7 @@ def test_producer_state_ok_accepts_a_large_project_payload(monkeypatch) -> None:
 
 def test_producer_ui_stamp_matches_html() -> None:
     stamp = producer_ui_stamp()
-    assert stamp == "brand3"
+    assert stamp == "brand6"
     html = repo_root() / "apps" / "producer" / "src" / "diony_producer" / "static" / "index.html"
     assert f"app.js?v={stamp}" in html.read_text(encoding="utf-8")
     assert f"app.css?v={stamp}" in html.read_text(encoding="utf-8")
@@ -560,7 +560,7 @@ def test_producer_ui_stamp_matches_html() -> None:
 
 def test_wizard_ui_stamp_matches_html() -> None:
     stamp = wizard_ui_stamp()
-    assert stamp == "brand3"
+    assert stamp == "brand11"
     html = repo_root() / "apps" / "wizard" / "src" / "diony_wizard" / "static" / "index.html"
     assert f"app.js?v={stamp}" in html.read_text(encoding="utf-8")
     assert f"app.css?v={stamp}" in html.read_text(encoding="utf-8")

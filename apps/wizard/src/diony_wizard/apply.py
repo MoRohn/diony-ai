@@ -313,6 +313,39 @@ fi
 """
 
 
+def _model_pack_dedupe() -> str:
+    """Hard-link byte-identical shared Wan assets without changing model paths."""
+    return """
+echo PACK_DEDUPE_START
+_diony_hardlink_identical() {
+  local canonical="$1"
+  shift
+  [ -f "$canonical" ] || return 0
+  local candidate pending
+  for candidate in "$@"; do
+    [ -f "$candidate" ] || continue
+    [ "$canonical" -ef "$candidate" ] && continue
+    cmp -s "$canonical" "$candidate" || continue
+    pending="${candidate}.diony-link"
+    ln -f "$canonical" "$pending"
+    mv -f "$pending" "$candidate"
+  done
+}
+_diony_t5=/models/wan/Wan2.2-I2V-A14B/models_t5_umt5-xxl-enc-bf16.pth
+_diony_hardlink_identical "$_diony_t5" \
+  /models/wan/Wan2.2-T2V-A14B/models_t5_umt5-xxl-enc-bf16.pth \
+  /models/wan/Wan2.2-S2V-14B/models_t5_umt5-xxl-enc-bf16.pth \
+  /models/wan/Wan2.2-Animate-14B/models_t5_umt5-xxl-enc-bf16.pth \
+  /models/wan/Wan2.2-VACE-Fun-A14B/models_t5_umt5-xxl-enc-bf16.pth
+_diony_vae=/models/wan/Wan2.2-I2V-A14B/Wan2.1_VAE.pth
+_diony_hardlink_identical "$_diony_vae" \
+  /models/wan/Wan2.2-T2V-A14B/Wan2.1_VAE.pth \
+  /models/wan/Wan2.2-S2V-14B/Wan2.1_VAE.pth \
+  /models/wan/Wan2.2-VACE-Fun-A14B/Wan2.1_VAE.pth
+echo PACK_DEDUPE_OK
+"""
+
+
 def apply_fail_text(result) -> str:
     """Operator excerpt. Do not treat pip 'already satisfied' as the miss."""
     out = getattr(result, "stdout", "") or ""
@@ -350,6 +383,7 @@ def remote_setup_script(repo: str, nas: str = "") -> str:
     mount = "\n".join(vault_mount_lines(nas))
     py = _python_bootstrap(repo)
     hub = _ensure_huggingface_hub()
+    dedupe = _model_pack_dedupe()
     # Keep the token out of Studio logs. It rides SSH stdin only.
     # Vault before .cluster. Venv before pip. Sequential SKU: Producer only.
     return f"""
@@ -387,6 +421,7 @@ for item in PACK:
     print(f"HF_DONE {{repo_id}}", flush=True)
 print("HF_OK", flush=True)
 PY
+{dedupe}
 test -d /opt/wan22/.git || git clone --depth 1 https://github.com/Wan-Video/Wan2.2.git /opt/wan22
 _diony_pip install -e "$DIONY_REPO/packages/contracts" -e "$DIONY_REPO/apps/wan" -e "$DIONY_REPO/apps/finish" -e "$DIONY_REPO/apps/producer" -e "$DIONY_REPO/apps/wizard"
 _diony_python -c "from pathlib import Path; from diony_wan.runner import ensure_attention_fallback, ensure_optional_engine_lazy_imports; ensure_attention_fallback(Path('/opt/wan22')); ensure_optional_engine_lazy_imports(Path('/opt/wan22'))"

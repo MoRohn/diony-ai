@@ -64,8 +64,17 @@ _AUTO_RETAKE_QC_PREFIXES = (
     "Measured temporal coherence failed",
     "Measured flicker failed",
 )
+_INFRASTRUCTURE_QC_PREFIXES = (
+    "GPU overlay has less than",
+    "GPU overlay has ",
+    "Vault has ",
+)
 _PERFORMANCE = PerformanceJournal()
 _ATTENTION_RECEIPT_NAME = "wan-cudnn-sdpa-validation.json"
+
+
+class CameraResourceBlocked(RuntimeError):
+    """Dispatch is safe to retry without creating or rejecting a Take."""
 
 
 def _write_json_atomic(path: Path, payload: dict) -> None:
@@ -328,11 +337,30 @@ def camera_disk_block() -> str:
     except ValueError:
         overlay_floor_gb = 15
     if overlay.free < overlay_floor_gb * 1024**3:
+        free_gb = max(0, overlay.free // (1024**3))
         return (
-            f"GPU overlay has less than the {overlay_floor_gb} GB safety floor. "
-            "Scratch stays on the vault; free container disk before Wan loads another clip."
+            f"GPU overlay has {free_gb} GB free; the {overlay_floor_gb} GB safety floor is required. "
+            "Scratch stays on the vault. Free container disk or use the 800 GB B200/B300 "
+            "minimum before Wan loads another clip."
         )
     return ""
+
+
+def _infrastructure_retry_seconds() -> float:
+    try:
+        return min(300.0, max(0.01, float(os.environ.get("DIONY_INFRA_RETRY_SECONDS", "30"))))
+    except ValueError:
+        return 30.0
+
+
+def _wait_for_infrastructure_retry(project: Project) -> bool:
+    """Wait interruptibly so Stop and pause remain responsive during a storage hold."""
+    deadline = time.monotonic() + _infrastructure_retry_seconds()
+    while time.monotonic() < deadline:
+        if farm_cancelled() or project.production_pause is not None:
+            return False
+        time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
+    return not farm_cancelled() and project.production_pause is None
 
 
 def resume_camera(project: Project) -> Project:
@@ -375,6 +403,25 @@ def resume_camera(project: Project) -> Project:
                     enter_farm()
                     start_farm(project, queued)
                     break
+            else:
+                queued = _selected_missing_takes(project, exclude_ids=set())
+                for take in queued:
+                    note = take.qc.notes.strip() if take.qc else ""
+                    if any(note.startswith(prefix) for prefix in _INFRASTRUCTURE_QC_PREFIXES):
+                        _clear_fail_for_reroll(take)
+                recoverable = bool(
+                    project.production_started_at is not None
+                    and queued
+                    and all(
+                        take.qc is None or take.qc.verdict != QCVerdict.FAIL
+                        for take in queued
+                    )
+                )
+                if recoverable:
+                    project.production_ended_at = None
+                    persist_project(project)
+                    enter_farm()
+                    start_farm(project, queued)
     return project
 
 
@@ -1246,29 +1293,7 @@ def run_one(
     _detail = f"Generating 720p · {task} · {shot.id}"
     blocked = camera_disk_block()
     if blocked:
-        _error = blocked
-        _detail = blocked[:240]
-        _clear_fail_for_reroll(take)
-        attach_negative(
-            project,
-            take,
-            negative_rel(project, take),
-            shot.duration_frames,
-            live=True,
-            err=blocked,
-        )
-        persist_project(project)
-        record_activity("qc", f"{shot.id} · {blocked[:240]}", level="fail", shot_id=shot.id)
-        _PERFORMANCE.record(
-            stage="wan_camera",
-            project_id=project.id,
-            take_id=take.id,
-            duration_seconds=time.monotonic() - started,
-            outcome="failed",
-            retry=take.attempt > 1,
-            metadata={"task": task, "reason": "disk_block"},
-        )
-        return
+        raise CameraResourceBlocked(blocked)
     _clear_fail_for_reroll(take)
     record_activity("wan", _detail, level="live", shot_id=shot.id)
     rel = negative_rel(project, take)
@@ -1385,6 +1410,7 @@ def start_farm(project: Project, takes: list[Take]) -> None:
 
     def loop() -> None:
         global _busy, _detail, _shot_id, _done, _error
+        storage_hold = ""
         try:
             from diony_wan.runner import prove_generate
 
@@ -1419,6 +1445,36 @@ def start_farm(project: Project, takes: list[Take]) -> None:
             return
         try:
             while True:
+                with _lock:
+                    if _cancel or project.production_pause is not None or not _pending:
+                        if project.production_pause is not None:
+                            _pending.clear()
+                        break
+                    next_shot_id = _pending[0].shot_id
+                blocked = camera_disk_block()
+                if blocked:
+                    storage_hold = blocked
+                    with _lock:
+                        _error = ""
+                        _shot_id = next_shot_id
+                        _detail = f"Storage hold · {blocked} Retrying automatically."
+                    record_activity(
+                        "wan",
+                        f"{_shot_id or 'Camera'} · storage hold; retrying automatically · {blocked}",
+                        level="info",
+                        shot_id=_shot_id,
+                    )
+                    if not _wait_for_infrastructure_retry(project):
+                        break
+                    continue
+                if storage_hold:
+                    record_activity(
+                        "wan",
+                        f"{_shot_id or 'Camera'} · GPU storage recovered; resuming Wan2.2 automatically",
+                        level="live",
+                        shot_id=_shot_id,
+                    )
+                    storage_hold = ""
                 with _lock:
                     if _cancel or project.production_pause is not None or not _pending:
                         if project.production_pause is not None:
@@ -1459,6 +1515,22 @@ def start_farm(project: Project, takes: list[Take]) -> None:
                         attention_backend=attention_backend,
                         measured_qc_required=True if attention_canary else None,
                     )
+                except CameraResourceBlocked as exc:
+                    blocked = str(exc)
+                    storage_hold = blocked
+                    with _lock:
+                        _pending.insert(0, take)
+                        _error = ""
+                        _detail = f"Storage hold · {blocked} Retrying automatically."
+                    record_activity(
+                        "wan",
+                        f"{take.shot_id} · storage hold; retrying automatically · {blocked}",
+                        level="info",
+                        shot_id=take.shot_id,
+                    )
+                    if not _wait_for_infrastructure_retry(project):
+                        break
+                    continue
                 except Exception as exc:  # noqa: BLE001 — never consume the rundown silently
                     from diony_wan.runner import classify_wan_log
 

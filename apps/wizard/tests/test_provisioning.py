@@ -97,7 +97,7 @@ def test_runpod_plan_is_the_diony_site_contract() -> None:
     b300 = runpod_plan("b300")
     assert b300["gpu_type_id"] == "NVIDIA B300 SXM6 AC"
     assert b300["gpu_count"] == 1
-    assert b300["container_disk_gb"] == 400
+    assert b300["container_disk_gb"] == 800
     assert b300["volume_gb"] == 1000
     assert b300["volume_mount_path"] == "/workspace"
     assert b300["ports"] == ["22/tcp"]
@@ -106,6 +106,7 @@ def test_runpod_plan_is_the_diony_site_contract() -> None:
     b200 = runpod_plan("b200")
     assert b200["gpu_type_id"] == "NVIDIA B200"
     assert b200["profile"] == "b200-v1"
+    assert b200["container_disk_gb"] == 800
     assert b200["interruptible"] is False
 
 
@@ -248,7 +249,8 @@ def test_compute_ui_has_grouped_choices_confirmation_and_agent_progress() -> Non
 
     assert "COMPUTE" in html
     assert "Choose where Diony AI will run. Agent will take it from here." in html
-    assert 'class="compute-group"' in html
+    assert 'class="compute-group compute-group-local"' in html
+    assert 'class="compute-group compute-group-lease"' in html
     assert "LOCAL" in html
     assert "LEASE" in html
     assert 'id="compute-confirm"' in html
@@ -288,6 +290,35 @@ def test_setup_agent_owns_action_area_until_validation_is_complete() -> None:
     assert "border-color: var(--void);" in complete_rule
     assert "color: #fff;" in complete_rule
     assert "@keyframes provision-turn" in css
+
+
+def test_connect_page_reports_waiting_working_ready_and_attention_states() -> None:
+    client = TestClient(wizard_app.app)
+    html = client.get("/").text
+    css = client.get("/static/app.css").text
+    js = client.get("/static/app.js").text
+
+    assert '/static/app.js?v=brand11' in html
+    assert 'id="provision-live-status"' in html
+    assert 'id="provision-live-label"' in html
+    assert 'id="provision-live-detail"' in html
+    assert 'id="provision-live-count"' in html
+    assert 'id="provision-live-track"' in html
+    assert 'id="provision-live-bar"' in html
+
+    assert "function provisionStatusView" in js
+    assert "function paintProvisionStatus" in js
+    assert "function paintProvisionBusy" in js
+    assert "Read-only inspection in progress" in js
+    assert "Waiting for each host to return GPU, fabric, vault, and pack checks." in js
+    assert 'provisionPanel.setAttribute("aria-busy", "true")' in js
+    assert 'document.body.dataset.provisionStatus' in js
+
+    assert ".provision-live-status" in css
+    assert '.provision-live-status[data-state="working"]' in css
+    assert '.provision-live-status[data-state="complete"]' in css
+    assert '.provision-live-status[data-state="failed"]' in css
+    assert "@keyframes provision-live-scan" in css
 
 
 def test_compute_options_name_hardware_and_vendors_without_repeating_group_labels() -> None:

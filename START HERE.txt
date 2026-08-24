@@ -115,7 +115,7 @@ Primary — Runpod Instant Cluster (two Pods with fabric)
                              Not H100, H200, B200, or RTX.
                              If there is no Spark pair, use Enverge.
        Network Volume        the volume from section 3
-       Container disk        400 GB
+       Container disk        800 GB
        Template              Runpod PyTorch (official)
        Deploy Cluster
 
@@ -154,7 +154,7 @@ Primary — Runpod: Deploy one Pod
        Do not click RTX, H100, H200, or B200.
 
   4. Storage (bottom of the page)
-       Container disk        400 GB
+       Container disk        800 GB
                              (weights at /models; erased on Stop)
        Persistent storage    Volume disk, 1000 GB
                              (vault at /workspace)
@@ -199,7 +199,7 @@ Primary — Runpod: Deploy one Pod
      Details check:
           GPU         1x B300  (must match Studio Site Leased B300)
           Template    Runpod PyTorch
-          Container disk  ≥400 GB  (/models; wiped on Stop)
+          Container disk  ≥800 GB  (/models; wiped on Stop)
           Volume disk     ≥1000 GB, Mount path /workspace
           Location / cost are not Studio fields.
 
@@ -240,7 +240,7 @@ Primary — Runpod: Deploy one Pod
        This site is one B200, not a B200 Instant Cluster.
 
   4. Storage (bottom of the page)
-       Container disk        400 GB
+       Container disk        800 GB
                              (weights at /models; erased on Stop)
        Persistent storage    Volume disk, 1000 GB
                              (vault at /workspace)
@@ -285,7 +285,7 @@ Primary — Runpod: Deploy one Pod
      Details check:
           GPU         1x B200  (must match Studio Site Leased B200)
           Template    Runpod PyTorch
-          Container disk  ≥400 GB  (/models; wiped on Stop)
+          Container disk  ≥800 GB  (/models; wiped on Stop)
           Volume disk     ≥1000 GB, Mount path /workspace
           Location / cost are not Studio fields.
 

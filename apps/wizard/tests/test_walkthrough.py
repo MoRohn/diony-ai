@@ -742,8 +742,8 @@ def test_ui_is_crate_to_system() -> None:
     assert "v=brand3" in html
     assert '<h2>DIONY STUDIO</h2>' not in html
     assert '<h2>A DIONY STUDIO</h2>' not in html
-    assert 'src="/static/studio-maker-motion-first.jpg?v=entrymotion3"' in html
-    assert 'src="/static/studio-team-motion-first.jpg?v=entrymotion3"' in html
+    assert 'poster="/static/studio-maker-motion-first.jpg?v=entrymotion8"' in html
+    assert 'poster="/static/studio-team-motion-first.jpg?v=entrymotion8"' in html
     assert ".entry-portrait" in css
     static = Path(__file__).resolve().parents[1] / "src" / "diony_wizard" / "static"
     for name in ("studio-maker-sketch.png", "studio-team-sketch.png"):
@@ -916,12 +916,12 @@ def test_wizard_first_page_plays_cropped_entry_motion_once_then_restores_the_fir
         assert "loop" not in video
         assert "controls" not in video
 
-    assert html.count('class="entry-motion-still"') == 2
+    assert 'class="entry-motion-still"' not in html
     assert html.count('class="entry-motion-video"') == 2
-    assert 'src="/static/studio-maker-motion.mp4?v=entrymotion3"' in html
-    assert 'src="/static/studio-team-motion.mp4?v=entrymotion3"' in html
-    assert 'poster="/static/studio-maker-motion-first.jpg?v=entrymotion3"' in html
-    assert 'poster="/static/studio-team-motion-first.jpg?v=entrymotion3"' in html
+    assert 'src="/static/studio-maker-motion.mp4?v=entrymotion8"' in html
+    assert 'src="/static/studio-team-motion.mp4?v=entrymotion8"' in html
+    assert 'poster="/static/studio-maker-motion-first.jpg?v=entrymotion8"' in html
+    assert 'poster="/static/studio-team-motion-first.jpg?v=entrymotion8"' in html
     assert "function playStudioEntryMotionOnce()" in js
     assert "function resetStudioEntryMotion" in js
     assert 'motion.dataset.motionPlayed = "true"' in js
@@ -930,18 +930,16 @@ def test_wizard_first_page_plays_cropped_entry_motion_once_then_restores_the_fir
     assert 'video.currentTime = 0' in js
     assert 'matchMedia("(prefers-reduced-motion: reduce)")' in js
     assert "requestAnimationFrame(playStudioEntryMotionOnce)" in js
-    assert '.entry-motion[data-motion-state="playing"] .entry-motion-video' in css
-    assert '.entry-motion[data-motion-state="playing"] .entry-motion-still' in css
+    assert '.entry-motion[data-motion-state="playing"] .entry-motion-video' not in css
+    assert '.entry-motion[data-motion-state="playing"] .entry-motion-still' not in css
     assert "background: transparent;\n  border: 0;\n  box-shadow: none;" in css
-    media_blend = css[
-        css.index(".entry-motion-still,\n.entry-motion-video {") : css.index(
-            "\n}\n", css.index(".entry-motion-still,\n.entry-motion-video {")
-        )
-    ]
-    assert "opacity: 0.58;" in media_blend
-    assert "filter:" not in media_blend
-    assert "mix-blend-mode: normal;" in media_blend
-    assert "clip-path: inset(2px);" in media_blend
+    video_start = css.rindex(".entry-portrait .entry-motion-video {")
+    video_rule = css[video_start : css.index("}", video_start)]
+    assert "opacity: 0.90;" in video_rule
+    assert "filter: none;" in video_rule
+    assert "mix-blend-mode: normal;" in video_rule
+    assert "visibility: visible;" in video_rule
+    assert "clip-path: inset(2px);" in css
     assert "entry-motion-control" not in html
 
     static = Path(__file__).resolve().parents[1] / "src" / "diony_wizard" / "static"
@@ -951,6 +949,135 @@ def test_wizard_first_page_plays_cropped_entry_motion_once_then_restores_the_fir
     for name in ("studio-maker-motion-first.jpg", "studio-team-motion-first.jpg"):
         asset = static / name
         assert asset.read_bytes().startswith(b"\xff\xd8\xff")
+
+
+def test_studio_entry_uses_right_aligned_team_type_blended_art_and_capsule_actions() -> None:
+    css = TestClient(app).get("/static/app.css").text
+
+    heading_rules = re.findall(r"\.studio-entry > h1 span:last-child\s*\{([^}]*)\}", css)
+    assert any("margin-left: auto;" in rule for rule in heading_rules)
+    assert any("text-align: right;" in rule for rule in heading_rules)
+
+    assert ".entry-portrait .entry-motion-still" not in css
+    video_start = css.rindex(".entry-portrait .entry-motion-video {")
+    video_rule = css[video_start : css.index("}", video_start)]
+    assert "filter: none;" in video_rule
+    assert "mix-blend-mode: normal;" in video_rule
+    portrait_rules = re.findall(r"\.entry-portrait\s*\{([^}]*)\}", css)
+    assert any("background-color: var(--folio);" in rule for rule in portrait_rules)
+
+    assert "--action-pill-radius: 999px;" in css
+    for selector in (
+        ".studio-intro-enter",
+        ".entry-action",
+        ".word",
+        ".production-folio .choice button",
+        ".existing-compute-action",
+        ".agent-continue",
+        ".inspect-compute-button",
+        ".production-folio #pass.continue",
+    ):
+        rules = re.findall(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
+        assert any("border-radius: var(--action-pill-radius);" in rule for rule in rules)
+
+    path_rules = re.findall(r"\.entry-paths\s*\{([^}]*)\}", css)
+    assert any("border-bottom: 0;" in rule for rule in path_rules)
+    entry_action_rules = re.findall(r"\.entry-action\s*\{([^}]*)\}", css)
+    assert any("min-height: 3.5rem;" in rule for rule in entry_action_rules)
+    assert any("margin-bottom: 0.7rem;" in rule for rule in entry_action_rules)
+    arrow_start = css.rindex(".entry-action-arrow {")
+    arrow_rule = css[arrow_start : css.index("}", arrow_start)]
+    assert "background: transparent;" in arrow_rule
+    for selector in (".existing-compute-arrow", ".inspect-compute-button > b"):
+        arrow_rules = re.findall(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
+        assert any("background: transparent;" in rule for rule in arrow_rules)
+
+
+def test_compute_page_uses_balanced_readable_responsive_layout() -> None:
+    client = TestClient(app)
+    html = client.get("/").text
+    js = client.get("/static/app.js").text
+    css = client.get("/static/app.css").text
+
+    assert '/static/app.css?v=brand11' in html
+    assert 'class="compute-group compute-group-local"' in html
+    assert 'class="compute-group compute-group-lease"' in html
+    assert 'group.className = `compute-group compute-group-${label.toLowerCase()}`;' in js
+
+    assert "--compute-card-radius: 1.5rem;" in css
+    assert 'body[data-step="path"] .production-folio .cue-workspace' in css
+    assert "max-width: 78rem;" in css
+    assert "grid-template-columns: minmax(0, 1.45fr) minmax(21rem, 0.85fr);" in css
+    assert "border-radius: var(--compute-card-radius);" in css
+    assert "text-wrap: balance;" in css
+    assert "overflow-wrap: normal;" in css
+    assert "@media (max-width: 1180px)" in css
+    assert "@media (max-height: 950px)" in css
+    assert 'body[data-step="path"]:not([data-provision="active"]) .existing-compute-action' in css
+    assert 'body[data-provision="active"] .production-folio .cue-workspace' in css
+
+    final_group_rule = css[css.rindex(".compute-group {") :]
+    final_group_rule = final_group_rule[: final_group_rule.index("}")]
+    assert "background: rgba(255, 255, 255, 0.035);" in final_group_rule
+
+    final_provision_rule = css[css.rindex(".provision-panel {") :]
+    final_provision_rule = final_provision_rule[: final_provision_rule.index("}")]
+    assert "border-radius: var(--compute-card-radius);" in final_provision_rule
+    assert "background: rgba(255, 255, 255, 0.035);" in final_provision_rule
+
+    final_runpod_rule = css[css.rindex(".runpod-command-entry {") :]
+    final_runpod_rule = final_runpod_rule[: final_runpod_rule.index("}")]
+    assert "rgba(255, 255, 255, 0.025)" in final_runpod_rule
+
+    final_provision_heading_rule = css[css.rindex(".provision-panel h3 {") :]
+    final_provision_heading_rule = final_provision_heading_rule[: final_provision_heading_rule.index("}")]
+    assert "color: var(--light);" in final_provision_heading_rule
+    assert "font-size: clamp(1.8rem, 2.25vw, 2.7rem);" in final_provision_heading_rule
+
+    assert 'body[data-provision="active"] .provision-form:has(.runpod-command-entry) label.wide textarea' in css
+    assert "min-height: 3rem;" in css
+    assert 'body[data-provision="active"] .provision-actions' in css
+
+    final_refresh_rule = css[css.rindex('body[data-step="path"] .site-refresh {') :]
+    final_refresh_rule = final_refresh_rule[: final_refresh_rule.index("}")]
+    assert "margin-top: 1.25rem;" in final_refresh_rule
+
+
+def test_studio_motion_grade_matches_the_static_art_transition() -> None:
+    client = TestClient(app)
+    html = client.get("/").text
+    css = client.get("/static/app.css").text
+
+    assert html.count("?v=entrymotion8") == 4
+    assert '.entry-motion[data-motion-state="playing"] .entry-motion-video' not in css
+
+    video_start = css.rindex(".entry-portrait .entry-motion-video {")
+    video_rule = css[video_start : css.index("}", video_start)]
+    assert "filter: none;" in video_rule
+    assert "mix-blend-mode: normal;" in video_rule
+
+    portrait_rules = re.findall(r"\.entry-portrait\s*\{([^}]*)\}", css)
+    assert any("background-color: var(--folio);" in rule for rule in portrait_rules)
+
+
+def test_studio_motion_and_final_frame_share_one_video_color_pipeline() -> None:
+    client = TestClient(app)
+    html = client.get("/").text
+    css = client.get("/static/app.css").text
+
+    assert 'class="entry-motion-still"' not in html
+    assert html.count('class="entry-motion-video"') == 2
+    assert html.count("?v=entrymotion8") == 4
+
+    video_start = css.rindex(".entry-portrait .entry-motion-video {")
+    video_rule = css[video_start : css.index("}", video_start)]
+    assert "filter: none;" in video_rule
+    assert "mix-blend-mode: normal;" in video_rule
+    assert "visibility: visible;" in video_rule
+    assert "opacity: 0.90;" in video_rule
+
+    assert '.entry-motion[data-motion-state="playing"] .entry-motion-still' not in css
+    assert '.entry-motion[data-motion-state="playing"] .entry-motion-video' not in css
 
 
 def test_production_folio_never_replays_a_full_surface_opacity_animation() -> None:

@@ -671,7 +671,7 @@ function paintComputeChoice(field, answers, interactive) {
     ["LEASE", ["dual", "b300", "b200"]],
   ].forEach(([label, options]) => {
     const group = document.createElement("section");
-    group.className = "compute-group";
+    group.className = `compute-group compute-group-${label.toLowerCase()}`;
     const cap = document.createElement("p");
     cap.className = "compute-group-label";
     cap.textContent = label;
@@ -1572,6 +1572,99 @@ function provisionVaultDiscovery(next) {
   return `<aside class="vault-discovery-card${source ? " is-found" : ""}" role="status" aria-live="polite"><span class="vault-discovery-signal" aria-hidden="true"><i></i><small>${stateLabel}</small></span><span class="vault-discovery-copy"><em>Vault auto-discovery</em><strong>${escapeHtml(headline)}</strong><small>${escapeHtml(detail)}</small></span><span class="vault-discovery-order" aria-hidden="true"><b>/diony/vault</b><b>NFS</b><b>/workspace</b></span></aside>`;
 }
 
+function provisionStatusView(next = {}) {
+  const events = Array.isArray(next.events) ? next.events : [];
+  const passed = events.filter((event) => event.status === "passed").length;
+  const activeEvent = [...events].reverse().find((event) => event.status === "active");
+  const failedEvent = [...events].reverse().find((event) => event.status === "failed");
+  const complete = next.status === "complete";
+  const working = next.status === "working" || next.status === "ready";
+  const failed = Boolean(next.error || failedEvent);
+  const total = Math.max(events.length, 1);
+  const activeCredit = activeEvent && !failed ? 0.25 : 0;
+  const progress = complete
+    ? 100
+    : Math.max(0, Math.min(96, Math.round(((passed + activeCredit) / total) * 100)));
+  const checkpointLabels = {
+    provider_account: "Provider sign-in required",
+    deploy_confirmation: "Deployment confirmation required",
+    provider_boot: "Provider allocation in progress",
+    provider_allocation: "Waiting for provider allocation",
+    existing_connection: "Waiting for SSH connection",
+    repair_credentials: "Repair authorization required",
+    validating_existing: "Validation in progress",
+    studio_handoff: "Securing Studio handoff",
+  };
+  let state = complete ? "complete" : working ? "working" : failed ? "failed" : "waiting";
+  if (failed) state = "failed";
+  const label = next.status_label || (failed
+    ? "Setup needs attention"
+    : complete
+      ? "Compute ready"
+      : checkpointLabels[next.checkpoint] || (working ? "Setup in progress" : "Waiting for the next action"));
+  const detail = String(
+    next.error ||
+      failedEvent?.detail ||
+      (next.status_label ? next.detail : activeEvent?.detail || next.detail) ||
+      "Diony is waiting for the next setup checkpoint."
+  );
+  const count = complete
+    ? `${total} ${total === 1 ? "check" : "checks"} complete`
+    : failed
+      ? "Action required"
+      : `${passed} of ${total} ${total === 1 ? "check" : "checks"} complete`;
+  const indeterminate = working && ["provider_boot", "validating_existing", "studio_handoff", "existing_connection"].includes(next.checkpoint);
+  return { state, label, detail, count, progress, working, indeterminate };
+}
+
+function paintProvisionStatus(next) {
+  const view = provisionStatusView(next);
+  const status = document.getElementById("provision-live-status");
+  const track = document.getElementById("provision-live-track");
+  const bar = document.getElementById("provision-live-bar");
+  if (status) status.dataset.state = view.state;
+  setText(document.getElementById("provision-live-label"), view.label);
+  setText(document.getElementById("provision-live-detail"), view.detail);
+  setText(document.getElementById("provision-live-count"), view.count);
+  if (track) {
+    track.classList.toggle("is-indeterminate", view.indeterminate);
+    track.setAttribute("aria-valuetext", `${view.label}. ${view.detail}`);
+    if (view.indeterminate) track.removeAttribute("aria-valuenow");
+    else track.setAttribute("aria-valuenow", String(view.progress));
+  }
+  if (bar) bar.style.setProperty("--provision-progress", `${view.progress}%`);
+  if (provisionPanel) provisionPanel.setAttribute("aria-busy", view.working ? "true" : "false");
+  document.body.dataset.provisionStatus = view.state;
+  return view;
+}
+
+function paintProvisionBusy(label, detail) {
+  paintProvisionStatus({
+    ...(provision || {}),
+    status: "working",
+    status_label: label,
+    error: "",
+    detail,
+  });
+  if (provisionPanel) provisionPanel.setAttribute("aria-busy", "true");
+  document.body.dataset.provisionStatus = "working";
+  provisionForm?.querySelectorAll("input, textarea, button").forEach((control) => {
+    control.disabled = true;
+  });
+  if (provisionProgress) {
+    provisionProgress.hidden = false;
+    provisionProgress.classList.remove("hidden");
+    provisionProgress.setAttribute("aria-valuetext", `${label}. ${detail}`);
+  }
+  setText(document.getElementById("provision-progress-label"), label);
+  setText(document.getElementById("provision-progress-detail"), detail);
+  if (provisionContinue) {
+    provisionContinue.hidden = true;
+    provisionContinue.classList.add("hidden");
+    provisionContinue.disabled = true;
+  }
+}
+
 function paintProvisioning(next) {
   provision = next;
   const setupInProgress = next.status === "working" || next.status === "ready";
@@ -1599,10 +1692,15 @@ function paintProvisioning(next) {
     refresh.hidden = true;
     refresh.classList.add("hidden");
   }
-  if (!active) return;
+  if (!active) {
+    provisionPanel.setAttribute("aria-busy", "false");
+    document.body.dataset.provisionStatus = "idle";
+    return;
+  }
   const well = document.querySelector(".well");
   if (well) well.scrollTop = 0;
 
+  const statusView = paintProvisionStatus(next);
   setText(document.getElementById("provision-provider"), next.provider || "Lease");
   setText(document.getElementById("provision-title"), next.headline || "Preparing compute");
   let detail = next.detail || "";
@@ -1617,7 +1715,7 @@ function paintProvisioning(next) {
     timeline.innerHTML = (next.events || [])
       .map(
         (event) =>
-          `<li class="${escapeHtml(event.status || "")}"><strong>${escapeHtml(
+          `<li class="${escapeHtml(event.status || "")}" data-state="${escapeHtml(event.status || "waiting")}"${event.status === "active" ? ' aria-current="step"' : ""}><strong>${escapeHtml(
             event.label || ""
           )}</strong><span>${escapeHtml(event.detail || "")}</span></li>`
       )
@@ -1638,8 +1736,9 @@ function paintProvisioning(next) {
   if (provisionProgress) {
     provisionProgress.hidden = !setupInProgress;
     provisionProgress.classList.toggle("hidden", !setupInProgress);
-    const progressDetail = next.detail || "Diony is completing this site.";
+    const progressDetail = statusView.detail || "Diony is completing this site.";
     provisionProgress.setAttribute("aria-valuetext", progressDetail);
+    setText(document.getElementById("provision-progress-label"), statusView.label);
     setText(document.getElementById("provision-progress-detail"), progressDetail);
   }
   if (provisionContinue) {
@@ -1762,14 +1861,37 @@ async function advanceProvisioning() {
           ? "connection_ready"
           : "";
   if (!action) return;
+  const values = provisionValues();
+  const busyCopy =
+    action === "inspect_existing"
+      ? [
+          "Read-only inspection in progress",
+          "Waiting for each host to return GPU, fabric, vault, and pack checks.",
+        ]
+      : action === "repair_existing"
+        ? ["Repair validation in progress", "Checking the repaired runtime and private vault contract."]
+        : action === "deploy"
+          ? ["Compute allocation in progress", "Waiting for the provider to assign GPU, storage, IP, and SSH."]
+          : ["Setup checkpoint in progress", "Diony is validating this checkpoint before continuing."];
   provisionContinue.disabled = true;
   if (provisionError) provisionError.textContent = "";
-  const res = await fetch("/api/provision/advance", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, ...provisionValues() }),
-  });
-  const body = await res.json();
+  paintProvisionBusy(busyCopy[0], busyCopy[1]);
+  let res;
+  let body;
+  try {
+    res = await fetch("/api/provision/advance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...values }),
+    });
+    body = await res.json();
+  } catch {
+    paintProvisioning(provision);
+    if (provisionError) {
+      provisionError.textContent = "The setup request could not be reached. Check the connection and retry.";
+    }
+    return;
+  }
   provisionContinue.disabled = false;
   if (!res.ok) {
     const detail = body.detail || "This checkpoint needs attention.";
@@ -1789,6 +1911,10 @@ async function advanceProvisioning() {
 async function adoptProvisionedSite() {
   if (provisionAdopting) return;
   provisionAdopting = true;
+  paintProvisionBusy(
+    "Securing Studio handoff",
+    "Recording the verified SSH and vault contract, then starting final site validation."
+  );
   if (provisionError) provisionError.textContent = "Recording the provider connection in Studio…";
   try {
     const res = await fetch("/api/provision/adopt", { method: "POST", cache: "no-store" });
