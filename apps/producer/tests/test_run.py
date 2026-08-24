@@ -270,6 +270,21 @@ def test_clip_monitor_exposes_actual_lane_and_fallback_reason(monkeypatch) -> No
         output_sha256="b" * 64,
         output_bytes=1024,
     )
+    assert receipt.denoise_passes == 1
+    assert receipt.effective_denoise_steps == 24
+
+    with __import__("pytest").raises(ValueError, match="generation fields"):
+        GenerationExecutionReceipt(
+            **(
+                receipt.model_dump(mode="python")
+                | {
+                    "task": "s2v-14B",
+                    "inference_frames_per_pass": 84,
+                    "denoise_passes": 2,
+                    "effective_denoise_steps": 48,
+                }
+            )
+        )
     take = Take(
         id="take-lane",
         shot_id=shot.id,
@@ -298,6 +313,9 @@ def test_clip_monitor_exposes_actual_lane_and_fallback_reason(monkeypatch) -> No
     assert row["generation_lane_label"] == "Quality CLI fallback"
     assert "receipt" in row["generation_fallback"].casefold()
     assert row["generation_elapsed_seconds"] == 901.0
+    assert row["inference_frames_per_pass"] == 81
+    assert row["denoise_passes"] == 1
+    assert row["effective_denoise_steps"] == 24
 
 
 def test_clip_monitor_tracks_finish_progress_as_structured_milestones(monkeypatch) -> None:

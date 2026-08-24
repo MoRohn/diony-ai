@@ -69,7 +69,11 @@ Producer process environment captured at startup. At a Take boundary, measured
 B200 operator proof may be rebound to the active Project and exactly one selected
 Take. That Take runs cuDNN SDPA, measured AutoQC, and immediate verified 1080
 Finish. A passing receipt activates the remaining Takes without restarting the
-Producer; any canary failure holds the queue before another Take is dispatched.
+Producer. An eligible creative or audiovisual QC failure follows the normal
+bounded immutable-Take AutoQC path: the operator proof is rebound only from the
+failed selected Take to its newly selected retry, and the unchanged waiting
+rundown remains queued. Runtime/infrastructure failure, a receipt-binding error,
+or exhaustion of the four-Take cap holds the queue before another Shot dispatches.
 
 The receipt is bound to one Project. It cannot activate another production.
 Every remaining Take still runs the normal AutoQC and 1080 Finish gates. A
@@ -96,9 +100,12 @@ Producer sequential FARM queue
 ```
 
 Task or checkpoint changes drain the cached pipeline before loading the next one.
-The resident worker supports core T2V-A14B and I2V-A14B only. S2V, Animate, TI2V,
-offload sites, non-81-frame requests, and non-24-step requests retain the official
-per-clip CLI. One worker never means two concurrent clips.
+The resident worker supports receipt-qualified T2V-A14B, I2V-A14B, and S2V-A14B.
+S2V carries the locked still, locked audio, one 84-frame inference window, exact
+81-frame publish cap, and the same 24-step BF16/negative-conditioning inputs as
+the pinned CLI. Animate, TI2V, offload sites, non-81-frame requests, and
+non-24-step requests retain the official per-clip CLI. One worker never means
+two concurrent clips.
 
 Producer never reorders Shots across a previous-frame continuity dependency just
 to group engines. Blueprint 20's exact-reference script lane is naturally a
@@ -119,6 +126,7 @@ requires `DIONY_WAN_RESIDENT_RECEIPT` to point to a JSON receipt that proves:
 - candidate retries no greater than baseline;
 - quality equivalence passed for every pair;
 - identical decoded-frame SHA-256 plus hashed AutoQC, verified-master, and blind-review evidence;
+- an explicit `qualified_tasks` list; a receipt cannot activate an engine it did not measure;
 - a named approver.
 
 Qualification records model/pipeline initialization, first denoise step, steady
@@ -151,7 +159,7 @@ any Take may enter the candidate lane. A file's presence is never approval.
 ### Regional compile candidate
 
 `DIONY_WAN_KERNEL_MODE=regional_compile` compiles each repeated
-`WanAttentionBlock` in both the high-noise and low-noise experts with
+`WanAttentionBlock` in both high/low-noise experts, or the S2V noise model, with
 `fullgraph=True` and fixed shapes inside the persistent worker. T5, VAE, solver,
 guidance, BF16 parameters, 24 denoise steps, and native output remain unchanged.
 The eager resident worker remains the exact rollback.
@@ -242,8 +250,9 @@ therefore be frequent without becoming part of production correctness.
 Every new negative also writes an atomic execution-lane sidecar. Producer binds
 it to `Take.generation_receipt` only after checking the output hash, byte count,
 and pinned quality fields. Production clip rows expose the actual lane, timing,
-attention backend, and fallback reason so held or rolled-back acceleration cannot
-look like an unexplained performance regression.
+attention backend, inference frames per pass, denoise-pass count, effective
+denoise steps, and fallback reason so held, doubled, or rolled-back acceleration
+cannot look like an unexplained performance regression.
 
 `GET /api/project` is also observational and must never persist or change
 `.cluster/current.json`. `POST /api/projects/{project_id}/activate` is the only

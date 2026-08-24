@@ -227,7 +227,7 @@ def test_generate_process_scan_ignores_shell_commands_that_only_quote_the_camera
     assert jobs[0]["take_id"] == "sh-010-t1"
 
 
-def test_s2v_expected_passes_match_the_padded_five_second_audio_contract(tmp_path) -> None:
+def test_s2v_expected_passes_match_the_single_bucket_five_second_audio_contract(tmp_path) -> None:
     import wave
 
     from diony_producer.farm import _s2v_expected_passes
@@ -240,6 +240,8 @@ def test_s2v_expected_passes_match_the_padded_five_second_audio_contract(tmp_pat
         output.writeframes(b"\x00\x00" * (48_000 * 5))
 
     assert _s2v_expected_passes("s2v-14B", str(audio), 80) == 2
+    assert _s2v_expected_passes("s2v-14B", str(audio), 84) == 1
+    assert _s2v_expected_passes("s2v-14B", str(audio), 88) == 1
     assert _s2v_expected_passes("t2v-A14B", str(audio), 80) == 1
 
 
@@ -723,6 +725,102 @@ def test_farm_auto_retakes_failed_continuity_and_continues_rundown(monkeypatch) 
     assert first_shot_takes[0].qc.verdict == QCVerdict.FAIL
     assert first_shot_takes[1].qc.verdict == QCVerdict.PASS
     assert project.shot(first_shot_id).selected_take_id == first_shot_takes[1].id
+    assert status["queued"] == 0
+    assert status["error"] == ""
+
+
+def test_b200_attention_canary_auto_retakes_voice_qc_without_losing_rundown(
+    tmp_path, monkeypatch
+) -> None:
+    from diony_producer import farm as farm_module
+    from diony_wan.attention_qualification import bind_project_canary, build_operator_receipt
+
+    project = demo_project()
+    first_shot_id = project.shots[0].id
+    first_take = project.takes_for(first_shot_id)[0]
+    project.takes = [take for take in project.takes if take.shot_id != first_shot_id]
+    project.takes.insert(0, first_take)
+    project.shot(first_shot_id).selected_take_id = first_take.id
+    receipt_path = tmp_path / "wan-cudnn-sdpa-validation.json"
+    receipt_path.write_text(
+        json.dumps(
+            bind_project_canary(
+                build_operator_receipt(
+                    {
+                        "gpu_name": "NVIDIA B200",
+                        "compute_capability": "10.0",
+                        "shape": [1, 40, 75600, 128],
+                        "dtype": "bfloat16",
+                        "candidate_backend": "cudnn_sdpa",
+                        "baseline_ms": [285.85, 285.39, 285.37],
+                        "candidate_ms": [92.08, 91.19, 91.18],
+                        "finite": True,
+                        "max_abs_delta": 0.000244140625,
+                        "mean_abs_delta": 0.0000111,
+                    },
+                    scope_project_id=project.id,
+                    approved_by="Diony B200 qualification",
+                ),
+                project_id=project.id,
+                take_id=first_take.id,
+            )
+        )
+    )
+    calls: list[str] = []
+    canary_pending = True
+
+    def fail_once_then_pass(_project, take, **_kwargs) -> None:
+        calls.append(take.id)
+        take.qc = QCReport(
+            id=f"qc-{take.id}",
+            take_id=take.id,
+            shot_id=take.shot_id,
+            verdict=(
+                QCVerdict.FAIL
+                if take.shot_id == first_shot_id and take.attempt == 1
+                else QCVerdict.PASS
+            ),
+            identity_ok=True,
+            morph_ok=True,
+            flicker_ok=True,
+            duration_ok=True,
+            legal_ok=True,
+            notes=(
+                "Voice performance failed: lip-sync confidence 0.7956 is below 0.90."
+                if take.shot_id == first_shot_id and take.attempt == 1
+                else "AutoQC passed."
+            ),
+        )
+
+    def attention_plan(_project, _take):
+        return (
+            ("cudnn_sdpa", True, receipt_path)
+            if canary_pending
+            else ("cudnn_sdpa", False, receipt_path)
+        )
+
+    def complete_canary(_project, _take, _receipt):
+        nonlocal canary_pending
+        canary_pending = False
+
+    farm_module.reset_farm()
+    monkeypatch.setattr("diony_wan.runner.prove_generate", lambda: None)
+    monkeypatch.setattr(farm_module, "_attention_plan", attention_plan)
+    monkeypatch.setattr(farm_module, "_complete_attention_canary", complete_canary)
+    monkeypatch.setattr(farm_module, "run_one", fail_once_then_pass)
+    monkeypatch.setattr("diony_producer.advance.maybe_advance_run", lambda project: None)
+    farm_module.start_farm(project, list(project.takes))
+
+    deadline = time.time() + 5
+    status = farm_module.farm_status()
+    while status["busy"] and time.time() < deadline:
+        time.sleep(0.01)
+        status = farm_module.farm_status()
+
+    assert calls[:2] == [f"{first_shot_id}-t1", f"{first_shot_id}-t2"]
+    assert calls[2:] == [take.id for take in project.takes if take.shot_id != first_shot_id]
+    assert project.shot(first_shot_id).selected_take_id == f"{first_shot_id}-t2"
+    assert json.loads(receipt_path.read_text())["quality_canary_take_id"] == f"{first_shot_id}-t2"
     assert status["queued"] == 0
     assert status["error"] == ""
 

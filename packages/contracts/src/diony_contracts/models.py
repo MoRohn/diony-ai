@@ -532,6 +532,9 @@ class GenerationExecutionReceipt(BaseModel):
     native_height: int = Field(gt=0)
     frame_num: int = Field(gt=0)
     sample_steps: int = Field(gt=0)
+    inference_frames_per_pass: int | None = Field(default=None, gt=0)
+    denoise_passes: int = Field(default=1, ge=1)
+    effective_denoise_steps: int = Field(default=0, ge=0)
     sample_solver: str
     precision: str
     negative_conditioning: bool
@@ -552,6 +555,13 @@ class GenerationExecutionReceipt(BaseModel):
 
     @model_validator(mode="after")
     def receipt_addresses_output_and_quality(self) -> GenerationExecutionReceipt:
+        if self.inference_frames_per_pass is None:
+            self.inference_frames_per_pass = self.frame_num
+        expected_steps = self.sample_steps * self.denoise_passes
+        if self.effective_denoise_steps == 0:
+            self.effective_denoise_steps = expected_steps
+        elif self.effective_denoise_steps != expected_steps:
+            raise ValueError("effective denoise work does not match steps per pass")
         if (
             not self.backend.strip()
             or not self.selected_lane.strip()
@@ -572,6 +582,12 @@ class GenerationExecutionReceipt(BaseModel):
             or self.native_height != 720
             or self.frame_num != 81
             or self.sample_steps != 24
+            or self.denoise_passes != 1
+            or self.effective_denoise_steps != 24
+            or (
+                self.task == "s2v-14B"
+                and self.inference_frames_per_pass != 84
+            )
             or self.sample_solver != "unipc"
             or self.precision != "bfloat16"
             or not self.negative_conditioning

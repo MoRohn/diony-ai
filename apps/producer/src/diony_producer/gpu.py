@@ -48,8 +48,10 @@ GPU_STAMP_FILES = (
     "apps/wan/src/diony_wan/runner.py",
     "apps/wan/src/diony_wan/attention_qualification.py",
     "apps/wan/src/diony_wan/resident.py",
+    "apps/wan/src/diony_wan/resident_worker.py",
     "apps/wan/src/diony_wan/runtime.py",
     "apps/wan/src/diony_wan/storage.py",
+    "apps/wan/src/diony_wan/validation.py",
     "packages/contracts/src/diony_contracts/models.py",
     "packages/contracts/src/diony_contracts/studio.py",
     "packages/contracts/src/diony_contracts/voice.py",
@@ -688,9 +690,10 @@ fi
     subprocess.run(cmd, input=script, capture_output=True, text=True, timeout=20, check=False)
 
 
-def _gpu_producer_start_script() -> str:
+def _gpu_producer_start_script(expected_stamp: str | None = None) -> str:
     """Repair and attest the Wan host runtime before accepting Production."""
-    return r"""
+    code_stamp = (expected_stamp or _code_stamp()).strip()
+    script = r"""
 set -euo pipefail
 if [ ! -d /models/wan/Wan2.2-T2V-A14B ] || [ ! -f /opt/wan22/generate.py ]; then
   echo GPU_PACK_MISSING
@@ -839,6 +842,7 @@ _diony_existing_producer_ready() {
   printf '%s\n' "$active_env" | grep -Fqx "DIONY_MODEL_HOT_CACHE=$DIONY_MODEL_HOT_CACHE" || return 1
   printf '%s\n' "$active_env" | grep -Fqx "DIONY_MODEL_HOT_CACHE_GB=$DIONY_MODEL_HOT_CACHE_GB" || return 1
   printf '%s\n' "$active_env" | grep -Fqx "DIONY_MODEL_HOT_CACHE_MIN_FREE_GB=$DIONY_MODEL_HOT_CACHE_MIN_FREE_GB" || return 1
+  printf '%s\n' "$active_env" | grep -Fqx "DIONY_CODE_STAMP=$DIONY_CODE_STAMP" || return 1
   if [ -n "${DIONY_COSYVOICE_PYTHON:-}" ]; then
     printf '%s\n' "$active_env" | grep -Fqx "DIONY_COSYVOICE_PYTHON=$DIONY_COSYVOICE_PYTHON" || return 1
   fi
@@ -869,6 +873,7 @@ nohup env -u DIONY_DRY_RUN PATH="$PATH" DIONY_VAULT=/diony/vault DIONY_BIND=0.0.
   DIONY_MODEL_HOT_CACHE="$DIONY_MODEL_HOT_CACHE" \
   DIONY_MODEL_HOT_CACHE_GB="$DIONY_MODEL_HOT_CACHE_GB" \
   DIONY_MODEL_HOT_CACHE_MIN_FREE_GB="$DIONY_MODEL_HOT_CACHE_MIN_FREE_GB" \
+  DIONY_CODE_STAMP="$DIONY_CODE_STAMP" \
   DIONY_VOICE_BACKEND_COMMAND="${DIONY_VOICE_BACKEND_COMMAND:-}" \
   DIONY_SPEAKER_EMBEDDING_MODEL="${DIONY_SPEAKER_EMBEDDING_MODEL:-}" \
   DIONY_COSYVOICE_PYTHON="${DIONY_COSYVOICE_PYTHON:-}" \
@@ -886,6 +891,13 @@ done
 echo GPU_PRODUCER_ENV_MISMATCH
 exit 14
 """
+    return script.replace(
+        "set -euo pipefail\n",
+        "set -euo pipefail\nexport DIONY_CODE_STAMP="
+        + shlex.quote(code_stamp)
+        + "\n",
+        1,
+    )
 
 
 def _start_gpu_producer(conn: dict) -> None:

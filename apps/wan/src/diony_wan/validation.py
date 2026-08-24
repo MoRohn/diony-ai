@@ -13,6 +13,7 @@ from diony_wan.resident import (
     EAGER_KERNEL_MODE,
     KERNEL_CANDIDATES,
     QUALITY_CONTRACT_SHA256,
+    RESIDENT_TASKS,
 )
 
 
@@ -56,10 +57,15 @@ def build_validation_receipt(
     candidate_retries = 0
     candidate_ooms = 0
     quality_evidence: list[dict[str, str]] = []
+    qualified_tasks: set[str] = set()
     for clip_id, pair in grouped.items():
         if set(pair) != {"baseline", "candidate"}:
             raise ValidationError(f"Benchmark clip {clip_id} is not paired.")
         left, right = pair["baseline"], pair["candidate"]
+        task = str(left.get("task") or "").strip()
+        if task not in RESIDENT_TASKS or str(right.get("task") or "").strip() != task:
+            raise ValidationError(f"Benchmark clip {clip_id} changed or omitted its resident task.")
+        qualified_tasks.add(task)
         if left.get("input_sha256") != right.get("input_sha256"):
             raise ValidationError(f"Benchmark clip {clip_id} changed its input lineage.")
         if left.get("quality_contract_sha256") != QUALITY_CONTRACT_SHA256 or right.get(
@@ -130,6 +136,7 @@ def build_validation_receipt(
         "candidate_ooms": candidate_ooms,
         "quality_passed": True,
         "quality_evidence_sha256": evidence_digest,
+        "qualified_tasks": sorted(qualified_tasks),
         "max_canary_percent": max_canary_percent,
         "approved_by": approver,
     }

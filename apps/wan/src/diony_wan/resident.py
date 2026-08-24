@@ -40,7 +40,7 @@ KERNEL_CANDIDATES = {
     EAGER_KERNEL_MODE: RESIDENT_CANDIDATE,
     REGIONAL_COMPILE_KERNEL_MODE: REGIONAL_COMPILE_CANDIDATE,
 }
-RESIDENT_TASKS = frozenset({"t2v-A14B", "i2v-A14B"})
+RESIDENT_TASKS = frozenset({"t2v-A14B", "i2v-A14B", "s2v-14B"})
 _SUPPRESSION_LOCK = threading.Lock()
 _SUPPRESSED_RECEIPTS: dict[str, str] = {}
 
@@ -66,7 +66,7 @@ def configured_kernel_mode() -> str:
     return mode
 
 
-def _receipt_decision(path: Path, *, kernel_mode: str) -> ResidentDecision:
+def _receipt_decision(path: Path, *, kernel_mode: str, task: str) -> ResidentDecision:
     try:
         raw = path.read_bytes()
         payload = json.loads(raw)
@@ -79,6 +79,9 @@ def _receipt_decision(path: Path, *, kernel_mode: str) -> ResidentDecision:
         return ResidentDecision(False, "Resident Wan validation receipt names an unsupported candidate.")
     if payload.get("quality_contract_sha256") != QUALITY_CONTRACT_SHA256:
         return ResidentDecision(False, "Resident Wan validation receipt does not match the quality contract.")
+    qualified_tasks = payload.get("qualified_tasks")
+    if not isinstance(qualified_tasks, list) or task not in qualified_tasks:
+        return ResidentDecision(False, f"Resident Wan validation receipt does not qualify {task}.")
     if int(payload.get("sample_count") or 0) < 30:
         return ResidentDecision(False, "Resident Wan validation requires at least 30 clips.")
     baseline_p50 = float(payload.get("baseline_p50_seconds") or 0)
@@ -138,7 +141,9 @@ def resident_decision(*, task: str, offload: bool) -> ResidentDecision:
         kernel_mode = configured_kernel_mode()
     except ResidentError as exc:
         return ResidentDecision(False, str(exc))
-    decision = _receipt_decision(Path(receipt).expanduser(), kernel_mode=kernel_mode)
+    decision = _receipt_decision(
+        Path(receipt).expanduser(), kernel_mode=kernel_mode, task=task
+    )
     if decision.enabled:
         with _SUPPRESSION_LOCK:
             reason = _SUPPRESSED_RECEIPTS.get(decision.receipt_sha256, "")
@@ -226,6 +231,7 @@ def resident_job_payload(
     frame_num: int,
     image: Path | None,
     log_path: Path,
+    audio: Path | None = None,
 ) -> dict[str, Any]:
     """Build the worker request without exposing an alternate quality knob."""
     kernel_mode = configured_kernel_mode()
@@ -242,6 +248,8 @@ def resident_job_payload(
         "seed": int(seed),
         "save_file": str(save_file),
         "image": str(image) if image is not None else "",
+        "audio": str(audio) if audio is not None else "",
+        "inference_frames_per_pass": 84 if task == "s2v-14B" else int(frame_num),
         "log_path": str(log_path),
         "offload_model": False,
         "init_on_cpu": False,

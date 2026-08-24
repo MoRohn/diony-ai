@@ -2,8 +2,8 @@
 
 Stdout is reserved for one JSON response per stdin JSON request. Upstream logs
 and tqdm output are redirected to the per-Take `.wan.log` supplied in the job.
-Only T2V-A14B and I2V-A14B use this worker; optional engines retain the pinned
-official CLI path.
+T2V-A14B, I2V-A14B, and receipt-qualified S2V-A14B use this worker; Animate and
+TI2V retain the pinned official CLI path.
 """
 
 from __future__ import annotations
@@ -65,11 +65,11 @@ def _apply_kernel_mode(pipeline: Any, kernel_mode: str) -> None:
         raise RuntimeError(f"Resident Wan does not support kernel mode {kernel_mode!r}.")
     models = [
         model
-        for name in ("low_noise_model", "high_noise_model")
+        for name in ("low_noise_model", "high_noise_model", "noise_model")
         if (model := getattr(pipeline, name, None)) is not None
     ]
-    if len(models) != 2 or any(not getattr(model, "blocks", None) for model in models):
-        raise RuntimeError("Regional compile requires both Wan A14B transformer experts.")
+    if not models or any(not getattr(model, "blocks", None) for model in models):
+        raise RuntimeError("Regional compile requires the active Wan A14B transformer blocks.")
     for model in models:
         for block in model.blocks:
             block.compile(fullgraph=True, dynamic=False)
@@ -82,9 +82,13 @@ def _pipeline_factory(task: str, checkpoint: str, kernel_mode: str):
 
     if not torch.cuda.is_available():
         raise RuntimeError("Resident Wan requires a CUDA device.")
-    if task not in {"t2v-A14B", "i2v-A14B"}:
+    if task not in {"t2v-A14B", "i2v-A14B", "s2v-14B"}:
         raise RuntimeError(f"Resident Wan does not support {task}.")
-    cls = wan.WanT2V if task == "t2v-A14B" else wan.WanI2V
+    cls = {
+        "t2v-A14B": wan.WanT2V,
+        "i2v-A14B": wan.WanI2V,
+        "s2v-14B": wan.WanS2V,
+    }[task]
     pipeline = cls(
         config=WAN_CONFIGS[task],
         checkpoint_dir=checkpoint,
@@ -101,11 +105,38 @@ def _pipeline_factory(task: str, checkpoint: str, kernel_mode: str):
     return pipeline
 
 
+def _s2v_generation_kwargs(job: dict[str, Any], cfg: Any, *, max_area: int) -> dict[str, Any]:
+    negative = str(job.get("negative_prompt") or "").strip()
+    default_negative = str(getattr(cfg, "sample_neg_prompt", "") or "").strip()
+    n_prompt = f"{default_negative}, {negative}" if default_negative and negative else negative
+    return {
+        "input_prompt": str(job["prompt"]),
+        "ref_image_path": str(job.get("image") or ""),
+        "audio_path": str(job.get("audio") or ""),
+        "enable_tts": False,
+        "tts_prompt_audio": None,
+        "tts_prompt_text": None,
+        "tts_text": None,
+        "num_repeat": None,
+        "pose_video": None,
+        "max_area": max_area,
+        "infer_frames": int(job.get("inference_frames_per_pass") or 0),
+        "shift": cfg.sample_shift,
+        "sample_solver": "unipc",
+        "sampling_steps": 24,
+        "guide_scale": cfg.sample_guide_scale,
+        "n_prompt": n_prompt,
+        "seed": int(job["seed"]),
+        "offload_model": False,
+        "init_first_frame": True,
+    }
+
+
 def _generate(cache: PipelineCache, job: dict[str, Any]) -> dict[str, Any]:
     import torch
     from PIL import Image
     from wan.configs import MAX_AREA_CONFIGS, SIZE_CONFIGS, WAN_CONFIGS
-    from wan.utils.utils import save_video
+    from wan.utils.utils import merge_video_audio, save_video
 
     from diony_wan.resident import QUALITY_CONTRACT_SHA256
 
@@ -113,7 +144,7 @@ def _generate(cache: PipelineCache, job: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("Resident job does not match the validated quality contract.")
     task = str(job.get("task") or "")
     checkpoint = str(job.get("checkpoint") or "")
-    if task not in {"t2v-A14B", "i2v-A14B"}:
+    if task not in {"t2v-A14B", "i2v-A14B", "s2v-14B"}:
         raise RuntimeError(f"Resident Wan does not support {task}.")
     if job.get("size") != "1280*720" or int(job.get("frame_num") or 0) != 81:
         raise RuntimeError("Resident Wan accepts only the validated 1280x720, 81-frame lane.")
@@ -131,10 +162,17 @@ def _generate(cache: PipelineCache, job: dict[str, Any]) -> dict[str, Any]:
     cfg = WAN_CONFIGS[task]
     image = None
     image_path = str(job.get("image") or "")
-    if image_path:
+    if image_path and task != "s2v-14B":
         image = Image.open(image_path).convert("RGB")
     if task == "i2v-A14B" and image is None:
         raise RuntimeError("Resident I2V requires the locked input image.")
+    audio_path = str(job.get("audio") or "")
+    if task == "s2v-14B" and (
+        not image_path
+        or not audio_path
+        or int(job.get("inference_frames_per_pass") or 0) != 84
+    ):
+        raise RuntimeError("Resident S2V requires locked image/audio and one 84-frame window.")
     negative = str(job.get("negative_prompt") or "").strip()
     n_prompt = f"{cfg.sample_neg_prompt}, {negative}" if negative else ""
     torch.cuda.reset_peak_memory_stats()
@@ -151,7 +189,7 @@ def _generate(cache: PipelineCache, job: dict[str, Any]) -> dict[str, Any]:
             seed=int(job["seed"]),
             offload_model=False,
         )
-    else:
+    elif task == "i2v-A14B":
         video = pipeline.generate(
             str(job["prompt"]),
             image,
@@ -165,6 +203,14 @@ def _generate(cache: PipelineCache, job: dict[str, Any]) -> dict[str, Any]:
             seed=int(job["seed"]),
             offload_model=False,
         )
+    else:
+        video = pipeline.generate(
+            **_s2v_generation_kwargs(
+                job,
+                cfg,
+                max_area=MAX_AREA_CONFIGS["1280*720"],
+            )
+        )
     destination = Path(str(job["save_file"]))
     destination.parent.mkdir(parents=True, exist_ok=True)
     save_video(
@@ -175,6 +221,13 @@ def _generate(cache: PipelineCache, job: dict[str, Any]) -> dict[str, Any]:
         normalize=True,
         value_range=(-1, 1),
     )
+    if task == "s2v-14B":
+        merge_video_audio(
+            video_path=str(destination),
+            audio_path=audio_path,
+            video_frames=81,
+            fps=cfg.sample_fps,
+        )
     del video
     torch.cuda.synchronize()
     finished = time.monotonic()

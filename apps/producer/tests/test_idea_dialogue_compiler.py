@@ -138,3 +138,54 @@ def test_title_case_cues_and_curly_quotes_compile_without_stage_directions() -> 
         "Hugo",
     ]
     assert all("Final hold" not in turn.text for turn in turns)
+    picture_prompts = " ".join(shot.prompt for shot in project.shots).casefold()
+    assert "we are starting a daily gratitude circle" not in picture_prompts
+    assert "i’m grateful this will be over" not in picture_prompts
+    assert "hugo. your turn. be vulnerable" not in picture_prompts
+    assert "neither of you can force me" not in picture_prompts
+
+
+def test_long_authored_dialogue_is_distributed_without_truncation_across_five_second_shots() -> None:
+    still = Asset(
+        id="ast-kitchen-long-line",
+        kind=AssetKind.IMAGE,
+        filename="kitchen.png",
+        mime="image/png",
+        bytes=48,
+        path="assets/ast-kitchen-long-line/kitchen.png",
+    )
+    authored = (
+        "I thought gratitude would make this room feel calmer but somehow "
+        "the coffee is judging us and Hugo has declared war on the toaster."
+    )
+    project = expand_idea(
+        Brief(
+            idea=f'In a shared kitchen.\nMarcus: "{authored}"',
+            customer_kind=CustomerKind.SERIES,
+            target_minutes=0.5,
+            attachment_ids=[still.id],
+        ),
+        assets=[still],
+    )
+
+    turns = [turn for shot in project.shots for turn in shot.dialogue_turns]
+
+    assert len(turns) == 3
+    assert all(len(turn.text.split()) <= 10 for turn in turns)
+    assert " ".join(turn.text for turn in turns) == authored
+    assert len({turn.character_id for turn in turns}) == 1
+
+
+def test_dialogue_only_idea_never_falls_back_to_voice_text_for_picture() -> None:
+    project = expand_idea(
+        Brief(
+            idea='Marcus: "We move before midnight."',
+            customer_kind=CustomerKind.SERIES,
+            target_minutes=0.5,
+        )
+    )
+
+    assert project.shots[0].dialogue_turns[0].text == "We move before midnight."
+    prompts = " ".join(shot.prompt for shot in project.shots).casefold()
+    assert "we move before midnight" not in prompts
+    assert "bible-locked performance" in prompts

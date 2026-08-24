@@ -1,6 +1,32 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+
+
+def test_resident_worker_import_does_not_require_fastapi() -> None:
+    script = """
+import builtins
+
+original_import = builtins.__import__
+
+def import_without_fastapi(name, *args, **kwargs):
+    if name == "fastapi" or name.startswith("fastapi."):
+        raise ModuleNotFoundError("FastAPI intentionally unavailable", name="fastapi")
+    return original_import(name, *args, **kwargs)
+
+builtins.__import__ = import_without_fastapi
+import diony_wan.resident_worker
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def _passing_receipt(
@@ -22,6 +48,7 @@ def _passing_receipt(
         "candidate_ooms": 0,
         "quality_passed": True,
         "quality_evidence_sha256": "a" * 64,
+        "qualified_tasks": ["t2v-A14B", "i2v-A14B", "s2v-14B"],
         "max_canary_percent": 10,
         "approved_by": "Diony performance qualification",
     }
@@ -42,6 +69,13 @@ def test_resident_wan_requires_a_complete_validation_receipt(tmp_path, monkeypat
     approved = resident_decision(task="i2v-A14B", offload=False)
     assert approved.enabled is True
     assert approved.receipt_sha256
+
+    scoped = _passing_receipt(QUALITY_CONTRACT_SHA256)
+    scoped["qualified_tasks"] = ["i2v-A14B"]
+    receipt.write_text(json.dumps(scoped))
+    held_s2v = resident_decision(task="s2v-14B", offload=False)
+    assert held_s2v.enabled is False
+    assert "qualify s2v" in held_s2v.reason.casefold()
 
 
 def test_regional_compile_requires_its_own_matching_receipt(tmp_path, monkeypatch) -> None:
@@ -170,7 +204,7 @@ def test_resident_wan_never_changes_the_quality_lane_or_runs_on_offload_sites(
 
     assert resident_decision(task="t2v-A14B", offload=False).enabled is True
     assert resident_decision(task="i2v-A14B", offload=False).enabled is True
-    assert resident_decision(task="s2v-14B", offload=False).enabled is False
+    assert resident_decision(task="s2v-14B", offload=False).enabled is True
     assert resident_decision(task="i2v-A14B", offload=True).enabled is False
 
 
@@ -235,6 +269,73 @@ def test_resident_job_payload_preserves_native_generation_inputs(tmp_path) -> No
     assert payload["init_on_cpu"] is False
 
 
+def test_resident_s2v_payload_preserves_locked_audio_and_exact_publish_window(tmp_path) -> None:
+    from diony_wan.resident import resident_job_payload
+
+    still = tmp_path / "locked.png"
+    audio = tmp_path / "clean-dialogue.wav"
+    still.write_bytes(b"image")
+    audio.write_bytes(b"audio")
+
+    payload = resident_job_payload(
+        task="s2v-14B",
+        checkpoint=tmp_path / "Wan2.2-S2V-14B",
+        prompt="The locked performer delivers the measured line.",
+        negative_prompt="identity drift, lip drift, flicker",
+        seed=10401,
+        save_file=tmp_path / "negative.mp4",
+        frame_num=81,
+        image=still,
+        audio=audio,
+        log_path=tmp_path / "negative.wan.log",
+    )
+
+    assert payload["task"] == "s2v-14B"
+    assert payload["image"] == str(still)
+    assert payload["audio"] == str(audio)
+    assert payload["inference_frames_per_pass"] == 84
+
+
+def test_resident_s2v_generation_kwargs_match_the_pinned_cli_contract(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from diony_wan.resident_worker import _s2v_generation_kwargs
+
+    job = {
+        "prompt": "A restrained locked performance.",
+        "negative_prompt": "identity drift, flicker",
+        "seed": 10401,
+        "image": str(tmp_path / "locked.png"),
+        "audio": str(tmp_path / "clean-dialogue.wav"),
+        "inference_frames_per_pass": 84,
+    }
+    cfg = SimpleNamespace(sample_shift=3.0, sample_guide_scale=4.5)
+
+    kwargs = _s2v_generation_kwargs(job, cfg, max_area=720 * 1280)
+
+    assert kwargs == {
+        "input_prompt": job["prompt"],
+        "ref_image_path": job["image"],
+        "audio_path": job["audio"],
+        "enable_tts": False,
+        "tts_prompt_audio": None,
+        "tts_prompt_text": None,
+        "tts_text": None,
+        "num_repeat": None,
+        "pose_video": None,
+        "max_area": 720 * 1280,
+        "infer_frames": 84,
+        "shift": 3.0,
+        "sample_solver": "unipc",
+        "sampling_steps": 24,
+        "guide_scale": 4.5,
+        "n_prompt": "identity drift, flicker",
+        "seed": 10401,
+        "offload_model": False,
+        "init_first_frame": True,
+    }
+
+
 def test_resident_canary_is_deterministic_and_has_hard_zero_and_full_boundaries(monkeypatch) -> None:
     from diony_wan.resident import resident_canary_selected
 
@@ -287,6 +388,7 @@ def test_validation_receipt_builder_requires_paired_quality_passed_clips() -> No
     for index in range(30):
         shared = {
             "clip_id": f"clip-{index:02d}",
+            "task": "s2v-14B",
             "input_sha256": f"input-{index:02d}",
             "quality_contract_sha256": QUALITY_CONTRACT_SHA256,
             "quality_passed": True,
@@ -308,6 +410,7 @@ def test_validation_receipt_builder_requires_paired_quality_passed_clips() -> No
     assert receipt["candidate_ooms"] == 0
     assert receipt["candidate_p50_seconds"] < receipt["baseline_p50_seconds"]
     assert receipt["max_canary_percent"] == 10
+    assert receipt["qualified_tasks"] == ["s2v-14B"]
     assert len(receipt["quality_evidence_sha256"]) == 64
 
     compiled = build_validation_receipt(

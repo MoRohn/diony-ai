@@ -14,7 +14,7 @@ from diony_producer.gpu import (
 
 
 def test_gpu_producer_start_repairs_and_validates_wan_host_python() -> None:
-    script = _gpu_producer_start_script()
+    script = _gpu_producer_start_script("content-stamp-v1")
     assert "wan-host-overlay.txt" in script
     assert "diony_wan/runtime.py" in script
     assert "wan-host-runtime.json" in script
@@ -37,6 +37,8 @@ def test_gpu_producer_start_repairs_and_validates_wan_host_python() -> None:
     assert "DIONY_MODEL_HOT_CACHE_MIN_FREE_GB" in script
     assert "/proc/$PRODUCER_PID/environ" in script
     assert 'grep -Fqx "DIONY_PYTHON=$DIONY_PYTHON"' in script
+    assert "DIONY_CODE_STAMP=content-stamp-v1" in script
+    assert 'grep -Fqx "DIONY_CODE_STAMP=$DIONY_CODE_STAMP"' in script
     assert script.find("_diony_existing_producer_ready") < script.find("GPU_PRODUCER_OK")
     assert 'OLD_PRODUCER_PID=$(_diony_8788_pid)' in script
     assert 'kill "$OLD_PRODUCER_PID"' in script
@@ -129,6 +131,8 @@ def test_gpu_code_stamp_tracks_storage_and_runtime_contracts() -> None:
 
     assert "apps/wan/src/diony_wan/storage.py" in gpu.GPU_STAMP_FILES
     assert "apps/wan/src/diony_wan/runtime.py" in gpu.GPU_STAMP_FILES
+    assert "apps/wan/src/diony_wan/resident_worker.py" in gpu.GPU_STAMP_FILES
+    assert "apps/wan/src/diony_wan/validation.py" in gpu.GPU_STAMP_FILES
 
 
 def test_gpu_remote_code_manifest_verifies_every_stamped_file(tmp_path, monkeypatch) -> None:

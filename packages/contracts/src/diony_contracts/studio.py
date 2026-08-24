@@ -473,9 +473,10 @@ def _install_wan_prompt_plan(
     sample_seconds: int | None,
 ) -> None:
     """Compile and atomically install the dispatchable five-layer prompt."""
+    visual_idea = _visual_only_text(idea) or "A Bible-locked performance in the authored setting."
     plan = compile_wan_prompt_plan(
-        idea=idea,
-        world=bible.world,
+        idea=visual_idea,
+        world=_visual_only_text(bible.world),
         wardrobe=wardrobe,
         shot_index=shot_index,
         focal_mm=shot.focal_mm,
@@ -611,6 +612,12 @@ _NON_CHARACTER_CUES = {
 }
 
 
+def _visual_only_text(value: str) -> str:
+    """Remove authored voice lines from every source used by the picture prompt."""
+    cleaned = _SCREENPLAY_DIALOGUE.sub(" ", value)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 def _script_dialogue(idea: str) -> list[ScriptDialogue]:
     """Preserve explicitly authored screenplay lines without inventing speech."""
     lines: list[ScriptDialogue] = []
@@ -626,6 +633,35 @@ def _script_dialogue(idea: str) -> list[ScriptDialogue]:
         speaker = raw_speaker.title() if raw_speaker.isupper() else raw_speaker
         lines.append(ScriptDialogue(speaker=speaker, text=text))
     return lines
+
+
+def _fit_dialogue_to_shots(
+    lines: list[ScriptDialogue],
+    *,
+    shot_count: int,
+    seconds_per_shot: float,
+) -> list[ScriptDialogue]:
+    """Split authored speech into natural-rate shot windows without rewriting it."""
+    if not lines:
+        return []
+    max_words = max(1, int(seconds_per_shot * 2.0))
+    fitted: list[ScriptDialogue] = []
+    for line in lines:
+        words = line.text.split()
+        for start in range(0, len(words), max_words):
+            fitted.append(
+                ScriptDialogue(
+                    speaker=line.speaker,
+                    text=" ".join(words[start : start + max_words]),
+                )
+            )
+    if len(fitted) > shot_count:
+        raise ValueError(
+            "Authored dialogue needs "
+            f"{len(fitted)} natural-rate shot windows but this rundown has {shot_count}. "
+            "Increase the program duration or shorten the authored dialogue before Production."
+        )
+    return fitted
 
 
 def _character_id(name: str) -> str:
@@ -993,7 +1029,11 @@ def expand_idea(
     image_ids = [a.id for a in held if a.kind == AssetKind.IMAGE]
     video_ids = [a.id for a in held if a.kind == AssetKind.VIDEO]
     audio_ids = [a.id for a in held if a.kind == AssetKind.AUDIO]
-    screenplay_dialogue = _script_dialogue(brief.idea)
+    screenplay_dialogue = _fit_dialogue_to_shots(
+        _script_dialogue(brief.idea),
+        shot_count=n,
+        seconds_per_shot=min(float(recipe["seconds"]) for recipe in recipes),
+    )
     sound_requested = bool(screenplay_dialogue) or _asks_for_sound(idea)
     spoken_direction = _spoken_direction_script(brief.idea)
     spoken_direction_assigned = False
@@ -1030,7 +1070,10 @@ def expand_idea(
     for index, line in enumerate(screenplay_dialogue):
         shot_index = min(n - 1, (index * n) // len(screenplay_dialogue))
         dialogue_by_shot.setdefault(shot_index, []).append(line)
-    visual_idea = re.sub(r"\s+", " ", _SCREENPLAY_DIALOGUE.sub(" ", idea)).strip() or idea
+    visual_idea = (
+        _visual_only_text(idea)
+        or "A Bible-locked performance in the authored setting."
+    )
     bible = Bible(
         title=title,
         logline=idea[:240],
@@ -1038,7 +1081,7 @@ def expand_idea(
         grain=book.grain,
         loudness=book.loudness,
         visual_grammar=book.grammar,
-        world=f"{book.world_prefix}: {idea}",
+        world=f"{book.world_prefix}: {visual_idea}",
         characters=characters,
         locked=False,
     )

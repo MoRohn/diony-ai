@@ -91,6 +91,12 @@ may enrich word choice and performance direction, but it must return the same
 typed object and may not change Character/Profile ids, authored text meaning,
 Shot duration, or locked timing without a new script version.
 
+Authored dialogue is allocated before synthesis at no more than two words per
+second of Shot time. A long line is split into ordered `DialogueTurn` windows
+for the same Character without deleting, paraphrasing, or inventing words. If
+the authored words need more windows than the rundown contains, Studio blocks
+before Production with an actionable duration/dialogue error.
+
 ## Swappable local backend
 
 Production uses `DIONY_VOICE_BACKEND_COMMAND`. The executable receives:
@@ -175,6 +181,13 @@ Identity synthesis and studio-audio processing retry automatically up to
 metrics, and diagnostic. A visual performance failure uses the normal immutable
 Take retake path and counts against the four camera Take cap. Infrastructure and
 missing-backend failures do not invent output.
+
+Alignment also measures every synthesized line before studio audio. A line may
+not exceed its allocated window by more than 250 ms or 10 percent, whichever is
+larger. Overflow is a bounded synthesis retake and then a pre-camera hold; the
+studio-audio chain may pad a short line but may never `atrim` overlong authored
+speech into a shorter Shot. This prevents a nominally legal five-second WAV from
+hiding missing words and creating predictable lip-sync/offset failures.
 
 Independent dialogue lines synthesize, embed, and align concurrently through a
 bounded local worker pool (`DIONY_VOICE_WORKERS`, default 4, maximum 8). Results

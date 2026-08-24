@@ -131,7 +131,9 @@ def test_native_s2v_and_animate_argv_preserve_their_conditioning_inputs(
     )
     assert s2v[s2v.index("--image") + 1] == str(still)
     assert s2v[s2v.index("--audio") + 1] == str(audio)
-    assert s2v[s2v.index("--infer_frames") + 1] == "80"
+    # One VAE-aligned 84-frame S2V window avoids the old second denoise pass;
+    # Diony's exact publish overlay trims the encoded negative to 81 frames.
+    assert s2v[s2v.index("--infer_frames") + 1] == "84"
     assert "--start_from_ref" in s2v
 
     animate = spark_argv(
@@ -274,6 +276,30 @@ def test_ensure_attention_fallback_is_idempotent(tmp_path) -> None:
     ensure_attention_fallback(tmp_path)
     assert attn.read_text(encoding="utf-8").count(_SDPA_MARKER) == 1
     assert (mods / "model.py").read_text(encoding="utf-8").count(_SDPA_MARKER) == 1
+
+
+def test_s2v_overlay_forces_the_production_1280_by_720_raster(tmp_path) -> None:
+    from diony_wan.runner import _S2V_RASTER_MARKER, ensure_s2v_production_raster
+
+    wan = tmp_path / "wan"
+    wan.mkdir()
+    source = wan / "speech2video.py"
+    source.write_text(
+        "        size = self.get_gen_size(\n"
+        "            size=None,\n"
+        "            max_area=max_area,\n"
+        "            ref_image_path=ref_image_path,\n"
+        "            pre_video_path=None)\n",
+        encoding="utf-8",
+    )
+
+    ensure_s2v_production_raster(tmp_path)
+    first = source.read_text(encoding="utf-8")
+    ensure_s2v_production_raster(tmp_path)
+
+    assert source.read_text(encoding="utf-8") == first
+    assert _S2V_RASTER_MARKER in first
+    assert "size = (720, 1280)" in first
 
 
 def test_native_generate_overlay_routes_negative_conditioning(tmp_path) -> None:
@@ -467,8 +493,86 @@ def test_s2v_progress_combines_repeated_denoise_passes_monotonically() -> None:
     assert "pass 2 of 2" in progress_label(second)
 
 
+def test_s2v_execution_receipt_exposes_measured_raster_and_effective_denoise_work(
+    tmp_path, monkeypatch
+) -> None:
+    from datetime import datetime, timezone
+    import time
+
+    import diony_wan.runner as runner
+
+    output = tmp_path / "negative.mp4"
+    output.write_bytes(b"addressed output" * 8)
+    monkeypatch.setattr(
+        runner,
+        "_probe_generated_video",
+        lambda _path: {"width": 1280, "height": 704, "frames": 77},
+    )
+    runner._write_generation_receipt(
+        output,
+        started_at=datetime.now(timezone.utc),
+        started_monotonic=time.monotonic(),
+        status="succeeded",
+        backend="native",
+        selected_lane="wan22_quality_cli_cudnn_sdpa",
+        task="s2v-14B",
+        frame_num=81,
+        width=1280,
+        height=720,
+        steps=24,
+        negative_conditioning=True,
+        attention_backend="cudnn_sdpa",
+        inference_frames_per_pass=84,
+        denoise_passes=1,
+    )
+
+    receipt = json.loads(output.with_suffix(".generation.json").read_text())
+    assert receipt["native_width"] == 1280
+    assert receipt["native_height"] == 704
+    assert receipt["frame_num"] == 77
+    assert receipt["quality_contract_matched"] is False
+    assert receipt["inference_frames_per_pass"] == 84
+    assert receipt["denoise_passes"] == 1
+    assert receipt["effective_denoise_steps"] == 24
+
+
 def test_prove_generate_is_a_noop_in_pytest() -> None:
     prove_generate()
+
+
+def test_s2v_publish_overlay_pads_audio_and_caps_the_video_at_contract_frames(
+    tmp_path,
+) -> None:
+    from diony_wan.runner import ensure_s2v_exact_publish
+
+    generate = tmp_path / "generate.py"
+    generate.write_text(
+        "merge_video_audio(video_path=args.save_file, audio_path=args.audio)\n"
+        'merge_video_audio(video_path=args.save_file, audio_path="tts.wav")\n'
+    )
+    utils = tmp_path / "wan" / "utils" / "utils.py"
+    utils.parent.mkdir(parents=True)
+    utils.write_text(
+        "def merge_video_audio(video_path: str, audio_path: str):\n"
+        "        command = [\n"
+        "            '-map', '0:v:0',\n"
+        "            '-map', '1:a:0',\n"
+        "            '-shortest',\n"
+        "            temp_output\n"
+        "        ]\n"
+    )
+
+    assert ensure_s2v_exact_publish(tmp_path) == generate
+    assert ensure_s2v_exact_publish(tmp_path) == generate
+
+    generated = generate.read_text()
+    utility = utils.read_text()
+    assert generated.count("DIONY_S2V_EXACT_PUBLISH") == 1
+    assert generated.count("video_frames=args.frame_num") == 2
+    assert generated.count("fps=cfg.sample_fps") == 2
+    assert "video_frames: int | None = None" in utility
+    assert "'-af', 'apad', '-frames:v', str(int(video_frames))" in utility
+    assert utility.count("DIONY_S2V_EXACT_PUBLISH") == 1
 
 
 def test_wan_child_env_can_select_cudnn_per_take_without_mutating_producer(
@@ -561,6 +665,11 @@ def test_validated_native_lane_uses_the_resident_worker_without_changing_inputs(
 
     monkeypatch.setattr(runner, "run_resident", resident)
     monkeypatch.setattr(
+        runner,
+        "_probe_generated_video",
+        lambda _path: {"width": 1280, "height": 720, "frames": 81},
+    )
+    monkeypatch.setattr(
         runner.subprocess,
         "Popen",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("CLI fallback ran")),
@@ -590,3 +699,70 @@ def test_validated_native_lane_uses_the_resident_worker_without_changing_inputs(
     assert receipt["selected_lane"] == "resident_bf16_eager"
     assert receipt["resident_receipt_sha256"] == "receipt-sha"
     assert receipt["quality_contract_matched"] is True
+
+
+def test_validated_s2v_lane_preserves_locked_audio_and_one_denoise_window(
+    tmp_path, monkeypatch
+) -> None:
+    import diony_wan.runner as runner
+    from diony_wan.resident import ResidentDecision
+
+    destination = tmp_path / "negative.mp4"
+    locked = tmp_path / "locked.png"
+    audio = tmp_path / "clean-dialogue.wav"
+    locked.write_bytes(b"locked reference")
+    audio.write_bytes(b"locked audio")
+    checkpoint = tmp_path / "Wan2.2-S2V-14B"
+    checkpoint.mkdir()
+    generate = tmp_path / "generate.py"
+    generate.write_text("# pinned upstream")
+    monkeypatch.setenv("DIONY_WAN_GENERATE", str(generate))
+    monkeypatch.setenv("WAN_CKPT_S2V", str(checkpoint))
+    monkeypatch.setenv("DIONY_WAN_RESIDENT_CANARY_PERCENT", "100")
+    monkeypatch.setattr(runner, "wan_needs_offload", lambda: False)
+    monkeypatch.setattr(
+        runner,
+        "resident_decision",
+        lambda **_kwargs: ResidentDecision(True, "validated", "receipt-sha"),
+    )
+    captured = {}
+
+    def resident(payload, **_kwargs):
+        captured.update(payload)
+        destination.write_bytes(b"resident s2v output" * 8)
+        return {"ok": True, "pipeline_reused": True}
+
+    monkeypatch.setattr(runner, "run_resident", resident)
+    monkeypatch.setattr(
+        runner,
+        "_probe_generated_video",
+        lambda _path: {"width": 1280, "height": 720, "frames": 81},
+    )
+    monkeypatch.setattr(
+        runner.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("CLI fallback ran")),
+    )
+
+    result = runner.run_generate(
+        task="s2v-14B",
+        prompt="The locked performer delivers one measured line.",
+        negative_prompt="identity drift, lip drift, flicker",
+        seed=10401,
+        save_file=destination,
+        duration_frames=120,
+        fps=24.0,
+        image=locked,
+        audio=audio,
+        steps=24,
+    )
+
+    assert result == destination
+    assert captured["task"] == "s2v-14B"
+    assert captured["image"] == str(locked)
+    assert captured["audio"] == str(audio)
+    assert captured["inference_frames_per_pass"] == 84
+    receipt = json.loads(destination.with_suffix(".generation.json").read_text())
+    assert receipt["quality_contract_matched"] is True
+    assert receipt["inference_frames_per_pass"] == 84
+    assert receipt["denoise_passes"] == 1

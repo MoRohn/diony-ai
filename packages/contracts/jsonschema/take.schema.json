@@ -186,6 +186,31 @@
           "title": "Sample Steps",
           "type": "integer"
         },
+        "inference_frames_per_pass": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inference Frames Per Pass"
+        },
+        "denoise_passes": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Denoise Passes",
+          "type": "integer"
+        },
+        "effective_denoise_steps": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Effective Denoise Steps",
+          "type": "integer"
+        },
         "sample_solver": {
           "title": "Sample Solver",
           "type": "string"

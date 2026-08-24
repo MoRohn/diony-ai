@@ -75,6 +75,7 @@ def test_producer_floors_are_idea_production_gallery() -> None:
     assert 'id="run-clips"' in html
     assert "clip.generation_lane_label" in js
     assert "clip.generation_fallback" in js
+    assert "clip.effective_denoise_steps" in js
     assert 'id="run-clip-summary"' in html
     assert 'id="run-signal"' in html
     assert 'id="run-signal-title"' in html

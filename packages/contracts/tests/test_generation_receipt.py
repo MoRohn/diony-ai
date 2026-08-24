@@ -59,3 +59,12 @@ def test_succeeded_generation_receipt_requires_addressed_output_and_exact_qualit
     with pytest.raises(ValidationError, match="quality contract"):
         _receipt(sample_steps=4)
 
+
+def test_s2v_quality_receipt_requires_one_84_frame_inference_window() -> None:
+    receipt = _receipt(task="s2v-14B", inference_frames_per_pass=84)
+
+    assert receipt.quality_contract_matched is True
+    assert receipt.effective_denoise_steps == 24
+
+    with pytest.raises(ValidationError, match="quality contract"):
+        _receipt(task="s2v-14B", inference_frames_per_pass=88)

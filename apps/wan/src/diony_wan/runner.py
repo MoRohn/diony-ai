@@ -37,12 +37,58 @@ TASKS = {
 }
 
 
+def s2v_infer_frames(frame_num: int) -> int:
+    """Return the smallest one-bucket VAE window covering the requested frames.
+
+    Upstream S2V requires a multiple of four. An 81-frame negative therefore
+    uses one 84-frame inference window; Diony's publish overlay retains exactly
+    the first 81 encoded frames while padding the shorter locked audio tail.
+    The old 80-frame window crossed the five-second audio bucket boundary and
+    paid for a second full denoise pass that was mostly discarded.
+    """
+    required = max(16, int(frame_num))
+    return ((required + 3) // 4) * 4
+
+
 class WanError(RuntimeError):
     pass
 
 
 def generation_receipt_path(save_file: Path) -> Path:
     return save_file.with_suffix(".generation.json")
+
+
+def _probe_generated_video(path: Path) -> dict[str, int]:
+    ffprobe = os.environ.get("DIONY_FFPROBE", "").strip() or shutil.which("ffprobe")
+    if not ffprobe or not path.is_file():
+        return {}
+    try:
+        proc = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-count_frames",
+                "-show_entries",
+                "stream=width,height,nb_read_frames,nb_frames",
+                "-of",
+                "json",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        stream = (json.loads(proc.stdout or "{}").get("streams") or [{}])[0]
+        frames = int(stream.get("nb_read_frames") or stream.get("nb_frames") or 0)
+        width = int(stream.get("width") or 0)
+        height = int(stream.get("height") or 0)
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, json.JSONDecodeError):
+        return {}
+    return {"width": width, "height": height, "frames": frames} if width and height and frames else {}
 
 
 def _write_generation_receipt(
@@ -60,6 +106,8 @@ def _write_generation_receipt(
     steps: int,
     negative_conditioning: bool,
     attention_backend: str,
+    inference_frames_per_pass: int | None = None,
+    denoise_passes: int = 1,
     resident_reason: str = "",
     resident_receipt_sha256: str = "",
     resident_kernel_mode: str = "",
@@ -75,11 +123,16 @@ def _write_generation_receipt(
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(chunk)
         output_sha256 = digest.hexdigest()
+    measured = _probe_generated_video(save_file) if status == "succeeded" else {}
+    reported_width = int(measured.get("width") or width)
+    reported_height = int(measured.get("height") or height)
+    reported_frames = int(measured.get("frames") or frame_num)
     quality_contract_matched = bool(
-        backend == "native"
-        and width == 1280
-        and height == 720
-        and frame_num == 81
+        measured
+        and backend == "native"
+        and reported_width == 1280
+        and reported_height == 720
+        and reported_frames == 81
         and steps == 24
         and negative_conditioning
     )
@@ -89,10 +142,19 @@ def _write_generation_receipt(
         "backend": backend,
         "selected_lane": selected_lane,
         "task": task,
-        "native_width": width,
-        "native_height": height,
-        "frame_num": frame_num,
+        "native_width": reported_width,
+        "native_height": reported_height,
+        "frame_num": reported_frames,
         "sample_steps": steps,
+        "inference_frames_per_pass": (
+            inference_frames_per_pass
+            if inference_frames_per_pass is not None
+            else s2v_infer_frames(frame_num)
+            if task == "s2v-14B"
+            else frame_num
+        ),
+        "denoise_passes": denoise_passes,
+        "effective_denoise_steps": steps * denoise_passes,
         "sample_solver": "unipc" if backend == "native" else "backend_configured",
         "precision": "bfloat16" if backend == "native" else "backend_configured",
         "negative_conditioning": negative_conditioning,
@@ -403,7 +465,7 @@ def spark_argv(
         cmd.extend(["--image", str(image)])
     if audio is not None and task == "s2v-14B" and audio.suffix.lower() in {".wav", ".mp3", ".flac"}:
         cmd.extend(["--audio", str(audio)])
-        cmd.extend(["--infer_frames", str(max(16, int(frame_num) - 1)), "--start_from_ref"])
+        cmd.extend(["--infer_frames", str(s2v_infer_frames(frame_num)), "--start_from_ref"])
     if animate_root is not None and task == "animate-14B":
         cmd.extend(["--src_root_path", str(animate_root)])
     if "wan2.2-animate-relighting" in lora_ids:
@@ -511,6 +573,8 @@ _MODEL_ALIAS = (
 )
 _LAZY_ENGINE_MARKER = "DIONY_LAZY_OPTIONAL_ENGINES"
 _NEGATIVE_PROMPT_MARKER = "DIONY_NEGATIVE_PROMPT_INPUT"
+_S2V_RASTER_MARKER = "DIONY_S2V_1280X720_RASTER"
+_S2V_PUBLISH_MARKER = "DIONY_S2V_EXACT_PUBLISH"
 _WAN_LAZY_IMPORTS = """# DIONY_LAZY_OPTIONAL_ENGINES: optional engines cannot block T2V/I2V.
 def __getattr__(name):
     if name == "WanS2V":
@@ -539,6 +603,97 @@ def ensure_optional_engine_lazy_imports(repo: Path | None = None) -> Path | None
         text = text.replace("from .animate import WanAnimate", "")
         package.write_text(text.rstrip() + "\n\n" + _WAN_LAZY_IMPORTS, encoding="utf-8")
     return package
+
+
+def ensure_s2v_production_raster(repo: Path | None = None) -> Path | None:
+    """Force the S2V production route to the contract's exact 1280x720 raster."""
+    if os.environ.get("PYTEST_CURRENT_TEST") and repo is None:
+        return None
+    root = Path(repo) if repo is not None else wan_repo()
+    source = root / "wan" / "speech2video.py"
+    if not source.is_file():
+        return None
+    original = source.read_text(encoding="utf-8")
+    if _S2V_RASTER_MARKER in original:
+        return source
+    anchor = (
+        "        size = self.get_gen_size(\n"
+        "            size=None,\n"
+        "            max_area=max_area,\n"
+        "            ref_image_path=ref_image_path,\n"
+        "            pre_video_path=None)\n"
+    )
+    replacement = (
+        f"        # {_S2V_RASTER_MARKER}: production is exact 1280x720.\n"
+        "        if max_area == 720 * 1280:\n"
+        "            size = (720, 1280)\n"
+        "        else:\n"
+        + anchor.replace("        size =", "            size =", 1)
+    )
+    if anchor not in original:
+        raise WanError("Wan S2V has no compatible production-raster call site")
+    source.write_text(original.replace(anchor, replacement, 1), encoding="utf-8")
+    return source
+
+
+def ensure_s2v_exact_publish(repo: Path | None = None) -> Path | None:
+    """Publish exactly 81 S2V frames without `-shortest` dropping B-frames.
+
+    Wan encodes a VAE-aligned 84-frame window. Its stock stream-copy mux uses
+    the five-second audio as `-shortest`; with reordered H.264 packets that
+    silently retained only 77 video frames. The overlay pads the final audio
+    tail and caps the copied video stream at the requested 81-frame contract.
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST") and repo is None:
+        return None
+    root = Path(repo) if repo is not None else wan_repo()
+    generate = root / "generate.py"
+    utility = root / "wan" / "utils" / "utils.py"
+    if not generate.is_file() or not utility.is_file():
+        return None
+    generated = generate.read_text(encoding="utf-8")
+    utility_text = utility.read_text(encoding="utf-8")
+    if _S2V_PUBLISH_MARKER not in generated:
+        direct = "merge_video_audio(video_path=args.save_file, audio_path=args.audio)"
+        tts = 'merge_video_audio(video_path=args.save_file, audio_path="tts.wav")'
+        if direct not in generated or tts not in generated:
+            raise WanError("Wan generate.py has no compatible S2V publish call site")
+        generated = generated.replace(
+            direct,
+            f"# {_S2V_PUBLISH_MARKER}: retain the exact Production frame contract.\n"
+            "                merge_video_audio(video_path=args.save_file, audio_path=args.audio, "
+            "video_frames=args.frame_num, fps=cfg.sample_fps)",
+            1,
+        )
+        generated = generated.replace(
+            tts,
+            'merge_video_audio(video_path=args.save_file, audio_path="tts.wav", '
+            "video_frames=args.frame_num, fps=cfg.sample_fps)",
+            1,
+        )
+        generate.write_text(generated, encoding="utf-8")
+    if _S2V_PUBLISH_MARKER not in utility_text:
+        signature = "def merge_video_audio(video_path: str, audio_path: str):"
+        command_end = "            temp_output\n        ]\n"
+        if signature not in utility_text or command_end not in utility_text:
+            raise WanError("Wan merge utility has no compatible exact-publish call site")
+        utility_text = utility_text.replace(
+            signature,
+            "def merge_video_audio(video_path: str, audio_path: str, "
+            "video_frames: int | None = None, fps: float | None = None):",
+            1,
+        )
+        utility_text = utility_text.replace(
+            command_end,
+            command_end
+            + f"        # {_S2V_PUBLISH_MARKER}: pad audio before the explicit frame cap.\n"
+            + "        if video_frames is not None and fps is not None:\n"
+            + "            shortest = command.index('-shortest')\n"
+            + "            command[shortest:shortest] = ['-af', 'apad', '-frames:v', str(int(video_frames))]\n",
+            1,
+        )
+        utility.write_text(utility_text, encoding="utf-8")
+    return generate
 
 
 def ensure_negative_prompt_input(repo: Path | None = None) -> Path | None:
@@ -655,6 +810,8 @@ def prove_generate() -> None:
         raise WanError(f"Wan2.2 generate.py not at {py}.")
     ensure_attention_fallback()
     ensure_optional_engine_lazy_imports()
+    ensure_s2v_production_raster()
+    ensure_s2v_exact_publish()
     ensure_negative_prompt_input()
     env, py_root = _wan_env()
     proc = subprocess.run(
@@ -812,6 +969,9 @@ def run_generate(
         )
         return result
     ensure_attention_fallback()
+    if task == "s2v-14B":
+        ensure_s2v_production_raster()
+        ensure_s2v_exact_publish()
     ensure_negative_prompt_input()
     offload = wan_needs_offload()
     from diony_wan.storage import prepare_checkpoint
@@ -846,9 +1006,10 @@ def run_generate(
         and width == 1280
         and height == 720
         and last_image is None
-        and audio is None
+        and (task == "s2v-14B" or audio is None)
         and animate_root is None
         and (task != "i2v-A14B" or image is not None)
+        and (task != "s2v-14B" or (image is not None and audio is not None))
     )
     fallback_reason = ""
     if resident_compatible:
@@ -862,6 +1023,7 @@ def run_generate(
             frame_num=frames,
             image=image,
             log_path=log_path,
+            audio=audio,
         )
         try:
             run_resident(

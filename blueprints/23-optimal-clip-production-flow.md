@@ -16,6 +16,12 @@ conditioning, native raster, or Finish is a different creative model and cannot
 silently replace Production. GPU utilization, a vendor speed claim, or one good
 preview is not production qualification.
 
+The B200 operational objective is strictly less than 600 seconds of end-to-end
+Producer time for every five-second Shot, including voice preparation when
+required, Wan camera, AutoQC, and the per-Take 1080 Finish. Cold activation and
+steady-state rows are recorded separately, but neither is excluded from the
+objective. A source-only optimization or camera-only timing is not proof.
+
 The only successful clip contract is:
 
 ```text
@@ -63,7 +69,8 @@ Routing is explicit:
 Before consuming GPU time, Producer verifies the signed Site, vault and overlay
 safety floors, checkpoint manifests, prompt contract, negative conditioning,
 reference files and hashes, previous-frame boundary, required voice backend,
-audio QC, output ownership, and available Finish path. A missing dependency is a
+natural-rate dialogue allocation, measured synthesized-line duration, audio QC,
+output ownership, and available Finish path. A missing dependency is a
 durable hold, not a failed creative Take and not a reason to improvise another
 engine.
 
@@ -85,7 +92,8 @@ the lane configuration hoped to execute:
 
 The fallback is intentionally the same 24-step BF16 quality lane. It is safe but
 not silent. `{negative}.generation.json` records backend, selected lane, task,
-native raster, frames, steps, solver, precision, negative conditioning,
+native raster, output frames, inference frames per pass, denoise-pass count,
+effective denoise steps, solver, precision, negative conditioning,
 attention backend, accelerator receipt, fallback reason, elapsed time, byte
 count, and output SHA-256. `Take.generation_receipt` persists the validated
 receipt. Producer rejects an unaddressed output, a hash mismatch, or a claimed
@@ -95,6 +103,24 @@ BF16, and negative-conditioned.
 Production exposes the actual lane on each clip row. “Quality CLI fallback” must
 include the held/missing/rollback reason. An optimization can therefore never
 appear to vanish without evidence.
+
+For an 81-frame spoken negative, S2V runs with
+`--infer_frames 84 --start_from_ref`: the smallest VAE-aligned window that
+covers the 81-frame contract. At 16 video frames per audio bucket this keeps a
+five-second locked WAV inside one bucket and one 24-step denoise pass. The prior
+80-frame value crossed the upstream audio-bucket boundary and executed two
+24-step passes. Upstream then stream-copied H.264 with the five-second audio as
+`-shortest`; reordered video packets silently reduced the published file to 77
+frames. Diony's exact S2V publish overlay pads the final audio tail and caps the
+encoded stream at 81 frames. Its Production raster overlay also bypasses the
+aspect-preserving 64-pixel helper that silently rounded height to 704. A measured
+line that cannot fit one window is blocked before Wan rather than truncated or
+paid for as a hidden second pass.
+
+The execution receipt probes the completed file with FFprobe and records actual
+decoded width, height, and frame count. Requested arguments can never make
+`quality_contract_matched=true` when the media bytes are 1280x704, 77 frames,
+or otherwise outside the pinned native contract.
 
 ## 4. B200 activation sequence
 
@@ -115,7 +141,10 @@ Producer then binds exactly one selected immutable Take. That Take must run the
 same prompts, seed, references, weights, 24 steps, BF16 precision, and negative
 conditioning; clear measured reference and temporal AutoQC; and land a verified
 1080 Finish. Only that evidence promotes cuDNN for the rest of that Project.
-Failure holds the remaining queue.
+An eligible creative/voice QC failure creates the normal bounded immutable
+retake, rebinds the still-unpromoted operator canary to that retry, and preserves
+the waiting rundown. Receipt/runtime failure or exhaustion of the Take cap holds
+the remaining queue.
 
 Resident eager and regional compilation remain later general candidates because
 they require 30 paired clips under Blueprint 21. They cannot borrow the cuDNN

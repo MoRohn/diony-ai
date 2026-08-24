@@ -38,7 +38,7 @@ from diony_contracts.voice import (
 
 
 VOICE_QC_VERSION = "diony-voice-qc-v1"
-VOICE_PIPELINE_VERSION = "diony-voice-performance-v1"
+VOICE_PIPELINE_VERSION = "diony-voice-performance-v2"
 
 
 class VoicePipelineError(RuntimeError):
@@ -1090,6 +1090,8 @@ class VoicePerformancePipeline:
             selected_seed = profile.seed
             attempts: list[dict[str, Any]] = []
             reference_paths = self._reference_paths(project, profile)
+            selected_alignment: dict[str, Any] | None = None
+            last_failure = "identity"
             for attempt in range(1, retake_cap + 1):
                 candidate = cache_root / f"line-{index + 1:02d}-{line.id}-a{attempt}.wav"
                 seed = profile.seed + (attempt - 1) * 1009
@@ -1125,9 +1127,36 @@ class VoicePerformancePipeline:
                             ),
                         }
                     )
+                    last_failure = "identity"
+                    continue
+                alignment = self.aligner.align(candidate, line)
+                measured_duration_ms = float(
+                    alignment.get("measured_duration_ms")
+                    or round(_media_duration_seconds(candidate) * 1000)
+                )
+                timing_tolerance_ms = max(250, round(line.target_duration_ms * 0.10))
+                timing_limit_ms = line.target_duration_ms + timing_tolerance_ms
+                if measured_duration_ms > timing_limit_ms:
+                    attempts.append(
+                        {
+                            "line_id": line.id,
+                            "attempt": attempt,
+                            "seed": seed,
+                            "speaker_similarity": round(selected_score, 6),
+                            "measured_duration_ms": round(measured_duration_ms),
+                            "target_duration_ms": line.target_duration_ms,
+                            "timing_limit_ms": timing_limit_ms,
+                            "diagnostic": (
+                                "voice timing overflow; synthesized speech exceeds its authored "
+                                "shot window and may not be trimmed"
+                            ),
+                        }
+                    )
+                    last_failure = "timing"
                     continue
                 raw = candidate
                 selected_seed = seed
+                selected_alignment = alignment
                 attempts.append(
                     {
                         "line_id": line.id,
@@ -1140,10 +1169,12 @@ class VoicePerformancePipeline:
                 break
             if raw is None:
                 raise VoicePipelineError(
-                    f"Voice identity failed for {line.id} after {retake_cap} bounded attempts"
+                    f"Voice {last_failure} failed for {line.id} after "
+                    f"{retake_cap} bounded attempts"
                 )
-            alignment = self.aligner.align(raw, line)
-            return index, raw, line, selected_score, selected_seed, attempts, alignment
+            if selected_alignment is None:
+                raise VoicePipelineError(f"Voice timing evidence is missing for {line.id}")
+            return index, raw, line, selected_score, selected_seed, attempts, selected_alignment
 
         try:
             worker_cap = min(8, max(1, int(os.environ.get("DIONY_VOICE_WORKERS", "4"))))

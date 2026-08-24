@@ -324,6 +324,13 @@ def _clip_rows(project: Project, farm: dict, finish: dict | None = None) -> list
                 "generation_elapsed_seconds": (
                     receipt.elapsed_seconds if receipt is not None else None
                 ),
+                "inference_frames_per_pass": (
+                    receipt.inference_frames_per_pass if receipt is not None else None
+                ),
+                "denoise_passes": receipt.denoise_passes if receipt is not None else None,
+                "effective_denoise_steps": (
+                    receipt.effective_denoise_steps if receipt is not None else None
+                ),
                 "quality_contract_matched": (
                     receipt.quality_contract_matched if receipt is not None else None
                 ),

@@ -129,6 +129,38 @@ def bind_project_canary(
     return rebound
 
 
+def rebind_failed_project_canary(
+    receipt: dict[str, Any],
+    *,
+    project_id: str,
+    failed_take_id: str,
+    retry_take_id: str,
+) -> dict[str, Any]:
+    """Move an unpromoted canary only to the failed Take's immutable retake."""
+    clean_project_id = project_id.strip()
+    clean_failed_id = failed_take_id.strip()
+    clean_retry_id = retry_take_id.strip()
+    if not clean_project_id or not clean_failed_id or not clean_retry_id:
+        raise QualificationError("Project, failed Take, and retry Take are required.")
+    if clean_failed_id == clean_retry_id:
+        raise QualificationError("The failed canary and immutable retry must differ.")
+    if receipt.get("stage") != "operator_passed_quality_canary_required":
+        raise QualificationError("Only an unpromoted Project canary may be rebound.")
+    if receipt.get("scope_project_id") != clean_project_id:
+        raise QualificationError("Another Project owns this attention canary.")
+    if str(receipt.get("quality_canary_take_id") or "").strip() != clean_failed_id:
+        raise QualificationError("Another selected immutable Take owns this Project canary.")
+    rebound = build_operator_receipt(
+        dict(receipt.get("operator_evidence") or {}),
+        scope_project_id=clean_project_id,
+        approved_by=str(receipt.get("approved_by") or "Diony B200 qualification"),
+    )
+    rebound["quality_canary_take_id"] = clean_retry_id
+    rebound["previous_failed_canary_take_id"] = clean_failed_id
+    rebound["source_receipt_sha256"] = _sha256(receipt)
+    return rebound
+
+
 def promote_quality_canary(
     receipt: dict[str, Any],
     evidence: dict[str, Any],

@@ -89,10 +89,15 @@ spec:
 
   performance:
     activation: held_pending_isolated_validation
+    five_second_shot_budget:
+      end_to_end_seconds_lt: 600
+      includes: [voice, wan_720, autoqc, finish_1080]
+      cold_and_steady_state_required: true
+      proof: durable_stage_and_take_receipts
     wan_resident:
       enabled: false
       candidate: persistent-bf16-resident-v1
-      tasks: [t2v-A14B, i2v-A14B]
+      tasks: [t2v-A14B, i2v-A14B, s2v-14B]
       concurrent_clips: 1
       precision: bfloat16
       sample_steps: 24

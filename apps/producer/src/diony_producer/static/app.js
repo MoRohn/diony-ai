@@ -503,7 +503,12 @@ function paintClips(list, clips) {
     id.textContent = clip.shot_id || "Clip";
     const take = document.createElement("span");
     const lane = String(clip.generation_lane_label || "").trim();
-    take.textContent = [clip.take_id || clip.engine || "", lane].filter(Boolean).join(" · ");
+    const effectiveSteps = Number(clip.effective_denoise_steps || 0);
+    const passes = Number(clip.denoise_passes || 0);
+    const work = effectiveSteps
+      ? `${effectiveSteps} denoise steps${passes > 1 ? ` · ${passes} passes` : ""}`
+      : "";
+    take.textContent = [clip.take_id || clip.engine || "", lane, work].filter(Boolean).join(" · ");
     if (clip.generation_fallback) take.title = clip.generation_fallback;
     identity.append(id, take);
     const state = document.createElement("span");

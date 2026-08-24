@@ -210,6 +210,31 @@ def _complete_attention_canary(project: Project, take: Take, receipt_path: Path)
     )
 
 
+def _rebind_attention_canary(
+    project: Project,
+    failed_take: Take,
+    retry_take: Take,
+    receipt_path: Path,
+) -> None:
+    """Preserve operator proof while normal AutoQC replaces a failed canary Take."""
+    from diony_wan.attention_qualification import rebind_failed_project_canary
+
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    rebound = rebind_failed_project_canary(
+        receipt,
+        project_id=project.id,
+        failed_take_id=failed_take.id,
+        retry_take_id=retry_take.id,
+    )
+    _write_json_atomic(receipt_path, rebound)
+    record_activity(
+        "gpu",
+        f"{retry_take.id} · B200 attention canary rebound after AutoQC retake",
+        level="live",
+        shot_id=retry_take.shot_id,
+    )
+
+
 def farm_generation() -> int:
     with _lock:
         return _generation
@@ -1175,6 +1200,31 @@ def _clear_fail_for_reroll(take: Take) -> None:
         take.qc.notes = "Queued for Wan2.2 on this pair. 720p negative, not a 1080 master."
 
 
+def _voice_performance_failure(voice_package) -> str:
+    """Describe the measured voice gate that failed instead of hiding it."""
+    if voice_package is None:
+        return "Voice performance failed: audiovisual timing evidence is missing."
+    qc = voice_package.qc
+    failures: list[str] = []
+    if qc.lip_sync_confidence < qc.lip_sync_confidence_min:
+        failures.append(
+            f"lip-sync confidence {qc.lip_sync_confidence:.4f} is below "
+            f"{qc.lip_sync_confidence_min:.2f}"
+        )
+    if qc.audiovisual_offset_ms_p95 > qc.audiovisual_offset_ms_max:
+        failures.append(
+            f"audiovisual offset p95 {qc.audiovisual_offset_ms_p95:.3f} ms exceeds "
+            f"{qc.audiovisual_offset_ms_max:g} ms"
+        )
+    if qc.performance_consistency < qc.performance_consistency_min:
+        failures.append(
+            f"performance consistency {qc.performance_consistency:.4f} is below "
+            f"{qc.performance_consistency_min:.2f}"
+        )
+    detail = "; ".join(failures) or "audiovisual timing evidence did not pass"
+    return f"Voice performance failed: {detail}."
+
+
 def attach_negative(
     project: Project,
     take: Take,
@@ -1353,7 +1403,7 @@ def attach_negative(
         elif voice_package and not voice_package.qc.audio_passed:
             failure = "Voice audio failed locked studio-audio QC."
         else:
-            failure = "Voice performance failed: audiovisual timing evidence is missing or below threshold."
+            failure = _voice_performance_failure(voice_package)
     if not failure and size > 32 and not dimensions_ok:
         width = int(media.get("width") or 0)
         height = int(media.get("height") or 0)
@@ -1774,6 +1824,38 @@ def start_farm(project: Project, takes: list[Take]) -> None:
                 integrity_error = _take_integrity_error(take)
                 if attention_canary:
                     if integrity_error:
+                        retry = auto_retake_for_qc_failure(project, take)
+                        if retry is not None and attention_receipt is not None:
+                            try:
+                                _rebind_attention_canary(
+                                    project,
+                                    take,
+                                    retry,
+                                    attention_receipt,
+                                )
+                            except Exception as exc:  # noqa: BLE001 — receipt binding is a hard gate
+                                with _lock:
+                                    _error = (
+                                        "B200 attention canary could not bind its AutoQC retake · "
+                                        f"{exc}"
+                                    )[:400]
+                                    _detail = _error[:240]
+                                    _pending.clear()
+                                record_activity(
+                                    "qc",
+                                    _detail,
+                                    level="fail",
+                                    shot_id=take.shot_id,
+                                )
+                                break
+                            with _lock:
+                                _pending.insert(0, retry)
+                                _error = ""
+                                _detail = (
+                                    f"B200 canary AutoQC retake {retry.attempt} of "
+                                    f"{RETAKE_CAP} · {retry.shot_id}"
+                                )
+                            continue
                         with _lock:
                             _done += 1
                             _error = (

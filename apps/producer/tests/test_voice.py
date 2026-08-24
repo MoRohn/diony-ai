@@ -495,6 +495,67 @@ def test_studio_audio_failure_retries_with_measured_diagnostic(tmp_path) -> None
     assert post_attempts[0]["diagnostic"].startswith("studio audio QC failed")
 
 
+def test_overlong_synthesis_is_rejected_before_studio_audio_can_trim_it(
+    tmp_path, monkeypatch
+) -> None:
+    class OverlongBackend(DeterministicVoiceTestBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.audio_process_calls = 0
+
+        def align(self, audio, line):
+            payload = super().align(audio, line)
+            payload["measured_duration_ms"] = round(line.target_duration_ms * 2.2)
+            return payload
+
+        def process_audio(self, *args, **kwargs):
+            self.audio_process_calls += 1
+            return super().process_audio(*args, **kwargs)
+
+    from diony_producer.voice import VoicePipelineError
+
+    monkeypatch.setenv("DIONY_VOICE_RETAKE_CAP", "2")
+    project, _, take = _spoken_take()
+    backend = OverlongBackend()
+    pipeline = VoicePerformancePipeline(
+        vault=tmp_path,
+        synthesizer=backend,
+        embedder=backend,
+        aligner=backend,
+        audio_processor=backend,
+        audiovisual_qc=backend,
+    )
+
+    with __import__("pytest").raises(VoicePipelineError, match="timing"):
+        pipeline.prepare_take(project, take)
+
+    assert backend.synthesis_calls == 2
+    assert backend.audio_process_calls == 0
+
+
+def test_voice_failure_message_reports_the_actual_av_thresholds(tmp_path) -> None:
+    from diony_producer.farm import _voice_performance_failure
+
+    project, _, take = _spoken_take()
+    backend = DeterministicVoiceTestBackend()
+    package = VoicePerformancePipeline(
+        vault=tmp_path,
+        synthesizer=backend,
+        embedder=backend,
+        aligner=backend,
+        audio_processor=backend,
+        audiovisual_qc=backend,
+    ).prepare_take(project, take)
+    package.qc.lip_sync_confidence = 0.7956
+    package.qc.audiovisual_offset_ms_p95 = 83.333
+    package.qc.performance_consistency = 1.0
+
+    message = _voice_performance_failure(package)
+
+    assert "lip-sync confidence 0.7956 is below 0.90" in message
+    assert "audiovisual offset p95 83.333 ms exceeds 40 ms" in message
+
+
 def test_visual_retake_reuses_locked_audio_but_requires_fresh_animation_qc(tmp_path) -> None:
     from diony_producer.farm import new_generation_take
 
