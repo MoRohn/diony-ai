@@ -86,7 +86,9 @@ the lane configuration hoped to execute:
 
 1. A Project-promoted B200 cuDNN SDPA receipt selects the exact-attention kernel.
 2. A matching resident BF16 or regional-compile receipt plus deterministic
-   canary selection may retain the same task/checkpoint pipeline on device.
+   canary selection may preload before the first Shot timer and retain the same
+   task/checkpoint pipeline on device. Cold preload remains separately measured
+   and still counts toward the end-to-end cold objective.
 3. Any missing, held, incompatible, or runtime-suppressed accelerator selects
    pinned official `generate.py` with the reason recorded as the fallback.
 

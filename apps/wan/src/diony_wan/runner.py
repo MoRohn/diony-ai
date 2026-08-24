@@ -22,6 +22,7 @@ from diony_wan.resident import (
     resident_canary_selected,
     resident_decision,
     resident_job_payload,
+    resident_prewarm_payload,
     run_resident,
     suppress_resident,
     stop_resident,
@@ -362,6 +363,40 @@ def wan_python() -> str:
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return "python3"
     return _probed_torch_python()
+
+
+def prewarm_validated_resident(
+    *,
+    task: str,
+    checkpoint: Path,
+    identifier: str,
+    attention_backend: str | None = None,
+    timeout: int | None = None,
+) -> bool:
+    """Load an approved canary pipeline before the first Shot timer starts.
+
+    This has no media or Take side effect. An absent/held receipt, a non-canary
+    Shot, or any preload failure leaves the exact pinned CLI path untouched.
+    """
+    offload = wan_needs_offload()
+    decision = resident_decision(task=task, offload=offload)
+    if not decision.enabled or not resident_canary_selected(identifier):
+        return False
+    env, py_root = _wan_env(attention_backend=attention_backend)
+    payload = resident_prewarm_payload(task=task, checkpoint=checkpoint)
+    payload["log_path"] = str(Path(identifier).with_suffix(".prewarm.wan.log"))
+    try:
+        response = run_resident(
+            payload,
+            python=wan_python(),
+            cwd=py_root,
+            env=env,
+            timeout=timeout or int(os.environ.get("DIONY_WAN_PREWARM_TIMEOUT", "900")),
+        )
+    except (ResidentError, OSError, subprocess.SubprocessError) as exc:
+        suppress_resident(decision.receipt_sha256, f"Resident prewarm failed: {exc}")
+        return False
+    return response.get("ok") is True
 
 
 @functools.lru_cache(maxsize=1)

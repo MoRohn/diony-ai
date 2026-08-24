@@ -99,6 +99,8 @@ spec:
       candidate: persistent-bf16-resident-v1
       tasks: [t2v-A14B, i2v-A14B, s2v-14B]
       concurrent_clips: 1
+      prewarm_before_first_shot: true
+      prewarm_counts_toward_cold_budget: true
       precision: bfloat16
       sample_steps: 24
       canary_percent: 10

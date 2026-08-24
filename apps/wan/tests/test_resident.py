@@ -29,6 +29,31 @@ import diony_wan.resident_worker
     assert completed.returncode == 0, completed.stderr
 
 
+def test_resident_prewarm_loads_once_before_the_first_shot(tmp_path, monkeypatch) -> None:
+    from diony_wan.resident import QUALITY_CONTRACT_SHA256, resident_prewarm_payload
+    from diony_wan.resident_worker import PipelineCache, _prewarm
+
+    created: list[tuple[str, str, str]] = []
+
+    def factory(task: str, checkpoint: str, kernel_mode: str):
+        created.append((task, checkpoint, kernel_mode))
+        return object()
+
+    checkpoint = tmp_path / "Wan2.2-S2V-14B"
+    payload = resident_prewarm_payload(task="s2v-14B", checkpoint=checkpoint)
+    cache = PipelineCache(factory=factory)
+
+    first = _prewarm(cache, payload)
+    second = _prewarm(cache, payload)
+
+    assert payload["operation"] == "prewarm"
+    assert payload["quality_contract_sha256"] == QUALITY_CONTRACT_SHA256
+    assert first["ok"] is True
+    assert first["pipeline_reused"] is False
+    assert second["pipeline_reused"] is True
+    assert created == [("s2v-14B", str(checkpoint), "eager")]
+
+
 def _passing_receipt(
     contract_sha256: str,
     *,

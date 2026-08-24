@@ -1728,6 +1728,8 @@ def start_farm(project: Project, takes: list[Take]) -> None:
                     take = _pending.pop(0)
                 if farm_cancelled():
                     break
+                active_task = ""
+                active_checkpoint: Path | None = None
                 try:
                     from diony_contracts.live import ckpt_dir
                     from diony_wan.storage import prepare_checkpoint, prefetch_checkpoint
@@ -1781,6 +1783,21 @@ def start_farm(project: Project, takes: list[Take]) -> None:
                             _done += 1
                         continue
                     existing.unlink(missing_ok=True)
+                if active_task and active_checkpoint is not None:
+                    from diony_wan.runner import prewarm_validated_resident
+
+                    if prewarm_validated_resident(
+                        task=active_task,
+                        checkpoint=active_checkpoint,
+                        identifier=str(existing),
+                        attention_backend=attention_backend,
+                    ):
+                        record_activity(
+                            "wan",
+                            f"{take.shot_id} · validated resident BF16 pipeline prewarmed",
+                            level="live",
+                            shot_id=take.shot_id,
+                        )
                 try:
                     run_one(
                         project,

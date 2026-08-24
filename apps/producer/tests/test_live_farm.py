@@ -200,6 +200,54 @@ def test_farm_waits_for_storage_and_retries_without_consuming_queue(monkeypatch)
     assert status["queued"] == 0
     assert status["error"] == ""
 
+
+def test_farm_prewarms_an_approved_resident_before_first_shot_timer(
+    tmp_path, monkeypatch
+) -> None:
+    from diony_producer import farm
+
+    project = demo_project()
+    take = project.takes[0]
+    checkpoint = tmp_path / "Wan2.2-S2V-14B"
+    checkpoint.mkdir()
+    order: list[str] = []
+
+    def prewarm(**kwargs) -> bool:
+        order.append("prewarm")
+        assert kwargs["identifier"].endswith("negative_720.mp4")
+        return True
+
+    def pass_take(_project, current, **_kwargs) -> None:
+        order.append("shot")
+        current.qc.verdict = QCVerdict.PASS
+
+    farm.reset_farm()
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setattr("diony_wan.runner.prove_generate", lambda: None)
+    monkeypatch.setattr("diony_contracts.live.ckpt_dir", lambda _task: checkpoint)
+    monkeypatch.setattr(
+        "diony_wan.storage.prepare_checkpoint", lambda _task, source: checkpoint
+    )
+    monkeypatch.setattr("diony_wan.runner.prewarm_validated_resident", prewarm)
+    monkeypatch.setattr(farm, "camera_task_for", lambda *_args: "s2v-14B")
+    monkeypatch.setattr(farm, "camera_disk_block", lambda: "")
+    monkeypatch.setattr(farm, "_attention_plan", lambda *_args: ("cudnn_sdpa", False, None))
+    monkeypatch.setattr(farm, "run_one", pass_take)
+    monkeypatch.setattr(farm, "record_activity", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("diony_producer.advance.maybe_advance_run", lambda _project: None)
+
+    farm.start_farm(project, [take])
+
+    deadline = time.time() + 5
+    status = farm.farm_status()
+    while status["busy"] and time.time() < deadline:
+        time.sleep(0.01)
+        status = farm.farm_status()
+
+    assert order == ["prewarm", "shot"]
+    assert status["error"] == ""
+
 SLOW_GENERATE = """#!/usr/bin/env python3
 import sys, time
 from pathlib import Path

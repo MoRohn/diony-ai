@@ -701,6 +701,49 @@ def test_validated_native_lane_uses_the_resident_worker_without_changing_inputs(
     assert receipt["quality_contract_matched"] is True
 
 
+def test_validated_resident_prewarm_is_gated_and_finishes_before_shot_timing(
+    tmp_path, monkeypatch
+) -> None:
+    import diony_wan.runner as runner
+    from diony_wan.resident import ResidentDecision
+
+    checkpoint = tmp_path / "Wan2.2-S2V-14B"
+    checkpoint.mkdir()
+    captured = {}
+    monkeypatch.setattr(runner, "wan_needs_offload", lambda: False)
+    monkeypatch.setattr(
+        runner,
+        "resident_decision",
+        lambda **_kwargs: ResidentDecision(True, "validated", "receipt-sha"),
+    )
+    monkeypatch.setattr(runner, "resident_canary_selected", lambda _identifier: True)
+    monkeypatch.setattr(
+        runner,
+        "_wan_env",
+        lambda **_kwargs: ({"DIONY_WAN_ATTENTION_BACKEND": "cudnn_sdpa"}, str(tmp_path)),
+    )
+    monkeypatch.setattr(runner, "wan_python", lambda: "/usr/bin/python3")
+
+    def resident(payload, **kwargs):
+        captured.update(payload=payload, kwargs=kwargs)
+        return {"ok": True, "pipeline_reused": False, "prewarm_seconds": 89.0}
+
+    monkeypatch.setattr(runner, "run_resident", resident)
+
+    warmed = runner.prewarm_validated_resident(
+        task="s2v-14B",
+        checkpoint=checkpoint,
+        identifier="project/take/negative.mp4",
+        attention_backend="cudnn_sdpa",
+    )
+
+    assert warmed is True
+    assert captured["payload"]["operation"] == "prewarm"
+    assert captured["payload"]["task"] == "s2v-14B"
+    assert captured["payload"]["checkpoint"] == str(checkpoint)
+    assert captured["kwargs"]["python"] == "/usr/bin/python3"
+
+
 def test_validated_s2v_lane_preserves_locked_audio_and_one_denoise_window(
     tmp_path, monkeypatch
 ) -> None:

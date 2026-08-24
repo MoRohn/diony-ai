@@ -132,6 +132,31 @@ def _s2v_generation_kwargs(job: dict[str, Any], cfg: Any, *, max_area: int) -> d
     }
 
 
+def _prewarm(cache: PipelineCache, job: dict[str, Any]) -> dict[str, Any]:
+    """Load a receipt-qualified pipeline before the first Shot timer starts."""
+    from diony_wan.resident import QUALITY_CONTRACT_SHA256
+
+    if job.get("quality_contract_sha256") != QUALITY_CONTRACT_SHA256:
+        raise RuntimeError("Resident prewarm does not match the validated quality contract.")
+    task = str(job.get("task") or "")
+    checkpoint = str(job.get("checkpoint") or "")
+    if task not in {"t2v-A14B", "i2v-A14B", "s2v-14B"} or not checkpoint:
+        raise RuntimeError("Resident prewarm requires a supported task and checkpoint.")
+    if job.get("offload_model") is not False or job.get("init_on_cpu") is not False:
+        raise RuntimeError("Resident prewarm requires the BF16 pipeline to remain on the GPU.")
+    kernel_mode = str(job.get("kernel_mode") or "eager")
+    started = time.monotonic()
+    _, reused = cache.get(task, checkpoint, kernel_mode)
+    return {
+        "ok": True,
+        "operation": "prewarm",
+        "pipeline_reused": reused,
+        "prewarm_seconds": round(time.monotonic() - started, 6),
+        "quality_contract_sha256": QUALITY_CONTRACT_SHA256,
+        "kernel_mode": kernel_mode,
+    }
+
+
 def _generate(cache: PipelineCache, job: dict[str, Any]) -> dict[str, Any]:
     import torch
     from PIL import Image
@@ -261,7 +286,11 @@ def main() -> None:
                     force=True,
                 )
                 with contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
-                    response = _generate(cache, job)
+                    response = (
+                        _prewarm(cache, job)
+                        if job.get("operation") == "prewarm"
+                        else _generate(cache, job)
+                    )
                 log.write("DIONY_RESIDENT_METRICS " + json.dumps(response, sort_keys=True) + "\n")
         except Exception as exc:  # noqa: BLE001 - preserve the worker for a safe next request
             response = {

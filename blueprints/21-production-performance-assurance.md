@@ -107,6 +107,12 @@ the pinned CLI. Animate, TI2V, offload sites, non-81-frame requests, and
 non-24-step requests retain the official per-clip CLI. One worker never means
 two concurrent clips.
 
+For a receipt-approved deterministic canary, FARM loads the selected task and
+checkpoint before `run_one` begins its Shot timer. That preload has no media or
+Take side effect; the first generation request must report pipeline reuse. The
+prewarm duration is still retained as cold-activation evidence and is not
+excluded from the Blueprint 23 end-to-end cold objective.
+
 Producer never reorders Shots across a previous-frame continuity dependency just
 to group engines. Blueprint 20's exact-reference script lane is naturally a
 homogeneous I2V sequence: one checkpoint, one resident pipeline, and the selected

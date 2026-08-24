@@ -237,6 +237,7 @@ def resident_job_payload(
     kernel_mode = configured_kernel_mode()
     return {
         "protocol": 1,
+        "operation": "generate",
         "task": task,
         "checkpoint": str(checkpoint),
         "size": QUALITY_CONTRACT["native_size"],
@@ -255,6 +256,20 @@ def resident_job_payload(
         "init_on_cpu": False,
         "quality_contract_sha256": QUALITY_CONTRACT_SHA256,
         "kernel_mode": kernel_mode,
+    }
+
+
+def resident_prewarm_payload(*, task: str, checkpoint: Path) -> dict[str, Any]:
+    """Build a receipt-bound model preload with no Shot or media side effect."""
+    return {
+        "protocol": 1,
+        "operation": "prewarm",
+        "task": task,
+        "checkpoint": str(checkpoint),
+        "offload_model": False,
+        "init_on_cpu": False,
+        "quality_contract_sha256": QUALITY_CONTRACT_SHA256,
+        "kernel_mode": configured_kernel_mode(),
     }
 
 
