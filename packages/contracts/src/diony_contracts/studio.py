@@ -738,16 +738,41 @@ def _script_dialogue(idea: str, *, default_speaker: str = "Character") -> list[S
     return lines
 
 
+DIALOGUE_NATURAL_WPS = 2.0
+
+
+def _dialogue_window_words(seconds_per_shot: float) -> int:
+    """Words one shot can carry at a natural speaking rate."""
+    return max(1, int(seconds_per_shot * DIALOGUE_NATURAL_WPS))
+
+
+def _dialogue_windows_needed(lines: list[ScriptDialogue], seconds_per_shot: float) -> int:
+    """Shot windows the authored dialogue needs at the natural rate."""
+    total_words = sum(len(line.text.split()) for line in lines)
+    if not total_words:
+        return 0
+    return math.ceil(total_words / _dialogue_window_words(seconds_per_shot))
+
+
 def _fit_dialogue_to_shots(
     lines: list[ScriptDialogue],
     *,
     shot_count: int,
     seconds_per_shot: float,
 ) -> list[list[ScriptDialogue]]:
-    """Split authored speech into natural-rate shot windows without rewriting it."""
+    """Split authored speech into shot windows without rewriting or refusing it.
+
+    Windows hold a natural speaking rate (DIALOGUE_NATURAL_WPS) when the rundown
+    has room. When it does not, the words are packed more briskly across the
+    shots that exist instead of raising: the operator's length goal is a target,
+    not a contract, and authored lines are never cut.
+    """
     if not lines:
         return []
-    max_words = max(1, int(seconds_per_shot * 2.0))
+    total_words = sum(len(line.text.split()) for line in lines)
+    max_words = _dialogue_window_words(seconds_per_shot)
+    if shot_count > 0 and math.ceil(total_words / max_words) > shot_count:
+        max_words = max(max_words, math.ceil(total_words / shot_count))
     fitted: list[ScriptDialogue] = []
     tokens: list[tuple[int, str, str]] = []
     preferred_boundaries: set[int] = set()
@@ -770,12 +795,8 @@ def _fit_dialogue_to_shots(
         return [[line] for line in fitted]
 
     minimum_windows = math.ceil(len(tokens) / max_words)
-    if minimum_windows > shot_count:
-        raise ValueError(
-            "Authored dialogue needs "
-            f"{minimum_windows} natural-rate shot windows but this rundown has {shot_count}. "
-            "Increase the program duration or shorten the authored dialogue before Production."
-        )
+    if minimum_windows > shot_count:  # Defensive: max_words above guarantees capacity.
+        raise ValueError("Authored dialogue could not be assigned to this rundown.")
 
     # Short authored turns should not each consume a whole 5s take when their
     # combined natural speaking time fits the rundown. Prefer existing turn and
@@ -1214,26 +1235,64 @@ def expand_idea(
     pid = f"studio-{run_id}"
     if is_sample:
         recipes = _sample_recipes(brief.customer_kind, sample_seconds)
+        program_durations: list[int] = []
     else:
-        recipes = _coverage_recipes(brief.customer_kind, _program_durations(brief.target_minutes))
-    n = len(recipes)
+        program_durations = _program_durations(brief.target_minutes)
+        recipes = _coverage_recipes(brief.customer_kind, program_durations)
     image_ids = [a.id for a in held if a.kind == AssetKind.IMAGE]
     video_ids = [a.id for a in held if a.kind == AssetKind.VIDEO]
     audio_ids = [a.id for a in held if a.kind == AssetKind.AUDIO]
+
     # Dialogue rides only on bookings long enough to hold a natural-rate
     # window; a short lane-tail booking never receives speech it cannot fit.
-    dialogue_eligible = [
-        index
-        for index, recipe in enumerate(recipes)
-        if int(recipe.get("duration_frames") or round(recipe["seconds"] * TIMELINE_FPS))
-        >= DIALOGUE_MIN_SHOT_FRAMES
-    ] or list(range(n))
+    def _dialogue_eligible(rows: list[dict]) -> list[int]:
+        return [
+            index
+            for index, recipe in enumerate(rows)
+            if int(recipe.get("duration_frames") or round(recipe["seconds"] * TIMELINE_FPS))
+            >= DIALOGUE_MIN_SHOT_FRAMES
+        ] or list(range(len(rows)))
+
+    def _dialogue_seconds(rows: list[dict], eligible: list[int]) -> float:
+        return min(float(rows[index]["seconds"]) for index in eligible)
+
+    authored_lines = _script_dialogue(brief.idea, default_speaker=book.lead_name)
+    dialogue_eligible = _dialogue_eligible(recipes)
+    seconds_per_shot = _dialogue_seconds(recipes, dialogue_eligible)
+    windows_needed = _dialogue_windows_needed(authored_lines, seconds_per_shot)
+    dialogue_fit_note = ""
+    if windows_needed > len(dialogue_eligible):
+        planned_shots = len(recipes)
+        if program_durations and len(program_durations) < MAX_QUALITY_SHOTS:
+            # The length goal is a target, not a contract: add lane-true shots
+            # so every authored line keeps a natural speaking window.
+            extra = windows_needed - len(dialogue_eligible)
+            grown = program_durations + [WAN_LANE_FRAMES] * extra
+            program_durations = grown[:MAX_QUALITY_SHOTS]
+            recipes = _coverage_recipes(brief.customer_kind, program_durations)
+            dialogue_eligible = _dialogue_eligible(recipes)
+            seconds_per_shot = _dialogue_seconds(recipes, dialogue_eligible)
+            windows_needed = _dialogue_windows_needed(authored_lines, seconds_per_shot)
+            dialogue_fit_note = (
+                f"Authored dialogue needs {windows_needed} natural-rate shot windows, so the rundown "
+                f"grew from {planned_shots} to {len(recipes)} lane shots. Every line is kept in order; "
+                "the stitched runtime lands past the length goal rather than cutting speech."
+            )
+        if windows_needed > len(dialogue_eligible):
+            brisk_words = math.ceil(
+                sum(len(line.text.split()) for line in authored_lines) / max(1, len(dialogue_eligible))
+            )
+            dialogue_fit_note = (
+                f"Authored dialogue needs {windows_needed} natural-rate shot windows but this "
+                f"{'sample' if is_sample else 'rundown'} has {len(dialogue_eligible)}. Diony kept every "
+                f"line and packs delivery up to {brisk_words} words per shot; lengthen the "
+                f"{'sample' if is_sample else 'program'} for a slower read."
+            )
+    n = len(recipes)
     dialogue_windows = _fit_dialogue_to_shots(
-        _script_dialogue(brief.idea, default_speaker=book.lead_name),
+        authored_lines,
         shot_count=len(dialogue_eligible),
-        seconds_per_shot=min(
-            float(recipes[index]["seconds"]) for index in dialogue_eligible
-        ),
+        seconds_per_shot=seconds_per_shot,
     )
     sound_requested = bool(dialogue_windows) or _asks_for_sound(idea)
     spoken_direction = _spoken_direction_script(brief.idea)
@@ -1438,6 +1497,15 @@ def expand_idea(
                     f"toward the {allotment_label(brief.target_minutes)} goal. "
                     "Do not lengthen a take past the 81-frame lane to fake TRT."
                 ),
+                shot_id=shots[0].id,
+            )
+        )
+    if dialogue_fit_note:
+        notes.append(
+            Note(
+                id="n-dialogue-fit",
+                author="conductor",
+                body=dialogue_fit_note,
                 shot_id=shots[0].id,
             )
         )

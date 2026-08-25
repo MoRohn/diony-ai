@@ -286,3 +286,63 @@ def test_dialogue_only_idea_never_falls_back_to_voice_text_for_picture() -> None
     prompts = " ".join(shot.prompt for shot in project.shots).casefold()
     assert "we move before midnight" not in prompts
     assert "bible-locked performance" in prompts
+
+
+def test_program_rundown_grows_instead_of_refusing_long_authored_dialogue() -> None:
+    """A 30s program has 9 dialogue-eligible shots; ~10 windows of speech used to raise."""
+    authored_turns = [
+        ("Marcus", "We are starting a daily gratitude circle and nobody is excused from it today."),
+        ("Lila", "I am grateful this will be over in under a minute if we all cooperate."),
+        ("Hugo", "I am grateful that neither of you can force me to continue this exercise."),
+        ("Marcus", "That is not the spirit Hugo and you know it so try again with feeling."),
+        ("Lila", "He tried and it was honest which is more than the toaster ever managed."),
+    ]
+    idea = "A clay ensemble performs in a shared kitchen.\n" + "\n".join(
+        f'{speaker}: “{text}”' for speaker, text in authored_turns
+    )
+
+    project = expand_idea(
+        Brief(idea=idea, customer_kind=CustomerKind.SERIES, target_minutes=0.5)
+    )
+
+    characters_by_id = {c.id: c.name for c in project.bible.characters}
+    actual_word_stream = [
+        (characters_by_id[turn.character_id], word)
+        for shot in project.shots
+        for turn in shot.dialogue_turns
+        for word in turn.text.split()
+    ]
+    expected_word_stream = [
+        (speaker, word) for speaker, text in authored_turns for word in text.split()
+    ]
+    assert actual_word_stream == expected_word_stream
+    assert len(project.shots) > 10  # grown past the 0.5-minute plan
+    # Natural rate held: no shot carries more than a ~3.4s window's worth of words.
+    assert all(
+        sum(len(turn.text.split()) for turn in shot.dialogue_turns) <= 6
+        for shot in project.shots
+    )
+    note = next(note for note in project.notes if note.id == "n-dialogue-fit")
+    assert "grew from 10 to" in note.body
+    assert "Every line is kept" in note.body
+
+
+def test_sample_keeps_every_authored_word_with_brisk_delivery() -> None:
+    """A fixed 5s sample cannot grow, so it packs the words instead of refusing."""
+    authored = (
+        "I thought gratitude would make this room feel calmer but somehow the coffee "
+        "is judging us and Hugo has declared war on the toaster again this morning."
+    )
+    project = expand_idea(
+        Brief(
+            idea=f'In a shared kitchen.\nMarcus: "{authored}"',
+            customer_kind=CustomerKind.SERIES,
+            production_kind=ProductionKind.SAMPLE,
+            sample_seconds=5,
+        )
+    )
+    turns = [turn for shot in project.shots for turn in shot.dialogue_turns]
+    assert " ".join(turn.text for turn in turns) == authored
+    note = next(note for note in project.notes if note.id == "n-dialogue-fit")
+    assert "sample" in note.body
+    assert "words per shot" in note.body
