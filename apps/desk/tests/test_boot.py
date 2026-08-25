@@ -722,7 +722,7 @@ def test_producer_ui_stamp_matches_html() -> None:
 
 def test_wizard_ui_stamp_matches_html() -> None:
     stamp = wizard_ui_stamp()
-    assert stamp == "brand13"
+    assert stamp == "brand14"
     html = repo_root() / "apps" / "wizard" / "src" / "diony_wizard" / "static" / "index.html"
     assert f"app.js?v={stamp}" in html.read_text(encoding="utf-8")
     assert f"app.css?v={stamp}" in html.read_text(encoding="utf-8")

@@ -1000,7 +1000,7 @@ def test_compute_page_uses_balanced_readable_responsive_layout() -> None:
     js = client.get("/static/app.js").text
     css = client.get("/static/app.css").text
 
-    assert '/static/app.css?v=brand13' in html
+    assert '/static/app.css?v=brand14' in html
     assert 'class="compute-group compute-group-local"' in html
     assert 'class="compute-group compute-group-lease"' in html
     assert 'group.className = `compute-group compute-group-${label.toLowerCase()}`;' in js

@@ -6,6 +6,7 @@ From a laptop, SSH BatchMode as DIONY_SSH_USER on DIONY_SSH_PORT (default 22).
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -109,7 +110,265 @@ _job: dict = {
     "started_at": "",
     "prepared": False,
     "pull_skipped": False,
+    "stages": [],
+    "percent": None,
+    "stage": "",
 }
+
+# Weighted setup stages for the Connect page. Weights approximate wall-clock share.
+SETUP_STAGES: list[tuple[str, str, int]] = [
+    ("site", "Check site", 2),
+    ("sync", "Sync Diony repo", 3),
+    ("storage", "Model storage on the vault", 3),
+    ("python", "Python runtime", 3),
+    ("pack", "Pinned model pack", 55),
+    ("dedupe", "Shared model assets", 3),
+    ("wan", "Wan2.2 runtime", 12),
+    ("cosyvoice", "CosyVoice2 runtime", 12),
+    ("producer", "Producer", 4),
+]
+
+
+def setup_stage_plan() -> list[dict]:
+    """Fresh stage list. `pack` carries one item per pinned model."""
+    stages: list[dict] = []
+    for stage_id, label, weight in SETUP_STAGES:
+        stage: dict = {
+            "id": stage_id,
+            "label": label,
+            "weight": weight,
+            "status": "pending",
+            "percent": None,
+            "detail": "",
+        }
+        if stage_id == "pack":
+            stage["items"] = [
+                {
+                    "id": repo,
+                    "label": repo.rsplit("/", 1)[-1],
+                    "status": "pending",
+                    "percent": None,
+                    "done": 0,
+                    "total": 1 if filename else int(files or 0),
+                    "bytes": int(payload_bytes or 0),
+                }
+                for repo, _dest, filename, _revision, files, payload_bytes in HF_PACK
+            ]
+        stages.append(stage)
+    return stages
+
+
+def _stage_fraction(stage: dict) -> float:
+    status = stage.get("status")
+    if status in {"done", "skipped"}:
+        return 1.0
+    if stage.get("percent") is not None:
+        return max(0.0, min(1.0, float(stage["percent"]) / 100.0))
+    return 0.35 if status == "active" else 0.0
+
+
+def setup_percent(stages: list[dict]) -> int | None:
+    """Overall 0-100. Holds at 99 until the last stage is done."""
+    if not stages:
+        return None
+    total = sum(int(stage.get("weight") or 0) for stage in stages) or 1
+    if all(stage.get("status") in {"done", "skipped"} for stage in stages):
+        return 100
+    earned = sum(int(stage.get("weight") or 0) * _stage_fraction(stage) for stage in stages)
+    return max(0, min(99, int(round(earned / total * 100))))
+
+
+def _pack_percent(stage: dict) -> int | None:
+    items = stage.get("items") or []
+    if not items:
+        return stage.get("percent")
+    weight = sum(int(item.get("bytes") or 0) for item in items) or len(items)
+    earned = 0.0
+    for item in items:
+        share = int(item.get("bytes") or 0) if any(i.get("bytes") for i in items) else 1
+        if item.get("status") == "done":
+            earned += share
+        elif item.get("total"):
+            earned += share * min(1.0, float(item.get("done") or 0) / float(item["total"]))
+    return int(round(earned / weight * 100))
+
+
+_STAGE_MARKERS: dict[str, tuple[str, str, str]] = {
+    "PY_RUNTIME_START": ("python", "active", "Creating the Diony venv"),
+    "PIP_CHECK": ("python", "active", "Checking huggingface_hub"),
+    "PIP_INSTALL": ("python", "active", "Installing huggingface_hub"),
+    "PIP_OK": ("python", "done", "Python runtime ready"),
+    "MODEL_VOLUME_START": ("storage", "active", "Preparing attached-volume model storage"),
+    "MODEL_VOLUME_MIGRATE": ("storage", "active", "Moving existing models to the attached volume"),
+    "MODEL_VOLUME_OK": ("storage", "done", "Attached-volume model storage ready"),
+    "HF_START": ("pack", "active", "Checking the pinned model pack"),
+    "HF_OK": ("pack", "done", "Pinned model pack ready"),
+    "PACK_DEDUPE_START": ("dedupe", "active", "Consolidating shared model assets"),
+    "PACK_DEDUPE_OK": ("dedupe", "done", "Shared model assets ready"),
+    "WAN_RUNTIME_START": ("wan", "active", "Cloning Wan2.2 and installing the Diony apps"),
+    "WAN_HOST_OVERLAY_REPAIR": ("wan", "active", "Repairing the Wan host runtime"),
+    "WAN_GIT_LOCK_CLEARED": ("wan", "active", "Clearing a stale git lock"),
+    "WAN_HOST_PYTHON_OK": ("wan", "done", "Wan host runtime ready"),
+    "COSYVOICE_RUNTIME_START": ("cosyvoice", "active", "Preparing the CosyVoice2 runtime"),
+    "COSYVOICE_RUNTIME_INSTALL": ("cosyvoice", "active", "Installing CosyVoice2 requirements"),
+    "COSYVOICE_PULL": ("cosyvoice", "active", "Downloading the CosyVoice2 voice model"),
+    "COSYVOICE_OK": ("cosyvoice", "done", "CosyVoice2 voice model ready"),
+    "PRODUCER_START": ("producer", "active", "Starting Producer"),
+    "APPLY_OK": ("producer", "done", "Producer is running"),
+}
+
+
+def apply_stage_event(line: str) -> dict | None:
+    """Map one streamed setup line to a stage/item transition, or None."""
+    clean = str(line or "").strip()
+    if not clean:
+        return None
+    marker, _, rest = clean.partition(" ")
+    if marker in {"HF_PULL", "HF_PROGRESS", "HF_DONE"}:
+        repo = rest.split(" -> ", 1)[0].split()[0] if rest.strip() else ""
+        if not repo:
+            return None
+        event = {"stage": "pack", "status": "active", "detail": "", "item": repo}
+        if marker == "HF_PULL":
+            event.update({"item_status": "active", "detail": f"Downloading {repo.rsplit('/', 1)[-1]}"})
+        elif marker == "HF_DONE":
+            event.update({"item_status": "done", "detail": f"{repo.rsplit('/', 1)[-1]} ready"})
+        else:
+            counts = rest.split()[1] if len(rest.split()) > 1 else ""
+            done_text, _, total_text = counts.partition("/")
+            if not done_text.isdigit():
+                return None
+            event.update(
+                {
+                    "item_status": "active",
+                    "done": int(done_text),
+                    "total": int(total_text) if total_text.isdigit() else None,
+                    "detail": f"Downloading {repo.rsplit('/', 1)[-1]} · {counts} files",
+                }
+            )
+        return event
+    if marker in _STAGE_MARKERS:
+        stage_id, status, detail = _STAGE_MARKERS[marker]
+        if marker == "MODEL_VOLUME_MIGRATE" and rest.strip():
+            detail = f"Moving existing {rest.strip()} models to the attached volume"
+        return {"stage": stage_id, "status": status, "detail": detail}
+    return None
+
+
+def _refresh_progress_locked() -> None:
+    stages = _job.get("stages") or []
+    for stage in stages:
+        if stage.get("id") == "pack" and stage.get("status") == "active":
+            stage["percent"] = _pack_percent(stage)
+    _job["percent"] = setup_percent(stages)
+    active = next((stage["id"] for stage in stages if stage.get("status") in {"active", "failed"}), "")
+    _job["stage"] = active
+
+
+def _apply_stage_event_locked(event: dict) -> None:
+    stages = _job.get("stages") or []
+    index = next((i for i, stage in enumerate(stages) if stage.get("id") == event["stage"]), -1)
+    if index < 0:
+        return
+    stage = stages[index]
+    for earlier in stages[:index]:
+        if earlier.get("status") not in {"done", "skipped"}:
+            earlier["status"] = "done"
+            earlier["percent"] = 100
+    if event["status"] == "done":
+        stage["status"] = "done"
+        stage["percent"] = 100
+        for item in stage.get("items") or []:
+            item["status"] = "done"
+            item["percent"] = 100
+            item["done"] = item.get("total") or item.get("done") or 0
+    elif stage.get("status") != "done":
+        stage["status"] = "active"
+    if event.get("detail"):
+        stage["detail"] = event["detail"]
+    item_id = event.get("item")
+    if item_id:
+        item = next((row for row in stage.get("items") or [] if row.get("id") == item_id), None)
+        if item is None:
+            item = {"id": item_id, "label": item_id.rsplit("/", 1)[-1], "status": "pending", "percent": None, "done": 0, "total": 0, "bytes": 0}
+            stage.setdefault("items", []).append(item)
+        item["status"] = event.get("item_status") or item["status"]
+        if event.get("done") is not None:
+            item["done"] = int(event["done"])
+            if event.get("total"):
+                item["total"] = int(event["total"])
+        if item["status"] == "done":
+            item["done"] = item.get("total") or item.get("done") or 0
+            item["percent"] = 100
+        elif item.get("total"):
+            item["percent"] = int(round(min(1.0, item["done"] / item["total"]) * 100))
+    _refresh_progress_locked()
+
+
+def _stage(epoch: int, stage_id: str, status: str, detail: str = "") -> None:
+    """Local-side stage transition (readiness, rsync, prepared-site shortcuts)."""
+    with _lock:
+        if epoch != _apply_epoch:
+            return
+        _apply_stage_event_locked({"stage": stage_id, "status": "active" if status == "active" else "done", "detail": detail})
+        if status == "skipped":
+            for stage in _job.get("stages") or []:
+                if stage.get("id") == stage_id:
+                    stage["status"] = "skipped"
+                    stage["percent"] = 100
+                    for item in stage.get("items") or []:
+                        item["status"] = "skipped"
+                        item["percent"] = 100
+            _refresh_progress_locked()
+    _persist()
+
+
+def _stage_line(line: str, epoch: int) -> None:
+    event = apply_stage_event(line)
+    if not event:
+        return
+    with _lock:
+        if epoch != _apply_epoch:
+            return
+        _apply_stage_event_locked(event)
+    _persist()
+
+
+def _finish_stages(epoch: int) -> None:
+    with _lock:
+        if epoch != _apply_epoch:
+            return
+        for stage in _job.get("stages") or []:
+            if stage.get("status") not in {"done", "skipped"}:
+                stage["status"] = "done"
+                stage["percent"] = 100
+        _refresh_progress_locked()
+
+
+def _fail_stages(epoch: int, error: str) -> None:
+    with _lock:
+        if epoch != _apply_epoch:
+            return
+        stages = _job.get("stages") or []
+        active = next((stage for stage in stages if stage.get("status") == "active"), None)
+        if active is None:
+            active = next((stage for stage in stages if stage.get("status") == "pending"), None)
+        if active is not None:
+            active["status"] = "failed"
+            active["detail"] = str(error or "")[:160]
+        _refresh_progress_locked()
+
+
+def public_progress(snapshot: dict | None = None) -> dict:
+    """The Connect page contract: stages, overall percent, active stage, start time."""
+    data = snapshot if snapshot is not None else public_apply()
+    return {
+        "stages": data.get("stages") or [],
+        "percent": data.get("percent"),
+        "stage": data.get("stage") or "",
+        "started_at": data.get("started_at") or "",
+        "running": bool(data.get("running")),
+    }
 
 
 def apply_path() -> Path:
@@ -131,6 +390,9 @@ def _snapshot_locked() -> dict:
         "started_at": str(_job.get("started_at") or ""),
         "prepared": bool(_job.get("prepared")),
         "pull_skipped": bool(_job.get("pull_skipped")),
+        "stages": copy.deepcopy(_job.get("stages") or []),
+        "percent": _job.get("percent"),
+        "stage": str(_job.get("stage") or ""),
     }
 
 
@@ -786,6 +1048,10 @@ def apply_progress_text(line: str) -> str:
     if clean.startswith("WAN_GIT_LOCK_CLEARED "):
         return "Clearing a stale git lock left by an interrupted install"
     stages = {
+        "PY_RUNTIME_START": "Preparing the Python runtime",
+        "WAN_RUNTIME_START": "Installing the Wan2.2 runtime and Diony apps",
+        "COSYVOICE_RUNTIME_START": "Preparing the CosyVoice2 runtime",
+        "PRODUCER_START": "Starting Producer",
         "HF_START": "Checking the pinned model pack",
         "HF_OK": "Pinned model pack ready",
         "MODEL_VOLUME_START": "Preparing attached-volume model storage",
@@ -849,6 +1115,7 @@ if ! flock -n 9; then
   exit 75
 fi
 {model_storage}
+echo PY_RUNTIME_START
 {py}
 {hub}
 echo HF_START
@@ -930,10 +1197,12 @@ with ThreadPoolExecutor(max_workers=min(pull_workers, len(PACK))) as pool:
 print("HF_OK", flush=True)
 PY
 {dedupe}
+echo WAN_RUNTIME_START
 test -d /opt/wan22/.git || git clone --depth 1 https://github.com/Wan-Video/Wan2.2.git /opt/wan22
 _diony_pip install -e "$DIONY_REPO/packages/contracts" -e "$DIONY_REPO/apps/wan" -e "$DIONY_REPO/apps/finish" -e "$DIONY_REPO/apps/producer" -e "$DIONY_REPO/apps/wizard"
 _diony_python -c "from pathlib import Path; from diony_wan.runner import ensure_attention_fallback, ensure_optional_engine_lazy_imports; ensure_attention_fallback(Path('/opt/wan22')); ensure_optional_engine_lazy_imports(Path('/opt/wan22'))"
 _diony_host_wan_pip
+echo COSYVOICE_RUNTIME_START
 COSY_RUNTIME=/diony/vault/runtime/cosyvoice
 COSY_ROOT="$COSY_RUNTIME/CosyVoice"
 COSY_PY="$COSY_RUNTIME/venv/bin/python"
@@ -1000,6 +1269,7 @@ PY
 test -d /models/wan/Wan2.2-T2V-A14B
 test -e /models/diony/diony_sr_v1/RealESRGAN_x2.pth || ls /models/diony/diony_sr_v1/*.pth >/dev/null
 exec 9>&-
+echo PRODUCER_START
 if ! pgrep -f "diony-producer" >/dev/null 2>&1; then
   nohup env PATH="$PATH" DIONY_VAULT=/diony/vault DIONY_BIND=0.0.0.0 DIONY_WAN_REPO=/opt/wan22 \\
     DIONY_PYTHON="${{DIONY_PYTHON:-/usr/bin/python3}}" \\
@@ -1086,6 +1356,9 @@ def reset_apply() -> None:
                 "started_at": "",
                 "prepared": False,
                 "pull_skipped": False,
+                "stages": [],
+                "percent": None,
+                "stage": "",
             }
         )
         _job["log"] = []
@@ -1094,6 +1367,14 @@ def reset_apply() -> None:
 
 def _fake_ok(hosts: list[str], detail: str) -> dict:
     with _lock:
+        stages = setup_stage_plan()
+        for stage in stages:
+            stage["status"] = "done"
+            stage["percent"] = 100
+            for item in stage.get("items") or []:
+                item["status"] = "done"
+                item["percent"] = 100
+                item["done"] = item.get("total") or 0
         _job.update(
             {
                 "running": False,
@@ -1103,6 +1384,9 @@ def _fake_ok(hosts: list[str], detail: str) -> dict:
                 "host": hosts[0] if hosts else "",
                 "prepared": True,
                 "pull_skipped": False,
+                "stages": stages,
+                "percent": 100,
+                "stage": "",
             }
         )
         _job["log"] = [detail]
@@ -1232,6 +1516,9 @@ def ensure_apply(
         _job["started_at"] = datetime.now(timezone.utc).isoformat()
         _job["prepared"] = False
         _job["pull_skipped"] = False
+        _job["stages"] = setup_stage_plan()
+        _job["percent"] = 0
+        _job["stage"] = ""
     thread = threading.Thread(
         target=_run_apply,
         args=(path, hosts, nas, epoch),
@@ -1260,6 +1547,9 @@ def ensure_producer(path: str, hosts: list[str], *, nas: str = "") -> dict:
         _job["host"] = hosts[0] if hosts else "spark-01"
         _job["log"] = []
         _job["started_at"] = datetime.now(timezone.utc).isoformat()
+        _job["stages"] = []
+        _job["percent"] = None
+        _job["stage"] = ""
     thread = threading.Thread(
         target=_run_producer,
         args=(path, hosts, nas, epoch),
@@ -1315,13 +1605,24 @@ def _run_apply(path: str, hosts: list[str], nas: str, epoch: int) -> None:
         if not _still(epoch):
             return
         _log("Check Site before any model pull", epoch)
+        _stage(epoch, "site", "active", "Read-only readiness probe over SSH")
         readiness: list[dict] = []
         for host in hosts or [primary]:
             result = exec_host(host, site_readiness_script(repo), timeout=90)
             readiness.append(parse_site_readiness(result))
         primary_state = readiness[0] if readiness else {}
+        _stage(epoch, "site", "done", "Site inspected")
         if primary_state.get("prepared"):
             _log("Site already prepared. Model pull skipped.", epoch)
+            for stage_id, detail in (
+                ("storage", "Already on the vault"),
+                ("python", "Already installed"),
+                ("pack", "Already on the vault"),
+                ("dedupe", "Already consolidated"),
+                ("wan", "Already installed"),
+                ("cosyvoice", "Already installed"),
+            ):
+                _stage(epoch, stage_id, "skipped", detail)
             if primary_state.get("producer_running") and not primary_state.get("wan_runtime"):
                 raise RuntimeError(
                     "Producer is active, but its last verified Wan runtime receipt is missing or invalid. "
@@ -1329,6 +1630,7 @@ def _run_apply(path: str, hosts: list[str], nas: str, epoch: int) -> None:
                 )
             if not primary_state.get("producer_running"):
                 if not apply_local(primary):
+                    _stage(epoch, "sync", "active", f"rsync → {primary}")
                     primed = exec_host(primary, f"mkdir -p {shlex.quote(repo)}", timeout=30)
                     if not primed.ok:
                         raise RuntimeError(
@@ -1342,6 +1644,7 @@ def _run_apply(path: str, hosts: list[str], nas: str, epoch: int) -> None:
                             or f"rsync to {primary}:{ssh_port()} failed. {synced.text[-800:]}"
                         )
                 _log("Repair host runtime and start Producer without pulling models", epoch)
+                _stage(epoch, "producer", "active", "Starting Producer")
                 started = exec_host(primary, producer_only_script(repo, nas), timeout=600)
                 if not started.ok or "APPLY_OK" not in (started.stdout or ""):
                     raise RuntimeError(started.text[-2000:] or "Could not start Producer")
@@ -1353,6 +1656,7 @@ def _run_apply(path: str, hosts: list[str], nas: str, epoch: int) -> None:
                     replicated = exec_host(primary, replicate_script(host), timeout=7200)
                     if not replicated.ok:
                         raise RuntimeError(replicated.text[-1200:] or f"Could not replicate models to {host}")
+            _finish_stages(epoch)
             _commit_job(
                 epoch,
                 ok=True,
@@ -1368,6 +1672,7 @@ def _run_apply(path: str, hosts: list[str], nas: str, epoch: int) -> None:
             _log("Diony-Enterprise HF Token is empty. Gated Hugging Face pulls will fail.", epoch)
         if not apply_local(primary):
             _log(f"Sync repo → {primary}:{repo}", epoch)
+            _stage(epoch, "sync", "active", f"rsync → {primary}:{repo}")
             primed = exec_host(primary, f"mkdir -p {shlex.quote(repo)} /models /workspace", timeout=30)
             if not _still(epoch):
                 return
@@ -1391,8 +1696,10 @@ def _run_apply(path: str, hosts: list[str], nas: str, epoch: int) -> None:
         if not _still(epoch):
             return
         _log("Mount vault, pull pack + Wan2.2 + diony_sr_v1, install, start Producer", epoch)
+        _stage(epoch, "sync", "done", "Repo on the host")
         timeout = int(os.environ.get("DIONY_APPLY_TIMEOUT", "21600"))
         def progress(line: str) -> None:
+            _stage_line(line, epoch)
             detail = apply_progress_text(line)
             if detail:
                 _log(detail, epoch)
@@ -1419,6 +1726,7 @@ def _run_apply(path: str, hosts: list[str], nas: str, epoch: int) -> None:
             if not _still(epoch):
                 return
         _log("Pack applied. Test GPU on Ready.", epoch)
+        _finish_stages(epoch)
         _commit_job(
             epoch,
             ok=True,
@@ -1429,6 +1737,7 @@ def _run_apply(path: str, hosts: list[str], nas: str, epoch: int) -> None:
         )
     except Exception as exc:  # noqa: BLE001 — apply must surface the miss
         err = apply_exception_text(exc)
+        _fail_stages(epoch, err)
         if not _commit_job(epoch, ok=False, running=False, error=err, detail=err):
             return
         _log(f"FAIL {err}", epoch)

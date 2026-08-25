@@ -392,6 +392,7 @@ class ProvisioningService:
                 "connection": None,
                 "inspection": None,
                 "events": [],
+                "progress": {},
                 "error": "",
                 "handed_off": False,
                 "handoff_url": "",
@@ -737,17 +738,21 @@ class ProvisioningService:
             self._event("Validation + setup", "Diony is completing the detected site.", "active")
             return self.public()
 
-    def mark_existing_progress(self, detail: str) -> dict[str, Any]:
+    def mark_existing_progress(self, detail: str, progress: dict[str, Any] | None = None) -> dict[str, Any]:
         with self._lock:
             clean = self._sanitize(detail) or "Diony is completing the detected site."
             self._state["detail"] = clean
+            if progress is not None:
+                self._state["progress"] = copy.deepcopy(progress)
             if self._state["events"]:
                 self._state["events"][-1].update({"status": "active", "detail": clean})
             return self.public()
 
-    def mark_existing_attention(self, detail: str) -> dict[str, Any]:
+    def mark_existing_attention(self, detail: str, progress: dict[str, Any] | None = None) -> dict[str, Any]:
         with self._lock:
             self._state.update({"status": "attention", "detail": self._sanitize(detail), "error": self._sanitize(detail)})
+            if progress is not None:
+                self._state["progress"] = copy.deepcopy(progress)
             if self._state["events"]:
                 self._state["events"][-1].update({"status": "failed", "detail": self._sanitize(detail)})
             return self.public()
@@ -767,6 +772,15 @@ class ProvisioningService:
             )
             if self._state["events"]:
                 self._state["events"][-1].update({"status": "passed", "detail": "Site signed. Continue to Producer."})
+            progress = self._state.get("progress") or {}
+            if isinstance(progress, dict) and progress.get("stages"):
+                for stage in progress["stages"]:
+                    if stage.get("status") not in {"done", "skipped"}:
+                        stage["status"] = "done"
+                        stage["percent"] = 100
+                progress["percent"] = 100
+                progress["running"] = False
+                progress["stage"] = ""
             self._hf_token = ""
             return self.public()
 

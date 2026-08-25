@@ -29,6 +29,7 @@ from diony_wizard.apply import (
     hf_token_set,
     load_hf_token,
     public_apply,
+    public_progress,
     reset_apply,
     retry_apply,
     should_apply,
@@ -615,6 +616,7 @@ def _adopt_existing_compute(existing: dict) -> dict:
         existing=True,
     )
     _provisioner.mark_existing_validating()
+    _provisioner.mark_existing_progress("", public_progress())
     payload = _state()
     payload["provision"] = _provisioner.public()
     return payload
@@ -630,13 +632,13 @@ def provision_existing_finalize() -> dict:
     apply = public_apply()
     if apply.get("running"):
         detail = str(apply.get("detail") or "Diony is completing the detected site.")
-        current = _provisioner.mark_existing_progress(detail)
+        current = _provisioner.mark_existing_progress(detail, public_progress(apply))
         payload = _state()
         payload["provision"] = current
         return payload
     if not apply.get("ok"):
         detail = str(apply.get("error") or apply.get("detail") or "Existing compute setup did not complete.")
-        _provisioner.mark_existing_attention(detail)
+        _provisioner.mark_existing_attention(detail, public_progress(apply))
         payload = _state()
         payload["provision"] = _provisioner.public()
         return payload
@@ -692,8 +694,7 @@ def provision_existing_retry() -> dict:
         workbook=_workbook,
     )
     _provisioner.mark_existing_validating()
-    if job.get("detail"):
-        _provisioner.mark_existing_progress(str(job["detail"]))
+    _provisioner.mark_existing_progress(str(job.get("detail") or ""), public_progress(job))
     payload = _state()
     payload["provision"] = _provisioner.public()
     return payload

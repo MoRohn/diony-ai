@@ -1606,8 +1606,108 @@ function provisionStatusView(next = {}) {
     : failed
       ? "Action required"
       : `${passed} of ${total} ${total === 1 ? "check" : "checks"} complete`;
-  const indeterminate = working && ["provider_boot", "validating_existing", "studio_handoff", "existing_connection"].includes(next.checkpoint);
+  let indeterminate = working && ["provider_boot", "validating_existing", "studio_handoff", "existing_connection"].includes(next.checkpoint);
+  const stageProgress = next.progress && Array.isArray(next.progress.stages) && next.progress.stages.length ? next.progress : null;
+  if (stageProgress && next.checkpoint === "validating_existing" && !complete) {
+    const percent = Number(stageProgress.percent);
+    if (Number.isFinite(percent)) {
+      const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+      const activeStage = stageProgress.stages.find((stage) => stage.status === "active" || stage.status === "failed");
+      return {
+        state,
+        label,
+        detail,
+        count: failed ? "Action required" : `${clamped}% · ${activeStage ? activeStage.label : "Setup"}`,
+        progress: clamped,
+        working,
+        indeterminate: false,
+      };
+    }
+  }
   return { state, label, detail, count, progress, working, indeterminate };
+}
+
+function formatElapsed(startedAt) {
+  const started = Date.parse(String(startedAt || ""));
+  if (!Number.isFinite(started)) return "";
+  const seconds = Math.max(0, Math.floor((Date.now() - started) / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  if (hours) return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+  return `${minutes}m ${String(rest).padStart(2, "0")}s`;
+}
+
+function stagePercentText(stage) {
+  const status = stage.status || "pending";
+  if (status === "done") return "100%";
+  if (status === "skipped") return "Skipped";
+  if (status === "failed") return "Failed";
+  const percent = stage.percent == null ? NaN : Number(stage.percent);
+  if (Number.isFinite(percent)) return `${Math.max(0, Math.min(100, Math.round(percent)))}%`;
+  return status === "active" ? "…" : "";
+}
+
+function renderStageItem(item) {
+  const status = item.status || "pending";
+  const percent = item.percent != null && Number.isFinite(Number(item.percent)) ? Math.max(0, Math.min(100, Math.round(Number(item.percent)))) : status === "done" ? 100 : 0;
+  const total = Number(item.total) || 0;
+  const done = status === "done" ? total : Number(item.done) || 0;
+  const files = total ? `${done}/${total} ${total === 1 ? "file" : "files"}` : "";
+  const percentText = status === "skipped" ? "Skipped" : status === "pending" ? "" : `${percent}%`;
+  return `<li class="provision-stage-item" data-state="${escapeHtml(status)}"><span class="provision-stage-item-label">${escapeHtml(
+    item.label || item.id || ""
+  )}</span><span class="provision-stage-item-files">${escapeHtml(files)}</span><span class="provision-stage-item-pct">${escapeHtml(
+    percentText
+  )}</span><span class="provision-stage-item-track"><i style="--stage-progress:${percent}%"></i></span></li>`;
+}
+
+function renderStage(stage) {
+  const status = stage.status || "pending";
+  const percent = stage.percent == null ? NaN : Number(stage.percent);
+  const hasPercent = Number.isFinite(percent);
+  const width = status === "done" || status === "skipped" ? 100 : hasPercent ? Math.max(0, Math.min(100, Math.round(percent))) : 0;
+  const indeterminate = status === "active" && !hasPercent;
+  const items = Array.isArray(stage.items) ? stage.items : [];
+  const showItems = items.length > 0 && (status === "active" || status === "failed");
+  const summary = items.length && status === "done"
+    ? `${items.length} ${items.length === 1 ? "model" : "models"} ready`
+    : items.length && status === "skipped"
+      ? `${items.length} ${items.length === 1 ? "model" : "models"} already on the vault`
+      : stage.detail || "";
+  return `<li class="provision-stage" data-state="${escapeHtml(status)}"${status === "active" ? ' aria-current="step"' : ""}>
+    <span class="provision-stage-dot" aria-hidden="true"></span>
+    <span class="provision-stage-label"><strong>${escapeHtml(stage.label || stage.id || "")}</strong><small>${escapeHtml(summary)}</small></span>
+    <span class="provision-stage-pct">${escapeHtml(stagePercentText(stage))}</span>
+    <span class="provision-stage-track${indeterminate ? " is-indeterminate" : ""}" role="progressbar" aria-label="${escapeHtml(stage.label || "")}" aria-valuemin="0" aria-valuemax="100"${indeterminate ? "" : ` aria-valuenow="${width}"`}><span style="--stage-progress:${width}%"></span></span>
+    ${showItems ? `<ol class="provision-stage-items">${items.map(renderStageItem).join("")}</ol>` : ""}
+  </li>`;
+}
+
+function paintProvisionStages(next) {
+  const panel = document.getElementById("provision-stages");
+  const list = document.getElementById("provision-stage-list");
+  if (!panel || !list) return;
+  const progress = next && next.progress && typeof next.progress === "object" ? next.progress : {};
+  const stages = Array.isArray(progress.stages) ? progress.stages : [];
+  const show = stages.length > 0 && ["validating_existing", null, undefined, ""].includes(next.checkpoint);
+  panel.hidden = !show;
+  panel.classList.toggle("hidden", !show);
+  if (!show) {
+    list.innerHTML = "";
+    return;
+  }
+  const percent = Number.isFinite(Number(progress.percent)) ? Math.max(0, Math.min(100, Math.round(Number(progress.percent)))) : 0;
+  const active = stages.find((stage) => stage.status === "active" || stage.status === "failed");
+  const doneCount = stages.filter((stage) => stage.status === "done" || stage.status === "skipped").length;
+  panel.dataset.state = active && active.status === "failed" ? "failed" : percent >= 100 ? "complete" : progress.running || active ? "working" : "waiting";
+  setText(document.getElementById("provision-stages-percent"), `${percent}%`);
+  setText(
+    document.getElementById("provision-stages-stage"),
+    active ? `${active.status === "failed" ? "Stopped at" : "Now"} · ${active.label}` : percent >= 100 ? `${doneCount} of ${stages.length} stages complete` : "Waiting to start"
+  );
+  setText(document.getElementById("provision-stages-elapsed"), progress.running && progress.started_at ? `Elapsed ${formatElapsed(progress.started_at)}` : "");
+  list.innerHTML = stages.map(renderStage).join("");
 }
 
 function paintProvisionStatus(next) {
@@ -1713,6 +1813,7 @@ function paintProvisioning(next) {
   const standaloneError = normalizedError && normalizedError !== normalizedDetail ? normalizedError : "";
   setProvisionError(standaloneError);
 
+  paintProvisionStages(next);
   const timeline = document.getElementById("provision-timeline");
   if (timeline) {
     timeline.innerHTML = (next.events || [])

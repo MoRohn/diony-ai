@@ -13,7 +13,7 @@
       href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/app.css?v=brand13" />
+    <link rel="stylesheet" href="/static/app.css?v=brand14" />
     <link rel="stylesheet" href="/static/folio.css?v=brand3" />
   </head>
   <body data-product-surface="studio" data-step="path" data-entry="loading">
@@ -255,6 +255,17 @@
                     </div>
                   </div>
                 </div>
+                <section id="provision-stages" class="provision-stages hidden" hidden aria-label="Setup stages">
+                  <div class="provision-stages-head">
+                    <strong>Setup progress</strong>
+                    <div class="provision-stages-meta">
+                      <span id="provision-stages-stage">Waiting</span>
+                      <span id="provision-stages-elapsed"></span>
+                      <b id="provision-stages-percent">0%</b>
+                    </div>
+                  </div>
+                  <ol id="provision-stage-list" class="provision-stage-list"></ol>
+                </section>
                 <ol id="provision-timeline" class="provision-timeline"></ol>
                 <form id="provision-form" class="provision-form"></form>
                 <p id="provision-error" class="err" role="alert"></p>
@@ -344,6 +355,6 @@
         </div>
       </form>
     </dialog>
-    <script src="/static/app.js?v=brand13"></script>
+    <script src="/static/app.js?v=brand14"></script>
   </body>
 </html>

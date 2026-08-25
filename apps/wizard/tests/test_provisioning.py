@@ -315,7 +315,7 @@ def test_connect_page_reports_waiting_working_ready_and_attention_states() -> No
     css = client.get("/static/app.css").text
     js = client.get("/static/app.js").text
 
-    assert '/static/app.js?v=brand13' in html
+    assert '/static/app.js?v=brand14' in html
     assert 'id="provision-live-status"' in html
     assert 'id="provision-live-label"' in html
     assert 'id="provision-live-detail"' in html

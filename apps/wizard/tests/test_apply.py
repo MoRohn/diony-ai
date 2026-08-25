@@ -824,3 +824,64 @@ def test_summarize_traceback_leads_with_the_exception() -> None:
     assert summarize_traceback(text) == (
         "OSError: [Errno 28] No space left on device — raised in src/diony_wan/runner.py line 40."
     )
+
+
+def test_setup_stage_tracker_reports_weighted_percentages() -> None:
+    from diony_wizard.apply import apply_stage_event, setup_percent, setup_stage_plan
+
+    plan = setup_stage_plan()
+    assert [stage["id"] for stage in plan] == [
+        "site", "sync", "storage", "python", "pack", "dedupe", "wan", "cosyvoice", "producer",
+    ]
+    pack = next(stage for stage in plan if stage["id"] == "pack")
+    assert {item["label"] for item in pack["items"]} >= {"Wan2.2-Animate-14B", "DeepSeek-V4-Flash-0731", "Real-ESRGAN"}
+    assert setup_percent(plan) == 0
+
+    assert apply_stage_event("HF_PROGRESS Wan-AI/Wan2.2-Animate-14B 438/444") == {
+        "stage": "pack",
+        "status": "active",
+        "item": "Wan-AI/Wan2.2-Animate-14B",
+        "item_status": "active",
+        "done": 438,
+        "total": 444,
+        "detail": "Downloading Wan2.2-Animate-14B · 438/444 files",
+    }
+    assert apply_stage_event("WAN_HOST_PYTHON_OK") == {"stage": "wan", "status": "done", "detail": "Wan host runtime ready"}
+    assert apply_stage_event("COSYVOICE_RUNTIME_START") == {
+        "stage": "cosyvoice", "status": "active", "detail": "Preparing the CosyVoice2 runtime",
+    }
+    assert apply_stage_event("Fetching 444 files: 99%|███| 439/444") is None
+
+    for stage in plan[:4]:
+        stage["status"] = "done"
+        stage["percent"] = 100
+    pack["status"] = "active"
+    pack["percent"] = 50
+    assert setup_percent(plan) == round((2 + 3 + 3 + 3 + 55 * 0.5) / 97 * 100)
+    for stage in plan:
+        stage["status"] = "done"
+    assert setup_percent(plan) == 100
+
+
+def test_fake_apply_exposes_complete_progress(monkeypatch, tmp_path) -> None:
+    from diony_wizard.apply import public_progress
+
+    monkeypatch.setenv("DIONY_APPLY_FAKE", "1")
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path))
+    reset_apply()
+    ensure_apply("b200", ["10.0.0.9"], nas="/workspace")
+    progress = public_progress()
+    assert progress["percent"] == 100
+    assert progress["running"] is False
+    assert all(stage["status"] == "done" for stage in progress["stages"])
+    assert progress["stages"][4]["items"][0]["percent"] == 100
+
+
+def test_remote_setup_script_emits_stage_markers(monkeypatch) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    script = remote_setup_script("/opt/diony-ai", "/workspace")
+    order = ["echo PY_RUNTIME_START", "echo HF_START", "echo WAN_RUNTIME_START", "echo COSYVOICE_RUNTIME_START", "echo PRODUCER_START", "echo APPLY_OK"]
+    positions = [script.find(marker) for marker in order]
+    assert all(pos >= 0 for pos in positions), positions
+    assert positions == sorted(positions)
