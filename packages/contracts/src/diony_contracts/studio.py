@@ -275,6 +275,7 @@ def _sample_recipes(kind: CustomerKind, seconds: int) -> list[dict]:
     recipes: list[dict] = []
     for index, frames in enumerate(durations):
         rec = dict(pool[min(index, 1)])
+        rec["hero"] = False
         if index == 0:
             rec["slug"] = "SAMPLE — DEFINING IMAGE"
         elif index == len(durations) - 1:
@@ -359,6 +360,7 @@ def _recipes(kind: CustomerKind) -> list[dict]:
             "camera_move": CameraMove.DOLLY_IN,
             "engine": Engine.I2V_A14B,
             "audio": None,
+            "hero": True,
         },
         {
             "slug": "INSERT — THE OBJECT THAT MATTERS",
@@ -392,6 +394,7 @@ def _recipes(kind: CustomerKind) -> list[dict]:
             "camera_move": CameraMove.STATIC,
             "engine": Engine.S2V_14B,
             "audio": True,
+            "hero": True,
         },
         {
             "slug": "BUTTON — LAST IMAGE",
@@ -408,6 +411,7 @@ def _recipes(kind: CustomerKind) -> list[dict]:
     if kind == CustomerKind.COMMERCIAL:
         base[2]["slug"] = "HERO — PRODUCT LOCK"
         base[2]["engine"] = Engine.I2V_A14B
+        base[2]["hero"] = True
         base[4]["slug"] = "TALENT TO CAMERA — CLAIM"
     if kind == CustomerKind.MUSIC_VIDEO:
         base[4]["slug"] = "PERFORMANCE — LIPSYNC CHORUS"
@@ -1372,6 +1376,7 @@ def expand_idea(
                     for turn_index, line in enumerate(spoken_lines)
                 ],
                 overlap_frames=overlap_frames,
+                hero=bool(rec.get("hero")),
             )
         _install_wan_prompt_plan(
             planned_shot,

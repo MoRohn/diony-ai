@@ -1271,3 +1271,106 @@ def test_auto_retake_prefers_the_directive_and_jumps_the_seed(tmp_path, monkeypa
     second = farm_module.auto_retake_for_qc_failure(project, retry)
     assert second is not None
     assert calls["repair"] == 1
+
+
+def test_select_hero_print_scores_candidates_and_keeps_ties_deterministic(
+    tmp_path, monkeypatch
+) -> None:
+    from diony_producer import farm as farm_module
+
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
+    project = expand_idea(
+        Brief(
+            idea="A courier delivers a letter that rewrites the city map.",
+            customer_kind="feature",
+            target_minutes=0.5,
+        )
+    )
+    shot = project.shots[1]
+    assert shot.hero is True
+    first = farm_module.new_generation_take(project, shot, attempt=1, live=True)
+    second = farm_module.new_generation_take(project, shot, attempt=2, live=True)
+    assert first.seed != second.seed
+    project.takes = [first, second]
+    shot.selected_take_id = first.id
+
+    # A passing sibling beats a failed print.
+    first.qc.verdict = QCVerdict.FAIL
+    second.qc.verdict = QCVerdict.PASS
+    best = farm_module.select_hero_print(project, shot)
+    assert best.id == second.id
+    assert shot.selected_take_id == second.id
+
+    # With equal verdicts, the stronger measured identity wins.
+    first.qc.verdict = QCVerdict.PASS
+    first.qc.reference_similarity = 0.91
+    second.qc.reference_similarity = 0.84
+    best = farm_module.select_hero_print(project, shot)
+    assert best.id == first.id
+
+    # A dead tie stays deterministic: the earlier attempt keeps the print.
+    second.qc.reference_similarity = 0.91
+    best = farm_module.select_hero_print(project, shot)
+    assert best.id == first.id
+
+
+def test_live_roll_queues_two_candidates_for_hero_shots_only(tmp_path, monkeypatch) -> None:
+    from fastapi.testclient import TestClient
+
+    import sys
+
+    from diony_producer.app import app
+
+    app_module = sys.modules["diony_producer.app"]
+
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setattr(app_module, "live_camera", lambda: True)
+    monkeypatch.setattr(app_module, "enter_farm", lambda: None)
+    queued_batches = []
+    monkeypatch.setattr(
+        app_module, "start_farm", lambda project, takes: queued_batches.append(list(takes))
+    )
+    client = TestClient(app)
+    client.post("/api/reset")
+    opened = client.post(
+        "/api/studio/open",
+        json={
+            "idea": "A lighthouse keeper paints the fog the color of warnings.",
+            "customer_kind": "feature",
+            "target_minutes": 0.5,
+        },
+    )
+    assert opened.status_code == 200
+    shots = opened.json()["shots"]
+    hero_ids = {shot["id"] for shot in shots if shot["hero"]}
+    assert hero_ids  # the coverage pool flags face-critical recipes
+
+    rolled = client.post("/api/studio/roll")
+    assert rolled.status_code == 200
+    takes = rolled.json()["takes"]
+    per_shot: dict[str, int] = {}
+    for take in takes:
+        per_shot[take["shot_id"]] = per_shot.get(take["shot_id"], 0) + 1
+    for shot in shots:
+        assert per_shot[shot["id"]] == (2 if shot["id"] in hero_ids else 1)
+    # Candidate seeds differ within each hero pair.
+    for shot_id in hero_ids:
+        seeds = [take["seed"] for take in takes if take["shot_id"] == shot_id]
+        assert len(set(seeds)) == 2
+
+    # The kill switch returns hero shots to single-take.
+    monkeypatch.setenv("DIONY_HERO_CANDIDATES", "0")
+    client.post("/api/reset")
+    client.post(
+        "/api/studio/open",
+        json={
+            "idea": "A lighthouse keeper paints the fog the color of warnings.",
+            "customer_kind": "feature",
+            "target_minutes": 0.5,
+        },
+    )
+    rolled = client.post("/api/studio/roll")
+    takes = rolled.json()["takes"]
+    assert len(takes) == len(shots)

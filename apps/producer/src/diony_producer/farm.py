@@ -622,6 +622,58 @@ def new_generation_take(
     )
 
 
+def hero_candidates_enabled() -> bool:
+    return os.environ.get("DIONY_HERO_CANDIDATES", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _candidate_score(take: Take) -> tuple:
+    """Order hero candidates by measured quality; deterministic tie-breaks."""
+    qc = take.qc
+    if qc is None:
+        return (-1, 0.0, 0.0, 0.0, 0.0, -take.attempt)
+    verdict_rank = {QCVerdict.PASS: 2, QCVerdict.WARN: 1, QCVerdict.FAIL: 0}.get(qc.verdict, 0)
+    reference = qc.reference_similarity
+    if reference is None and qc.reference_similarities:
+        reference = min(qc.reference_similarities.values())
+    return (
+        verdict_rank,
+        round(reference or 0.0, 4),
+        -(qc.temporal_residual_p95 or 0.0),
+        -(qc.flicker_luma_p95 or 0.0),
+        qc.temporal_delta_p95 or 0.0,
+        -take.attempt,
+    )
+
+
+def select_hero_print(project: Project, shot) -> Take:
+    """Score every landed generation candidate and make the best one the print."""
+    candidates = [
+        item
+        for item in project.takes_for(shot.id)
+        if item.origin == TakeOrigin.GENERATION and item.qc is not None
+    ]
+    if not candidates:
+        raise RuntimeError(f"{shot.id} has no landed candidates to select from")
+    best = max(candidates, key=_candidate_score)
+    if shot.selected_take_id != best.id:
+        previous = shot.selected_take_id
+        shot.selected_take_id = best.id
+        assemble_program(project)
+        persist_project(project)
+        record_activity(
+            "qc",
+            f"{shot.id} · hero print selected: {best.id}"
+            + (f" over {previous}" if previous else ""),
+            shot_id=shot.id,
+        )
+    return best
+
+
 def _auto_retake_quality_failure(take: Take) -> bool:
     qc = take.qc
     if qc is None or qc.verdict != QCVerdict.FAIL:
@@ -2005,6 +2057,22 @@ def start_farm(project: Project, takes: list[Take]) -> None:
                         _error = ""
                         _detail = f"B200 acceleration active · {take.id} verified"
                     continue
+                landed_shot = project.shot(take.shot_id)
+                if landed_shot.hero:
+                    with _lock:
+                        sibling_pending = any(
+                            item.shot_id == take.shot_id for item in _pending
+                        )
+                    if sibling_pending:
+                        # The sibling candidate is still queued; selection and
+                        # any retake decision wait until both have landed.
+                        with _lock:
+                            _done += 1
+                            _error = ""
+                            _detail = f"Hero candidate {take.id} landed · awaiting sibling"
+                        continue
+                    take = select_hero_print(project, landed_shot)
+                    integrity_error = _take_integrity_error(take)
                 retry = auto_retake_for_qc_failure(project, take)
                 with _lock:
                     if retry is not None:

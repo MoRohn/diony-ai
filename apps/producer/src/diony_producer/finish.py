@@ -23,20 +23,28 @@ from diony_producer.vault import persist_project, record_activity, vault_root
 try:
     from diony_finish.pipeline import (
         FinishError,
+        PostSRQCError,
         finish_clip,
         finished_media_has_picture,
         media_frame_count,
         stitch_masters,
         verify_finished_media,
+        verify_post_sr,
     )
 except ImportError:  # producer installed without finish package
     FinishError = RuntimeError  # type: ignore[misc, assignment]
+
+    class PostSRQCError(RuntimeError):  # type: ignore[no-redef]
+        pass
 
     def finish_clip(**kwargs):  # type: ignore[no-untyped-def]
         raise FinishError("diony-finish is not installed")
 
     def media_frame_count(path):  # type: ignore[no-untyped-def]
         return 0
+
+    def verify_post_sr(negative, master, *, label="post-SR QC"):  # type: ignore[no-untyped-def]
+        raise FinishError(f"{label} cannot run because diony-finish is not installed")
 
     def stitch_masters(**kwargs):  # type: ignore[no-untyped-def]
         raise FinishError("diony-finish is not installed")
@@ -304,6 +312,9 @@ def _finish_one(project: Project, take: Take) -> None:
         raise FinishError(f"1080 master missing for {take.id}")
     if _visual_qc_required():
         verify_finished_media(dest, label=f"1080 finish for {take.id}")
+        # Blueprint 06/19: the finish may not add identity drift or temporal
+        # boil the negative does not have. A violation holds this take only.
+        verify_post_sr(src, dest, label=f"post-SR QC for {take.id}")
     digest = _sha256_file(dest)
     measured_frames = media_frame_count(dest) if _visual_qc_required() else 0
     _attach_1080(
@@ -459,6 +470,17 @@ def start_finish(project: Project, takes: list[Take]) -> None:
                     if finish_cancelled(token):
                         break
                     message = str(exc).strip()[:800] or "1080 finish failed"
+                    if isinstance(exc, PostSRQCError):
+                        # A per-take quality verdict, not a model failure: this
+                        # take stays unfinished and blocks final readiness, but
+                        # the rest of the queue keeps finishing.
+                        with _lock:
+                            _done += 1
+                            _error = message
+                            _detail = message
+                        persist_project(project)
+                        record_activity("sr", message, level="fail", shot_id=take.shot_id)
+                        continue
                     with _lock:
                         _error = message
                         _detail = message

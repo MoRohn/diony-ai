@@ -415,6 +415,9 @@ class Shot(BaseModel):
     dialogue_turns: list[DialogueTurn] = Field(default_factory=list, max_length=32)
     overlap_frames: int = 8
     max_takes: int = 4
+    # Hero-class coverage (face/identity-critical) rolls two seed candidates
+    # and the AutoQC scores pick the print; everything else stays single-take.
+    hero: bool = False
     selected_take_id: str | None = None
 
     @field_validator("duration_frames")

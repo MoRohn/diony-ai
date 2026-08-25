@@ -75,6 +75,7 @@ from diony_producer.farm import (
     clear_production_pause,
     enter_farm,
     farm_status,
+    hero_candidates_enabled,
     new_generation_take,
     reset_farm,
     request_pause_after_current,
@@ -938,6 +939,12 @@ def roll_dailies() -> dict:
         take = _generation_take(shot)
         _project.takes.append(take)
         queued.append(take)
+        if shot.hero and live_camera() and hero_candidates_enabled():
+            # Hero-class coverage rolls a second seed candidate; AutoQC scores
+            # pick the print once both land.
+            sibling = _generation_take(shot, attempt=2)
+            _project.takes.append(sibling)
+            queued.append(sibling)
     warning = enter_farm() if live_camera() else None
     if warning and _project.shots:
         _project.notes.append(

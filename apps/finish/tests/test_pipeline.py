@@ -561,3 +561,53 @@ def test_temporal_sr_is_a_hard_dependency_not_a_silent_downgrade() -> None:
             require_temporal_sr()
     else:
         require_temporal_sr()
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg is required")
+def test_post_sr_gate_accepts_a_faithful_finish_and_rejects_added_boil(tmp_path) -> None:
+    import json as json_module
+
+    from diony_finish.pipeline import PostSRQCError, measure_post_sr, verify_post_sr
+
+    ffmpeg = shutil.which("ffmpeg")
+    negative = tmp_path / "negative_720.mp4"
+    subprocess.run(
+        [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc2=s=1280x720:r=24:d=2",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(negative),
+        ],
+        check=True,
+    )
+    faithful = tmp_path / "finish_faithful.mov"
+    subprocess.run(
+        [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(negative),
+            "-vf", "scale=1920:1080:flags=bicubic",
+            "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", str(faithful),
+        ],
+        check=True,
+    )
+    receipt = verify_post_sr(negative, faithful, label="post-SR QC test")
+    assert receipt["identity_ssim"] is None or receipt["identity_ssim"] >= 0.75
+    assert receipt["boil_ratio"] <= 2.5
+    stored = json_module.loads(
+        (faithful.parent / (faithful.name + ".post-sr.json")).read_text()
+    )
+    assert stored["measurement_version"] == "diony-post-sr-v1"
+
+    boiling = tmp_path / "finish_boiling.mov"
+    subprocess.run(
+        [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(negative),
+            "-vf", "scale=1920:1080:flags=bicubic,noise=alls=40:allf=t+u",
+            "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", str(boiling),
+        ],
+        check=True,
+    )
+    measured = measure_post_sr(negative, boiling)
+    assert measured["boil_ratio"] > receipt["boil_ratio"]
+    with pytest.raises(PostSRQCError):
+        verify_post_sr(negative, boiling, label="post-SR QC test")

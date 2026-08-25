@@ -329,9 +329,28 @@ failed checks, stable references, and recommended repair route.
 - 1920×1080 exact raster and project cadence;
 - no illegal stretch, 1920×1088 leak, or odd conform;
 - Rec.709 luma/chroma legal;
-- no new SR identity drift, edge ringing, temporal boil, or grain shimmer;
+- no new SR identity drift, edge ringing, temporal boil, or grain shimmer —
+  measured (`diony-post-sr-v1`): a mid-clip finished frame must hold SSIM
+  ≥ `DIONY_POST_SR_SSIM_MIN` (default 0.75) against its own bicubic-upscaled
+  negative, and the finished proxy's high-frequency temporal energy may not
+  exceed `DIONY_SR_BOIL_RATIO_MAX` (default 2.5×) the negative's; the receipt
+  is written beside the master. A violation holds **that take only** — the
+  rest of the finish queue keeps running while model/checkpoint failures
+  remain terminal for the run;
 - frame count, handles, and timeline duration reconcile;
 - decoded media is playable and checksum is stored.
+
+### Hero candidate takes
+
+Hero-class coverage (face/identity-critical recipes — the character lock and
+the dialogue beauty beat; the commercial product lock) rolls **two seed
+candidates** on a live camera, and the AutoQC scores select the print once
+both land: verdict rank first, then measured reference identity, temporal
+coherence, flicker, and motion, with deterministic tie-breaks. Both candidates
+count against the four-generation Take cap; retake decisions wait until the
+candidate pair has landed and apply to the selected print. Samples never roll
+candidates (the 5–10s promise stays fast), and `DIONY_HERO_CANDIDATES=0` is
+the site kill switch.
 
 ### Audio parity
 

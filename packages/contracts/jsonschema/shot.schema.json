@@ -377,6 +377,11 @@
       "title": "Max Takes",
       "type": "integer"
     },
+    "hero": {
+      "default": false,
+      "title": "Hero",
+      "type": "boolean"
+    },
     "selected_take_id": {
       "anyOf": [
         {

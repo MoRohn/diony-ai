@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import itertools
 import re
@@ -258,6 +259,151 @@ def _tile_sr(model, device, frame, *, tile: int | None = None) -> object:
     sr = (out / weight.clamp(min=1e-6)).clamp(0, 1)[0]
     arr = (sr.detach().cpu().numpy().transpose(1, 2, 0) * 255.0).clip(0, 255).astype(np.uint8)
     return arr[: h * SR_SCALE, : w * SR_SCALE]
+
+
+POST_SR_MEASUREMENT_VERSION = "diony-post-sr-v1"
+
+
+class PostSRQCError(FinishError):
+    """The finished 1080 diverged from its own 720 negative (identity or boil)."""
+
+
+def _post_sr_thresholds() -> tuple[float, float]:
+    try:
+        ssim_min = float(os.environ.get("DIONY_POST_SR_SSIM_MIN", "0.75"))
+    except ValueError:
+        ssim_min = 0.75
+    try:
+        boil_max = float(os.environ.get("DIONY_SR_BOIL_RATIO_MAX", "2.5"))
+    except ValueError:
+        boil_max = 2.5
+    return min(0.99, max(0.5, ssim_min)), min(10.0, max(1.2, boil_max))
+
+
+def _analysis_gray_frames(path: Path):
+    """Decode a small 320x180 @ 12 fps grayscale proxy for temporal analysis."""
+    import numpy as np
+
+    process = subprocess.run(
+        [
+            _ffmpeg(),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(path),
+            "-vf",
+            "scale=320:180:flags=area,fps=12,format=gray",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "gray",
+            "pipe:1",
+        ],
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+    if process.returncode != 0:
+        raise PostSRQCError(
+            process.stderr.decode("utf-8", errors="replace")[-200:] or "post-SR proxy decode failed"
+        )
+    frame_bytes = 320 * 180
+    count = len(process.stdout) // frame_bytes
+    if count < 4:
+        raise PostSRQCError("post-SR proxy decoded too few frames")
+    return np.frombuffer(process.stdout[: count * frame_bytes], dtype=np.uint8).reshape(
+        count, 180, 320
+    ).astype(np.float32) / 255.0
+
+
+def _boil_energy(frames) -> float:
+    """p95 temporal energy of the high-frequency residual — grain boil signal."""
+    import numpy as np
+
+    blurred = frames.copy()
+    blurred[:, 1:-1, :] = (frames[:, :-2, :] + frames[:, 1:-1, :] + frames[:, 2:, :]) / 3.0
+    blurred[:, :, 1:-1] = (blurred[:, :, :-2] + blurred[:, :, 1:-1] + blurred[:, :, 2:]) / 3.0
+    residual = frames - blurred
+    diffs = np.mean(np.abs(np.diff(residual, axis=0)), axis=(1, 2))
+    return float(np.percentile(diffs, 95))
+
+
+def _post_sr_identity(negative: Path, master: Path) -> float | None:
+    """SSIM of a mid-clip finished frame against its bicubic-upscaled negative."""
+    probe_seconds = 0.0
+    total = _media_frame_count(master)
+    if total > 2:
+        probe_seconds = max(0.0, (total // 2) / 24.0)
+    process = subprocess.run(
+        [
+            _ffmpeg(),
+            "-hide_banner",
+            "-nostats",
+            "-ss",
+            f"{probe_seconds:.3f}",
+            "-i",
+            str(master),
+            "-ss",
+            f"{probe_seconds:.3f}",
+            "-i",
+            str(negative),
+            "-filter_complex",
+            (
+                "[0:v]scale=1920:1080:flags=bicubic,format=gray[fin];"
+                "[1:v]scale=1920:1080:flags=bicubic,format=gray[neg];"
+                "[fin][neg]ssim=f=-"
+            ),
+            "-frames:v",
+            "1",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if process.returncode != 0:
+        return None
+    match = re.search(r"All:\s*([0-9.]+)", (process.stderr or "") + (process.stdout or ""))
+    return float(match.group(1)) if match else None
+
+
+def measure_post_sr(negative: Path, master: Path) -> dict:
+    """Measure finished-vs-negative identity and temporal boil. Never raises floors."""
+    identity = _post_sr_identity(negative, master)
+    negative_energy = _boil_energy(_analysis_gray_frames(negative))
+    master_energy = _boil_energy(_analysis_gray_frames(master))
+    boil_ratio = master_energy / max(negative_energy, 1e-5)
+    return {
+        "measurement_version": POST_SR_MEASUREMENT_VERSION,
+        "identity_ssim": round(identity, 4) if identity is not None else None,
+        "negative_boil_energy": round(negative_energy, 6),
+        "master_boil_energy": round(master_energy, 6),
+        "boil_ratio": round(boil_ratio, 4),
+    }
+
+
+def verify_post_sr(negative: Path, master: Path, *, label: str = "post-SR QC") -> dict:
+    """Blueprint 06/19: the finish may not add identity drift or temporal boil."""
+    ssim_min, boil_max = _post_sr_thresholds()
+    receipt = measure_post_sr(negative, master)
+    receipt_path = master.with_suffix(master.suffix + ".post-sr.json")
+    receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    identity = receipt["identity_ssim"]
+    if identity is not None and identity < ssim_min:
+        raise PostSRQCError(
+            f"{label}: finished frame SSIM {identity:g} against its own negative is "
+            f"below {ssim_min:g}; the finish altered the picture's identity"
+        )
+    if receipt["boil_ratio"] > boil_max:
+        raise PostSRQCError(
+            f"{label}: temporal boil ratio {receipt['boil_ratio']:g} exceeds {boil_max:g}; "
+            "the finish is adding frame-to-frame grain shimmer the negative does not have"
+        )
+    return receipt
 
 
 def require_temporal_sr() -> None:
