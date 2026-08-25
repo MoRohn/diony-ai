@@ -479,3 +479,86 @@ def test_plan_production_budget_keeps_the_roll_responsive(monkeypatch) -> None:
     assert any("planning budget" in text and level == "warn" for text, level in activity)
     assert any("refined 0/" in text for text, _ in activity)
     assert all(shot.prompt for shot in pending)
+
+
+def test_reference_locked_shots_accept_motion_refinement_under_tiered_locks(
+    monkeypatch,
+) -> None:
+    import json as json_module
+
+    from diony_contracts.models import Asset
+    from diony_contracts.models import Brief as BriefModel
+    from diony_contracts.studio import refresh_reference_shot
+
+    monkeypatch.delenv("DIONY_DRY_RUN", raising=False)
+    still = Asset(
+        id="ast-character",
+        kind="image",
+        filename="character.png",
+        mime="image/png",
+        bytes=12,
+        path="assets/ast-character/character.png",
+    )
+    project = expand_idea(
+        BriefModel(
+            idea=(
+                "Using this attached character and same background. Illustrate the character "
+                "as if they are brainstorming, being creative, producing, and directing a scene."
+            ),
+            customer_kind=CustomerKind.SERIES,
+            target_minutes=10 / 60,
+            production_kind="sample",
+            sample_seconds=10,
+            attachment_ids=[still.id],
+        ),
+        assets=[still],
+    )
+    pending = list(project.shots)
+    target = pending[1]
+    assert target.reference_lock.value == "character_and_background"
+    scene_before = target.prompt_plan.scene
+    environment_before = target.prompt_plan.environment_dynamics
+    subject_before = target.prompt_plan.subject
+
+    def responder(payload):
+        system = payload["messages"][0]["content"]
+        user = payload["messages"][1]["content"]
+        if system == brain.BIBLE_SYSTEM:
+            return "not json"
+        rows = json_module.loads(user[user.index("Shots: ") + len("Shots: ") :])
+        if system == brain.CRITIC_SYSTEM:
+            return json_module.dumps(
+                {"shots": [{"id": row["id"], "verdict": "pass"} for row in rows]}
+            )
+        return json_module.dumps(
+            {
+                "shots": [
+                    {
+                        "id": row["id"],
+                        "subject": "A completely different actor",
+                        "motion": _valid_motion(index),
+                        "scene": "A brand new invented scene with texture",
+                        "environment_dynamics": "An invented environment layer",
+                    }
+                    for index, row in enumerate(rows)
+                ]
+            }
+        )
+
+    monkeypatch.setattr(brain, "inference_live", lambda: True)
+    monkeypatch.setattr(brain, "brain_up", lambda: True)
+    monkeypatch.setattr(brain, "record_activity", lambda *a, **kw: None)
+    monkeypatch.setattr(brain.httpx, "post", _CapturePost(responder))
+
+    brain.plan_production(project, pending)
+
+    # Motion refined; the supplied pixels keep subject, scene, and environment.
+    assert "shifts weight" in target.prompt_plan.motion
+    assert target.prompt_plan.scene == scene_before
+    assert target.prompt_plan.environment_dynamics == environment_before
+    assert target.prompt_plan.subject == subject_before
+    refined_prompt = target.prompt
+
+    # The refinement survives the dispatch-time contract refresh.
+    refresh_reference_shot(project, target)
+    assert target.prompt == refined_prompt

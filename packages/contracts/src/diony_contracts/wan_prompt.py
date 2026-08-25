@@ -574,7 +574,13 @@ def validate_wan_prompt_dispatch(shot: Shot) -> list[str]:
 
 
 def repair_wan_prompt_plan(plan: WanPromptPlan, failure_notes: str) -> WanPromptPlan | None:
-    """Repair the diagnosed layer only; unknown failures require human evidence."""
+    """Repair the diagnosed layer only; unknown failures require human evidence.
+
+    A repair that appends direction can push an already-full plan past the word
+    budget. Rather than declining (which used to leave a retake with only a new
+    seed), each appending branch carries a compact fallback: the replacement
+    layers and added negative terms survive, the appended clause drops.
+    """
     notes = failure_notes.casefold()
     subject = plan.subject
     motion = plan.motion
@@ -582,6 +588,10 @@ def repair_wan_prompt_plan(plan: WanPromptPlan, failure_notes: str) -> WanPrompt
     scene = plan.scene
     environment_dynamics = plan.environment_dynamics
     negative_terms = list(plan.negative_terms)
+    compact_motion: str | None = None
+    compact_camera: str | None = None
+    compact_scene: str | None = None
+    compact_environment: str | None = None
     if any(cue in notes for cue in ("boundary continuity", "temporal jump")):
         motion = (
             "continues steadily from the previous motion toward frame right, shifts weight "
@@ -592,6 +602,7 @@ def repair_wan_prompt_plan(plan: WanPromptPlan, failure_notes: str) -> WanPrompt
             f"{plan.environment_dynamics}; preserve the incoming final-frame geometry, exposure, "
             "motion direction, and subject placement through the handoff"
         )
+        compact_environment = plan.environment_dynamics
     elif any(cue in notes for cue in ("identity", "face", "morph", "reference lock")):
         subject = (
             "The exact supplied subject with identical face or design, silhouette, proportions, "
@@ -614,6 +625,10 @@ def repair_wan_prompt_plan(plan: WanPromptPlan, failure_notes: str) -> WanPrompt
             "lips, mouth, and jaw timing without frozen or doubled mouth motion"
         )
         negative_terms.extend(("frozen lips", "late mouth motion", "doubled mouth"))
+        compact_motion = (
+            "speaks toward camera at a steady pace as each phoneme drives precise lip and jaw "
+            "timing, shifting weight before a settled hold"
+        )
     elif any(
         cue in notes
         for cue in (
@@ -635,32 +650,56 @@ def repair_wan_prompt_plan(plan: WanPromptPlan, failure_notes: str) -> WanPrompt
     elif any(cue in notes for cue in ("camera", "reframe", "unexpected zoom", "unexpected pan")):
         camera = f"{plan.camera}, one uninterrupted take with no reframing"
         negative_terms.extend(("camera jump", "unwanted cut"))
+        compact_camera = plan.camera
     elif any(cue in notes for cue in ("plastic", "airbrush", "painting", "cgi")):
         scene = f"{plan.scene}; visible material texture and natural imperfections"
         negative_terms.extend(("plastic texture", "synthetic surface"))
+        compact_scene = plan.scene
     elif any(cue in notes for cue in ("flicker", "flat background", "flat lighting", "exposure")):
         scene = f"{plan.scene}; practical lighting and exposure remain stable frame to frame"
         negative_terms.extend(("lighting flicker", "exposure pumping"))
+        compact_scene = plan.scene
     else:
         return None
-    repaired = make_wan_prompt_plan(
-        source_idea_sha256=plan.source_idea_sha256,
-        subject=subject,
-        motion=motion,
-        camera=camera,
-        scene=scene,
-        environment_dynamics=environment_dynamics,
-        identity_anchors=plan.identity_anchors,
-        high_noise_plan=plan.high_noise_plan,
-        low_noise_plan=plan.low_noise_plan,
-        generation_method=plan.generation_method,
-        audio_strategy=plan.audio_strategy,
-        quality_lora_ids=plan.quality_lora_ids,
-        continuity_risks=plan.continuity_risks,
-        negative_terms=negative_terms,
-        strategy_version=plan.strategy_version,
+    def _finalize(
+        final_motion: str,
+        final_camera: str,
+        final_scene: str,
+        final_environment: str,
+    ) -> WanPromptPlan | None:
+        candidate = make_wan_prompt_plan(
+            source_idea_sha256=plan.source_idea_sha256,
+            subject=subject,
+            motion=final_motion,
+            camera=final_camera,
+            scene=final_scene,
+            environment_dynamics=final_environment,
+            identity_anchors=plan.identity_anchors,
+            high_noise_plan=plan.high_noise_plan,
+            low_noise_plan=plan.low_noise_plan,
+            generation_method=plan.generation_method,
+            audio_strategy=plan.audio_strategy,
+            quality_lora_ids=plan.quality_lora_ids,
+            continuity_risks=plan.continuity_risks,
+            negative_terms=negative_terms,
+            strategy_version=plan.strategy_version,
+        )
+        return candidate if not candidate.diagnostics else None
+
+    repaired = _finalize(motion, camera, scene, environment_dynamics)
+    if repaired is not None:
+        return repaired
+    if all(
+        value is None
+        for value in (compact_motion, compact_camera, compact_scene, compact_environment)
+    ):
+        return None
+    return _finalize(
+        compact_motion if compact_motion is not None else motion,
+        compact_camera if compact_camera is not None else camera,
+        compact_scene if compact_scene is not None else scene,
+        compact_environment if compact_environment is not None else environment_dynamics,
     )
-    return repaired if not repaired.diagnostics else None
 
 
 def repair_wan_prompt_for_qc(shot: Shot, failure_notes: str) -> bool:

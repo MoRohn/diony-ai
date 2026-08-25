@@ -207,8 +207,17 @@ Programmatic locks win over model prose:
   output falls back atomically to the deterministic local plan — and the
   fallback is a production activity line, never a silent downgrade.
 
-Reference-locked Shots do not accept generative refinement. Literal ownership
-of the supplied pixels is more important than decorative prose.
+Reference-locked Shots accept refinement under tiered locks — literal
+ownership of the supplied pixels always wins over decorative prose:
+
+| Reference lock | DeepSeek may refine | Locked to the compiled contract |
+|---|---|---|
+| none | subject (anchors verbatim), motion, scene, environment dynamics | camera |
+| character | motion, scene | subject, environment dynamics (continuity tags), camera |
+| character_and_background | motion only | subject, scene, environment dynamics, camera |
+
+A refined locked plan survives to dispatch: the contract refresh preserves a
+current, dispatch-valid plan instead of recompiling over it.
 
 ## Negative conditioning
 

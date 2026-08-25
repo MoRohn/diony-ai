@@ -55,10 +55,12 @@ BATCH_SYSTEM = (
     "For every shot: motion names pace, direction, and body mechanics as 2-3 temporal "
     "beats with physical weight; scene names motivated light and physical texture; "
     "environment_dynamics adds subtle parallax that never competes with the subject. "
-    "Where a shot's locks mark subject locked, repeat the supplied subject exactly; "
-    "where unlocked, you may sharpen the subject but every supplied identity anchor "
-    "phrase must remain verbatim. Camera is always a production lock — never restate "
-    "or change focal length, T-stop, or the camera move. Vary phrasing across shots so "
+    "Where a shot's locks mark a field locked, repeat the supplied text exactly — "
+    "reference-locked shots keep their subject, and the strictest locks also keep "
+    "scene and environment_dynamics, because the supplied pixels own them; "
+    "where the subject is unlocked, you may sharpen it but every supplied identity "
+    "anchor phrase must remain verbatim. Camera is always a production lock — never "
+    "restate or change focal length, T-stop, or the camera move. Vary phrasing across shots so "
     "no two shots read as the same sentence. Never include production metadata, "
     "wardrobe authoring notes, or delivery-spec language. Do not mention cloud APIs."
 )
@@ -166,18 +168,41 @@ def _apply_refinement(
     *,
     allow_subject: bool = False,
 ) -> str:
+    """Apply refined layers under tiered reference locks.
+
+    NONE: subject (optionally), motion, scene, and environment dynamics.
+    CHARACTER: motion and scene; the environment layer keeps its continuity tags.
+    CHARACTER_AND_BACKGROUND: motion only — the supplied pixels own the rest.
+    """
     locked = shot.prompt_plan
-    if locked is None or shot.reference_lock != ReferenceLock.NONE:
+    if locked is None:
         return shot.prompt
+    scene_locked = shot.reference_lock == ReferenceLock.CHARACTER_AND_BACKGROUND
+    environment_locked = shot.reference_lock != ReferenceLock.NONE
     motion = candidate.get("motion")
-    scene = candidate.get("scene")
-    environment_dynamics = candidate.get("environment_dynamics")
-    if not all(isinstance(value, str) for value in (motion, scene, environment_dynamics)):
+    if not isinstance(motion, str):
         return shot.prompt
+    if shot.reference_lock == ReferenceLock.NONE and not all(
+        isinstance(candidate.get(key), str) for key in ("scene", "environment_dynamics")
+    ):
+        return shot.prompt
+    refined_scene = candidate.get("scene")
+    scene = (
+        refined_scene
+        if not scene_locked and isinstance(refined_scene, str)
+        else locked.scene
+    )
+    refined_environment = candidate.get("environment_dynamics")
+    environment_dynamics = (
+        refined_environment
+        if not environment_locked and isinstance(refined_environment, str)
+        else locked.environment_dynamics
+    )
     subject = locked.subject
     refined_subject = candidate.get("subject")
     if (
         allow_subject
+        and shot.reference_lock == ReferenceLock.NONE
         and isinstance(refined_subject, str)
         and refined_subject.strip()
         and all(
@@ -232,7 +257,7 @@ def _planning_budget_seconds() -> float:
 def expand_on_site(shot: Shot, bible: Bible) -> str:
     """Refine typed layers on site; invalid output cannot replace the local plan."""
     local = expand_shot_prompt(shot, bible)
-    if shot.prompt_plan is None or shot.reference_lock != ReferenceLock.NONE:
+    if shot.prompt_plan is None:
         return local
     if not _brain_reachable() or not brain_up():
         return local
@@ -276,6 +301,8 @@ def _shot_payload(shot: Shot) -> dict[str, object]:
         "locks": {
             "subject": shot.reference_lock != ReferenceLock.NONE,
             "camera": True,
+            "scene": shot.reference_lock == ReferenceLock.CHARACTER_AND_BACKGROUND,
+            "environment_dynamics": shot.reference_lock != ReferenceLock.NONE,
         },
     }
 
@@ -512,11 +539,7 @@ def plan_production(project: Project, shots: list[Shot]) -> None:
     outcomes land in the activity feed; compiled plans always stand as the
     validated fallback.
     """
-    pending = [
-        shot
-        for shot in shots
-        if shot.prompt_plan is not None and shot.reference_lock == ReferenceLock.NONE
-    ]
+    pending = [shot for shot in shots if shot.prompt_plan is not None]
     for shot in shots:
         # The compiled render is the guaranteed baseline for every shot,
         # including the reference-locked ones planning does not touch.

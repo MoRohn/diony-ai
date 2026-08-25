@@ -320,3 +320,42 @@ def test_prompt_plans_are_deterministic_for_the_same_idea() -> None:
     ] == [
         shot.prompt_plan.model_dump(mode="json") for shot in second.shots if shot.prompt_plan
     ]
+
+
+def test_boundary_repair_falls_back_compactly_on_a_full_locked_plan() -> None:
+    """An over-budget append must degrade to a compact repair, never to seed-only."""
+    from diony_contracts.models import Asset, Brief
+    from diony_contracts.studio import expand_idea, refresh_reference_shot
+    from diony_contracts.wan_prompt import repair_wan_prompt_for_qc
+
+    still = Asset(
+        id="ast-character",
+        kind="image",
+        filename="character.png",
+        mime="image/png",
+        bytes=12,
+        path="assets/ast-character/character.png",
+    )
+    project = expand_idea(
+        Brief(
+            idea=(
+                "Using this attached character and same background. Illustrate the character "
+                "as if they are brainstorming, being creative, producing, and directing a scene."
+            ),
+            customer_kind="series",
+            target_minutes=10 / 60,
+            production_kind="sample",
+            sample_seconds=10,
+            attachment_ids=[still.id],
+        ),
+        assets=[still],
+    )
+    shot = project.shots[1]
+    refresh_reference_shot(project, shot)
+
+    assert repair_wan_prompt_for_qc(
+        shot, "Shot boundary continuity failed (first/last SSIM 0.6100; required 0.75)."
+    )
+    assert "temporal discontinuity" in shot.negative_prompt
+    assert "without a temporal jump" in shot.prompt_plan.motion
+    assert 80 <= shot.prompt_plan.word_count <= 140
