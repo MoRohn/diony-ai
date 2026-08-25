@@ -40,7 +40,7 @@ Site is unsigned until a human picks **DGX Quad-Spark Cluster**, **Enverge DGX D
 - Active cluster profile, serving notes, vault fstab, and weight manifest as read-only files
 - A site pack on Producer (and on the signed report) so prep stays inside Studio
 - `python3 infra/health/check_cluster.py` as a laptop dry-run on the RoCE line and on the signed report
-- Live Dual-Spark/B300/B200 App apply: SSH BatchMode (`DIONY_SSH_USER`, `DIONY_SSH_PORT`, `DIONY_SSH_KEY`) or local bash on the GPU, Hugging Face pull, Wan clone, `diony-finish` install, Producer start. `HF_TOKEN` is pasted on App or Ready from https://huggingface.co/settings/tokens (Create new token +). Not stored in site.json.
+- Live Dual-Spark/B300/B200 App apply: SSH BatchMode (`DIONY_SSH_USER`, `DIONY_SSH_PORT`, `DIONY_SSH_KEY`) or local bash on the GPU, Hugging Face pull, Wan clone, `diony-finish` install, Producer start. Hugging Face auth is the Diony-Enterprise HF Token from the backend; nothing is pasted on App or Ready. Never stored in site.json.
 - Ready Test GPU: SSH + `nvidia-smi` (must match Site). If Pack is red, **Pull pack** on Ready (same SSH line). Pytest records dry-run rows. Operator click SSHes even when the desk set `DIONY_DRY_RUN=1`, unless `DIONY_PROVE_OFF=1` / `DIONY_APPLY_OFF=1`
 - A signed report only after every line is passed — Sign is the last line and writes the site lock
 - Recorded lines are reviewable; pending lines cannot be skipped
@@ -76,7 +76,7 @@ Laptop pytest and unsigned fabric stay **dry-run** (`DIONY_DRY_RUN=1`). Netplan 
 | Ready Continue blocked | Host is a real IP and Test GPU was not clicked, or a row is red | Pack red: **Pull pack** on Ready (not App Continue). Then Test GPU. Other red rows: fix SSH / GPU name / vault / Dashscope |
 | App Continue stays on App / Studio stops answering | Pack pull is hours long, and a second Continue nested-locked the apply mutex (event loop froze) | App Continue starts the pull and opens Ready. Pack progress is on Ready. Do not click Continue again on App. Hard-refresh after a Studio restart |
 | Returning to a prepared Site starts another model pull | The App line did not probe the connected node before setup | **Check Site** must run the read-only readiness probe first. A complete primary pack skips Hugging Face and reports that no pull ran. |
-| Pack red on Ready | Pull still running, no `HF_TOKEN`, or App was dry-run with no SSH | Open https://huggingface.co/settings/tokens, Create new token +, paste **HF_TOKEN** on App or Ready. Then **Pull pack**. Then Test GPU |
+| Pack red on Ready | Pull still running, or App was dry-run with no SSH | **Pull pack** (the backend's Diony-Enterprise HF Token authenticates the pull). Then Test GPU |
 | `mount: /diony/vault: permission denied` | RunPod (and similar) deny `mount --bind` onto `/diony/vault`; `ln -sfn` into an existing directory becomes `/diony/vault/workspace` | App moves the directory aside and links `/workspace` → `/diony/vault`. Product path stays `/diony/vault`. Re-run **Pull pack** |
 | `Requirement already satisfied: huggingface_hub` as Pack FAIL | Apply ran `pip install -U pip huggingface_hub` every time; pip exited non-zero after listing packages already in the venv | Skip pip when `snapshot_download` imports. Retry **Pull pack**. Hugging Face then starts. |
 | Refresh did not reset Studio | Walk, apply log, and Connect SSH port live in the Studio process | Click **Refresh** on Site, or **Start over** in the mast. Then Site → Connect with the current RunPod TCP line. A browser refresh does not clear uvicorn memory |

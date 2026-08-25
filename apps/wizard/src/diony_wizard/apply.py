@@ -16,6 +16,7 @@ from pathlib import Path
 
 from diony_contracts.cluster import cluster_root
 from diony_contracts.live import wizard_live
+from diony_wizard.enterprise import enterprise_hf_token
 from diony_wizard.prep import repo_root, vault_mount_lines
 from diony_wizard.remote import (
     apply_local,
@@ -652,7 +653,7 @@ def apply_progress_text(line: str) -> str:
 
 
 def remote_setup_script(repo: str, nas: str = "") -> str:
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN") or ""
+    token = hf_token()
     if token:
         quoted = shlex.quote(token)
         token_line = (
@@ -929,49 +930,28 @@ def should_apply(path: str | None, workbook: dict | None = None) -> bool:
     return apply_allowed(path, workbook)
 
 
+def hf_token() -> str:
+    """The Diony-Enterprise HF Token. Always the backend's own credential."""
+    return enterprise_hf_token()
+
+
 def hf_token_set() -> bool:
-    return bool(
-        os.environ.get("HF_TOKEN", "").strip()
-        or os.environ.get("HUGGING_FACE_HUB_TOKEN", "").strip()
-    )
-
-
-def hf_token_path() -> Path:
-    return cluster_root() / ".cluster" / "hf.token"
+    return bool(hf_token())
 
 
 def load_hf_token() -> None:
-    """Load a previously saved token. Never logs it."""
-    if hf_token_set():
-        return
-    try:
-        token = hf_token_path().read_text(encoding="utf-8").strip()
-    except OSError:
-        return
-    if token:
-        os.environ["HF_TOKEN"] = token
-        os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", token)
-
-
-def bind_hf_token(raw: str) -> None:
-    token = (raw or "").strip()
-    if not token or token in {"set", "••••"}:
+    """Export the Diony-Enterprise HF Token for in-process huggingface_hub calls. Never logs it."""
+    token = hf_token()
+    if not token:
         return
     os.environ["HF_TOKEN"] = token
     os.environ["HUGGING_FACE_HUB_TOKEN"] = token
-    dest = hf_token_path()
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(token + "\n", encoding="utf-8")
-    try:
-        dest.chmod(0o600)
-    except OSError:
-        pass
 
 
 def bind_hf_from_answers(answers: dict | None) -> dict:
-    """Set HF_TOKEN from the form. Strip it so workbook / site.json never store it."""
+    """Strip any pasted hf_token so workbook / site.json never store one. The backend token is used regardless."""
     data = dict(answers or {})
-    bind_hf_token(str(data.pop("hf_token", "") or ""))
+    data.pop("hf_token", None)
     return data
 
 
@@ -1165,7 +1145,7 @@ def _run_apply(path: str, hosts: list[str], nas: str, epoch: int) -> None:
             return
         _log(f"Apply on {primary} as {ssh_user()} port {ssh_port()}", epoch)
         if not hf_token_set():
-            _log("HF_TOKEN is not set on this Studio. Gated Hugging Face pulls will fail.", epoch)
+            _log("Diony-Enterprise HF Token is empty. Gated Hugging Face pulls will fail.", epoch)
         if not apply_local(primary):
             _log(f"Sync repo → {primary}:{repo}", epoch)
             primed = exec_host(primary, f"mkdir -p {shlex.quote(repo)} /models /workspace", timeout=30)

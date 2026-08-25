@@ -436,8 +436,6 @@ function paintProve() {
         hint.textContent = "Pull failed. Open Activity, then retry.";
       } else if (state?.apply?.running) {
         hint.textContent = "Preparing the Site. You can leave this page open.";
-      } else if (!state?.hf_token) {
-        hint.textContent = "Add a token from huggingface.co/settings/tokens, then pull the missing pack.";
       } else if (packRowMissing()) {
         hint.textContent = "Pack missing. Pull it, then test again.";
       } else if (state?.prove?.ok) {
@@ -817,14 +815,11 @@ function paintField(field, answers, interactive) {
     return wrap;
   }
   input = document.createElement("input");
-  input.type = field.kind === "password" || field.id === "hf_token" ? "password" : "text";
-  input.placeholder =
-    field.id === "hf_token" && state?.hf_token
-      ? "Token is set. Paste a new one to replace."
-      : field.placeholder || "";
+  input.type = field.kind === "password" ? "password" : "text";
+  input.placeholder = field.placeholder || "";
   input.name = field.id;
-  input.value = field.kind === "password" || field.id === "hf_token" ? "" : shown;
-  input.autocomplete = field.id === "hf_token" ? "off" : "on";
+  input.value = field.kind === "password" ? "" : shown;
+  input.autocomplete = field.kind === "password" ? "off" : "on";
   input.disabled = !interactive;
   lab.appendChild(input);
   wrap.appendChild(lab);
@@ -1480,7 +1475,6 @@ function provisionField(name) {
     provider: ["Provider", "text", "Runpod, Enverge, or another site owner"],
     signer: ["Lease owner", "text", "Name responsible for this lease"],
     provider_token: ["Runpod API key", "password", "Pod read/write key"],
-    hf_token: ["Hugging Face token", "password", "hf_…"],
     hosts: existingHosts,
     ssh_user: ["SSH user", "text", "root"],
     ssh_port: ["SSH port", "text", "22"],
@@ -1591,7 +1585,6 @@ function provisionStatusView(next = {}) {
     provider_boot: "Provider allocation in progress",
     provider_allocation: "Waiting for provider allocation",
     existing_connection: "Waiting for SSH connection",
-    repair_credentials: "Repair authorization required",
     validating_existing: "Validation in progress",
     studio_handoff: "Securing Studio handoff",
   };
@@ -1766,11 +1759,7 @@ function paintProvisioning(next) {
       provisionContinue.innerHTML = `<span><small>READ-ONLY SSH</small><strong>Inspect Compute</strong></span><b aria-hidden="true">→</b>`;
     } else {
       provisionContinue.textContent =
-        next.checkpoint === "repair_credentials"
-          ? "Repair and validate"
-          : next.checkpoint === "validating_existing"
-            ? "Retry validation"
-            : "Continue";
+        next.checkpoint === "validating_existing" ? "Retry validation" : "Continue";
     }
   }
   if (next.status === "ready" && !provisionAdopting) adoptProvisionedSite();
@@ -1869,9 +1858,7 @@ async function advanceProvisioning() {
   const action =
     provision.checkpoint === "existing_connection"
       ? "inspect_existing"
-      : provision.checkpoint === "repair_credentials"
-        ? "repair_existing"
-        : provision.checkpoint === "provider_account"
+      : provision.checkpoint === "provider_account"
       ? provision.provider === "Runpod"
         ? "provider_ready"
         : "allocation_requested"

@@ -500,13 +500,12 @@ def test_gpu_connect_teaches_runpod_map() -> None:
         app = lesson_for("app", site)
         app_teach = " ".join(app.teach)
         assert "DIONY_SSH_USER" in app_teach
-        assert "HF_TOKEN" in app_teach
-        assert "huggingface.co/settings/tokens" in app_teach
-        token = next(f for f in app.fields if f.id == "hf_token")
-        assert token.kind == "password"
+        assert "Diony-Enterprise HF Token" in app_teach
+        assert "huggingface.co/settings/tokens" not in app_teach
+        assert not any(f.id == "hf_token" for f in app.fields)
         ready = lesson_for("prove", site)
-        assert any(f.id == "hf_token" for f in ready.fields)
-        assert "huggingface.co/settings/tokens" in " ".join(ready.teach)
+        assert not any(f.id == "hf_token" for f in ready.fields)
+        assert "Diony-Enterprise HF Token" in " ".join(ready.teach)
         assert "does not start vLLM" in app_teach or "App does not start vLLM" in app_teach
         if site == "b200":
             assert "16384" in app_teach

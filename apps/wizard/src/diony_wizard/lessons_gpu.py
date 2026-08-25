@@ -75,19 +75,7 @@ _VAULT_DEFAULT_GPU = "/workspace"
 _SSH_USER_PLACEHOLDER_GPU = "root"
 _SSH_USER_HINT_GPU = "Word before @. RunPod: root. Not an email."
 _SSH_PORT_HINT_GPU = "Number after -p. Example 28231. Not Jupyter 8888."
-HF_TOKEN_URL = "https://huggingface.co/settings/tokens"
-
-
-def hf_token_field() -> Field:
-    return Field(
-        "hf_token",
-        "HF_TOKEN",
-        "password",
-        placeholder="hf_…",
-        prefill=False,
-        source=f"{HF_TOKEN_URL} → Create new token +",
-        hint="Open that page. Create a new token. Paste it here. Gated DeepSeek and Wan pulls need it. Never Dashscope.",
-    )
+HF_TOKEN_NOTE = "Hugging Face auth is the Diony-Enterprise HF Token, held by the backend. Nothing to paste."
 
 
 def _attr(name: str, default):
@@ -230,7 +218,7 @@ def _fallback_app_teach(path: str) -> list[str]:
     return [
         "Nothing to pick. The pack is pinned: DeepSeek-V4-Flash-0731 + Wan2.2 A14B (720p) plus diony_sr_v1.",
         "Continue starts the pack pull and opens Ready. Never Dashscope. How is the apply log.",
-        "HF_TOKEN: open https://huggingface.co/settings/tokens, Create new token +, paste it in HF_TOKEN on this page.",
+        HF_TOKEN_NOTE,
         brain,
         f"Producer opens at {PRODUCER_URL}. Do not quote the Quad-Spark 2–5 day SLA.",
         "Next is Ready. Test GPU, then Sign Producer.",
@@ -306,7 +294,7 @@ def prove_lesson(path: str) -> Lesson:
         [
             "Test GPU uses the Connect SSH line and reads nvidia-smi. Dry-run records the same rows without opening a socket.",
             f"Expect {expect}. Wrong GPU is a fail.",
-            "HF_TOKEN: open https://huggingface.co/settings/tokens, Create new token +, paste it in HF_TOKEN on this page, then Pull pack.",
+            HF_TOKEN_NOTE,
             "Connection refused means the pod is Stopped or RunPod remapped the TCP IP/-p. Open Connect (02). Copy the new SSH over exposed TCP line. Then Pull pack.",
             "If Pack is red, Pull pack on this line (Hugging Face onto /models), then Test GPU. Continue when every row is a pass. While the pack is pulling, Ready shows in progress — leave Studio open.",
         ],
@@ -314,7 +302,6 @@ def prove_lesson(path: str) -> Lesson:
             "Wrong GPU name",
             "SSH refused / stale Connect IP or port",
             "DASH_API_KEY set on this GPU",
-            "Skipping HF_TOKEN",
             "Skipping Pull pack when /models is empty",
             "Continuing with a red row",
         ],
@@ -328,7 +315,6 @@ def prove_lesson(path: str) -> Lesson:
                 default="checked",
                 auto=True,
             ),
-            hf_token_field(),
         ],
         commands=["# Test GPU runs nvidia-smi over SSH over exposed TCP. Pytest never opens a socket."],
         handoff=["Every row is a pass.", "Next: Sign Producer."],
@@ -395,7 +381,6 @@ def _gpu_lessons(path: str) -> dict[str, Lesson]:
             _call("single_gpu_app_teach", _fallback_app_teach, path),
             _call("single_gpu_app_fail", _fallback_app_fail, path),
             [
-                hf_token_field(),
                 Field(
                     "pack",
                     "Pack",
@@ -408,7 +393,7 @@ def _gpu_lessons(path: str) -> dict[str, Lesson]:
                 ),
             ],
             commands=[
-                "# 1. Pack — this GPU, into /models. Hugging Face token is HF_TOKEN.",
+                "# 1. Pack — this GPU, into /models. Hugging Face auth is the Diony-Enterprise HF Token.",
                 *_call("pack_pull_commands", _fallback_pack_pull, path),
                 "# 2. Producer — same environment. App starts this. Not vLLM.",
                 *_call("producer_start_commands", _fallback_producer_start, cluster=True),
@@ -510,7 +495,6 @@ def gpu_lessons(path: str) -> dict[str, Lesson]:
                 _fallback_app_teach(path),
                 _fallback_app_fail(path),
                 [
-                    hf_token_field(),
                     Field(
                         "pack",
                         "Pack",

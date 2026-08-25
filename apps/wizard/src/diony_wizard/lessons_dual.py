@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from diony_wizard.lesson import Field, Lesson
-from diony_wizard.lessons_gpu import hf_token_field, prove_lesson
+from diony_wizard.lessons_gpu import HF_TOKEN_NOTE, prove_lesson
 from diony_wizard.prep import (
     PACK_LABEL,
     PRODUCER_URL,
@@ -81,7 +81,9 @@ DUAL_LESSONS: dict[str, Lesson] = {
         "This pair’s pack is pinned. Continue starts the pull and opens Ready.",
         [
             "Nothing to pick. The pack is pinned for Dual-Spark: DeepSeek-V4-Flash-0731 + Wan2.2 A14B (720p) plus diony_sr_v1. Brain is spark-2x-v1 TP=2.",
-            "Continue SSHes (or runs locally on spark-01), mounts the vault at /diony/vault, pulls the pack, clones Wan2.2, installs diony-finish, and starts Producer. How is the log of that apply. Hugging Face token is HF_TOKEN: open https://huggingface.co/settings/tokens, Create new token +, paste it in HF_TOKEN on this page. Never Dashscope.",
+            "Continue SSHes (or runs locally on spark-01), mounts the vault at /diony/vault, pulls the pack, clones Wan2.2, installs diony-finish, and starts Producer. How is the log of that apply. "
+            + HF_TOKEN_NOTE
+            + " Never Dashscope.",
             "Brain recipe is recorded (spark-2x-v1 TP=2). App does not start vLLM. Produce expands if brain is up; Produce starts Wan; Production runs 1080 finish and mix. Sequential: never brain and Wan together.",
             f"Producer opens at {PRODUCER_URL}. After Sign, Open Producer uses {PRODUCER_URL}.",
             "Continue starts the pull and opens Ready. The pack can take minutes to hours. Watch it on Ready, then Test GPU. Sign writes site.json onto /diony/vault. Do not quote the Quad-Spark 2–5 day SLA.",
@@ -92,11 +94,9 @@ DUAL_LESSONS: dict[str, Lesson] = {
             "Two Sparks with no RoCE between them",
             "Co-resident DeepSeek and Wan A14B",
             "Leaving DASH_API_KEY set",
-            "Skipping HF_TOKEN (gated DeepSeek and Wan will fail)",
             "Cloud studio / Dashscope as a substitute",
         ],
         [
-            hf_token_field(),
             Field(
                 "pack",
                 "Pack",

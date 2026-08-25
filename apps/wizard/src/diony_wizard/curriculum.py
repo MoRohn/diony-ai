@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 
 from diony_wizard.lesson import Field, Lesson, field_applies, normalize
 from diony_wizard.prep import (
@@ -481,19 +480,6 @@ def validate_answers(
         if not field_applies(field, site):
             continue
         raw = str(answers.get(field.id, "")).strip()
-        if field.id == "hf_token":
-            if os.environ.get("PYTEST_CURRENT_TEST"):
-                continue
-            if raw and raw not in {"set", "••••"}:
-                continue
-            if os.environ.get("HF_TOKEN", "").strip() or os.environ.get(
-                "HUGGING_FACE_HUB_TOKEN", ""
-            ).strip():
-                continue
-            return (
-                "HF_TOKEN is empty. Open https://huggingface.co/settings/tokens, "
-                "Create new token, paste it here."
-            )
         if not raw:
             return f"{field.label} is empty."
         if field.accept:

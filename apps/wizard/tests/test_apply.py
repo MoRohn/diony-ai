@@ -535,42 +535,56 @@ def test_connect_rerecord_after_pass_keeps_ready(monkeypatch) -> None:
     assert body["workbook"]["connect"]["ssh_port"] == "30111"
 
 
-def test_hf_token_is_bound_and_not_echoed(monkeypatch, tmp_path) -> None:
+def test_enterprise_hf_token_is_always_used_and_never_echoed(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("DIONY_DRY_RUN", "1")
     monkeypatch.setenv("DIONY_VAULT", str(tmp_path))
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
-    from diony_wizard.apply import hf_token_set
+    from diony_wizard.apply import hf_token, hf_token_set, load_hf_token
+    from diony_wizard.enterprise import DIONY_ENTERPRISE_HF_TOKEN
 
-    try:
-        client = TestClient(app)
-        client.post("/api/reset")
-        client.post(
-            "/api/steps/path/pass",
-            json={
-                "answers": {
-                    "site": "b200",
-                    "provider": "this rack",
-                    "signer": "Rohn Springfield",
-                }
-            },
-        )
-        client.post("/api/steps/connect/pass", json={"answers": {}})
-        saved = client.post(
-            "/api/steps/app/save",
-            json={"answers": {"hf_token": "hf_secret_test_token"}},
-        )
-        assert saved.status_code == 200
-        assert "hf_secret_test_token" not in saved.text
-        assert saved.json()["hf_token"] is True
-        assert hf_token_set()
-        assert (tmp_path / ".cluster" / "hf.token").is_file()
-        passed = client.post("/api/steps/app/pass", json={"answers": {}})
-        assert passed.status_code == 200
-        assert "hf_secret_test_token" not in passed.text
-    finally:
-        os.environ.pop("HF_TOKEN", None)
-        os.environ.pop("HUGGING_FACE_HUB_TOKEN", None)
+    # No operator input: the backend token is the one on every apply.
+    assert hf_token() == DIONY_ENTERPRISE_HF_TOKEN
+    assert hf_token_set()
+    assert f"export HF_TOKEN={DIONY_ENTERPRISE_HF_TOKEN}" in remote_setup_script("/opt/diony-ai", "/workspace")
+    load_hf_token()
+    assert os.environ["HF_TOKEN"] == DIONY_ENTERPRISE_HF_TOKEN
+    assert os.environ["HUGGING_FACE_HUB_TOKEN"] == DIONY_ENTERPRISE_HF_TOKEN
+
+    # Env override rotates the token without a code change.
+    monkeypatch.setenv("DIONY_ENTERPRISE_HF_TOKEN", "hf_rotated")
+    assert hf_token() == "hf_rotated"
+    assert "export HF_TOKEN=hf_rotated" in remote_setup_script("/opt/diony-ai", "/workspace")
+    monkeypatch.delenv("DIONY_ENTERPRISE_HF_TOKEN")
+
+    client = TestClient(app)
+    client.post("/api/reset")
+    client.post(
+        "/api/steps/path/pass",
+        json={
+            "answers": {
+                "site": "b200",
+                "provider": "this rack",
+                "signer": "Rohn Springfield",
+            }
+        },
+    )
+    client.post("/api/steps/connect/pass", json={"answers": {}})
+    # A pasted token is ignored and never stored or echoed.
+    saved = client.post(
+        "/api/steps/app/save",
+        json={"answers": {"hf_token": "hf_secret_test_token"}},
+    )
+    assert saved.status_code == 200
+    assert "hf_secret_test_token" not in saved.text
+    assert DIONY_ENTERPRISE_HF_TOKEN not in saved.text
+    assert saved.json()["hf_token"] is True
+    assert not (tmp_path / ".cluster" / "hf.token").exists()
+    assert "hf_token" not in saved.json()["workbook"].get("app", {})
+    passed = client.post("/api/steps/app/pass", json={"answers": {}})
+    assert passed.status_code == 200
+    assert DIONY_ENTERPRISE_HF_TOKEN not in passed.text
+    assert hf_token() == DIONY_ENTERPRISE_HF_TOKEN
 
 
 def test_reset_clears_apply_and_ssh_env(monkeypatch) -> None:
@@ -623,7 +637,7 @@ def test_stale_apply_does_not_write_after_reset() -> None:
 
 def test_reset_clears_local_site_lock_keeps_hf_token(tmp_path) -> None:
     from diony_contracts.cluster import read_site_lock, site_lock_path, write_site_lock
-    from diony_wizard.apply import bind_hf_token, hf_token_path, hf_token_set
+    from diony_wizard.apply import hf_token_set
 
     write_site_lock(
         {
@@ -637,7 +651,6 @@ def test_reset_clears_local_site_lock_keeps_hf_token(tmp_path) -> None:
             },
         }
     )
-    bind_hf_token("hf_keep_across_reset")
     assert site_lock_path().is_file()
     client = TestClient(app)
     res = client.post("/api/reset")
@@ -645,5 +658,3 @@ def test_reset_clears_local_site_lock_keeps_hf_token(tmp_path) -> None:
     assert read_site_lock() is None
     assert not site_lock_path().is_file()
     assert hf_token_set()
-    assert hf_token_path().is_file()
-    assert "hf_keep_across_reset" in hf_token_path().read_text(encoding="utf-8")

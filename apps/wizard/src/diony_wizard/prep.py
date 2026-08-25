@@ -254,7 +254,7 @@ def single_gpu_app_teach(path: str) -> list[str]:
         )
     return [
         f"Nothing to pick. The pack is pinned for this GPU: DeepSeek-V4-Flash-0731 + Wan2.2 A14B (720p) plus diony_sr_v1. Not a Hugging Face latest tag.",
-        "Continue SSHes as DIONY_SSH_USER on DIONY_SSH_PORT with DIONY_SSH_KEY (BatchMode), or runs locally on this GPU. Prefer RunPod SSH over exposed TCP (rsync). Hugging Face token is HF_TOKEN. Open https://huggingface.co/settings/tokens, Create new token +, paste it in HF_TOKEN on this page. Never Dashscope. How is the apply log.",
+        "Continue SSHes as DIONY_SSH_USER on DIONY_SSH_PORT with DIONY_SSH_KEY (BatchMode), or runs locally on this GPU. Prefer RunPod SSH over exposed TCP (rsync). Hugging Face auth is the Diony-Enterprise HF Token, held by the backend. Nothing to paste. Never Dashscope. How is the apply log.",
         "The pull mounts the vault at /diony/vault, writes the pack into /models, clones Wan2.2, installs diony-finish, and starts Producer.",
         brain,
         "Sequential: drain → unload → load. Never brain and Wan together. Produce expands if brain is up; Produce starts Wan; Production runs 1080 finish and mix.",
@@ -267,7 +267,6 @@ def single_gpu_app_fail(path: str) -> list[str]:
     fails = [
         "Picking a different DeepSeek or Wan because a blog said so",
         "Leaving DASH_API_KEY set",
-        "Skipping HF_TOKEN (gated DeepSeek and Wan will fail)",
         "Skipping Producer start and treating Studio as the showrunner",
         "Cloud studio / Dashscope as a substitute",
         "Co-resident DeepSeek and Wan A14B",

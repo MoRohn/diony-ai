@@ -9,6 +9,7 @@ from diony_wizard.provisioning import (
     classify_existing_compute,
     runpod_plan,
 )
+from diony_wizard.enterprise import enterprise_hf_token
 from diony_wizard.provisioning import ProvisioningError
 
 wizard_app = importlib.import_module("diony_wizard.app")
@@ -51,7 +52,7 @@ class FakeRunpod:
 
 class EchoingRunpod(FakeRunpod):
     def quote(self, path: str, token: str) -> dict:
-        raise ProvisioningError(f"provider rejected {token} and hf_secret")
+        raise ProvisioningError(f"provider rejected {token} and {enterprise_hf_token()}")
 
 
 class FakeExistingInspector:
@@ -161,12 +162,11 @@ def test_provider_errors_are_redacted_even_if_the_provider_echoes_a_secret() -> 
                 "action": "provider_ready",
                 "signer": "Rohn Springfield",
                 "provider_token": "rpa_secret",
-                "hf_token": "hf_secret",
             }
         )
     except ProvisioningError as exc:
         assert "rpa_secret" not in str(exc)
-        assert "hf_secret" not in str(exc)
+        assert enterprise_hf_token() not in str(exc)
     public = service.public()
     assert "rpa_secret" not in str(public)
     assert "hf_secret" not in str(public)
@@ -315,7 +315,7 @@ def test_connect_page_reports_waiting_working_ready_and_attention_states() -> No
     css = client.get("/static/app.css").text
     js = client.get("/static/app.js").text
 
-    assert '/static/app.js?v=brand12' in html
+    assert '/static/app.js?v=brand13' in html
     assert 'id="provision-live-status"' in html
     assert 'id="provision-live-label"' in html
     assert 'id="provision-live-detail"' in html
@@ -444,12 +444,13 @@ def test_existing_compute_agent_discovers_profile_and_only_requests_token_for_re
             "ssh_port": "22",
         }
     )
-    assert needs_token["checkpoint"] == "repair_credentials"
-    assert needs_token["required_inputs"] == ["hf_token"]
-    assert "missing" in needs_token["detail"].lower()
-    repaired = missing.advance({"action": "repair_existing", "hf_token": "hf_secret"})
-    assert repaired["status"] == "ready"
-    assert "hf_secret" not in str(repaired)
+    # The pack is missing, but no token is requested: the backend holds the
+    # Diony-Enterprise HF Token and repairs only what is missing.
+    assert needs_token["status"] == "ready"
+    assert needs_token["required_inputs"] == []
+    assert any(e["label"] == "Repair authorization" for e in needs_token["events"])
+    assert "hf_" not in str(needs_token)
+    assert missing.consume()["hf_token"] == enterprise_hf_token()
 
 
 def test_existing_compute_is_validated_signed_and_handed_to_producer(monkeypatch) -> None:

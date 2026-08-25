@@ -631,9 +631,9 @@ def test_b300_app_includes_the_pack() -> None:
     assert any("diony-wan" in line for line in app_lesson["commands"])
     assert "How is Producer installed" not in str(app_lesson)
     labels = " ".join(f.get("label", "") for f in app_lesson["fields"])
-    assert "HF_TOKEN" in labels
-    assert any(f.get("id") == "hf_token" for f in app_lesson["fields"])
-    assert any("huggingface.co/settings/tokens" in (f.get("source") or "") for f in app_lesson["fields"])
+    assert "HF_TOKEN" not in labels
+    assert not any(f.get("id") == "hf_token" for f in app_lesson["fields"])
+    assert not any(f.get("id") == "hf_token" for f in app_lesson["fields"])
     assert "How is Producer" not in labels
 
 
@@ -779,7 +779,8 @@ def test_ui_is_crate_to_system() -> None:
     assert 'step === "app" || step === "prove"' in js
     assert "function lineInteractive" in js
     assert "function sshLineDead" in js
-    assert "huggingface.co/settings/tokens" in js
+    assert "huggingface.co/settings/tokens" not in js
+    assert "hf_token" not in js
     assert 'field.kind === "password"' in js
     assert "function packRowMissing" in js
     assert "/api/prove" in js

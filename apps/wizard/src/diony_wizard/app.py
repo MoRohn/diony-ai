@@ -139,7 +139,7 @@ class SSHCommandBody(BaseModel):
 
 
 def _public_workbook(book: dict | None = None) -> dict:
-    """Workbook for APIs and the signed report. Never include HF_TOKEN."""
+    """Workbook for APIs and the signed report. Never include a Hugging Face token."""
     src = book if book is not None else _workbook
     out: dict = {}
     for key, row in (src or {}).items():
@@ -553,10 +553,7 @@ def provision_adopt() -> dict:
         connected = pass_step("connect", AdvanceBody(answers=connection))
         if connected.get("active_step") != "app":
             raise ProvisioningError("Studio did not accept the provider connection.")
-        prepared = pass_step(
-            "app",
-            AdvanceBody(answers={"hf_token": str(lease.get("hf_token") or "")}),
-        )
+        prepared = pass_step("app", AdvanceBody())
         _provisioner.mark_handed_off()
         prepared["provision"] = _provisioner.public()
         return prepared
@@ -573,8 +570,6 @@ def _adopt_existing_compute(existing: dict) -> dict:
     provider = str(existing.get("provider") or ("Local" if path == "local" else ""))
     signer = str(existing.get("signer") or "")
     connection = dict(existing.get("connection") or {})
-    hf_token = str(existing.get("hf_token") or "")
-    bind_hf_from_answers({"hf_token": hf_token})
 
     site_step = _by_id("path")
     _bind_site({"site": path, "provider": provider, "signer": signer})
@@ -745,11 +740,7 @@ def post_apply_retry() -> dict:
             "Pack pull needs the RunPod IP on Connect. Placeholder names do not SSH.",
         )
     if not hf_token_set():
-        raise HTTPException(
-            400,
-            "HF_TOKEN is empty. Open https://huggingface.co/settings/tokens, "
-            "Create new token, paste it on App or Ready, then Pull pack.",
-        )
+        raise HTTPException(400, "Diony-Enterprise HF Token is empty. Set DIONY_ENTERPRISE_HF_TOKEN, then Pull pack.")
     hosts = site_nodes(_compute_path, _workbook)
     bind_ssh_env(_workbook.get("connect") or {})
     job = retry_apply(_compute_path, hosts, nas=vault_export(_workbook), workbook=_workbook)

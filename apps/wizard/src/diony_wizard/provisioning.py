@@ -21,6 +21,7 @@ from typing import Any
 
 import httpx
 
+from diony_wizard.enterprise import enterprise_hf_token
 from diony_wizard.ssh_command import SSHCommandError, normalize_identity_file
 
 
@@ -439,9 +440,7 @@ class ProvisioningService:
                     "action_url": ENVERGE_SPARK_URL if path == "dual" else RUNPOD_SIGNUP_URL,
                     "action_label": f"Open {provider}",
                     "required_inputs": (
-                        ["signer", "hf_token"]
-                        if path == "dual"
-                        else ["signer", "provider_token", "hf_token"]
+                        ["signer"] if path == "dual" else ["signer", "provider_token"]
                     ),
                 }
             )
@@ -489,8 +488,6 @@ class ProvisioningService:
                     return self._enverge_connection(values)
                 if action == "inspect_existing" and self._state["checkpoint"] == "existing_connection":
                     return self._inspect_existing(values)
-                if action == "repair_existing" and self._state["checkpoint"] == "repair_credentials":
-                    return self._repair_existing(values)
             except ProvisioningError as exc:
                 self._state["status"] = "attention"
                 self._state["error"] = self._sanitize(str(exc))
@@ -560,41 +557,22 @@ class ProvisioningService:
         for check in inspection.get("checks") or []:
             self._event(str(check.get("label") or "Check"), str(check.get("detail") or ""), "passed" if check.get("ok") else "active")
         if not inspection.get("prepared"):
-            self._state.update(
-                {
-                    "status": "attention",
-                    "checkpoint": "repair_credentials",
-                    "headline": "Repair the existing site",
-                    "detail": "The connection and hardware passed, but the Diony model pack or runtime is missing. Add a Hugging Face token so the agent can install only what is missing.",
-                    "required_inputs": ["hf_token"],
-                }
+            self._hf_token = enterprise_hf_token()
+            self._event(
+                "Repair authorization",
+                "Pack or runtime is missing. Diony-Enterprise HF Token will install only what is missing.",
             )
-            self._event("Repair authorization", "Waiting for a masked Hugging Face token.", "active")
-            return self.public()
         return self._ready(connection)
-
-    def _repair_existing(self, values: dict[str, Any]) -> dict[str, Any]:
-        token = str(values.get("hf_token") or os.environ.get("HF_TOKEN") or "").strip()
-        if not token:
-            raise ProvisioningError("Add the Hugging Face token so Diony can repair the missing pack.")
-        self._hf_token = token
-        if self._state["events"]:
-            self._state["events"][-1]["status"] = "passed"
-            self._state["events"][-1]["detail"] = "Repair authorized. Secret removed from the UI."
-        return self._ready(dict(self._state["connection"] or {}))
 
     def _collect_identity(self, values: dict[str, Any], provider_token: bool) -> None:
         signer = str(values.get("signer") or "").strip()
-        hf_token = str(values.get("hf_token") or "").strip()
         token = str(values.get("provider_token") or "").strip()
         if len(signer) < 2:
             raise ProvisioningError("Enter the named human responsible for this lease.")
-        if not hf_token and not os.environ.get("HF_TOKEN", "").strip():
-            raise ProvisioningError("Add the Hugging Face token for the pinned Diony model pack.")
         if provider_token and not token:
             raise ProvisioningError("Add a Runpod API key with Pod read/write access.")
         self._signer = signer
-        self._hf_token = hf_token or os.environ.get("HF_TOKEN", "").strip()
+        self._hf_token = enterprise_hf_token()
         if provider_token:
             self._provider_token = token
 
