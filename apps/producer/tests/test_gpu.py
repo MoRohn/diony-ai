@@ -42,6 +42,9 @@ def test_gpu_producer_start_repairs_and_validates_wan_host_python() -> None:
     assert script.find("_diony_existing_producer_ready") < script.find("GPU_PRODUCER_OK")
     assert 'OLD_PRODUCER_PID=$(_diony_8788_pid)' in script
     assert 'kill "$OLD_PRODUCER_PID"' in script
+    assert "_diony_production_busy" in script
+    assert "GPU_PRODUCER_BUSY_DEFERRED" in script
+    assert script.find("_diony_production_busy") < script.find('kill "$OLD_PRODUCER_PID"')
     assert 'if _diony_existing_producer_ready; then' in script
     assert "GPU_PRODUCER_ENV_MISMATCH" in script
     assert "DIONY_COSYVOICE_PYTHON" in script
@@ -106,6 +109,24 @@ def test_gpu_start_allows_persistent_optional_runtime_repair(monkeypatch) -> Non
     gpu._start_gpu_producer({"ssh_port": "28869", "ssh_user": "root", "host": "gpu"})
 
     assert observed["timeout"] >= 600
+
+
+def test_gpu_start_treats_active_production_restart_deferral_as_healthy(monkeypatch) -> None:
+    import diony_producer.gpu as gpu
+
+    def fake_run(command, **kwargs):
+        return type(
+            "Result",
+            (),
+            {"returncode": 0, "stdout": "GPU_PRODUCER_BUSY_DEFERRED\n", "stderr": ""},
+        )()
+
+    monkeypatch.setattr(gpu.subprocess, "run", fake_run)
+    gpu._set_error("stale error")
+
+    gpu._start_gpu_producer({"ssh_port": "28869", "ssh_user": "root", "host": "gpu"})
+
+    assert gpu.last_gpu_error() == ""
 
 
 def test_gpu_code_stamp_hashes_content_not_package_mtime(tmp_path, monkeypatch) -> None:

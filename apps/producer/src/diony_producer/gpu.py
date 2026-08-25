@@ -747,6 +747,15 @@ if [ -x /diony/vault/runtime/cosyvoice/venv/bin/python ] && \
   export DIONY_COSYVOICE_ROOT=/diony/vault/runtime/cosyvoice/CosyVoice
   export DIONY_COSYVOICE_MODEL=/diony/vault/models/audio/CosyVoice2-0.5B
   export DIONY_COSYVOICE_PROMPT_AUDIO=/opt/wan22/examples/zero_shot_prompt.wav
+  if [ -d /diony/vault/runtime/voice/prompt-library ]; then
+    export DIONY_COSYVOICE_PROMPT_LIBRARY=/diony/vault/runtime/voice/prompt-library
+  fi
+  if [ -d /diony/vault/runtime/audio/library ]; then
+    export DIONY_SOUND_LIBRARY=/diony/vault/runtime/audio/library
+  fi
+  if [ -f /opt/diony-ai/apps/producer/src/diony_producer/audiogen_backend.py ]; then
+    export DIONY_AUDIOGEN_COMMAND="/opt/diony-ai/.venv/bin/python /opt/diony-ai/apps/producer/src/diony_producer/audiogen_backend.py"
+  fi
   if [ -f /opt/diony-ai/apps/producer/src/diony_producer/cosyvoice_backend.py ]; then
     export DIONY_VOICE_BACKEND_COMMAND="/opt/diony-ai/.venv/bin/python /opt/diony-ai/apps/producer/src/diony_producer/cosyvoice_backend.py"
     export DIONY_SPEAKER_EMBEDDING_MODEL=cosyvoice-campplus-v1
@@ -851,11 +860,30 @@ _diony_existing_producer_ready() {
     printf '%s\n' "$active_env" | grep -Fqx "DIONY_SPEAKER_EMBEDDING_MODEL=$DIONY_SPEAKER_EMBEDDING_MODEL" || return 1
   fi
 }
+_diony_production_busy() {
+  # A code/env refresh may never kill the owner of a live camera, finish, or
+  # mix. The next idle health check will apply the synchronized build.
+  if pgrep -af '[g]enerate.py' >/dev/null 2>&1; then
+    return 0
+  fi
+  local endpoint payload
+  for endpoint in farm finish mix; do
+    payload=$(curl -sf --max-time 2 "http://127.0.0.1:8788/api/$endpoint" 2>/dev/null || true)
+    if printf '%s' "$payload" | grep -Eq '"busy"[[:space:]]*:[[:space:]]*true'; then
+      return 0
+    fi
+  done
+  return 1
+}
 if _diony_existing_producer_ready; then
   echo GPU_PRODUCER_OK
   exit 0
 fi
 if OLD_PRODUCER_PID=$(_diony_8788_pid); then
+  if _diony_production_busy; then
+    echo GPU_PRODUCER_BUSY_DEFERRED
+    exit 0
+  fi
   kill "$OLD_PRODUCER_PID" >/dev/null 2>&1 || true
   for _diony_stop_wait in 1 2 3 4 5; do
     kill -0 "$OLD_PRODUCER_PID" >/dev/null 2>&1 || break
@@ -880,6 +908,13 @@ nohup env -u DIONY_DRY_RUN PATH="$PATH" DIONY_VAULT=/diony/vault DIONY_BIND=0.0.
   DIONY_COSYVOICE_ROOT="${DIONY_COSYVOICE_ROOT:-}" \
   DIONY_COSYVOICE_MODEL="${DIONY_COSYVOICE_MODEL:-}" \
   DIONY_COSYVOICE_PROMPT_AUDIO="${DIONY_COSYVOICE_PROMPT_AUDIO:-}" \
+  DIONY_COSYVOICE_PROMPT_LIBRARY="${DIONY_COSYVOICE_PROMPT_LIBRARY:-}" \
+  DIONY_SOUND_LIBRARY="${DIONY_SOUND_LIBRARY:-}" \
+  DIONY_AUDIOGEN="${DIONY_AUDIOGEN:-}" \
+  DIONY_AUDIOGEN_COMMAND="${DIONY_AUDIOGEN_COMMAND:-}" \
+  DIONY_AUDIOGEN_CLI_THINKSOUND="${DIONY_AUDIOGEN_CLI_THINKSOUND:-}" \
+  DIONY_AUDIOGEN_CLI_ACE_STEP="${DIONY_AUDIOGEN_CLI_ACE_STEP:-}" \
+  DIONY_AUDIOGEN_CLI_STABLE_AUDIO_OPEN="${DIONY_AUDIOGEN_CLI_STABLE_AUDIO_OPEN:-}" \
   "$PRODUCER_BIN" >/diony/vault/.cluster/producer.log 2>&1 &
 for _diony_start_wait in 1 2 3 4 5 6 7 8 9 10; do
   sleep 1
@@ -930,6 +965,12 @@ def _start_gpu_producer(conn: dict) -> None:
             "Wan2.2 host Python dependencies could not be repaired. "
             "Studio requires a passing runtime report before Production."
         )
+        return
+    if proc.returncode == 0 and (
+        "GPU_PRODUCER_OK" in (proc.stdout or "")
+        or "GPU_PRODUCER_BUSY_DEFERRED" in (proc.stdout or "")
+    ):
+        _set_error("")
         return
     if proc.returncode != 0 or "GPU_PRODUCER_OK" not in (proc.stdout or ""):
         _set_error(blob[:800] or f"GPU Producer start failed on {conn['host']}")

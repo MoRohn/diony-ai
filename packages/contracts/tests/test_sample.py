@@ -70,11 +70,13 @@ def test_sample_expansion_uses_references_and_hits_the_requested_timeframe() -> 
 
     assert project.brief is not None
     assert project.brief.production_kind == ProductionKind.SAMPLE
-    assert len(project.shots) == 2
+    assert len(project.shots) == 3
+    # Bookings are lane-true: stitched TRT is exactly the requested time frame.
+    assert total_frames == round(7 * project.bible.fps)
     assert total_frames / project.bible.fps == pytest.approx(7, abs=0.06)
-    assert all(shot.duration_frames / shot.fps <= 5.1 for shot in project.shots)
+    assert all(shot.duration_frames <= 81 for shot in project.shots)
     assert project.shots[0].continuity_mode == "reference"
-    assert project.shots[1].continuity_mode == "previous_frame"
-    assert project.shots[1].overlap_frames == 8
+    assert all(shot.continuity_mode == "previous_frame" for shot in project.shots[1:])
+    assert all(shot.overlap_frames == 8 for shot in project.shots[1:])
     assert all(shot.keyframe_asset_ids == [still.id] for shot in project.shots)
     assert all("sample" in shot.prompt.casefold() for shot in project.shots)

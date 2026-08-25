@@ -123,8 +123,13 @@ def finish_ready() -> bool:
 
 
 def wan_frame_num(duration_frames: int, fps: float = 23.976) -> int:
-    """Wan A14B wants 4n+1 frames. Cap 81. Generate at 24 fps intent."""
+    """Wan A14B wants 4n+1 frames. Cap 81. Generate at 24 fps intent.
+
+    Rounds up within the cap: a booked timeline duration may be conformed by
+    trimming delivered frames, never by stretching them, so the camera must
+    always deliver at least what the timeline books (up to the 81-frame lane).
+    """
     rate = fps if fps > 1 else 23.976
     want = max(17, int(round(duration_frames * 24.0 / rate)))
-    n = max(4, round((want - 1) / 4.0))
+    n = max(4, (want + 2) // 4)
     return min(81, 4 * n + 1)

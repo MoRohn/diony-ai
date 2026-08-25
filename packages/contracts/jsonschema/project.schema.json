@@ -305,6 +305,10 @@
           "title": "True Peak Dbtp",
           "type": "number"
         },
+        "soundtrack_policy": {
+          "$ref": "#/$defs/SoundtrackPolicy",
+          "default": "licensed_only"
+        },
         "visual_grammar": {
           "title": "Visual Grammar",
           "type": "string"
@@ -2149,6 +2153,23 @@
           "default": null,
           "title": "Audiovisual Offset Ms P95"
         },
+        "audiovisual_backend": {
+          "default": "",
+          "title": "Audiovisual Backend",
+          "type": "string"
+        },
+        "audiovisual_measurement_qualified": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audiovisual Measurement Qualified"
+        },
         "reference_asset_ids": {
           "items": {
             "type": "string"
@@ -2484,6 +2505,15 @@
       ],
       "title": "Shot",
       "type": "object"
+    },
+    "SoundtrackPolicy": {
+      "description": "Whether generated (non-speech) audio may join the licensed soundtrack.",
+      "enum": [
+        "licensed_only",
+        "generated_ok"
+      ],
+      "title": "SoundtrackPolicy",
+      "type": "string"
     },
     "Take": {
       "properties": {
@@ -3184,6 +3214,23 @@
           "maximum": 100,
           "title": "Audiovisual Offset Ms Max",
           "type": "number"
+        },
+        "audiovisual_backend": {
+          "default": "",
+          "title": "Audiovisual Backend",
+          "type": "string"
+        },
+        "audiovisual_measurement_qualified": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audiovisual Measurement Qualified"
         },
         "performance_consistency": {
           "anyOf": [

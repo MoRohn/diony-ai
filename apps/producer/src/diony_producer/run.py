@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-from diony_contracts.cluster import site_status
+from diony_contracts.cluster import RETAKE_CAP, site_status
 from diony_contracts.enums import ArtifactKind, GateName, QCVerdict
 from diony_contracts.models import Project, Take
 from diony_contracts.studio import allotment_label
@@ -307,6 +307,18 @@ def _clip_rows(project: Project, farm: dict, finish: dict | None = None) -> list
             {
                 "shot_id": shot.id,
                 "take_id": take.id if take else "",
+                "attempt_label": (
+                    f"attempt {take.attempt} of {RETAKE_CAP}" if take is not None else ""
+                ),
+                "av_evidence_label": (
+                    "Qualified AV"
+                    if take
+                    and take.qc
+                    and take.qc.audiovisual_measurement_qualified
+                    else "Diagnostic AV only"
+                    if take and take.qc and take.qc.audiovisual_backend
+                    else ""
+                ),
                 "engine": shot.engine.value if shot.engine else "",
                 "state": state,
                 "stage": stage,
@@ -888,6 +900,8 @@ def run_payload(
     )
     clips = _clip_rows(project, farm, finish)
     fail_notes = [clip["note"] for clip in clips if clip["state"] == "failed" and clip.get("note")]
+    failed_clip_count = sum(1 for clip in clips if clip["state"] == "failed")
+    passed_shown = max(0, shown - failed_clip_count)
     farm_error = str(farm.get("error") or "").strip()
     finish_error = str(finish.get("error") or "").strip()
     mix_error = str(mix.get("error") or "").strip()
@@ -975,8 +989,21 @@ def run_payload(
         phase = "farm"
         waiting = None
         now = f"Wan2.2 stopped. {fail_notes[0]}"
-        tally = f"{shown} / {farm_total or shots}" if (farm_total or shots) else "—"
-        tally_note = "Wan failed"
+        denominator = farm_total or shots
+        tally = (
+            f"{passed_shown} passed · {failed_clip_count} failed / {denominator}"
+            if denominator
+            else "—"
+        )
+        tally_note = (
+            "QC hold · Take preserved"
+            if any(
+                clip.get("state") == "failed"
+                and clip.get("av_evidence_label") == "Diagnostic AV only"
+                for clip in clips
+            )
+            else "Wan failed"
+        )
     elif farm_incomplete:
         phase = "farm"
         waiting = None
@@ -1161,7 +1188,7 @@ def run_payload(
     if phase == "stopped":
         stage_completed = shown
     elif phase in {"farm", "paused"}:
-        stage_completed = shown
+        stage_completed = passed_shown if farm_failed else shown
         if phase == "farm":
             stage_partial = min(100, max(0, int((farm.get("progress") or {}).get("pct") or 0))) / 100
     elif phase == "finish":
@@ -1226,7 +1253,8 @@ def run_payload(
             "error": last_gpu_error() if site_gpu and not live else "",
         },
         "shots": shots,
-        "farmed": shown,
+        "farmed": passed_shown if farm_failed else shown,
+        "failed_clips": failed_clip_count,
         "goal": goal,
         "production_kind": production_kind,
         "sample_seconds": sample_seconds,

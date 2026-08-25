@@ -538,6 +538,7 @@ def pack_pull_commands(path: str | None) -> list[str]:
         cmds.append(f"# Brain is auto: BRAIN first, {spec['recipe']}")
         cmds.append(
             "vllm serve /models/deepseek/DeepSeek-V4-Flash-0731 "
+            "--served-model-name DeepSeek-V4-Flash-0731 "
             "--trust-remote-code --tensor-parallel-size 1 "
             f"--max-model-len {spec['max_model_len']} "
             f"--gpu-memory-utilization {spec['gpu_util']}"
@@ -547,6 +548,7 @@ def pack_pull_commands(path: str | None) -> list[str]:
         cmds.append("# Brain is auto: BRAIN first, spark-2x-v1 TP=2. Sequential SPLIT.")
         cmds.append(
             "vllm serve /models/deepseek/DeepSeek-V4-Flash-0731 "
+            "--served-model-name DeepSeek-V4-Flash-0731 "
             "--trust-remote-code --kv-cache-dtype nvfp4_ds_mla --block-size 256 "
             "--tensor-parallel-size 2 --distributed-executor-backend mp --nnodes 2 "
             "--enable-expert-parallel --max-model-len 1048576 --max-num-seqs 6 "

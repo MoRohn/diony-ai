@@ -117,16 +117,24 @@ def test_mix_assembles_verified_per_clip_voice_packages_in_timeline_order(
     master.parent.mkdir(parents=True)
     master.write_bytes(b"picture" * 16)
     written_sources: list[tuple[str, float]] = []
+    from diony_producer import mix as mix_module
 
-    def write_locked(destination, *, sources, **_kwargs):
-        written_sources.extend((package.take_id, start_seconds) for _, start_seconds, package in sources)
+    original_filters = mix_module._voice_rail_filters
+
+    def capture_filters(rows):
+        written_sources.extend((row.package.take_id, row.start_seconds) for row in rows)
+        return original_filters(rows)
+
+    def fake_rail(destination, **_kwargs):
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(b"RIFF" + b"locked-voice" * 8)
 
     monkeypatch.setattr("diony_producer.mix._visual_qc_required", lambda: False)
     monkeypatch.setattr("diony_producer.mix._tool", lambda name: name)
     monkeypatch.setattr("diony_producer.mix._duration_seconds", lambda *_args: 20.0)
-    monkeypatch.setattr("diony_producer.mix._write_locked_voice_stem", write_locked)
+    monkeypatch.setattr("diony_producer.mix._voice_rail_filters", capture_filters)
+    monkeypatch.setattr("diony_producer.mix._write_rail", fake_rail)
+    monkeypatch.setattr("diony_producer.mix._write_program_mixdown", fake_rail)
     monkeypatch.setattr("diony_producer.mix._measure_stem", lambda *_args, **_kwargs: (-24.0, -1.2))
     monkeypatch.setattr("diony_producer.mix._mux_program", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("diony_producer.mix.program_master_has_audio", lambda *_args: True)
@@ -139,6 +147,9 @@ def test_mix_assembles_verified_per_clip_voice_packages_in_timeline_order(
     assert stem.role == "dialogue_stem"
     assert stem.metadata["voice_package_count"] == 1
     assert stem.metadata["voice_pipeline"] == "locked_per_clip"
+    program = project.asset(project.mix.stem_asset_ids[-1])
+    assert program.role == "program_mix_stem"
+    assert program.metadata["rails"] == "dialogue"
 
 
 def test_multi_turn_dialogue_counts_as_required_dialogue() -> None:
@@ -294,3 +305,62 @@ def test_mix_refuses_a_flat_green_picture_master(tmp_path, monkeypatch) -> None:
 
     with pytest.raises(MixError, match="visual QC.*flat color"):
         bounce_mix(project)
+
+
+def test_voice_rail_filters_fade_across_picture_junctions() -> None:
+    from pathlib import Path
+
+    from diony_producer.mix import VoiceRailRow, _voice_rail_filters
+
+    rows = [
+        VoiceRailRow(Path("a.wav"), 0.0, None, 3.378, 0.0, 0.3337),
+        VoiceRailRow(Path("b.wav"), 3.044, None, 3.378, 0.3337, 0.0),
+    ]
+    filters, labels = _voice_rail_filters(rows)
+    assert labels == ["[voice0]", "[voice1]"]
+    # Outgoing clip fades out over the junction blend; incoming fades in.
+    assert "afade=t=out:st=3.044300:d=0.333700" in filters[0]
+    assert "afade=t=in" not in filters[0]
+    assert "afade=t=in:st=0:d=0.333700" in filters[1]
+    assert "adelay=3044|3044" in filters[1]
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg is required")
+def test_program_mixdown_ducks_score_under_dialogue(tmp_path) -> None:
+    from diony_producer.mix import _write_program_mixdown
+
+    ffmpeg = shutil.which("ffmpeg")
+    rails = {}
+    for role, frequency in (("dialogue", 300), ("score", 220), ("foley", 800)):
+        rail = tmp_path / f"{role}.wav"
+        subprocess.run(
+            [
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi",
+                "-i", f"sine=frequency={frequency}:sample_rate=48000:duration=3",
+                "-af", "volume=0.2,aformat=channel_layouts=stereo",
+                "-c:a", "pcm_s16le", str(rail),
+            ],
+            check=True,
+        )
+        rails[role] = rail
+
+    destination = tmp_path / "program-mix.wav"
+    _write_program_mixdown(
+        destination,
+        ffmpeg=ffmpeg,
+        rails=rails,
+        duration=3.0,
+        target=-24.0,
+        peak=-1.0,
+    )
+    assert destination.is_file() and destination.stat().st_size > 44
+    probe = subprocess.run(
+        [
+            shutil.which("ffprobe"), "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", str(destination),
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    assert abs(float(probe.stdout.strip()) - 3.0) < 0.1

@@ -271,6 +271,10 @@ def test_qc_diagnosis_repairs_only_the_failed_prompt_layer() -> None:
     motion_repair = repair_wan_prompt_plan(original, "Subject froze halfway through the clip")
     camera_repair = repair_wan_prompt_plan(original, "Camera jumped and cut mid-clip")
     texture_repair = repair_wan_prompt_plan(original, "Output looks plastic and airbrushed")
+    voice_repair = repair_wan_prompt_plan(
+        original,
+        "Voice performance failed: qualified lip-sync confidence was below 0.90",
+    )
 
     assert motion_repair is not None
     assert motion_repair.motion != original.motion
@@ -290,6 +294,14 @@ def test_qc_diagnosis_repairs_only_the_failed_prompt_layer() -> None:
     assert validate_wan_prompt_plan(motion_repair) == []
     assert validate_wan_prompt_plan(camera_repair) == []
     assert validate_wan_prompt_plan(texture_repair) == []
+    assert voice_repair is not None
+    assert voice_repair.motion != original.motion
+    assert "phoneme" in voice_repair.motion.casefold()
+    assert "mouth" in voice_repair.motion.casefold()
+    assert voice_repair.subject == original.subject
+    assert voice_repair.camera == original.camera
+    assert voice_repair.scene == original.scene
+    assert validate_wan_prompt_plan(voice_repair) == []
 
 
 def test_prompt_plans_are_deterministic_for_the_same_idea() -> None:

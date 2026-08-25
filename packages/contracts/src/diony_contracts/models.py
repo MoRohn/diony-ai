@@ -21,6 +21,7 @@ from diony_contracts.enums import (
     LoudnessTarget,
     MixLockState,
     NoteAuthor,
+    SoundtrackPolicy,
     PictureLockState,
     ProductionKind,
     ProductionStopDisposition,
@@ -333,6 +334,9 @@ class Bible(BaseModel):
     grain: Grain = Grain.FINE
     loudness: LoudnessTarget = LoudnessTarget.BROADCAST
     true_peak_dbtp: float = -1.0
+    # Generated (non-speech) audio joins the soundtrack only when the Bible
+    # explicitly allows it; licensed library cues are always eligible.
+    soundtrack_policy: SoundtrackPolicy = SoundtrackPolicy.LICENSED_ONLY
     visual_grammar: str
     world: str
     characters: list[Character] = Field(default_factory=list)
@@ -471,6 +475,8 @@ class QCReport(BaseModel):
     voice_performance_consistency: float | None = Field(default=None, ge=0, le=1)
     lip_sync_confidence: float | None = Field(default=None, ge=0, le=1)
     audiovisual_offset_ms_p95: float | None = Field(default=None, ge=0)
+    audiovisual_backend: str = ""
+    audiovisual_measurement_qualified: bool | None = None
     reference_asset_ids: list[str] = Field(default_factory=list)
     reference_similarity: float | None = None
     reference_similarities: dict[str, float] = Field(default_factory=dict)

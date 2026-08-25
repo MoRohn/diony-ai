@@ -588,6 +588,52 @@ def test_camera_tally_uses_landed_negatives_when_worker_counter_restarts(monkeyp
     assert board["progress"]["pct"] == round((2.25 / len(project.shots)) * 100)
 
 
+def test_qc_hold_tally_never_counts_a_rejected_negative_as_completed(monkeypatch) -> None:
+    from diony_contracts.fixture import demo_project
+    import diony_producer.run as run_module
+
+    project = demo_project()
+    shot = project.shots[0]
+    take = project.takes_for(shot.id)[0]
+    project.takes = [item for item in project.takes if item.shot_id != shot.id]
+    project.takes.insert(0, take)
+    shot.selected_take_id = take.id
+    take.qc = QCReport(
+        id=f"qc-{take.id}",
+        take_id=take.id,
+        shot_id=take.shot_id,
+        verdict=QCVerdict.FAIL,
+        identity_ok=True,
+        morph_ok=True,
+        flicker_ok=True,
+        duration_ok=True,
+        legal_ok=True,
+        audiovisual_backend="diony-local-av-motion-sync-v1",
+        audiovisual_measurement_qualified=False,
+        notes=(
+            "Voice performance failed: qualified mouth-sync evidence is unavailable; "
+            "diagnostic only, so Diony preserved this Take."
+        ),
+    )
+    monkeypatch.setattr(run_module, "take_has_live_negative", lambda current, _project: current is take)
+    monkeypatch.setattr(run_module, "gpu_monitor", lambda: {"heartbeat": "", "journal": [], "log": ""})
+    monkeypatch.setattr(run_module, "signed_gpu_site", lambda: False)
+    monkeypatch.setattr(run_module, "wizard_pack_on_gpu", lambda: False)
+
+    board = run_module.run_payload(
+        project,
+        farm={"busy": False, "live": True, "done": 1, "total": 3, "detail": "", "error": ""},
+        finish={"busy": False, "live": True, "done": 0, "total": 0, "detail": "", "error": ""},
+        mix={"busy": False, "detail": "", "error": ""},
+        live=True,
+    )
+
+    assert board["tally"] == f"0 passed · 1 failed / {len(project.shots)}"
+    assert board["tally_note"] == "QC hold · Take preserved"
+    assert board["clips"][0]["attempt_label"] == "attempt 1 of 4"
+    assert board["clips"][0]["av_evidence_label"] == "Diagnostic AV only"
+
+
 def test_run_payload_exposes_mix_busy_as_protected_work(monkeypatch) -> None:
     from diony_contracts.fixture import demo_project
     import diony_producer.run as run_module

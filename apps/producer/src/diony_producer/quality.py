@@ -10,7 +10,28 @@ from pathlib import Path
 from typing import Iterable
 
 
-MEASUREMENT_VERSION = "diony-temporal-v1"
+# v2: 320x180 @ 12 fps analysis proxy (v1 was 160x90 @ 8 fps). Stats scale with
+# the proxy, so calibration receipts and stored QC evidence bind to this version.
+MEASUREMENT_VERSION = "diony-temporal-v2"
+ANALYSIS_WIDTH = 320
+ANALYSIS_HEIGHT = 180
+ANALYSIS_FPS = 12
+
+# Shipped fallback gates, used only when neither an operator env override nor a
+# site calibration receipt provides a measured value.
+DEFAULT_RESIDUAL_P95_MAX = 0.20
+DEFAULT_FLICKER_P95_MAX = 0.12
+DEFAULT_DELTA_P95_MIN = 0.0015
+
+
+@dataclass(frozen=True)
+class TemporalThresholds:
+    """Resolved gate values, with where each came from for the receipt trail."""
+
+    residual_p95_max: float = DEFAULT_RESIDUAL_P95_MAX
+    flicker_p95_max: float = DEFAULT_FLICKER_P95_MAX
+    delta_p95_min: float = DEFAULT_DELTA_P95_MIN
+    source: str = "default"
 
 
 @dataclass(frozen=True)
@@ -26,14 +47,51 @@ class TemporalQualityReceipt:
     error: str = ""
 
 
-def _threshold(name: str, default: float) -> float:
+def _env_threshold(name: str) -> float | None:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
     try:
-        return float(os.environ.get(name, str(default)))
+        return float(raw)
     except ValueError:
-        return default
+        return None
 
 
-def measure_temporal_frames(frames: Iterable[object]) -> TemporalQualityReceipt:
+def resolve_thresholds(calibrated: TemporalThresholds | None = None) -> TemporalThresholds:
+    """Explicit operator env overrides win, then site calibration, then defaults."""
+    base = calibrated or TemporalThresholds()
+    overrides = {
+        "residual_p95_max": _env_threshold("DIONY_TEMPORAL_RESIDUAL_P95_MAX"),
+        "flicker_p95_max": _env_threshold("DIONY_FLICKER_LUMA_P95_MAX"),
+        "delta_p95_min": _env_threshold("DIONY_TEMPORAL_DELTA_P95_MIN"),
+    }
+    if all(value is None for value in overrides.values()):
+        return base
+    return TemporalThresholds(
+        residual_p95_max=(
+            overrides["residual_p95_max"]
+            if overrides["residual_p95_max"] is not None
+            else base.residual_p95_max
+        ),
+        flicker_p95_max=(
+            overrides["flicker_p95_max"]
+            if overrides["flicker_p95_max"] is not None
+            else base.flicker_p95_max
+        ),
+        delta_p95_min=(
+            overrides["delta_p95_min"]
+            if overrides["delta_p95_min"] is not None
+            else base.delta_p95_min
+        ),
+        source=f"{base.source}+env",
+    )
+
+
+def measure_temporal_frames(
+    frames: Iterable[object],
+    *,
+    thresholds: TemporalThresholds | None = None,
+) -> TemporalQualityReceipt:
     """Measure motion residual and global luminance changes on RGB frames.
 
     A global brightness pulse is flicker. Spatially incoherent frame-to-frame
@@ -42,6 +100,7 @@ def measure_temporal_frames(frames: Iterable[object]) -> TemporalQualityReceipt:
     """
     import numpy as np
 
+    gates = resolve_thresholds(thresholds)
     lumas = []
     for frame in frames:
         array = np.asarray(frame)
@@ -65,29 +124,30 @@ def measure_temporal_frames(frames: Iterable[object]) -> TemporalQualityReceipt:
     delta_p95 = float(np.percentile(deltas, 95))
     residual_p95 = float(np.percentile(residuals, 95))
     flicker_p95 = float(np.percentile(flicker, 95))
-    morph_limit = _threshold("DIONY_TEMPORAL_RESIDUAL_P95_MAX", 0.20)
-    flicker_limit = _threshold("DIONY_FLICKER_LUMA_P95_MAX", 0.12)
-    motion_floor = _threshold("DIONY_TEMPORAL_DELTA_P95_MIN", 0.0015)
     return TemporalQualityReceipt(
         measured=True,
         frame_count=len(lumas),
         temporal_delta_p95=round(delta_p95, 6),
         temporal_residual_p95=round(residual_p95, 6),
         flicker_luma_p95=round(flicker_p95, 6),
-        morph_ok=residual_p95 <= morph_limit,
-        flicker_ok=flicker_p95 <= flicker_limit,
-        motion_ok=delta_p95 >= motion_floor,
+        morph_ok=residual_p95 <= gates.residual_p95_max,
+        flicker_ok=flicker_p95 <= gates.flicker_p95_max,
+        motion_ok=delta_p95 >= gates.delta_p95_min,
     )
 
 
-def measure_negative_quality(path: Path) -> TemporalQualityReceipt:
-    """Decode a small 8 fps analysis stream; never retain full-resolution video."""
+def measure_negative_quality(
+    path: Path,
+    *,
+    thresholds: TemporalThresholds | None = None,
+) -> TemporalQualityReceipt:
+    """Decode a small analysis stream; never retain full-resolution video."""
     import numpy as np
 
     ffmpeg = os.environ.get("DIONY_FFMPEG", "").strip() or shutil.which("ffmpeg")
     if not ffmpeg:
         return TemporalQualityReceipt(False, error="FFmpeg is unavailable")
-    width, height = 160, 90
+    width, height = ANALYSIS_WIDTH, ANALYSIS_HEIGHT
     try:
         process = subprocess.run(
             [
@@ -98,7 +158,7 @@ def measure_negative_quality(path: Path) -> TemporalQualityReceipt:
                 "-i",
                 str(path),
                 "-vf",
-                f"scale={width}:{height}:flags=area,fps=8",
+                f"scale={width}:{height}:flags=area,fps={ANALYSIS_FPS}",
                 "-an",
                 "-f",
                 "rawvideo",
@@ -124,4 +184,4 @@ def measure_negative_quality(path: Path) -> TemporalQualityReceipt:
         )
         for index in range(0, len(process.stdout) - frame_bytes + 1, frame_bytes)
     ]
-    return measure_temporal_frames(frames)
+    return measure_temporal_frames(frames, thresholds=thresholds)

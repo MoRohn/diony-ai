@@ -56,6 +56,15 @@
       ],
       "title": "LoudnessTarget",
       "type": "string"
+    },
+    "SoundtrackPolicy": {
+      "description": "Whether generated (non-speech) audio may join the licensed soundtrack.",
+      "enum": [
+        "licensed_only",
+        "generated_ok"
+      ],
+      "title": "SoundtrackPolicy",
+      "type": "string"
     }
   },
   "properties": {
@@ -99,6 +108,10 @@
       "default": -1.0,
       "title": "True Peak Dbtp",
       "type": "number"
+    },
+    "soundtrack_policy": {
+      "$ref": "#/$defs/SoundtrackPolicy",
+      "default": "licensed_only"
     },
     "visual_grammar": {
       "title": "Visual Grammar",

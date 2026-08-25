@@ -28,7 +28,8 @@ def test_expand_idea_grammar_on_every_shot() -> None:
         )
     )
     assert project.bible.width == 1920
-    assert len(project.shots) == 60
+    # 5 minutes of TRT on the honest 81-frame lane with 8-frame stitch handles.
+    assert len(project.shots) == 99
     for shot in project.shots:
         assert shot.focal_mm > 0
         assert shot.finish == FinishIntent.DELIVERABLE
@@ -59,7 +60,7 @@ def test_length_allotments_are_goals() -> None:
             target_minutes=0.5,
         )
     )
-    assert len(short.shots) == 6
+    assert len(short.shots) == 10
     mid = expand_idea(
         Brief(
             idea="A courier delivers a letter that rewrites the city map.",
@@ -67,7 +68,7 @@ def test_length_allotments_are_goals() -> None:
             target_minutes=10,
         )
     )
-    assert len(mid.shots) == 60
+    assert len(mid.shots) == 120
     assert any("quality-lane" in n.body for n in mid.notes)
 
 
@@ -159,8 +160,10 @@ def test_short_goal_stitched_trt_is_near_the_picker() -> None:
     )
     _, five_total = stitch_events(five)
     five_trt = five_total / five.bible.fps
-    assert 240 <= five_trt <= 320
-    assert all(abs(s.duration_frames / s.fps - 5) < 0.2 for s in five.shots)
+    # Lane-true bookings stitch to the goal exactly, not approximately.
+    assert five_total == round(5 * 60 * five.bible.fps)
+    assert abs(five_trt - 300) < 0.1
+    assert all(17 <= s.duration_frames <= 81 for s in five.shots)
 
 
 def test_visual_only_idea_does_not_invent_dialogue_or_s2v() -> None:
@@ -449,7 +452,7 @@ def test_long_form_without_a_starting_still_chains_bounded_i2v_segments() -> Non
     assert project.shots[0].continuity_mode == ContinuityMode.INDEPENDENT
     assert all(shot.engine == Engine.I2V_A14B for shot in project.shots[1:])
     assert all(shot.continuity_mode == ContinuityMode.PREVIOUS_FRAME for shot in project.shots[1:])
-    assert all(4 <= shot.duration_frames / shot.fps <= 7 for shot in project.shots)
+    assert all(17 <= shot.duration_frames <= 81 for shot in project.shots)
     assert all("previous final frame" in shot.prompt.casefold() for shot in project.shots[1:])
 
 
@@ -478,13 +481,13 @@ def test_attached_character_sample_locks_every_shot_and_boundary() -> None:
         assets=[still],
     )
 
-    assert len(project.shots) == 2
+    assert len(project.shots) == 4
     assert all(shot.engine == Engine.I2V_A14B for shot in project.shots)
     assert all(shot.keyframe_asset_ids == [still.id] for shot in project.shots)
     assert all(shot.reference_lock == "character_and_background" for shot in project.shots)
     assert project.shots[0].continuity_mode == "reference"
-    assert project.shots[1].continuity_mode == "previous_frame"
-    assert project.shots[1].overlap_frames == 8
+    assert all(shot.continuity_mode == "previous_frame" for shot in project.shots[1:])
+    assert all(shot.overlap_frames == 8 for shot in project.shots[1:])
     assert all("no presenter" in shot.prompt.casefold() for shot in project.shots)
     assert all("picture-in-picture" in shot.negative_prompt.casefold() for shot in project.shots)
     assert all(shot.camera_move == "static" for shot in project.shots)
@@ -634,8 +637,8 @@ def test_retake_upgrades_a_pre_fix_plural_reference_project() -> None:
         else:
             shot.duration_frames -= 8
 
-    refresh_reference_shot(project, project.shots[0])
-    refresh_reference_shot(project, project.shots[1])
+    for shot in project.shots:
+        refresh_reference_shot(project, shot)
 
     assert all(shot.engine == Engine.I2V_A14B for shot in project.shots)
     assert all(shot.reference_lock == ReferenceLock.CHARACTER_AND_BACKGROUND for shot in project.shots)
@@ -643,7 +646,9 @@ def test_retake_upgrades_a_pre_fix_plural_reference_project() -> None:
     assert all(shot.keyframe_asset_ids == [still.id] for shot in project.shots)
     assert project.shots[0].continuity_mode == ContinuityMode.REFERENCE
     assert project.shots[1].continuity_mode == ContinuityMode.PREVIOUS_FRAME
-    assert project.shots[1].duration_frames == 128
+    # The upgrade never inflates a booking past camera truth; the persisted
+    # duration stands and AutoQC reconciles any remaining fiction to measured frames.
+    assert project.shots[1].duration_frames == 73
     assert all(shot.overlap_frames == 8 for shot in project.shots)
     assert all("picture-in-picture" in shot.negative_prompt for shot in project.shots)
     assert all("cartoon" not in shot.negative_prompt.casefold() for shot in project.shots)
@@ -662,3 +667,74 @@ def test_identical_briefs_receive_full_strength_unique_run_namespaces() -> None:
     assert first.id != second.id
     assert len(first.id.rsplit("-", 1)[-1]) == 32
     assert len(second.id.rsplit("-", 1)[-1]) == 32
+
+
+def test_lane_durations_are_lane_true_and_stitch_to_the_exact_target() -> None:
+    from diony_contracts.studio import (
+        STITCH_OVERLAP_FRAMES,
+        WAN_LANE_FRAMES,
+        WAN_MIN_SHOT_FRAMES,
+        _lane_durations,
+    )
+
+    for target in (17, 47, 81, 82, 120, 168, 240, 719, 7193):
+        durations = _lane_durations(target)
+        assert all(WAN_MIN_SHOT_FRAMES <= d <= WAN_LANE_FRAMES for d in durations)
+        stitched = sum(durations) - STITCH_OVERLAP_FRAMES * (len(durations) - 1)
+        assert stitched == max(WAN_MIN_SHOT_FRAMES, target)
+
+
+def test_program_durations_are_monotonic_in_the_length_goal() -> None:
+    from diony_contracts.studio import STITCH_OVERLAP_FRAMES, _program_durations
+
+    def trt(minutes: float) -> int:
+        durations = _program_durations(minutes)
+        return sum(durations) - STITCH_OVERLAP_FRAMES * (len(durations) - 1)
+
+    goals = [0.5, 1.0, 2.0, 3.0, 5.0]
+    stitched = [trt(m) for m in goals]
+    assert stitched == sorted(stitched)
+    # A longer goal inside the quality window never yields a shorter program.
+    assert trt(3.0) > trt(1.0)
+
+
+def test_refresh_preserves_a_repaired_current_plan() -> None:
+    """A QC repair applied after the contract refresh must survive re-dispatch."""
+    from diony_contracts.wan_prompt import repair_wan_prompt_for_qc
+
+    still = Asset(
+        id="ast-character",
+        kind=AssetKind.IMAGE,
+        filename="character.png",
+        mime="image/png",
+        bytes=12,
+        path="assets/ast-character/character.png",
+    )
+    project = expand_idea(
+        Brief(
+            idea=(
+                "Using this attached character and same background. Illustrate the character "
+                "as if they are brainstorming, being creative, producing, and directing a scene."
+            ),
+            customer_kind=CustomerKind.SERIES,
+            target_minutes=10 / 60,
+            production_kind="sample",
+            sample_seconds=10,
+            attachment_ids=[still.id],
+        ),
+        assets=[still],
+    )
+    shot = project.shots[1]
+    refresh_reference_shot(project, shot)
+    assert repair_wan_prompt_for_qc(
+        shot, "Measured motion failed (delta p95 0.0002); the plate is effectively frozen."
+    )
+    repaired_motion = shot.prompt_plan.motion
+    repaired_prompt = shot.prompt
+    assert "mid-clip freeze" in shot.negative_prompt
+
+    refresh_reference_shot(project, shot)
+
+    assert shot.prompt_plan.motion == repaired_motion
+    assert shot.prompt == repaired_prompt
+    assert "mid-clip freeze" in shot.negative_prompt

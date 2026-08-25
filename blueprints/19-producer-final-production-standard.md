@@ -204,8 +204,11 @@ story outcome, safety decision, human note, or supplied reference ownership.
 | fast blocking | TI2V-5B | `previz` only; never master input without A14B replacement |
 | final picture | `diony_sr_v1` | temporal SR, legalize, grade, conform |
 
-Camera duration stays on the approximately five-second A14B quality lane. Longer
-programs gain shots/reels; they do not stretch generation duration to fake TRT.
+Camera duration stays on the native A14B quality lane: a bounded 4n+1 take of at
+most **81 frames** (~3.4 s at 23.976). The timeline books only frames the camera
+actually delivers — a booked frame may be trimmed at conform, never stretched —
+and adjacent shots share the 8-frame temporal blend. Longer programs gain
+shots/reels; they do not stretch generation duration to fake TRT.
 
 ### Consistency locks
 
@@ -343,14 +346,35 @@ failed checks, stable references, and recommended repair route.
 - Wan S2V consumes the locked processed audio. Lip confidence is at least 0.90
   and p95 dialogue offset is within 40 ms; facial and upper-body performance
   must pass the same timed performance receipt;
-- dialogue, score, and SFX are separate stems when present;
+- dialogue, ambience, Foley, and score are separate stems when present. The
+  non-dialogue stems come from two receipted sources, in fixed priority: the
+  operator-provisioned licensed sound library (`DIONY_SOUND_LIBRARY`,
+  `ambience/`/`foley/`/`score/` subfolders), and — only when the site exports
+  `DIONY_AUDIOGEN=enabled` AND the Bible's `soundtrack_policy` is
+  `generated_ok` — cues rendered locally by the pinned open-weights
+  instruments (ThinkSound Apache-2.0 for picture-conditioned Foley/ambience,
+  ACE-Step Apache-2.0 for score, Stable Audio Open under the Stability
+  Community License for textures; see NOTICE) through the
+  `DIONY_AUDIOGEN_COMMAND` adapter. Both are edit-listed by DeepSeek at roll
+  while the brain is resident and persisted as a digest-protected plan; a
+  missing or tampered library cue invalidates the whole plan, and every
+  generated cue carries a receipt (generator, prompt, seed, sha256, measured
+  QC) and must pass duration, energy, true-peak, and a **no-speech** gate
+  (voiced-speech presence below 0.20 — CosyVoice remains the only speech
+  instrument). A generated cue that fails renders or gates is dropped with a
+  visible warning and never blocks delivery. Cue provenance (`licensed` vs
+  `generated`) is recorded in the plan and stem receipts;
+- rails mix with dialogue-priority sidechain ducking on ambience and score,
+  per-clip dialogue crossfades sized to the picture's temporal blends, and a
+  program-level two-pass linear loudnorm to the Bible target;
 - a picture-only request does not invent dialogue, route a template beat to
   S2V, or synthesize noise merely to populate a soundtrack; without authored
-  dialogue or verified content-bearing audio, Mix remains open and blocks the
-  deliverable;
+  dialogue or verified content-bearing audio (licensed planned cues qualify),
+  Mix remains open and blocks the deliverable;
 - room tone, white noise, pink noise, test tones, and silence never satisfy
   dialogue or finished-soundtrack evidence;
-- final Mix assembles verified per-clip VoiceClipPackages and never invokes synthesis;
+- final Mix assembles verified per-clip VoiceClipPackages and licensed library
+  bytes and never invokes synthesis;
 - broadcast target is −24 LUFS, streaming target is −16 LUFS;
 - true peak is −1 dBTP;
 - missing required dialogue, clipped stems, silent channels, phase faults, or

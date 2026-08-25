@@ -602,6 +602,21 @@ def repair_wan_prompt_plan(plan: WanPromptPlan, failure_notes: str) -> WanPrompt
     elif any(
         cue in notes
         for cue in (
+            "voice performance",
+            "lip-sync",
+            "lipsync",
+            "audiovisual offset",
+            "mouth-sync",
+        )
+    ):
+        motion = (
+            f"{plan.motion}; the speaking face remains visible as each phoneme drives precise "
+            "lips, mouth, and jaw timing without frozen or doubled mouth motion"
+        )
+        negative_terms.extend(("frozen lips", "late mouth motion", "doubled mouth"))
+    elif any(
+        cue in notes
+        for cue in (
             "froze",
             "frozen",
             "no movement",

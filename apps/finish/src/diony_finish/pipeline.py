@@ -260,12 +260,26 @@ def _tile_sr(model, device, frame, *, tile: int | None = None) -> object:
     return arr[: h * SR_SCALE, : w * SR_SCALE]
 
 
+def require_temporal_sr() -> None:
+    """Temporal SR is part of the diony_sr_v1 contract, not an optional extra.
+
+    Without the flow warp, finish degrades to per-frame still SR — the exact
+    "boiling grain" failure mode Blueprint 06 names. Refuse loudly instead of
+    silently shipping it.
+    """
+    try:
+        import cv2  # noqa: F401
+    except ImportError as exc:
+        raise FinishError(
+            "diony_sr_v1 requires OpenCV (cv2) for the temporal flow blend; "
+            "per-frame still SR would ship boiling grain. Install opencv-python "
+            "on the finish host."
+        ) from exc
+
+
 def _warp_blend(prev, current, prev_gray, gray):
     import numpy as np
-    try:
-        import cv2
-    except ImportError:
-        return current
+    import cv2
     flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
     flow = cv2.resize(flow, (current.shape[1], current.shape[0])) * SR_SCALE
     h, w = current.shape[:2]
@@ -670,6 +684,7 @@ def finish_clip(
         raise FinishError(f"720 negative missing: {src}")
     if _truthy("DIONY_FINISH_FAKE"):
         return _fake_master(src, dest, fps)
+    require_temporal_sr()
     model, device = _load_model()
     tile = _device_tile_size(device)
     frames, src_fps, measured_total = _decode_frame_stream(src)
@@ -745,12 +760,20 @@ def _stitch_filter(
         raise FinishError("no 1080 clips to stitch")
     filters: list[str] = []
     for index, (path, _handle, duration) in enumerate(clips):
+        frames = max(1, duration)
         source_frames = _media_frame_count(path)
-        stretch = max(1, duration) / max(1, source_frames or duration)
+        if source_frames and source_frames < frames - 1 and not _truthy("DIONY_FINISH_FAKE"):
+            # A booked frame may be trimmed, never stretched. Retiming picture to
+            # cover a generation shortfall alters motion cadence and desyncs the
+            # locked audio rail; a short clip is a QC problem, not a conform trick.
+            raise FinishError(
+                f"1080 clip {path.name} decodes {source_frames} frames but the "
+                f"timeline books {frames}; refusing to stretch motion to cover the gap"
+            )
         filters.append(
-            f"[{index}:v]trim=start_frame=0,setpts={stretch:.9f}*PTS,"
+            f"[{index}:v]trim=start_frame=0,"
             f"fps={fps:.6f},tpad=stop_mode=clone:stop=-1,"
-            f"trim=start_frame=0:end_frame={max(1, duration)},"
+            f"trim=start_frame=0:end_frame={frames},"
             f"settb=AVTB,setpts=PTS-STARTPTS[v{index}]"
         )
     current = "[v0]"
@@ -778,6 +801,11 @@ def _stitch_filter(
         f"limiter=min=72:max=952:planes=6{program}"
     )
     return ";".join(filters), program, total_frames
+
+
+def media_frame_count(path: Path) -> int:
+    """Measured decoded frames of a finished clip, for trim-only timeline lineage."""
+    return _media_frame_count(path)
 
 
 def _media_frame_count(path: Path) -> int:

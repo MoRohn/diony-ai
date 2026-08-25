@@ -139,3 +139,41 @@ Source: https://github.com/boto/boto3 and https://github.com/boto/botocore
 
 These libraries do not change Diony's proprietary software license. Their own
 license and notice files remain controlling for the upstream components.
+
+==============================================================================
+ThinkSound (Apache License 2.0)
+==============================================================================
+
+Project: ThinkSound — Chain-of-Thought reasoning for audio generation/editing
+Source: https://github.com/FunAudioLLM/ThinkSound
+Weights: https://huggingface.co/FunAudioLLM/ThinkSound
+License: Apache License 2.0 (code and model weights)
+
+Used, when a site enables generated soundtrack cues, as the local
+video-conditioned Foley/ambience instrument. Never a hosted service.
+
+==============================================================================
+ACE-Step (Apache License 2.0)
+==============================================================================
+
+Project: ACE-Step — A Step Towards Music Generation Foundation Model
+Source: https://github.com/ace-step/ACE-Step
+Weights: https://huggingface.co/ACE-Step/ACE-Step-v1-3.5B
+License: Apache License 2.0 (code and model weights)
+
+Used, when a site enables generated soundtrack cues, as the local score
+instrument. Never a hosted service.
+
+==============================================================================
+Stable Audio Open 1.0 (Stability AI Community License)
+==============================================================================
+
+Project: Stable Audio Open
+Weights: https://huggingface.co/stabilityai/stable-audio-open-1.0
+License: Stability AI Community License Agreement
+
+Optional local texture/SFX instrument for generated soundtrack cues. The
+Stability AI Community License permits free commercial use below USD $1M
+annual revenue with registration; larger organizations require a Stability AI
+Enterprise License. Operators enabling this instrument are responsible for
+that registration/licensing. Never a hosted service.

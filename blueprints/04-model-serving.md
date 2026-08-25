@@ -28,6 +28,7 @@ Four-node leased H100/H200/B200/B300/GB200 (`lease-gpu-v1`) uses that datacenter
 
 ```
 vllm serve deepseek-ai/DeepSeek-V4-Flash-0731 \
+  --served-model-name DeepSeek-V4-Flash-0731 \
   --trust-remote-code \
   --kv-cache-dtype nvfp4_ds_mla \
   --block-size 256 \
@@ -63,6 +64,7 @@ One Blackwell B300. Compose stub: `infra/compose/brain-b300.yml`. Serving notes:
 
 ```
 vllm serve /models/deepseek/DeepSeek-V4-Flash-0731 \
+  --served-model-name DeepSeek-V4-Flash-0731 \
   --trust-remote-code \
   --tensor-parallel-size 1 \
   --max-model-len 1048576 \
@@ -77,6 +79,7 @@ One Blackwell B200, **180 GB**. Weights ~155.4 GiB. Pin `max_model_len 16384`, `
 
 ```
 vllm serve /models/deepseek/DeepSeek-V4-Flash-0731 \
+  --served-model-name DeepSeek-V4-Flash-0731 \
   --trust-remote-code \
   --tensor-parallel-size 1 \
   --max-model-len 16384 \

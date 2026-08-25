@@ -656,6 +656,92 @@ def test_adopted_camera_job_auto_retakes_failed_continuity(tmp_path, monkeypatch
     assert shot.selected_take_id == f"{shot.id}-t2"
 
 
+def test_adopted_b200_canary_rebinds_its_accelerated_lane_to_the_retake(
+    tmp_path, monkeypatch
+) -> None:
+    from diony_producer import farm as farm_module
+
+    project = demo_project()
+    shot = project.shots[0]
+    take = project.takes_for(shot.id)[0]
+    project.takes = [item for item in project.takes if item.shot_id != shot.id]
+    project.takes.insert(0, take)
+    shot.selected_take_id = take.id
+    output = tmp_path / "projects" / project.id / "takes" / take.id / "negative_720.mp4"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"landed" * 64)
+    receipt = tmp_path / "wan-cudnn-sdpa-validation.json"
+    receipt.write_text("{}")
+    job = {"pid": 1234, "save": str(output), "take_id": take.id}
+    rebound: list[tuple[str, str]] = []
+    queued: list[list[str]] = []
+
+    def attach_failed(_project, current, *args, **kwargs) -> None:
+        current.qc = QCReport(
+            id=f"qc-{current.id}",
+            take_id=current.id,
+            shot_id=current.shot_id,
+            verdict=QCVerdict.FAIL,
+            identity_ok=True,
+            morph_ok=True,
+            flicker_ok=True,
+            duration_ok=True,
+            legal_ok=True,
+            audiovisual_measurement_qualified=True,
+            notes="Voice performance failed: qualified audiovisual QC rejected this take.",
+        )
+
+    monkeypatch.setattr(farm_module, "list_generate_jobs", lambda: [job])
+    monkeypatch.setattr(farm_module, "generate_process_alive", lambda pid: False)
+    monkeypatch.setattr(farm_module, "attach_negative", attach_failed)
+    monkeypatch.setattr(farm_module, "_bound_attention_canary", lambda *_args: receipt)
+    monkeypatch.setattr(
+        farm_module,
+        "_rebind_attention_canary",
+        lambda _project, failed, retry, _path: rebound.append((failed.id, retry.id)),
+    )
+    monkeypatch.setattr(farm_module.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        farm_module,
+        "start_farm",
+        lambda current, takes: queued.append([item.id for item in takes]),
+    )
+
+    farm_module.adopt_live_farm(project)
+
+    deadline = time.time() + 2
+    while not queued and time.time() < deadline:
+        time.sleep(0.01)
+
+    assert rebound == [(take.id, f"{shot.id}-t2")]
+    assert queued[0][0] == f"{shot.id}-t2"
+
+
+def test_unqualified_av_diagnostic_never_spends_another_full_camera_take() -> None:
+    from diony_producer.farm import _auto_retake_quality_failure
+
+    project = demo_project()
+    take = project.takes[0]
+    take.qc = QCReport(
+        id=f"qc-{take.id}",
+        take_id=take.id,
+        shot_id=take.shot_id,
+        verdict=QCVerdict.FAIL,
+        identity_ok=True,
+        morph_ok=True,
+        flicker_ok=True,
+        duration_ok=True,
+        legal_ok=True,
+        audiovisual_measurement_qualified=False,
+        notes=(
+            "Voice performance failed: lip-sync confidence 0.8013 is below 0.90; "
+            "audiovisual offset p95 83.333 ms exceeds 40 ms."
+        ),
+    )
+
+    assert _auto_retake_quality_failure(take) is False
+
+
 def test_adoption_never_resurrects_an_unselected_missing_take(monkeypatch) -> None:
     from diony_producer import farm as farm_module
 
@@ -830,11 +916,12 @@ def test_b200_attention_canary_auto_retakes_voice_qc_without_losing_rundown(
             ),
             identity_ok=True,
             morph_ok=True,
-            flicker_ok=True,
-            duration_ok=True,
-            legal_ok=True,
-            notes=(
-                "Voice performance failed: lip-sync confidence 0.7956 is below 0.90."
+                flicker_ok=True,
+                duration_ok=True,
+                legal_ok=True,
+                audiovisual_measurement_qualified=True,
+                notes=(
+                    "Voice performance failed: lip-sync confidence 0.7956 is below 0.90."
                 if take.shot_id == first_shot_id and take.attempt == 1
                 else "AutoQC passed."
             ),
@@ -1060,3 +1147,127 @@ def test_same_background_lock_rejects_late_reference_drift(tmp_path, monkeypatch
     assert take.qc is not None
     assert take.qc.verdict == QCVerdict.FAIL
     assert "required 0.75" in take.qc.notes
+
+
+def test_under_delivered_negative_fails_the_duration_gate(tmp_path, monkeypatch) -> None:
+    """A booked frame may be trimmed from delivered picture, never stretched into it."""
+    from diony_producer import farm as farm_module
+
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
+    monkeypatch.delenv("DIONY_MEASURED_QC_REQUIRED", raising=False)
+    project = expand_idea(
+        Brief(
+            idea="A courier delivers a letter that rewrites the city map.",
+            customer_kind="feature",
+            target_minutes=0.5,
+        )
+    )
+    shot = project.shots[0]
+    assert shot.duration_frames == 81
+    take = Take(id="sh-010-t1", shot_id=shot.id, attempt=1, engine=shot.engine, seed=shot.seed)
+    project.takes = [take]
+    relative = f"projects/{project.id}/takes/{take.id}/negative_720.mp4"
+    negative = tmp_path / "vault" / relative
+    negative.parent.mkdir(parents=True)
+    negative.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"short" * 32)
+    monkeypatch.setattr(
+        farm_module,
+        "probe_media",
+        lambda *args, **kwargs: {"width": 1280, "height": 720, "fps": 23.976, "frames": 76},
+    )
+
+    farm_module.attach_negative(project, take, relative, shot.duration_frames, live=True)
+
+    assert take.qc is not None
+    assert take.qc.verdict == QCVerdict.FAIL
+    assert take.qc.duration_ok is False
+    assert take.qc.notes.startswith("Duration mismatch")
+    # An honest shortfall is a camera failure the farm may retake automatically.
+    assert any(take.qc.notes.startswith(p) for p in farm_module._AUTO_RETAKE_QC_PREFIXES)
+
+
+def test_legacy_over_booked_shot_reconciles_to_measured_camera_truth(tmp_path, monkeypatch) -> None:
+    """A pre-lane Shot that booked 120 frames keeps only what Wan delivered."""
+    from diony_producer import farm as farm_module
+
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
+    monkeypatch.delenv("DIONY_MEASURED_QC_REQUIRED", raising=False)
+    project = expand_idea(
+        Brief(
+            idea="A courier delivers a letter that rewrites the city map.",
+            customer_kind="feature",
+            target_minutes=0.5,
+        )
+    )
+    shot = project.shots[0]
+    shot.duration_frames = 120  # persisted before the lane-true booking contract
+    take = Take(id="sh-010-t1", shot_id=shot.id, attempt=1, engine=shot.engine, seed=shot.seed)
+    project.takes = [take]
+    relative = f"projects/{project.id}/takes/{take.id}/negative_720.mp4"
+    negative = tmp_path / "vault" / relative
+    negative.parent.mkdir(parents=True)
+    negative.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"legacy" * 32)
+    monkeypatch.setattr(
+        farm_module,
+        "probe_media",
+        lambda *args, **kwargs: {"width": 1280, "height": 720, "fps": 23.976, "frames": 81},
+    )
+
+    farm_module.attach_negative(project, take, relative, 120, live=True)
+
+    assert take.qc is not None
+    assert take.qc.duration_ok is True
+    assert take.qc.verdict == QCVerdict.PASS
+    assert shot.duration_frames == 81
+
+
+def test_auto_retake_prefers_the_directive_and_jumps_the_seed(tmp_path, monkeypatch) -> None:
+    from diony_producer import farm as farm_module
+
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
+    project = expand_idea(
+        Brief(
+            idea="A courier delivers a letter that rewrites the city map.",
+            customer_kind="feature",
+            target_minutes=0.5,
+        )
+    )
+    shot = project.shots[0]
+    take = farm_module.new_generation_take(project, shot, live=True)
+    project.takes = [take]
+    shot.selected_take_id = take.id
+    take.qc.verdict = QCVerdict.FAIL
+    take.qc.notes = "Measured motion failed (delta p95 0.0002); the plate is effectively frozen."
+    calls = {"directive": 0, "repair": 0}
+
+    def fake_directive(project_arg, shot_arg, take_arg):
+        calls["directive"] += 1
+        return True
+
+    def fake_repair(shot_arg, notes):
+        calls["repair"] += 1
+        return True
+
+    monkeypatch.setattr(farm_module, "direct_retake", fake_directive)
+    monkeypatch.setattr(farm_module, "repair_wan_prompt_for_qc", fake_repair)
+
+    retry = farm_module.auto_retake_for_qc_failure(project, take)
+
+    assert retry is not None
+    assert calls == {"directive": 1, "repair": 0}
+    # The retake seed is a distant deterministic jump, not an adjacent draw.
+    assert retry.seed != shot.seed
+    assert abs(retry.seed - shot.seed) > 1000
+    again = farm_module.new_generation_take(project, shot, attempt=retry.attempt, live=True)
+    assert again.seed == retry.seed
+
+    # Without a directive, the keyword repair table still runs.
+    monkeypatch.setattr(farm_module, "direct_retake", lambda *args: False)
+    retry.qc.verdict = QCVerdict.FAIL
+    retry.qc.notes = "Measured motion failed (delta p95 0.0002); the plate is effectively frozen."
+    second = farm_module.auto_retake_for_qc_failure(project, retry)
+    assert second is not None
+    assert calls["repair"] == 1

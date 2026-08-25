@@ -216,9 +216,18 @@ silently reduce the picture codec or bit depth.
 - spatial residual p95 after removing coherent exposure change;
 - global luminance-change p95.
 
-`DIONY_MEASURED_QC_REQUIRED=1` makes missing evidence, incoherent temporal change,
-or flicker a hard camera failure. It remains off until threshold calibration is
-included in the isolated qualification. Reference SSIM and boundary continuity
+Measured temporal QC turns **on by default once the site is calibrated**. The
+calibration receipt (`{vault}/.cluster/measured-qc-calibration.json`, written by
+`python -m diony_producer.calibration` from at least 12 verified-good 720p
+negatives — explicit paths or `--from-vault` PASS-verdict takes) derives the
+motion floor, morph residual ceiling, and flicker ceiling with margin around
+what good clips actually measure, clamped to absolute guard rails, digest-
+protected, and bound to the analysis measurement version (`diony-temporal-v2`,
+320×180 @ 12 fps). With a valid receipt and no explicit choice, missing
+evidence, incoherent temporal change, flicker, or a frozen/black plate is a
+hard camera failure. `DIONY_MEASURED_QC_REQUIRED=1|0` remains the explicit
+operator override in either direction; a tampered, stale-version, or
+out-of-bounds receipt never applies. Reference SSIM and boundary continuity
 remain independent required evidence.
 
 Every 1080 Take and program master must independently verify:

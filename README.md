@@ -52,7 +52,7 @@ North Star deliverable: **one hour of TV/movie-ready audiovisual**, 1920×1080, 
 **Idea to finished clip**
 - **Sample** is a real action: a finished **5s/10s clip** from the current idea and its references — bounded Wan2.2 camera takes through AutoQC, exact time-frame assembly, mandatory `diony_sr_v1` 1080 finish and mix, entering Gallery only with checksum-verified master lineage.
 - **Binding image references**: subject-defining stills lock the whole show to Wan **I2V** — characters and character teams hold across shots, adjacent shots condition on the prior print's last frame, boundary QC and an eight-frame temporal blend keep continuity, and I2V can never silently downgrade to T2V. ([Blueprint 20](blueprints/20-wan22-prompt-intelligence.md))
-- **Length goals**, not stopwatches: shot count scales so the stitched program lands near the goal, on the Wan 5-second quality lane.
+- **Length goals**, not stopwatches: shot count scales so the stitched program lands the goal exactly, on the native Wan 81-frame quality lane — booked picture is trimmed at conform, never stretched.
 
 **Production you can watch and stop**
 - Production is a **live monitor**: overall tally and clock, per-shot clip milestones, pipeline stages, GPU/compute activity, and a production log — not server access logs.

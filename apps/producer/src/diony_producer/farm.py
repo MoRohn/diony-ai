@@ -30,7 +30,7 @@ from diony_contracts.enums import (
     ReferenceLock,
     TakeOrigin,
 )
-from diony_contracts.live import inference_live
+from diony_contracts.live import inference_live, wan_frame_num
 from diony_contracts.models import (
     Artifact,
     GenerationExecutionReceipt,
@@ -52,6 +52,8 @@ from diony_producer.camera import (
 )
 from diony_producer.gallery_join import probe_media, resolve_media_tool
 from diony_producer.performance import PerformanceJournal
+from diony_producer.brain import direct_retake
+from diony_producer.calibration import calibrated_thresholds, measured_qc_required_default
 from diony_producer.quality import MEASUREMENT_VERSION, measure_negative_quality
 from diony_producer.vault import persist_project, record_activity, vault_root
 from diony_producer.voice import prepare_voice_for_take, verify_voice_animation
@@ -70,6 +72,7 @@ _REFERENCE_CHECKPOINTS = frozenset({"first", "quarter", "middle", "three_quarter
 _AUTO_RETAKE_QC_PREFIXES = (
     "Shot boundary continuity failed",
     "Reference lock failed",
+    "Duration mismatch",
     "Measured motion failed",
     "Measured temporal coherence failed",
     "Measured flicker failed",
@@ -235,6 +238,22 @@ def _rebind_attention_canary(
     )
 
 
+def _bound_attention_canary(project: Project, take: Take) -> Path | None:
+    """Recover the exact unpromoted B200 canary after a Producer restart."""
+    path = vault_root() / "qualification" / _ATTENTION_RECEIPT_NAME
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    if (
+        receipt.get("stage") == "operator_passed_quality_canary_required"
+        and receipt.get("scope_project_id") == project.id
+        and str(receipt.get("quality_canary_take_id") or "").strip() == take.id
+    ):
+        return path
+    return None
+
+
 def farm_generation() -> int:
     with _lock:
         return _generation
@@ -259,12 +278,7 @@ def qc_contract_valid(project: Project, take: Take) -> bool:
         or qc.loudness_ok is not True
     ):
         return False
-    measured_required = os.environ.get("DIONY_MEASURED_QC_REQUIRED", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    measured_required = measured_qc_required_default()
     if measured_required and (
         qc.measurement_version != MEASUREMENT_VERSION
         or qc.measured_frame_count < 3
@@ -566,7 +580,14 @@ def new_generation_take(
         shot_id=shot.id,
         attempt=n,
         engine=shot.engine,
-        seed=shot.seed + (n - 1) * 19,
+        # Retakes jump to a distant deterministic seed. Adjacent seeds explore
+        # almost the same noise; a systematic failure needs a different draw.
+        seed=(
+            shot.seed
+            if n == 1
+            else int(hashlib.sha256(f"{shot.id}:{shot.seed}:{n}".encode("utf-8")).hexdigest()[:8], 16)
+            % 2_000_000_000
+        ),
         asset_720p_id=f"neg-{tid}",
         version=n,
         origin=TakeOrigin.GENERATION,
@@ -606,6 +627,11 @@ def _auto_retake_quality_failure(take: Take) -> bool:
     if qc is None or qc.verdict != QCVerdict.FAIL:
         return False
     note = qc.notes.strip()
+    if (
+        note.startswith("Voice performance failed")
+        and qc.audiovisual_measurement_qualified is not True
+    ):
+        return False
     return any(note.startswith(prefix) for prefix in _AUTO_RETAKE_QC_PREFIXES)
 
 
@@ -626,7 +652,11 @@ def auto_retake_for_qc_failure(project: Project, take: Take) -> Take | None:
     if len(generations) >= RETAKE_CAP:
         return None
     refresh_reference_shot(project, shot)
-    repair_wan_prompt_for_qc(shot, take.qc.notes if take.qc else "")
+    # Evidence-driven direction first: DeepSeek addresses every measured symptom
+    # at once. The keyword repair table remains the offline fallback. Both are
+    # applied after the contract refresh, so the revision survives to dispatch.
+    if not direct_retake(project, shot, take):
+        repair_wan_prompt_for_qc(shot, take.qc.notes if take.qc else "")
     retry = new_generation_take(project, shot, live=True)
     project.takes.append(retry)
     shot.selected_take_id = retry.id
@@ -990,6 +1020,7 @@ def adopt_live_farm(project: Project) -> None:
     take = take_for_job(project, job)
     if take is None:
         return
+    attention_receipt = _bound_attention_canary(project, take)
     with _lock:
         if _busy:
             return
@@ -1034,7 +1065,14 @@ def adopt_live_farm(project: Project) -> None:
         if farm_cancelled() or project.production_stop is not None:
             return
         if stable:
-            attach_negative(project, take, rel, project.shot(take.shot_id).duration_frames, live=True)
+            attach_negative(
+                project,
+                take,
+                rel,
+                project.shot(take.shot_id).duration_frames,
+                live=True,
+                measured_qc_required=True if attention_receipt is not None else None,
+            )
             persist_project(project)
             integrity_error = _take_integrity_error(take)
             if integrity_error:
@@ -1043,14 +1081,42 @@ def adopt_live_farm(project: Project) -> None:
                 record_activity("qc", f"{take.shot_id} · {_detail}", level="fail", shot_id=take.shot_id)
                 retry = auto_retake_for_qc_failure(project, take)
                 if retry is not None:
-                    _error = ""
-                    _detail = (
-                        f"AutoQC retake {retry.attempt} of {RETAKE_CAP} · "
-                        f"{retry.shot_id}"
-                    )
+                    try:
+                        if attention_receipt is not None:
+                            _rebind_attention_canary(
+                                project,
+                                take,
+                                retry,
+                                attention_receipt,
+                            )
+                    except Exception as exc:  # noqa: BLE001 — receipt binding is a hard gate
+                        retry = None
+                        _error = (
+                            "B200 attention canary could not bind its adopted AutoQC retake · "
+                            f"{exc}"
+                        )[:400]
+                        _detail = _error[:240]
+                    else:
+                        _error = ""
+                        _detail = (
+                            f"AutoQC retake {retry.attempt} of {RETAKE_CAP} · "
+                            f"{retry.shot_id}"
+                        )
             else:
-                _error = ""
-                record_activity("wan", f"{take.shot_id} · 720p negative landed", shot_id=take.shot_id)
+                try:
+                    if attention_receipt is not None:
+                        _detail = f"Qualifying adopted {take.id} · measured QC + 1080 finish"
+                        _complete_attention_canary(project, take, attention_receipt)
+                except Exception as exc:  # noqa: BLE001 — qualification is a hard gate
+                    _error = f"B200 attention canary stopped before activation · {exc}"[:400]
+                    _detail = _error[:240]
+                else:
+                    _error = ""
+                    record_activity(
+                        "wan",
+                        f"{take.shot_id} · 720p negative landed",
+                        shot_id=take.shot_id,
+                    )
         else:
             from diony_wan.runner import classify_wan_log
 
@@ -1205,6 +1271,13 @@ def _voice_performance_failure(voice_package) -> str:
     if voice_package is None:
         return "Voice performance failed: audiovisual timing evidence is missing."
     qc = voice_package.qc
+    if qc.audiovisual_measurement_qualified is not True:
+        backend = qc.audiovisual_backend or "configured AV checker"
+        return (
+            "Voice performance failed: qualified mouth-sync evidence is unavailable; "
+            f"{backend} is diagnostic only, so Diony preserved this Take instead of "
+            "spending another full camera render."
+        )
     failures: list[str] = []
     if qc.lip_sync_confidence < qc.lip_sync_confidence_min:
         failures.append(
@@ -1259,18 +1332,22 @@ def attach_negative(
         "frames": 0,
     }
     dimensions_ok = int(media.get("width") or 0) == 1280 and int(media.get("height") or 0) == 720
+    measured_frames = int(media.get("frames") or 0)
+    # The camera contract is trim-only conform: Wan must deliver at least the
+    # booked frames (or the 81-frame lane ceiling when a legacy Shot over-books).
+    expected_frames = min(shot.duration_frames, wan_frame_num(shot.duration_frames, shot.fps))
+    duration_ok = (
+        measured_frames + 1 >= expected_frames
+        if live and not err and dest.is_file()
+        else not live
+    )
     temporal = (
-        measure_negative_quality(dest)
+        measure_negative_quality(dest, thresholds=calibrated_thresholds())
         if not err and dest.is_file()
         else None
     )
     if measured_qc_required is None:
-        measured_qc_required = os.environ.get("DIONY_MEASURED_QC_REQUIRED", "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
+        measured_qc_required = measured_qc_required_default()
     morph_ok = bool(temporal and temporal.measured and temporal.morph_ok) if measured_qc_required else True
     flicker_ok = (
         bool(temporal and temporal.measured and temporal.flicker_ok)
@@ -1373,6 +1450,7 @@ def attach_negative(
         and size > 32
         and not err
         and dimensions_ok
+        and duration_ok
         and reference_verified
         and continuity_verified
         and morph_ok
@@ -1386,6 +1464,7 @@ def attach_negative(
     )
     production_clean_ok = bool(
         dimensions_ok
+        and duration_ok
         and reference_verified
         and continuity_verified
         and morph_ok
@@ -1411,6 +1490,11 @@ def attach_negative(
             "Wan negative dimensions could not be measured; install FFmpeg or FFprobe."
             if not width or not height
             else f"Wan negative is {width}×{height}; Diony requires native 1280×720."
+        )
+    if not failure and not duration_ok:
+        failure = (
+            f"Duration mismatch: Wan delivered {measured_frames} frames but the "
+            f"contract requires {expected_frames}; booked picture is trimmed, never stretched."
         )
     if not failure and not reference_verified:
         measured = "missing" if similarity is None else f"{similarity:.4f}"
@@ -1445,7 +1529,7 @@ def attach_negative(
         identity_ok=reference_verified,
         morph_ok=morph_ok,
         flicker_ok=flicker_ok,
-        duration_ok=bool(media.get("frames")) if live else True,
+        duration_ok=duration_ok,
         legal_ok=legal_ok,
         motion_ok=motion_ok,
         camera_ok=camera_ok,
@@ -1465,6 +1549,10 @@ def attach_negative(
         lip_sync_confidence=(voice_package.qc.lip_sync_confidence if voice_package else None),
         audiovisual_offset_ms_p95=(
             voice_package.qc.audiovisual_offset_ms_p95 if voice_package else None
+        ),
+        audiovisual_backend=(voice_package.qc.audiovisual_backend if voice_package else ""),
+        audiovisual_measurement_qualified=(
+            voice_package.qc.audiovisual_measurement_qualified if voice_package else False
         ),
         reference_asset_ids=reference_ids,
         reference_similarity=similarity,
@@ -1489,6 +1577,11 @@ def attach_negative(
             )
         ),
     )
+    if live and duration_ok and 0 < measured_frames < shot.duration_frames:
+        # Reconcile the timeline to camera truth: a legacy Shot that booked more
+        # frames than the 81-frame lane can deliver keeps only measured frames,
+        # so assembly conforms by trim and never by a silent time-stretch.
+        shot.duration_frames = max(17, measured_frames)
 
 
 def _take_integrity_error(take: Take) -> str:

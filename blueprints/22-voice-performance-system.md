@@ -116,13 +116,25 @@ Required actions:
 | `embed-reference` | clean local reference + embedding model | speaker vector JSON | no Profile lock |
 | `align` | processed line + performance line | phoneme/viseme/co-articulation and face/body timing JSON | no S2V dispatch |
 | `studio-audio` | line WAVs/timing, duration, LUFS/peak, deterministic seed | clean dialogue WAV, final clip mix WAV, audio metrics JSON including voiced-speech presence | bounded retry, then QC hold |
-| `audiovisual-qc` | Wan negative, clean dialogue, performance metadata | lip confidence, p95 offset, performance consistency | immutable visual retake |
+| `audiovisual-qc` | Wan negative, clean dialogue, performance metadata | backend identity, qualification flag, lip confidence, p95 offset, performance consistency | immutable visual retake only from qualified mouth-sync evidence; otherwise one preserved QC hold |
 
 The command is an adapter boundary, not permission to use a hosted service.
 Backends remain local and replaceable. CosyVoice, a licensed voice engine,
 ECAPA-TDNN/CAM++-class embedding, forced alignment, and SyncNet-class AV checks
 may change independently behind these actions. Model/version names are written
 into each package.
+
+Casting is per character, never one shared voice. `synthesize` and
+`enroll-synthetic` resolve their cloning prompt in order: the character's own
+attached reference sample, then a clip from the local
+`DIONY_COSYVOICE_PROMPT_LIBRARY` keyed by cast order, then the single
+`DIONY_COSYVOICE_PROMPT_AUDIO` default. The resolved prompt path, source, and
+sha256 are recorded in the response. Because synthetic profiles enroll from
+their own first render, self-similarity is tautological; the pipeline therefore
+fails a script when two distinct speaking characters measure pairwise speaker
+similarity above the `DIONY_VOICE_CAST_DISTINCT_MAX` ceiling (default 0.90) —
+a collapsed cast is a voice QC failure with an actionable diagnostic, not a
+deliverable.
 
 `DeterministicVoiceTestBackend` exists only under `DIONY_DRY_RUN=1`. Its tones
 and fixed metrics are test evidence, never a deliverable or signed-site proof.
@@ -182,7 +194,15 @@ Default hard floors:
 Identity synthesis and studio-audio processing retry automatically up to
 `DIONY_VOICE_RETAKE_CAP` (default 3, maximum 5). Each attempt records its seed,
 metrics, and diagnostic. A visual performance failure uses the normal immutable
-Take retake path and counts against the four camera Take cap. Infrastructure and
+Take retake path and counts against the four camera Take cap only when the AV
+backend explicitly returns qualified mouth-sync evidence. Qualification is
+measured, not categorical: the local performance-motion check
+(`diony-local-av-motion-sync-v2`) measures at the clip's true frame rate,
+refines the offset to sub-frame resolution around the correlation peak, and
+qualifies only when both signals carry structure (enough comparable frames,
+active audio, an unambiguous interior correlation peak). Degenerate evidence —
+a static plate, near-silence, an edge-of-window peak — stays an unqualified
+one-take QC hold and must not spend another Wan render. Infrastructure and
 missing-backend failures do not invent output.
 
 Voiced-speech presence measures energy-modulated periodic frames in the final

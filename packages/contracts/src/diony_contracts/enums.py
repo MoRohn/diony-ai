@@ -67,6 +67,13 @@ class LoudnessTarget(StrEnum):
     STREAMING = "streaming"  # -16 LUFS
 
 
+class SoundtrackPolicy(StrEnum):
+    """Whether generated (non-speech) audio may join the licensed soundtrack."""
+
+    LICENSED_ONLY = "licensed_only"
+    GENERATED_OK = "generated_ok"
+
+
 class QCVerdict(StrEnum):
     PASS = "pass"
     FAIL = "fail"

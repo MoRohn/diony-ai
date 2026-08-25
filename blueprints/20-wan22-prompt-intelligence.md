@@ -174,20 +174,38 @@ unprepared video may not be mislabeled as Animate conditioning.
 - `character` may enter the authored Scene world while its identity, silhouette,
   proportions, wardrobe, and original medium remain locked.
 
-## On-site DeepSeek refinement
+## On-site DeepSeek planning
 
-DeepSeek-V4-Flash-0731 receives the typed plan and returns JSON with exactly the
-five named layers. Producer never stores an unparsed answer as production state.
+Planning is batched and visible, never one silent call per shot. At roll,
+Producer runs one brain health check, then:
+
+1. a **bible pass** (skipped once the Bible is human-locked) that authors the
+   project's own logline and a concrete project-specific visual grammar in
+   place of the canned playbook sentence;
+2. **draft batches** of up to 8 shots per chat call, each carrying the Bible
+   context once plus the five typed layers, identity anchors, and lock flags
+   per shot — with an explicit instruction to vary phrasing across the batch;
+3. one **critique pass** per productive batch, auditing metadata leakage,
+   contradiction with the camera lock and negative conditioning, temporal-beat
+   motion, texture, and cross-shot repetition, returning revisions for only
+   the layers that failed.
+
+Requests use Blueprint 04 agentic sampling (`temperature 1.0`, `top_p 0.95`),
+wire-level `reasoning_effort`, and output budgets sized to the batch. Serving
+commands pin `--served-model-name DeepSeek-V4-Flash-0731` so the client model
+id resolves without an env override.
 
 Programmatic locks win over model prose:
 
-- subject is copied from the local plan, not accepted from the model;
 - camera is copied from the local plan, not accepted from the model;
-- only motion, aesthetic/lighting, and environment dynamics may be enriched;
+- subject may be sharpened on unlocked shots only, and every identity anchor
+  phrase must survive verbatim, or the local subject stands;
+- motion, aesthetic/lighting, and environment dynamics may be enriched;
 - the entire candidate must still pass word-budget, motion, camera, lighting,
   and texture checks;
 - malformed, weak, contradictory, over-budget, unavailable, or cloud-routed
-  output falls back atomically to the deterministic local plan.
+  output falls back atomically to the deterministic local plan — and the
+  fallback is a production activity line, never a silent downgrade.
 
 Reference-locked Shots do not accept generative refinement. Literal ownership
 of the supplied pixels is more important than decorative prose.
@@ -210,7 +228,16 @@ true negative-conditioning input through the runtime contract.
 
 ## AutoQC layer repair
 
-Known failures change only the diagnosed layer:
+Retake revision is evidence-driven first, keyword-mapped second. When the brain
+is reachable, the full QC evidence bundle — failure notes, measured values,
+the five typed layers, negative conditioning, and what earlier attempts already
+tried — goes to the DeepSeek retake director, which may revise multiple layers
+at once and add up to four negative terms, addressing **every** reported
+symptom rather than only the first matched keyword. The directive is applied
+through the same plan validators; camera stays locked; subject changes require
+every identity anchor verbatim and never apply on reference-locked Shots. The
+applied directive and its rationale are activity lines. Offline or invalid
+direction falls back to the keyword table:
 
 | Evidence | Repair |
 |---|---|
@@ -221,8 +248,12 @@ Known failures change only the diagnosed layer:
 | plastic/painted surface | add physical material texture and natural imperfection |
 | boundary continuity | replace Motion with an explicit prior-motion handoff |
 
-Every repair creates a new Take and a new complete prompt receipt. The four-Take
-cap remains binding. Unknown failures do not trigger creative prompt churn.
+Every revision is applied **after** the reference-contract refresh and survives
+to dispatch: a refresh that would not change the shot contract preserves a
+current, dispatch-valid plan instead of recompiling over the repair. Retake
+seeds jump to a distant deterministic draw instead of an adjacent one. Every
+repair creates a new Take and a new complete prompt receipt. The four-Take cap
+remains binding. Unknown failures do not trigger creative prompt churn.
 
 Measured AutoQC also requires non-frozen temporal motion, temporal coherence,
 stable lighting, camera cleanliness, media integrity, reference identity,

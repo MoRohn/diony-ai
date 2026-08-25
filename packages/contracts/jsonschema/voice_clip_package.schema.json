@@ -333,6 +333,23 @@
           "title": "Audiovisual Offset Ms Max",
           "type": "number"
         },
+        "audiovisual_backend": {
+          "default": "",
+          "title": "Audiovisual Backend",
+          "type": "string"
+        },
+        "audiovisual_measurement_qualified": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audiovisual Measurement Qualified"
+        },
         "performance_consistency": {
           "anyOf": [
             {

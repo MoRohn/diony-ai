@@ -64,7 +64,8 @@ from diony_producer.advance import (
     maybe_advance_run,
     reopen_picture_for_retake,
 )
-from diony_producer.brain import expand_on_site
+from diony_producer.brain import expand_on_site, plan_production
+from diony_producer.soundtrack import plan_soundtrack
 from diony_producer.camera import live_camera
 from diony_producer.control_plane import ControlPlane, WorkspaceAccessDenied
 from diony_producer.farm import (
@@ -912,11 +913,17 @@ def roll_dailies() -> dict:
     _require_gpu()
     _require_running_project()
     _project.mark_production_start()
-    for shot in _project.shots:
-        # Prompt text is part of the immutable camera receipt. A recovery roll
-        # must not silently rewrite the prompt behind an already-created Take.
-        if not _project.takes_for(shot.id):
-            shot.prompt = expand_on_site(shot, _project.bible)
+    # Prompt text is part of the immutable camera receipt. A recovery roll
+    # must not silently rewrite the prompt behind an already-created Take, so
+    # planning only touches shots that have no Take yet — batched, with every
+    # outcome on the activity feed.
+    plan_production(
+        _project,
+        [shot for shot in _project.shots if not _project.takes_for(shot.id)],
+    )
+    # Soundtrack cues are edit-listed while the brain is still resident; the
+    # digest-protected plan is what Mix builds the licensed stems from later.
+    plan_soundtrack(_project)
     queued: list = []
     for shot in _project.shots:
         existing = _project.takes_for(shot.id)

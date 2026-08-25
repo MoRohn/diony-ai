@@ -137,12 +137,13 @@ def test_title_case_cues_and_curly_quotes_compile_without_stage_directions() -> 
     turns = [turn for shot in project.shots for turn in shot.dialogue_turns]
 
     assert set(by_id.values()) == {"Marcus", "Lila", "Hugo"}
-    assert [by_id[turn.character_id] for turn in turns] == [
-        "Marcus",
-        "Lila",
-        "Marcus",
-        "Hugo",
-    ]
+    # Long turns may split across lane-true shot windows; the speaking order holds.
+    speaker_runs: list[str] = []
+    for turn in turns:
+        name = by_id[turn.character_id]
+        if not speaker_runs or speaker_runs[-1] != name:
+            speaker_runs.append(name)
+    assert speaker_runs == ["Marcus", "Lila", "Marcus", "Hugo"]
     assert all("Final hold" not in turn.text for turn in turns)
     picture_prompts = " ".join(shot.prompt for shot in project.shots).casefold()
     assert "we are starting a daily gratitude circle" not in picture_prompts
@@ -177,7 +178,9 @@ def test_prose_speech_direction_with_curly_quote_compiles_as_authored_dialogue()
 
     turns = [turn for shot in project.shots for turn in shot.dialogue_turns]
 
-    assert [turn.text for turn in turns] == ["Welcome to the future, it’s our time now."]
+    # The authored line survives verbatim even when it spans lane-true windows.
+    assert " ".join(turn.text for turn in turns) == "Welcome to the future, it’s our time now."
+    assert len({turn.character_id for turn in turns}) == 1
     assert len(project.voice_profiles) == 1
     assert project.voice_profiles[0].character_id == turns[0].character_id
     assert any(shot.keyframe_asset_ids == [still.id] for shot in project.shots if shot.dialogue_turns)
@@ -185,7 +188,7 @@ def test_prose_speech_direction_with_curly_quote_compiles_as_authored_dialogue()
     assert "welcome to the future" not in picture_prompts
 
 
-def test_long_authored_dialogue_is_distributed_without_truncation_across_five_second_shots() -> None:
+def test_long_authored_dialogue_is_distributed_without_truncation_across_lane_shots() -> None:
     still = Asset(
         id="ast-kitchen-long-line",
         kind=AssetKind.IMAGE,
@@ -210,8 +213,9 @@ def test_long_authored_dialogue_is_distributed_without_truncation_across_five_se
 
     turns = [turn for shot in project.shots for turn in shot.dialogue_turns]
 
-    assert len(turns) == 3
-    assert all(len(turn.text.split()) <= 10 for turn in turns)
+    # 24 authored words at the natural rate over ~3.4s lane shots → 6-word windows.
+    assert len(turns) == 4
+    assert all(len(turn.text.split()) <= 6 for turn in turns)
     assert " ".join(turn.text for turn in turns) == authored
     assert len({turn.character_id for turn in turns}) == 1
 
@@ -257,10 +261,10 @@ def test_thirty_second_program_packs_turns_by_total_natural_speaking_time() -> N
         for word in text.split()
     ]
 
-    assert len(project.shots) == 6
-    assert len([shot for shot in project.shots if shot.dialogue_turns]) == 6
+    assert len(project.shots) == 10
+    assert len([shot for shot in project.shots if shot.dialogue_turns]) == 10
     assert all(
-        sum(len(turn.text.split()) for turn in shot.dialogue_turns) <= 10
+        sum(len(turn.text.split()) for turn in shot.dialogue_turns) <= 6
         for shot in project.shots
     )
     assert actual_word_stream == expected_word_stream

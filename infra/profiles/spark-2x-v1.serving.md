@@ -18,6 +18,7 @@ Two leased DGX Spark GB10. Same Diony as Quad-Spark, on two machines. Sequential
 
 ```
 vllm serve /models/deepseek/DeepSeek-V4-Flash-0731 \
+  --served-model-name DeepSeek-V4-Flash-0731 \
   --trust-remote-code \
   --kv-cache-dtype nvfp4_ds_mla \
   --block-size 256 \

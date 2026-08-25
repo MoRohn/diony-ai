@@ -38,7 +38,9 @@ from diony_contracts.voice import (
 
 
 VOICE_QC_VERSION = "diony-voice-qc-v2"
-VOICE_PIPELINE_VERSION = "diony-voice-performance-v3"
+# v4: per-character prompt casting + cast-distinct QC; cached v3 audio predates
+# distinct casting and must not be reused.
+VOICE_PIPELINE_VERSION = "diony-voice-performance-v4"
 
 
 class VoicePipelineError(RuntimeError):
@@ -467,6 +469,8 @@ class AnimationMeasurements:
     lip_sync_confidence: float
     audiovisual_offset_ms_p95: float
     performance_consistency: float
+    audiovisual_backend: str = ""
+    qualified_for_visual_retake: bool = False
     diagnostics: tuple[str, ...] = ()
 
 
@@ -481,6 +485,7 @@ class Synthesizer(Protocol):
         *,
         seed: int,
         reference_paths: list[Path],
+        cast_index: int = 0,
     ) -> None: ...
 
 
@@ -550,8 +555,9 @@ class DeterministicVoiceTestBackend:
         *,
         seed: int,
         reference_paths: list[Path],
+        cast_index: int = 0,
     ) -> None:
-        del reference_paths
+        del reference_paths, cast_index
         self.synthesis_calls += 1
         frequency = 135 + (sum(ord(char) for char in profile.character_id) % 110)
         self._tone(output, duration_ms=line.target_duration_ms, seed=seed, frequency=frequency)
@@ -623,6 +629,8 @@ class DeterministicVoiceTestBackend:
             lip_sync_confidence=0.98,
             audiovisual_offset_ms_p95=8.0,
             performance_consistency=0.97,
+            audiovisual_backend=self.name,
+            qualified_for_visual_retake=True,
         )
 
 
@@ -669,6 +677,7 @@ class LocalVoiceCommandBackend:
         *,
         seed: int,
         reference_paths: list[Path],
+        cast_index: int = 0,
     ) -> None:
         self._invoke(
             "synthesize",
@@ -677,6 +686,7 @@ class LocalVoiceCommandBackend:
                 "profile": profile.model_dump(mode="json"),
                 "seed": seed,
                 "reference_paths": [str(path) for path in reference_paths],
+                "cast_index": cast_index,
                 "output": str(output),
             },
             output,
@@ -689,6 +699,8 @@ class LocalVoiceCommandBackend:
         line: PerformanceScriptLine,
         profile: VoiceProfile,
         output: Path,
+        *,
+        cast_index: int = 0,
     ) -> list[float]:
         response = output.with_suffix(".enrollment.json")
         payload = self._invoke(
@@ -697,6 +709,7 @@ class LocalVoiceCommandBackend:
                 "line": line.model_dump(mode="json"),
                 "profile": profile.model_dump(mode="json"),
                 "seed": profile.seed,
+                "cast_index": cast_index,
                 "output": str(output),
             },
             response,
@@ -810,6 +823,10 @@ class LocalVoiceCommandBackend:
             lip_sync_confidence=float(payload["lip_sync_confidence"]),
             audiovisual_offset_ms_p95=float(payload["audiovisual_offset_ms_p95"]),
             performance_consistency=float(payload["performance_consistency"]),
+            audiovisual_backend=str(payload.get("backend") or self.name),
+            qualified_for_visual_retake=(
+                payload.get("qualified_for_visual_retake") is True
+            ),
             diagnostics=tuple(str(item) for item in payload.get("diagnostics", [])),
         )
 
@@ -891,7 +908,7 @@ class VoicePerformancePipeline:
         registry = VoiceProfileRegistry(project)
         enrolled_profiles: list[VoiceProfile] = []
         marker = ":synthetic-enrollment-v1"
-        for profile in profiles:
+        for cast_index, profile in enumerate(profiles):
             if profile.source != VoiceProfileSource.SYNTHETIC or profile.speaker_embedding_model.endswith(marker):
                 enrolled_profiles.append(profile)
                 continue
@@ -911,7 +928,7 @@ class VoicePerformancePipeline:
                 / "synthetic-enrollment.wav"
             )
             output.parent.mkdir(parents=True, exist_ok=True)
-            embedding = [float(value) for value in enroll(line, profile, output)]
+            embedding = [float(value) for value in enroll(line, profile, output, cast_index=cast_index)]
             if not output.is_file() or output.stat().st_size <= 44:
                 raise VoicePipelineError("synthetic voice enrollment returned no audio evidence")
             model = os.environ.get(
@@ -926,6 +943,37 @@ class VoicePerformancePipeline:
                 )
             )
         return enrolled_profiles
+
+    @staticmethod
+    def _verify_cast_distinct(profiles: list[VoiceProfile]) -> None:
+        """Fail a collapsed cast: two characters must never measure as one voice.
+
+        Synthetic profiles enroll from their own first render, so self-similarity
+        is tautological; distinctness across the cast is the check that actually
+        proves casting worked.
+        """
+        try:
+            ceiling = float(os.environ.get("DIONY_VOICE_CAST_DISTINCT_MAX", "0.90"))
+        except ValueError:
+            ceiling = 0.90
+        ceiling = min(0.999, max(0.5, ceiling))
+        speakers: dict[str, VoiceProfile] = {}
+        for profile in profiles:
+            speakers.setdefault(profile.character_id, profile)
+        distinct = list(speakers.values())
+        for index, left in enumerate(distinct):
+            for right in distinct[index + 1 :]:
+                if len(left.speaker_embedding) != len(right.speaker_embedding):
+                    continue
+                similarity = _cosine(left.speaker_embedding, right.speaker_embedding)
+                if similarity > ceiling:
+                    raise VoicePipelineError(
+                        "Voice audio failed cast-distinct QC: "
+                        f"{left.character_id} and {right.character_id} measure speaker "
+                        f"similarity {similarity:.4f} above the {ceiling:.2f} ceiling. "
+                        "Attach per-character reference samples or point "
+                        "DIONY_COSYVOICE_PROMPT_LIBRARY at distinct prompt clips."
+                    )
 
     @staticmethod
     def _cache_key(script: PerformanceScript, profiles: list[VoiceProfile]) -> str:
@@ -1054,6 +1102,7 @@ class VoicePerformancePipeline:
         profiles = self._profiles(project, shot)
         script = optimize_voice_script(project, shot, profiles)
         profiles = self._enroll_synthetic_profiles(project, script, profiles)
+        self._verify_cast_distinct(profiles)
         script = optimize_voice_script(project, shot, profiles)
         cache_key = self._cache_key(script, profiles)
         if self._cached_package_valid(project, take, cache_key):
@@ -1065,6 +1114,7 @@ class VoicePerformancePipeline:
         cache_root = self.vault / "projects" / project.id / "voice" / "cache" / cache_key
         cache_root.mkdir(parents=True, exist_ok=True)
         profile_by_id = {profile.id: profile for profile in profiles}
+        cast_rank = {profile.id: index for index, profile in enumerate(profiles)}
         line_audio: list[tuple[Path, PerformanceScriptLine]] = []
         alignments: list[dict[str, Any]] = []
         speaker_scores: list[float] = []
@@ -1104,6 +1154,7 @@ class VoicePerformancePipeline:
                     candidate,
                     seed=seed,
                     reference_paths=reference_paths,
+                    cast_index=cast_rank.get(profile.id, 0),
                 )
                 if not candidate.is_file() or candidate.stat().st_size <= 44:
                     attempts.append(
@@ -1364,14 +1415,18 @@ class VoicePerformancePipeline:
             self._asset_path(metadata_asset),
         )
         animation_passed = (
-            measurements.lip_sync_confidence >= package.qc.lip_sync_confidence_min
+            measurements.qualified_for_visual_retake
+            and measurements.lip_sync_confidence >= package.qc.lip_sync_confidence_min
             and measurements.audiovisual_offset_ms_p95 <= package.qc.audiovisual_offset_ms_max
-            and measurements.performance_consistency >= package.qc.project_consistency_min
+            and measurements.performance_consistency
+            >= package.qc.performance_consistency_min
         )
         qc_payload = package.qc.model_dump(mode="json") | {
             "lip_sync_confidence": measurements.lip_sync_confidence,
             "audiovisual_offset_ms_p95": measurements.audiovisual_offset_ms_p95,
             "performance_consistency": measurements.performance_consistency,
+            "audiovisual_backend": measurements.audiovisual_backend,
+            "audiovisual_measurement_qualified": measurements.qualified_for_visual_retake,
             "animation_passed": animation_passed,
             "passed": bool(package.qc.audio_passed and animation_passed),
             "diagnostics": list(package.qc.diagnostics) + list(measurements.diagnostics),

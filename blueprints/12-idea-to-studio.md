@@ -42,7 +42,7 @@ From a brief (idea + customer + **length goal**) the studio brain writes:
 - Timeline with handles
 - Mix target from the playbook
 
-Idea has a length picker: **30s, 1m, 3m, 5m, 10m, 15m, 20m, 30m, 40m, 1hr**. That is a **program TRT goal**, not wall-clock and not a stopwatch. Each take stays on the Wan **5s quality lane** (Blueprint 07, 10). Shot-count scales so the overlap stitch is near the goal up to **5m** (60 takes). 10m–15m cap at 60 takes this pass, with an explicit note. Target >15 minutes: **first reel only** (12 takes), with a note that a 1-hour rundown is BRAIN-mode (Blueprint 07). Do not fake 800 shots. Do not lengthen a take past 5s to fake TRT.
+Idea has a length picker: **30s, 1m, 3m, 5m, 10m, 15m, 20m, 30m, 40m, 1hr**. That is a **program TRT goal**, not wall-clock and not a stopwatch. Each take stays on the Wan native quality lane: a bounded **81-frame** (~3.4 s) 4n+1 take (Blueprint 07, 10, 19). The rundown books lane-true durations whose overlap stitch lands the goal **exactly** up to **5m** (99 takes). 10m–15m cap at 120 takes this pass, with an explicit note. Target >15 minutes: **first reel only** (12 takes), with a note that a 1-hour rundown is BRAIN-mode (Blueprint 07). Do not fake 800 shots. Do not lengthen a take past the 81-frame lane — and never time-stretch delivered picture — to fake TRT.
 
 ## What Sample does
 

@@ -55,7 +55,8 @@ def test_stitch_filter_uses_temporal_overlap_instead_of_hard_concat() -> None:
     assert total == 232
 
 
-def test_stitch_conforms_short_sources_to_exact_timeline_frames(tmp_path) -> None:
+def test_stitch_trims_to_exact_timeline_frames_and_refuses_to_stretch(tmp_path) -> None:
+    """A booked frame may be trimmed from delivered picture, never stretched into it."""
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
     if not ffmpeg or not ffprobe:
@@ -72,7 +73,7 @@ def test_stitch_conforms_short_sources_to_exact_timeline_frames(tmp_path) -> Non
                 "-f",
                 "lavfi",
                 "-i",
-                f"{source}=s=160x90:r=16:d=5.0625",
+                f"{source}=s=160x90:r=23.976:d=4",
                 "-frames:v",
                 "81",
                 "-an",
@@ -88,7 +89,7 @@ def test_stitch_conforms_short_sources_to_exact_timeline_frames(tmp_path) -> Non
 
     destination = tmp_path / "exact-timeline.mov"
     stitch_masters(
-        [(clips[0], 0, 120), (clips[1], 8, 128)],
+        [(clips[0], 0, 81), (clips[1], 8, 74)],
         destination,
         fps=23.976,
     )
@@ -110,7 +111,15 @@ def test_stitch_conforms_short_sources_to_exact_timeline_frames(tmp_path) -> Non
         text=True,
         check=True,
     )
-    assert int(probe.stdout.strip()) == 240
+    # 81 + 74 booked frames sharing an 8-frame temporal blend.
+    assert int(probe.stdout.strip()) == 147
+
+    with pytest.raises(FinishError, match="refusing to stretch"):
+        stitch_masters(
+            [(clips[0], 0, 120), (clips[1], 8, 128)],
+            tmp_path / "stretched.mov",
+            fps=23.976,
+        )
 
 
 def test_rrdb_x2_matches_upstream_shape_and_output() -> None:
@@ -540,3 +549,15 @@ def test_fake_program_stitch(tmp_path, monkeypatch) -> None:
     out = stitch_masters([(clip, 0, 24), (clip, 8, 24)], dest, fps=24.0)
     assert out.is_file()
     assert out.stat().st_size > 32
+
+
+def test_temporal_sr_is_a_hard_dependency_not_a_silent_downgrade() -> None:
+    from diony_finish.pipeline import require_temporal_sr
+
+    try:
+        import cv2  # noqa: F401
+    except ImportError:
+        with pytest.raises(FinishError, match="boiling grain"):
+            require_temporal_sr()
+    else:
+        require_temporal_sr()

@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import threading
+from typing import NamedTuple
 from pathlib import Path
 
 from diony_contracts.enums import AssetKind
@@ -22,6 +23,7 @@ from diony_finish.pipeline import FinishError, finished_media_has_picture, verif
 
 from diony_producer.gallery_join import resolve_media_tool
 from diony_producer.gallery import gallery_program_preview_path
+from diony_producer.soundtrack import PlannedCue, ensure_generated_cues, load_soundtrack_plan
 from diony_producer.vault import abs_path, persist_project, record_activity, vault_root
 
 
@@ -173,14 +175,32 @@ def _selected_take_for_shot(project: Project, shot_id: str):
     return takes[-1] if takes else None
 
 
-def _locked_voice_sources(
-    project: Project,
-) -> list[tuple[Path, float, VoiceClipPackage]]:
-    """Resolve verified per-clip mixes at their frame-authoritative timeline starts."""
+class VoiceRailRow(NamedTuple):
+    audio: Path
+    start_seconds: float
+    package: VoiceClipPackage
+    clip_seconds: float
+    fade_in: float
+    fade_out: float
+
+
+def _locked_voice_sources(project: Project) -> list[VoiceRailRow]:
+    """Resolve verified per-clip mixes at their frame-authoritative timeline starts.
+
+    Each row carries junction fades sized to the picture's temporal blends, so
+    audio crosses a cut exactly where picture dissolves instead of butt-cutting
+    under a visible transition.
+    """
     if project.timeline is None:
         raise MixError("Required dialogue needs a locked timeline")
-    starts = {event.shot_id: event.start_frame / project.timeline.fps for event in project.timeline.events}
-    sources: list[tuple[Path, float, VoiceClipPackage]] = []
+    fps = project.timeline.fps or 23.976
+    events = list(project.timeline.events)
+    starts = {event.shot_id: event.start_frame / fps for event in events}
+    fades_in = {event.shot_id: max(0, event.handle_in) / fps for event in events}
+    fades_out: dict[str, float] = {}
+    for current, following in zip(events, events[1:]):
+        fades_out[current.shot_id] = max(0, following.handle_in) / fps
+    sources: list[VoiceRailRow] = []
     for shot in project.shots:
         if not shot.audio_line and not shot.dialogue_turns:
             continue
@@ -208,44 +228,172 @@ def _locked_voice_sources(
             raise MixError(f"Required dialogue on {shot.id} has no final mixed audio bytes")
         if not timing.is_file() or timing.stat().st_size <= 32:
             raise MixError(f"Required dialogue on {shot.id} has no performance timing metadata")
-        sources.append((audio, max(0.0, starts.get(shot.id, 0.0)), package))
-    return sorted(sources, key=lambda row: (row[1], row[2].shot_id))
+        sources.append(
+            VoiceRailRow(
+                audio=audio,
+                start_seconds=max(0.0, starts.get(shot.id, 0.0)),
+                package=package,
+                clip_seconds=max(0.1, shot.duration_frames / (shot.fps or fps)),
+                fade_in=round(fades_in.get(shot.id, 0.0), 6),
+                fade_out=round(fades_out.get(shot.id, 0.0), 6),
+            )
+        )
+    return sorted(sources, key=lambda row: (row.start_seconds, row.package.shot_id))
 
 
-def _write_locked_voice_stem(
+def _voice_rail_filters(sources: list[VoiceRailRow]) -> tuple[list[str], list[str]]:
+    """Per-clip filter chains with picture-matched junction fades. Pure."""
+    filters: list[str] = []
+    labels: list[str] = []
+    for index, row in enumerate(sources):
+        chain = [f"[{index}:a]aformat=sample_rates=48000:channel_layouts=stereo"]
+        if row.fade_in > 0:
+            chain.append(f"afade=t=in:st=0:d={row.fade_in:.6f}")
+        if row.fade_out > 0:
+            start = max(0.0, row.clip_seconds - row.fade_out)
+            chain.append(f"afade=t=out:st={start:.6f}:d={row.fade_out:.6f}")
+        delay_ms = max(0, round(row.start_seconds * 1000))
+        chain.append(f"adelay={delay_ms}|{delay_ms}")
+        label = f"voice{index}"
+        filters.append(",".join(chain) + f"[{label}]")
+        labels.append(f"[{label}]")
+    return filters, labels
+
+
+def _cue_rail_filters(cues: list[PlannedCue]) -> tuple[list[str], list[str]]:
+    """Per-cue filter chains: licensed library bytes, trimmed, gained, placed. Pure."""
+    filters: list[str] = []
+    labels: list[str] = []
+    for index, cue in enumerate(cues):
+        delay_ms = max(0, round(cue.start_seconds * 1000))
+        label = f"cue{index}"
+        filters.append(
+            f"[{index}:a]atrim=0:{cue.duration_seconds:.6f},"
+            "aformat=sample_rates=48000:channel_layouts=stereo,"
+            f"volume={cue.gain_db:g}dB,"
+            f"adelay={delay_ms}|{delay_ms}[{label}]"
+        )
+        labels.append(f"[{label}]")
+    return filters, labels
+
+
+def _write_rail(
     destination: Path,
     *,
     ffmpeg: str,
-    sources: list[tuple[Path, float, VoiceClipPackage]],
+    inputs: list[Path],
+    filters: list[str],
+    labels: list[str],
     duration: float,
-    target: float,
-    peak: float,
+    label: str,
 ) -> None:
-    """Assemble already-produced clip mixes; synthesis never occurs at final mix."""
-    if not sources:
-        raise MixError("Required dialogue has no verified per-clip voice packages")
+    """Assemble already-produced audio; nothing is synthesized at final mix."""
+    if not labels:
+        raise MixError(f"{label} has no audio sources")
     destination.parent.mkdir(parents=True, exist_ok=True)
     pending = destination.with_name(f".{destination.stem}.part.wav")
     pending.unlink(missing_ok=True)
     command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
-    for audio, _start, _package in sources:
+    for audio in inputs:
         command.extend(["-i", str(audio)])
-    filters: list[str] = []
-    labels: list[str] = []
-    for index, (_audio, start_seconds, _package) in enumerate(sources):
-        delay_ms = max(0, round(start_seconds * 1000))
-        label = f"voice{index}"
-        filters.append(
-            f"[{index}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
-            f"adelay={delay_ms}|{delay_ms}[{label}]"
-        )
-        labels.append(f"[{label}]")
-    filters.append(
+    graph = list(filters)
+    graph.append(
         "".join(labels)
-        + f"amix=inputs={len(labels)}:normalize=0:dropout_transition=0,"
-        + f"apad,atrim=0:{duration:.6f},"
-        + f"loudnorm=I={target:g}:TP={peak:g}:LRA=7[out]"
+        + (f"amix=inputs={len(labels)}:normalize=0:dropout_transition=0," if len(labels) > 1 else "")
+        + f"apad,atrim=0:{duration:.6f}[out]"
     )
+    command.extend(
+        [
+            "-filter_complex",
+            ";".join(graph),
+            "-map",
+            "[out]",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-c:a",
+            "pcm_s24le",
+            str(pending),
+        ]
+    )
+    _run(command, label=label)
+    if not pending.is_file() or pending.stat().st_size <= 44:
+        raise MixError(f"{label} returned no audio bytes")
+    os.replace(pending, destination)
+
+
+def _loudness_full_report(stem: Path, *, ffmpeg: str, target: float, peak: float) -> dict:
+    result = _run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-nostats",
+            "-i",
+            str(stem),
+            "-af",
+            f"loudnorm=I={target:g}:TP={peak:g}:LRA=7:print_format=json",
+            "-f",
+            "null",
+            "-",
+        ],
+        label="program loudness measurement",
+    )
+    return _json_report(result.stderr or result.stdout)
+
+
+def _write_program_mixdown(
+    destination: Path,
+    *,
+    ffmpeg: str,
+    rails: dict[str, Path],
+    duration: float,
+    target: float,
+    peak: float,
+) -> None:
+    """Combine rails with dialogue-priority ducking and two-pass linear loudnorm."""
+    order = [role for role in ("dialogue", "ambience", "foley", "score") if role in rails]
+    if not order:
+        raise MixError("program mixdown has no rails")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    premix = destination.with_name(f".{destination.stem}.premix.wav")
+    pending = destination.with_name(f".{destination.stem}.part.wav")
+    premix.unlink(missing_ok=True)
+    pending.unlink(missing_ok=True)
+    ducked_roles = [role for role in ("ambience", "score") if role in rails and "dialogue" in rails]
+    filters: list[str] = []
+    mix_labels: list[str] = []
+    index_of = {role: index for index, role in enumerate(order)}
+    if "dialogue" in rails:
+        keys = "".join(f"[key{role}]" for role in ducked_roles)
+        filters.append(
+            f"[{index_of['dialogue']}:a]asplit={1 + len(ducked_roles)}[dialoguemain]{keys}"
+        )
+        mix_labels.append("[dialoguemain]")
+    for role in order:
+        if role == "dialogue":
+            continue
+        source = f"[{index_of[role]}:a]"
+        if role in ducked_roles:
+            filters.append(
+                f"{source}[key{role}]sidechaincompress="
+                f"threshold=0.02:ratio=6:attack=25:release=350[{role}duck]"
+            )
+            mix_labels.append(f"[{role}duck]")
+        else:
+            mix_labels.append(source)
+    filters.append(
+        "".join(mix_labels)
+        + (
+            f"amix=inputs={len(mix_labels)}:normalize=0:dropout_transition=0,"
+            if len(mix_labels) > 1
+            else ""
+        )
+        + f"apad,atrim=0:{duration:.6f}[out]"
+    )
+    command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+    for role in order:
+        command.extend(["-i", str(rails[role])])
     command.extend(
         [
             "-filter_complex",
@@ -258,12 +406,52 @@ def _write_locked_voice_stem(
             "2",
             "-c:a",
             "pcm_s24le",
-            str(pending),
+            str(premix),
         ]
     )
-    _run(command, label="locked voice stem assembly")
+    try:
+        _run(command, label="program mixdown")
+        if not premix.is_file() or premix.stat().st_size <= 44:
+            raise MixError("program mixdown returned no audio bytes")
+        measured = _loudness_full_report(premix, ffmpeg=ffmpeg, target=target, peak=peak)
+        try:
+            two_pass = (
+                f"loudnorm=I={target:g}:TP={peak:g}:LRA=7:"
+                f"measured_I={float(measured['input_i']):g}:"
+                f"measured_LRA={float(measured['input_lra']):g}:"
+                f"measured_TP={float(measured['input_tp']):g}:"
+                f"measured_thresh={float(measured['input_thresh']):g}:"
+                f"offset={float(measured['target_offset']):g}:linear=true"
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MixError("program loudness measurement is incomplete") from exc
+        _run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(premix),
+                "-af",
+                two_pass,
+                "-t",
+                f"{duration:.6f}",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-c:a",
+                "pcm_s24le",
+                str(pending),
+            ],
+            label="program loudness normalization",
+        )
+    finally:
+        premix.unlink(missing_ok=True)
     if not pending.is_file() or pending.stat().st_size <= 44:
-        raise MixError("Locked per-clip voice assembly returned no audio bytes")
+        raise MixError("program loudness normalization returned no audio bytes")
     os.replace(pending, destination)
 
 
@@ -315,15 +503,57 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+_STEM_ROLES = {
+    "room_tone_stem",
+    "dialogue_stem",
+    "ambience_stem",
+    "foley_stem",
+    "score_stem",
+    "program_mix_stem",
+}
+
+
 def _mix_revision(project: Project) -> int:
-    return 1 + sum(
-        asset.role in {"room_tone_stem", "dialogue_stem"}
+    revisions = [
+        int(asset.metadata.get("mix_revision") or 0)
         for asset in project.assets
+        if asset.role in _STEM_ROLES and isinstance(asset.metadata, dict)
+    ]
+    return 1 + max(revisions, default=0)
+
+
+def _stem_asset(
+    project: Project,
+    *,
+    rel: str,
+    role: str,
+    revision: int,
+    metadata: dict,
+) -> Asset:
+    path = abs_path(rel)
+    digest = _sha256(path)
+    asset = Asset(
+        id=f"ast-{digest[:12]}-{role.replace('_', '-')}-v{revision}",
+        kind=AssetKind.AUDIO,
+        filename=path.name,
+        mime="audio/wav",
+        bytes=path.stat().st_size,
+        path=rel,
+        sha256=digest,
+        role=role,
+        metadata={"mix_revision": revision, **metadata},
     )
+    project.assets.append(asset)
+    return asset
 
 
 def bounce_mix(project: Project) -> None:
-    """Assemble verified content audio; generated noise is never a soundtrack."""
+    """Assemble verified content audio; generated noise is never a soundtrack.
+
+    Content is verified per-clip dialogue and/or licensed library cues from the
+    digest-protected soundtrack plan. Rails mix with dialogue-priority ducking
+    and land on the Bible loudness target through two-pass linear loudnorm.
+    """
     if project.mix is None or project.timeline is None or not project.timeline.preview_path:
         raise MixError("Mix needs a finished program timeline")
     master = abs_path(project.timeline.preview_path)
@@ -340,33 +570,96 @@ def bounce_mix(project: Project) -> None:
     peak = project.bible.true_peak_dbtp
     revision = _mix_revision(project)
     script = _dialogue_script(project)
-    if not script:
+    ensure_generated_cues(project)
+    planned_cues = load_soundtrack_plan(project) or []
+    if not script and not planned_cues:
         raise MixError(
             "No authored dialogue or verified content-bearing audio is available; "
             "refusing a noise-only mix."
         )
-    voice_sources = _locked_voice_sources(project)
-    role = "dialogue_stem"
-    stem_rel = (
-        f"projects/{project.id}/program/{project.timeline.id}/stems/"
-        f"dialogue-v{revision}.wav"
-    )
-    stem = abs_path(stem_rel)
     duration = _duration_seconds(master, ffprobe)
-    _write_locked_voice_stem(
-        stem,
+    stems_root = f"projects/{project.id}/program/{project.timeline.id}/stems"
+    rails: dict[str, Path] = {}
+    rail_assets: list[Asset] = []
+    voice_sources: list[VoiceRailRow] = []
+    if script:
+        voice_sources = _locked_voice_sources(project)
+        dialogue_rel = f"{stems_root}/dialogue-v{revision}.wav"
+        dialogue_stem = abs_path(dialogue_rel)
+        filters, labels = _voice_rail_filters(voice_sources)
+        _write_rail(
+            dialogue_stem,
+            ffmpeg=ffmpeg,
+            inputs=[row.audio for row in voice_sources],
+            filters=filters,
+            labels=labels,
+            duration=duration,
+            label="locked voice stem assembly",
+        )
+        rails["dialogue"] = dialogue_stem
+        rail_assets.append(
+            _stem_asset(
+                project,
+                rel=dialogue_rel,
+                role="dialogue_stem",
+                revision=revision,
+                metadata={
+                    "timeline_id": project.timeline.id,
+                    "script_sha256": hashlib.sha256(script.encode("utf-8")).hexdigest(),
+                    "voice_package_count": len(voice_sources),
+                    "voice_pipeline": "locked_per_clip",
+                    "voice_package_sha256": hashlib.sha256(
+                        "|".join(row.package.cache_key for row in voice_sources).encode("utf-8")
+                    ).hexdigest(),
+                },
+            )
+        )
+    for role in ("ambience", "foley", "score"):
+        cues = [cue for cue in planned_cues if cue.role == role]
+        if not cues:
+            continue
+        rail_rel = f"{stems_root}/{role}-v{revision}.wav"
+        rail_stem = abs_path(rail_rel)
+        filters, labels = _cue_rail_filters(cues)
+        _write_rail(
+            rail_stem,
+            ffmpeg=ffmpeg,
+            inputs=[Path(cue.path) for cue in cues],
+            filters=filters,
+            labels=labels,
+            duration=duration,
+            label=f"{role} stem assembly",
+        )
+        rails[role] = rail_stem
+        rail_assets.append(
+            _stem_asset(
+                project,
+                rel=rail_rel,
+                role=f"{role}_stem",
+                revision=revision,
+                metadata={
+                    "timeline_id": project.timeline.id,
+                    "cue_count": len(cues),
+                    "cue_ids": ",".join(cue.cue_id for cue in cues),
+                },
+            )
+        )
+    program_rel = f"{stems_root}/program-mix-v{revision}.wav"
+    program_stem = abs_path(program_rel)
+    _write_program_mixdown(
+        program_stem,
         ffmpeg=ffmpeg,
-        sources=voice_sources,
+        rails=rails,
         duration=duration,
         target=target,
         peak=peak,
     )
-    measured, true_peak = _measure_stem(stem, ffmpeg=ffmpeg, target=target, peak=peak)
+    measured, true_peak = _measure_stem(program_stem, ffmpeg=ffmpeg, target=target, peak=peak)
     if abs(measured - target) > 1.0:
         raise MixError(f"measured loudness {measured:g} LUFS missed the {target:g} LUFS target")
     if true_peak > peak:
         raise MixError(f"measured true peak {true_peak:g} dBTP exceeded the {peak:g} dBTP ceiling")
-    _mux_program(master, stem, ffmpeg=ffmpeg)
+    _mux_program(master, program_stem, ffmpeg=ffmpeg)
     if _visual_qc_required():
         try:
             verify_finished_media(master, label="mixed 1080 program master")
@@ -375,31 +668,22 @@ def bounce_mix(project: Project) -> None:
     if not program_master_has_audio(project):
         raise MixError("the mixed 1080 program master has no verified audio stream")
 
-    digest = _sha256(stem)
-    asset = Asset(
-        id=f"ast-{digest[:12]}-mix-v{revision}",
-        kind=AssetKind.AUDIO,
-        filename=stem.name,
-        mime="audio/wav",
-        bytes=stem.stat().st_size,
-        path=stem_rel,
-        sha256=digest,
-        role=role,
-        metadata={
-            "mix_revision": revision,
-            "timeline_id": project.timeline.id,
-            "measured_lufs": measured,
-            "true_peak_dbtp": true_peak,
-            "script_sha256": hashlib.sha256(script.encode("utf-8")).hexdigest() if script else "",
-            "voice_package_count": len(voice_sources),
-            "voice_pipeline": "locked_per_clip" if voice_sources else "none",
-            "voice_package_sha256": hashlib.sha256(
-                "|".join(package.cache_key for _, _, package in voice_sources).encode("utf-8")
-            ).hexdigest() if voice_sources else "",
-        },
+    rail_assets.append(
+        _stem_asset(
+            project,
+            rel=program_rel,
+            role="program_mix_stem",
+            revision=revision,
+            metadata={
+                "timeline_id": project.timeline.id,
+                "measured_lufs": measured,
+                "true_peak_dbtp": true_peak,
+                "rails": ",".join(sorted(rails)),
+                "planned_cue_count": len(planned_cues),
+            },
+        )
     )
-    project.assets.append(asset)
-    project.mix.stem_asset_ids = [asset.id]
+    project.mix.stem_asset_ids = [asset.id for asset in rail_assets]
     project.mix.measured_lufs = measured
     project.mix.true_peak_dbtp = true_peak
     project.mix.picture_lock_timeline_id = project.timeline.id

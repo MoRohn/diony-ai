@@ -25,6 +25,7 @@ try:
         FinishError,
         finish_clip,
         finished_media_has_picture,
+        media_frame_count,
         stitch_masters,
         verify_finished_media,
     )
@@ -33,6 +34,9 @@ except ImportError:  # producer installed without finish package
 
     def finish_clip(**kwargs):  # type: ignore[no-untyped-def]
         raise FinishError("diony-finish is not installed")
+
+    def media_frame_count(path):  # type: ignore[no-untyped-def]
+        return 0
 
     def stitch_masters(**kwargs):  # type: ignore[no-untyped-def]
         raise FinishError("diony-finish is not installed")
@@ -301,6 +305,7 @@ def _finish_one(project: Project, take: Take) -> None:
     if _visual_qc_required():
         verify_finished_media(dest, label=f"1080 finish for {take.id}")
     digest = _sha256_file(dest)
+    measured_frames = media_frame_count(dest) if _visual_qc_required() else 0
     _attach_1080(
         project,
         take,
@@ -308,7 +313,7 @@ def _finish_one(project: Project, take: Take) -> None:
         size,
         source_artifact=source_artifact,
         digest=digest,
-        duration_frames=shot.duration_frames,
+        duration_frames=measured_frames or shot.duration_frames,
     )
     persist_project(project)
     record_activity("sr", f"{shot.id} · 1080 master", shot_id=shot.id)

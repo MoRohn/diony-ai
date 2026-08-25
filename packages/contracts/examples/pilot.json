@@ -26,6 +26,7 @@
     "grain": "fine",
     "loudness": "broadcast",
     "true_peak_dbtp": -1.0,
+    "soundtrack_policy": "licensed_only",
     "visual_grammar": "Tungsten practicals, 35mm spherical, wet asphalt, restrained camera, ink and brass, no daylight interiors.",
     "world": "1962 metropolitan daily. Linotype, rain, one newsroom, one alley.",
     "characters": [
@@ -176,6 +177,8 @@
         "voice_performance_consistency": null,
         "lip_sync_confidence": null,
         "audiovisual_offset_ms_p95": null,
+        "audiovisual_backend": "",
+        "audiovisual_measurement_qualified": null,
         "reference_asset_ids": [],
         "reference_similarity": null,
         "reference_similarities": {},
@@ -189,9 +192,9 @@
         "flicker_luma_p95": null,
         "measured_frame_count": 0,
         "notes": "Identity drift vs still-mara-wide. Retake.",
-        "created_at": "2026-08-24T22:04:26.341619Z"
+        "created_at": "2026-08-25T16:16:51.974233Z"
       },
-      "created_at": "2026-08-24T22:04:26.341630Z",
+      "created_at": "2026-08-25T16:16:51.974243Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -219,7 +222,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-08-24T22:04:26.341469Z"
+          "created_at": "2026-08-25T16:16:51.973969Z"
         }
       ],
       "voice_package": null,
@@ -258,6 +261,8 @@
         "voice_performance_consistency": null,
         "lip_sync_confidence": null,
         "audiovisual_offset_ms_p95": null,
+        "audiovisual_backend": "",
+        "audiovisual_measurement_qualified": null,
         "reference_asset_ids": [],
         "reference_similarity": null,
         "reference_similarities": {},
@@ -271,9 +276,9 @@
         "flicker_luma_p95": null,
         "measured_frame_count": 0,
         "notes": "",
-        "created_at": "2026-08-24T22:04:26.341639Z"
+        "created_at": "2026-08-25T16:16:51.974257Z"
       },
-      "created_at": "2026-08-24T22:04:26.341642Z",
+      "created_at": "2026-08-25T16:16:51.974261Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -301,7 +306,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-08-24T22:04:26.341634Z"
+          "created_at": "2026-08-25T16:16:51.974251Z"
         },
         {
           "id": "art-sh-010-t2-1080",
@@ -323,7 +328,7 @@
           "height": 1080,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-08-24T22:04:26.341636Z"
+          "created_at": "2026-08-25T16:16:51.974253Z"
         }
       ],
       "voice_package": null,
@@ -362,6 +367,8 @@
         "voice_performance_consistency": null,
         "lip_sync_confidence": null,
         "audiovisual_offset_ms_p95": null,
+        "audiovisual_backend": "",
+        "audiovisual_measurement_qualified": null,
         "reference_asset_ids": [],
         "reference_similarity": null,
         "reference_similarities": {},
@@ -375,9 +382,9 @@
         "flicker_luma_p95": null,
         "measured_frame_count": 0,
         "notes": "Paper stock slightly modern. Usable.",
-        "created_at": "2026-08-24T22:04:26.341648Z"
+        "created_at": "2026-08-25T16:16:51.974267Z"
       },
-      "created_at": "2026-08-24T22:04:26.341650Z",
+      "created_at": "2026-08-25T16:16:51.974269Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -405,7 +412,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 72,
-          "created_at": "2026-08-24T22:04:26.341645Z"
+          "created_at": "2026-08-25T16:16:51.974264Z"
         }
       ],
       "voice_package": null,
@@ -444,6 +451,8 @@
         "voice_performance_consistency": null,
         "lip_sync_confidence": null,
         "audiovisual_offset_ms_p95": null,
+        "audiovisual_backend": "",
+        "audiovisual_measurement_qualified": null,
         "reference_asset_ids": [],
         "reference_similarity": null,
         "reference_similarities": {},
@@ -457,9 +466,9 @@
         "flicker_luma_p95": null,
         "measured_frame_count": 0,
         "notes": "",
-        "created_at": "2026-08-24T22:04:26.341655Z"
+        "created_at": "2026-08-25T16:16:51.974274Z"
       },
-      "created_at": "2026-08-24T22:04:26.341658Z",
+      "created_at": "2026-08-25T16:16:51.974278Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -487,7 +496,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 168,
-          "created_at": "2026-08-24T22:04:26.341653Z"
+          "created_at": "2026-08-25T16:16:51.974271Z"
         }
       ],
       "voice_package": null,
@@ -499,7 +508,7 @@
       "id": "n-human-010",
       "author": "human",
       "body": "Hold her eyes on the nick in the case. Don't blink off it.",
-      "created_at": "2026-08-24T22:04:26.341668Z",
+      "created_at": "2026-08-25T16:16:51.974288Z",
       "shot_id": "sh-010",
       "take_id": null
     }
@@ -594,8 +603,8 @@
     "exception_by": "",
     "exception_at": null
   },
-  "created_at": "2026-08-24T22:04:26.341695Z",
-  "updated_at": "2026-08-24T22:04:26.341695Z",
+  "created_at": "2026-08-25T16:16:51.974313Z",
+  "updated_at": "2026-08-25T16:16:51.974313Z",
   "deleted_at": null,
   "production_started_at": null,
   "production_ended_at": null,

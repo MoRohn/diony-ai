@@ -268,6 +268,7 @@ def _fallback_pack_pull(path: str | None) -> list[str]:
         "huggingface-cli download Wan-AI/Wan2.2-T2V-A14B --local-dir /models/wan/Wan2.2-T2V-A14B",
         f"# Brain is auto: {spec.get('recipe', path)}",
         "vllm serve /models/deepseek/DeepSeek-V4-Flash-0731 "
+        "--served-model-name DeepSeek-V4-Flash-0731 "
         "--trust-remote-code --tensor-parallel-size 1 "
         f"--max-model-len {length} --gpu-memory-utilization {util}",
     ]

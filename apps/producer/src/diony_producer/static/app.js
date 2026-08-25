@@ -507,7 +507,11 @@ function paintClips(list, clips) {
     const work = effectiveSteps
       ? `${effectiveSteps} denoise steps${passes > 1 ? ` · ${passes} passes` : ""}`
       : "";
-    take.textContent = [clip.take_id || clip.engine || "", lane, work].filter(Boolean).join(" · ");
+    const attempt = clip.attempt_label || "";
+    const avEvidence = clip.av_evidence_label || "";
+    take.textContent = [clip.take_id || clip.engine || "", lane, work, attempt, avEvidence]
+      .filter(Boolean)
+      .join(" · ");
     if (clip.generation_fallback) take.title = clip.generation_fallback;
     identity.append(id, take);
     const state = document.createElement("span");

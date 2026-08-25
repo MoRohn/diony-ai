@@ -49,9 +49,11 @@ from diony_contracts.voice import (
 )
 from diony_contracts.stitch import stitch_events
 from diony_contracts.wan_prompt import (
+    WAN22_PROMPT_STRATEGY_VERSION,
     compile_wan_prompt_plan,
     render_negative_prompt,
     render_wan_prompt,
+    validate_wan_prompt_plan,
 )
 
 @dataclass(frozen=True)
@@ -195,49 +197,92 @@ def _title(idea: str, hint: str) -> str:
     return core[:1].upper() + core[1:]
 
 
-# Wan2.2 A14B quality lane is a ~5s 720p take (Blueprint 07, 10). Longer takes
-# are not higher quality. Cap 60 shots so a 5m goal can stitch near TRT without
-# faking an hour (Blueprint 12). >15m stays first reel.
-WAN_QUALITY_SECONDS = 5.0
-MAX_QUALITY_SHOTS = 60
+# Wan2.2 A14B's native quality lane is a bounded 81-frame (4n+1, ~3.4s) 720p
+# take (Blueprint 07, 10, 23). The timeline books exactly what the camera can
+# deliver — a booked frame may be trimmed at conform, never stretched. Adjacent
+# shots share an 8-frame temporal blend, so every chained shot contributes
+# net lane frames of TRT. >15m stays first reel (Blueprint 12).
+TIMELINE_FPS = 23.976
+WAN_LANE_FRAMES = 81
+STITCH_OVERLAP_FRAMES = 8
+WAN_LANE_NET_FRAMES = WAN_LANE_FRAMES - STITCH_OVERLAP_FRAMES
+WAN_MIN_SHOT_FRAMES = 17
+WAN_QUALITY_SECONDS = WAN_LANE_FRAMES / TIMELINE_FPS
+MAX_QUALITY_SHOTS = 120
 FIRST_REEL_SHOTS = 12
 
-def _shot_count(minutes: float) -> int:
-    """How many 5s quality-lane takes the length goal needs. Not wall-clock."""
+
+def _lane_durations(target_frames: int) -> list[int]:
+    """Split a TRT goal into lane-true bookings the camera can actually deliver.
+
+    Every booking is within [WAN_MIN_SHOT_FRAMES, WAN_LANE_FRAMES]; adjacent
+    shots share STITCH_OVERLAP_FRAMES in the timeline, so the stitched TRT of
+    the returned bookings equals target_frames exactly.
+    """
+    target = max(WAN_MIN_SHOT_FRAMES, int(target_frames))
+    if target <= WAN_LANE_FRAMES:
+        return [target]
+    n = 1 + -(-(target - WAN_LANE_FRAMES) // WAN_LANE_NET_FRAMES)
+    durations = [WAN_LANE_FRAMES] * (n - 1)
+    last = target - WAN_LANE_NET_FRAMES * (n - 1)
+    if last < WAN_MIN_SHOT_FRAMES:
+        durations[-1] -= WAN_MIN_SHOT_FRAMES - last
+        last = WAN_MIN_SHOT_FRAMES
+    durations.append(last)
+    return durations
+
+
+def _program_durations(minutes: float) -> list[int]:
+    """Lane-true bookings whose stitched TRT lands on the length goal."""
     if minutes > 15:
-        return FIRST_REEL_SHOTS
-    n = int(round((minutes * 60.0) / WAN_QUALITY_SECONDS))
-    return max(4, min(MAX_QUALITY_SHOTS, n))
+        # First reel only (Blueprint 12): a bounded honest opening pass.
+        return [WAN_LANE_FRAMES] * FIRST_REEL_SHOTS
+    durations = _lane_durations(max(WAN_MIN_SHOT_FRAMES, int(round(minutes * 60.0 * TIMELINE_FPS))))
+    if len(durations) > MAX_QUALITY_SHOTS:
+        durations = [WAN_LANE_FRAMES] * MAX_QUALITY_SHOTS
+    while (
+        len(durations) < 4
+        and max(durations) >= 2 * WAN_MIN_SHOT_FRAMES + STITCH_OVERLAP_FRAMES
+    ):
+        # Coverage floor: split the longest booking into two chained shots.
+        # The split adds one shared handle, so stitched TRT is preserved.
+        i = durations.index(max(durations))
+        widest = durations.pop(i)
+        first = (widest + STITCH_OVERLAP_FRAMES) // 2
+        durations[i:i] = [first, widest + STITCH_OVERLAP_FRAMES - first]
+    return durations
 
 
-def _coverage_recipes(kind: CustomerKind, n: int) -> list[dict]:
-    """Cycle cinematic patterns. Every take stays on the 5s quality lane."""
+def _coverage_recipes(kind: CustomerKind, durations: list[int]) -> list[dict]:
+    """Cycle cinematic patterns. Every take books what the Wan lane delivers."""
     pool = _recipes(kind)
     out: list[dict] = []
-    for i in range(n):
+    for i, frames in enumerate(durations):
         rec = dict(pool[i % len(pool)])
         cycle = i // len(pool)
         if cycle:
             rec["slug"] = f"{rec['slug']} · {cycle + 1}"
-        rec["seconds"] = WAN_QUALITY_SECONDS
+        rec["duration_frames"] = int(frames)
+        rec["seconds"] = frames / TIMELINE_FPS
         out.append(rec)
     return out
 
 
 def _sample_recipes(kind: CustomerKind, seconds: int) -> list[dict]:
-    """A Sample is an exact 5–10s cut made from one or two bounded Wan takes."""
-    remaining = seconds
-    durations: list[int] = []
-    while remaining:
-        duration = min(int(WAN_QUALITY_SECONDS), remaining)
-        durations.append(duration)
-        remaining -= duration
-    labels = ("SAMPLE — DEFINING IMAGE", "SAMPLE — PAYOFF")
+    """A Sample is an exact 5–10s cut made from bounded lane-true Wan takes."""
+    durations = _lane_durations(int(round(seconds * TIMELINE_FPS)))
+    pool = _recipes(kind)
     recipes: list[dict] = []
-    for index, duration in enumerate(durations):
-        rec = dict(_recipes(kind)[index])
-        rec["slug"] = labels[index]
-        rec["seconds"] = duration
+    for index, frames in enumerate(durations):
+        rec = dict(pool[min(index, 1)])
+        if index == 0:
+            rec["slug"] = "SAMPLE — DEFINING IMAGE"
+        elif index == len(durations) - 1:
+            rec["slug"] = "SAMPLE — PAYOFF"
+        else:
+            rec["slug"] = f"SAMPLE — CONTINUITY {index}"
+        rec["duration_frames"] = int(frames)
+        rec["seconds"] = frames / TIMELINE_FPS
         recipes.append(rec)
     return recipes
 
@@ -1005,14 +1050,12 @@ def _upgrade_binding_reference_contract(project: Project) -> None:
     char_id = project.bible.characters[0].id if project.bible.characters else "char-lead"
     if project.bible.characters:
         project.bible.characters[0].still_asset_ids = list(subject_image_ids)
-    is_sample = brief.production_kind == ProductionKind.SAMPLE
     scene_schedule = _scene_schedule(_script_scenes(brief.idea), len(project.shots))
     narrated_scenes: set[int] = set()
     spoken_direction = _spoken_direction_script(brief.idea)
     spoken_direction_assigned = False
     for index, item in enumerate(project.shots):
         scene_beat = scene_schedule[index]
-        had_overlap = item.overlap_frames > 0
         item.engine = Engine.I2V_A14B
         item.character_ref_ids = [char_id]
         item.keyframe_asset_ids = list(subject_image_ids)
@@ -1021,8 +1064,6 @@ def _upgrade_binding_reference_contract(project: Project) -> None:
             ContinuityMode.REFERENCE if index == 0 else ContinuityMode.PREVIOUS_FRAME
         )
         item.overlap_frames = 8
-        if is_sample and index > 0 and not had_overlap:
-            item.duration_frames += 8
         narration = None
         if scene_beat is not None:
             item.scene = str(scene_beat.number)
@@ -1049,6 +1090,20 @@ def refresh_reference_shot(project: Project, shot: Shot) -> Shot:
     Project therefore receives today's strict prompt, negative conditioning,
     and same-world camera lock instead of replaying stale creative direction.
     """
+    def _plan_inputs() -> tuple:
+        return (
+            shot.reference_lock,
+            shot.engine,
+            tuple(shot.keyframe_asset_ids),
+            shot.continuity_mode,
+            shot.overlap_frames,
+            shot.focal_mm,
+            shot.t_stop,
+            shot.lighting_ratio,
+            shot.camera_move,
+        )
+
+    before_contract = _plan_inputs()
     _upgrade_binding_reference_contract(project)
     sample_camera = (
         _explicit_sample_camera(project.brief.idea)
@@ -1085,6 +1140,18 @@ def refresh_reference_shot(project: Project, shot: Shot) -> Shot:
         scene_beat = scene_schedule[index] if index < len(scene_schedule) else None
         if scene_beat is not None and scene_beat.visual:
             idea = scene_beat.visual
+    if (
+        before_contract == _plan_inputs()
+        and shot.prompt_plan is not None
+        and shot.prompt_plan.strategy_version == WAN22_PROMPT_STRATEGY_VERSION
+        and not validate_wan_prompt_plan(shot.prompt_plan)
+        and shot.prompt == render_wan_prompt(shot.prompt_plan)
+        and shot.negative_prompt == render_negative_prompt(shot.prompt_plan)
+    ):
+        # The strict contract is already applied and the plan is dispatch-valid.
+        # Recompiling here would erase a QC repair or retake directive, replaying
+        # the exact creative direction that just failed.
+        return shot
     sample_seconds = project.brief.sample_seconds if project.brief is not None else None
     wardrobe = (
         project.bible.characters[0].wardrobe
@@ -1141,7 +1208,7 @@ def expand_idea(
     if is_sample:
         recipes = _sample_recipes(brief.customer_kind, sample_seconds)
     else:
-        recipes = _coverage_recipes(brief.customer_kind, _shot_count(brief.target_minutes))
+        recipes = _coverage_recipes(brief.customer_kind, _program_durations(brief.target_minutes))
     n = len(recipes)
     image_ids = [a.id for a in held if a.kind == AssetKind.IMAGE]
     video_ids = [a.id for a in held if a.kind == AssetKind.VIDEO]
@@ -1149,7 +1216,7 @@ def expand_idea(
     dialogue_windows = _fit_dialogue_to_shots(
         _script_dialogue(brief.idea, default_speaker=book.lead_name),
         shot_count=n,
-        seconds_per_shot=min(float(recipe["seconds"]) for recipe in recipes),
+        seconds_per_shot=sum(float(recipe["seconds"]) for recipe in recipes) / len(recipes),
     )
     sound_requested = bool(dialogue_windows) or _asks_for_sound(idea)
     spoken_direction = _spoken_direction_script(brief.idea)
@@ -1211,11 +1278,10 @@ def expand_idea(
     for i, rec in enumerate(recipes):
         scene_beat = scene_schedule[i]
         spoken_lines = dialogue_by_shot.get(i, [])
-        frames = max(24, int(round(rec["seconds"] * 23.976)))
-        if is_sample and reference_lock != ReferenceLock.NONE and i > 0:
-            # The temporal blend consumes the incoming handle. Preserve the user's
-            # requested Sample TRT by carrying those frames on the incoming shot.
-            frames += 8
+        frames = max(
+            WAN_MIN_SHOT_FRAMES,
+            int(rec.get("duration_frames") or round(rec["seconds"] * TIMELINE_FPS)),
+        )
         sid = f"sh-{(i + 1) * 10:03d}"
         engine = Engine.I2V_A14B if image_ids else Engine.T2V_A14B
         if synced_performance and rec.get("audio") and image_ids:
@@ -1325,7 +1391,10 @@ def expand_idea(
         )
         shots.append(planned_shot)
     notes = []
-    coverage_sec = n * WAN_QUALITY_SECONDS
+    coverage_frames = sum(shot.duration_frames for shot in shots) - STITCH_OVERLAP_FRAMES * max(
+        0, len(shots) - 1
+    )
+    coverage_sec = coverage_frames / TIMELINE_FPS
     if brief.target_minutes > 15:
         notes.append(
             Note(
@@ -1344,9 +1413,9 @@ def expand_idea(
                 id="n-pass-cap",
                 author="conductor",
                 body=(
-                    f"This pass is {int(coverage_sec)}s of 5s Wan quality-lane coverage "
+                    f"This pass is {int(coverage_sec)}s of bounded Wan quality-lane coverage "
                     f"toward the {allotment_label(brief.target_minutes)} goal. "
-                    "Do not lengthen a take past 5s to fake TRT."
+                    "Do not lengthen a take past the 81-frame lane to fake TRT."
                 ),
                 shot_id=shots[0].id,
             )

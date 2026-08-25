@@ -75,12 +75,32 @@ def passing_voice_qc() -> VoiceQCReceipt:
         lip_sync_confidence_min=0.90,
         audiovisual_offset_ms_p95=18.0,
         audiovisual_offset_ms_max=40.0,
+        audiovisual_backend="syncnet-local-v1",
+        audiovisual_measurement_qualified=True,
         performance_consistency=0.95,
         performance_consistency_min=0.90,
         audio_passed=True,
         animation_passed=True,
         passed=True,
     )
+
+
+def test_voice_qc_records_whether_av_evidence_is_qualified_for_visual_retake() -> None:
+    receipt = passing_voice_qc()
+
+    assert receipt.audiovisual_backend == "syncnet-local-v1"
+    assert receipt.audiovisual_measurement_qualified is True
+
+
+def test_legacy_verified_voice_qc_without_qualification_field_remains_readable() -> None:
+    payload = passing_voice_qc().model_dump(mode="json")
+    payload.pop("audiovisual_backend")
+    payload.pop("audiovisual_measurement_qualified")
+
+    legacy = VoiceQCReceipt.model_validate(payload)
+
+    assert legacy.passed is True
+    assert legacy.audiovisual_measurement_qualified is None
 
 
 def test_locked_voice_profile_is_content_addressed_and_immutable() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -10,6 +11,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+_PROMPT_AUDIO_SUFFIXES = {".wav", ".mp3", ".flac"}
 
 
 class BackendError(RuntimeError):
@@ -184,6 +187,44 @@ def speech_presence_score(samples: Any, *, sample_rate: int) -> float:
     return round(min(1.0, voiced / len(frames)), 4)
 
 
+def prompt_audio_for(request: dict[str, Any]) -> tuple[str, str]:
+    """Resolve the cloning prompt clip that casts this character's voice.
+
+    Order: the character's own attached reference sample, then a clip from the
+    local voice library keyed by cast order (so a two-hander never shares one
+    voice while distinct clips exist), then the single shared default clip.
+    """
+    for candidate in request.get("reference_paths") or []:
+        path = Path(str(candidate))
+        if path.is_file():
+            return str(path), "reference-sample"
+    library = os.environ.get("DIONY_COSYVOICE_PROMPT_LIBRARY", "").strip()
+    profile = dict(request.get("profile") or {})
+    character_id = str(profile.get("character_id") or "")
+    if library and character_id and Path(library).is_dir():
+        clips = sorted(
+            path
+            for path in Path(library).iterdir()
+            if path.is_file() and path.suffix.lower() in _PROMPT_AUDIO_SUFFIXES
+        )
+        if clips:
+            cast_index = request.get("cast_index")
+            if isinstance(cast_index, int) and cast_index >= 0:
+                index = cast_index
+            else:
+                index = int(hashlib.sha256(character_id.encode("utf-8")).hexdigest()[:8], 16)
+            return str(clips[index % len(clips)]), "voice-library"
+    return _required_env("DIONY_COSYVOICE_PROMPT_AUDIO"), "shared-default"
+
+
+def _prompt_provenance(prompt_audio: str, prompt_source: str) -> dict[str, Any]:
+    return {
+        "prompt_audio": prompt_audio,
+        "prompt_source": prompt_source,
+        "prompt_sha256": hashlib.sha256(Path(prompt_audio).read_bytes()).hexdigest(),
+    }
+
+
 def _cosy_worker() -> list[str]:
     worker = Path(__file__).with_name("cosyvoice_worker.py")
     if not worker.is_file():
@@ -206,11 +247,12 @@ def _synthesize(request: dict[str, Any]) -> dict[str, Any]:
         raise BackendError("CosyVoice synthesis requires text and output")
     embedding_output = output.with_suffix(output.suffix + ".campplus.json")
     embedding_output.unlink(missing_ok=True)
+    prompt_audio, prompt_source = prompt_audio_for(request)
     _run(
         [
             *_cosy_worker(),
             "--prompt-audio",
-            _required_env("DIONY_COSYVOICE_PROMPT_AUDIO"),
+            prompt_audio,
             "--text",
             text,
             "--output",
@@ -227,7 +269,11 @@ def _synthesize(request: dict[str, Any]) -> dict[str, Any]:
         or not embedding_output.is_file()
     ):
         raise BackendError("CosyVoice returned no synthesis audio")
-    return {"backend": "cosyvoice2-0.5b-local-v1", "output": str(output)}
+    return {
+        "backend": "cosyvoice2-0.5b-local-v1",
+        "output": str(output),
+        **_prompt_provenance(prompt_audio, prompt_source),
+    }
 
 
 def _embedding(audio: Path, response: Path) -> dict[str, Any]:
@@ -268,11 +314,12 @@ def _enroll_synthetic(request: dict[str, Any], response: Path) -> dict[str, Any]
         raise BackendError("CosyVoice synthetic enrollment requires text and output")
     temporary = response.with_suffix(response.suffix + ".campplus.json")
     temporary.unlink(missing_ok=True)
+    prompt_audio, prompt_source = prompt_audio_for(request)
     _run(
         [
             *_cosy_worker(),
             "--prompt-audio",
-            _required_env("DIONY_COSYVOICE_PROMPT_AUDIO"),
+            prompt_audio,
             "--text",
             text,
             "--output",
@@ -298,6 +345,7 @@ def _enroll_synthetic(request: dict[str, Any], response: Path) -> dict[str, Any]
         "embedding": vector,
         "backend": "cosyvoice-campplus-v1:synthetic-enrollment-v1",
         "output": str(output),
+        **_prompt_provenance(prompt_audio, prompt_source),
     }
 
 
@@ -484,7 +532,51 @@ def _studio_audio(request: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _video_fps(path: Path) -> float:
+    result = _run(
+        [
+            _ffprobe(),
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=r_frame_rate",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        timeout=30,
+    )
+    text = result.stdout.decode("utf-8", errors="replace").strip().splitlines()
+    raw = text[0].strip() if text else ""
+    try:
+        if "/" in raw:
+            numerator, denominator = raw.split("/", 1)
+            value = float(numerator) / float(denominator)
+        else:
+            value = float(raw)
+    except (ValueError, ZeroDivisionError):
+        return 24.0
+    return value if 1.0 <= value <= 120.0 else 24.0
+
+
+# Qualification floors for the measured performance-motion sync evidence.
+_AV_MIN_POINTS = 12
+_AV_LAG_RANGE_FRAMES = 6
+_AV_MIN_CORRELATION = 0.30
+_AV_MIN_PROMINENCE = 0.10
+_AV_MIN_ACTIVE_AUDIO = 0.20
+
+
 def _av_qc(request: dict[str, Any]) -> dict[str, Any]:
+    """Measure audio-to-performance-motion timing at the clip's true frame rate.
+
+    The offset is refined to sub-frame resolution with a parabolic fit around
+    the correlation peak. The measurement qualifies as retake evidence only
+    when both signals carry enough structure and the peak is unambiguous;
+    degenerate inputs stay unqualified with the reason in the diagnostics.
+    """
     import numpy as np
 
     video = Path(str(request.get("video") or ""))
@@ -492,7 +584,7 @@ def _av_qc(request: dict[str, Any]) -> dict[str, Any]:
     metadata = Path(str(request.get("performance_metadata") or ""))
     if not video.is_file() or not audio.is_file() or not metadata.is_file():
         raise BackendError("audiovisual QC inputs are incomplete")
-    fps = 24
+    fps = _video_fps(video)
     frame_result = _run(
         [
             _ffmpeg(),
@@ -501,7 +593,7 @@ def _av_qc(request: dict[str, Any]) -> dict[str, Any]:
             "-i",
             str(video),
             "-vf",
-            f"fps={fps},scale=160:90,format=gray",
+            "scale=160:90,format=gray",
             "-f",
             "rawvideo",
             "-pix_fmt",
@@ -517,48 +609,94 @@ def _av_qc(request: dict[str, Any]) -> dict[str, Any]:
     frames = np.frombuffer(frame_result.stdout[: frame_count * frame_size], dtype=np.uint8)
     frames = frames.reshape(frame_count, 90, 160).astype(np.float32)
     center = frames[:, 15:80, 35:125]
-    motion = np.mean(np.abs(np.diff(center, axis=0)), axis=(1, 2))
+    motion = np.mean(np.abs(np.diff(center, axis=0)), axis=(1, 2)).astype(np.float64)
     audio_result = _run(
         [_ffmpeg(), "-v", "error", "-i", str(audio), "-ac", "1", "-ar", "16000", "-f", "f32le", "-"],
         timeout=120,
     )
     samples = np.frombuffer(audio_result.stdout, dtype="<f4").astype(np.float64)
-    window = max(1, round(16000 / fps))
     envelope = []
     for index in range(frame_count):
-        segment = samples[index * window : (index + 1) * window]
+        start = round(index * 16000 / fps)
+        stop = round((index + 1) * 16000 / fps)
+        segment = samples[start:stop]
         envelope.append(float(np.sqrt(np.mean(segment * segment))) if segment.size else 0.0)
     envelope_array = np.asarray(envelope[1:], dtype=np.float64)
     length = min(motion.size, envelope_array.size)
     motion = motion[:length]
     envelope_array = envelope_array[:length]
-    if length < 6 or float(np.std(motion)) <= 1e-8 or float(np.std(envelope_array)) <= 1e-8:
-        correlation = 0.0
-        best_lag = 0
+    disqualifiers: list[str] = []
+    if length < _AV_MIN_POINTS:
+        disqualifiers.append(f"only {length} comparable frames; need {_AV_MIN_POINTS}")
+    quiet_floor = float(np.percentile(envelope_array, 20)) if length else 0.0
+    active_fraction = (
+        float(np.mean(envelope_array > max(1e-4, quiet_floor * 2.5))) if length else 0.0
+    )
+    if active_fraction < _AV_MIN_ACTIVE_AUDIO:
+        disqualifiers.append(
+            f"active audio fraction {active_fraction:.2f} is below {_AV_MIN_ACTIVE_AUDIO:.2f}"
+        )
+    correlation = 0.0
+    best_lag = 0
+    refined_lag = 0.0
+    if (
+        length >= _AV_MIN_POINTS
+        and float(np.std(motion)) > 1e-8
+        and float(np.std(envelope_array)) > 1e-8
+    ):
+        motion_norm = (motion - np.mean(motion)) / np.std(motion)
+        envelope_norm = (envelope_array - np.mean(envelope_array)) / np.std(envelope_array)
+        lags = list(range(-_AV_LAG_RANGE_FRAMES, _AV_LAG_RANGE_FRAMES + 1))
+        scores: dict[int, float] = {}
+        for lag in lags:
+            left = motion_norm[max(0, lag) : length + min(0, lag)]
+            right = envelope_norm[max(0, -lag) : length - max(0, lag)]
+            scores[lag] = float(np.mean(left * right)) if left.size else -1.0
+        best_lag = max(scores, key=lambda lag: scores[lag])
+        correlation = scores[best_lag]
+        prominence = correlation - float(np.median(list(scores.values())))
+        if correlation < _AV_MIN_CORRELATION:
+            disqualifiers.append(
+                f"peak correlation {correlation:.4f} is below {_AV_MIN_CORRELATION:.2f}"
+            )
+        elif prominence < _AV_MIN_PROMINENCE:
+            disqualifiers.append(
+                f"correlation peak prominence {prominence:.4f} is below {_AV_MIN_PROMINENCE:.2f}"
+            )
+        if abs(best_lag) >= _AV_LAG_RANGE_FRAMES:
+            disqualifiers.append(
+                "correlation peak sits at the search edge; the true offset may be larger"
+            )
+        refined_lag = float(best_lag)
+        left_score = scores.get(best_lag - 1)
+        right_score = scores.get(best_lag + 1)
+        if left_score is not None and right_score is not None:
+            curvature = left_score - 2 * correlation + right_score
+            if curvature < -1e-9:
+                refined_lag = best_lag + 0.5 * (left_score - right_score) / curvature
     else:
-        motion = (motion - np.mean(motion)) / np.std(motion)
-        envelope_array = (envelope_array - np.mean(envelope_array)) / np.std(envelope_array)
-        scored: list[tuple[float, int]] = []
-        for lag in range(-2, 3):
-            left = motion[max(0, lag) : length + min(0, lag)]
-            right = envelope_array[max(0, -lag) : length - max(0, lag)]
-            scored.append((float(np.mean(left * right)) if left.size else -1.0, lag))
-        correlation, best_lag = max(scored)
+        disqualifiers.append("motion or audio signal carries no measurable structure")
     video_duration = _duration_seconds(video)
     audio_duration = _duration_seconds(audio)
     duration_consistency = max(0.0, 1.0 - abs(video_duration - audio_duration) / max(video_duration, 0.001))
     confidence = max(0.0, min(1.0, 0.75 + 0.25 * max(0.0, correlation)))
-    offset_ms = abs(best_lag) * 1000 / fps
+    offset_ms = abs(refined_lag) * 1000 / fps
+    qualified = not disqualifiers
+    diagnostics = [
+        f"center-performance audio-motion correlation={correlation:.4f}",
+        f"best_lag_frames={best_lag} refined_lag_frames={refined_lag:.3f} fps={fps:.3f}",
+        f"active_audio_fraction={active_fraction:.3f}",
+        "Measured locally; no hosted service used.",
+    ]
+    if disqualifiers:
+        diagnostics.extend(f"unqualified: {reason}" for reason in disqualifiers)
     return {
         "lip_sync_confidence": round(confidence, 4),
         "audiovisual_offset_ms_p95": round(offset_ms, 3),
         "performance_consistency": round(duration_consistency, 4),
-        "diagnostics": [
-            f"center-performance audio-motion correlation={correlation:.4f}",
-            f"best_lag_frames={best_lag}",
-            "Measured local AV timing; no hosted service used.",
-        ],
-        "backend": "diony-local-av-motion-sync-v1",
+        "diagnostics": diagnostics,
+        "backend": "diony-local-av-motion-sync-v2",
+        "qualified_for_visual_retake": qualified,
     }
 
 

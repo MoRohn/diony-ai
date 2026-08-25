@@ -30,3 +30,14 @@ def test_frame_num_is_4n_plus_1() -> None:
     n = wan_frame_num(120, 23.976)
     assert n % 4 == 1
     assert 17 <= n <= 81
+
+
+def test_frame_num_never_delivers_fewer_frames_than_booked_within_the_lane() -> None:
+    """Trim-only conform: the camera must cover every booked frame up to the 81 cap."""
+    for booked in range(17, 82):
+        delivered = wan_frame_num(booked, 23.976)
+        assert delivered % 4 == 1
+        assert delivered >= booked
+        assert delivered <= 81
+    # Over-booked legacy shots still cap at the lane ceiling.
+    assert wan_frame_num(120, 23.976) == 81

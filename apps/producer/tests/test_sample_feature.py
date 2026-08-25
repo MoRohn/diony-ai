@@ -35,12 +35,12 @@ def test_sample_intake_uses_the_idea_reference_and_normal_production_run() -> No
     assert sample["brief"]["production_kind"] == "sample"
     assert sample["brief"]["sample_seconds"] == 10
     assert sample["brief"]["target_minutes"] == pytest.approx(10 / 60)
-    assert len(sample["shots"]) == 2
+    assert len(sample["shots"]) == 4
     assert all(shot["keyframe_asset_ids"] == [reference_id] for shot in sample["shots"])
 
     rolled = client.post("/api/studio/roll")
     assert rolled.status_code == 200
-    assert len(rolled.json()["takes"]) == 2
+    assert len(rolled.json()["takes"]) == 4
     run = client.get("/api/run").json()
     assert run["production_kind"] == "sample"
     assert run["sample_seconds"] == 10

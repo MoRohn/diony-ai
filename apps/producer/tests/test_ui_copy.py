@@ -608,6 +608,8 @@ def test_production_monitor_has_one_live_focus_and_collapsed_evidence() -> None:
     assert 'status.textContent = activityStatusLabel(row.level);' in js
     assert 'count.textContent = run.tally || "—";' in js
     assert 'count.innerHTML = `${run.tally || "—"}' not in js
+    assert 'clip.attempt_label || ""' in js
+    assert 'clip.av_evidence_label || ""' in js
 
 
 def test_production_watch_is_single_flight_and_never_animates_the_full_folio() -> None:

@@ -5,6 +5,7 @@ from pathlib import Path
 from diony_contracts.enums import Engine, VoiceProfileSource, VoiceRenderState
 from diony_contracts.fixture import demo_project
 from diony_producer.voice import (
+    AnimationMeasurements,
     DeterministicVoiceTestBackend,
     VoicePerformancePipeline,
     VoiceProfileRegistry,
@@ -135,7 +136,8 @@ def test_local_synthetic_voice_enrolls_from_a_render_before_identity_qc(
             del audio, model
             return [1.0, 0.0]
 
-        def enroll_synthetic(self, line, profile, output):
+        def enroll_synthetic(self, line, profile, output, *, cast_index=0):
+            del cast_index
             self.enrollment_calls += 1
             self.synthesize(line, profile, output, seed=profile.seed, reference_paths=[])
             self.enrolled_embedding = [0.0] * len(profile.speaker_embedding)
@@ -195,6 +197,73 @@ def test_audiovisual_qc_promotes_package_only_after_video_evidence(tmp_path) -> 
     assert verified.qc.lip_sync_confidence >= verified.qc.lip_sync_confidence_min
     assert verified.qc.audiovisual_offset_ms_p95 <= verified.qc.audiovisual_offset_ms_max
     assert verified.qc.performance_consistency >= verified.qc.performance_consistency_min
+    assert verified.qc.audiovisual_measurement_qualified is True
+
+
+def test_diagnostic_av_measurement_cannot_reject_picture_as_a_qualified_failure(tmp_path) -> None:
+    class DiagnosticBackend(DeterministicVoiceTestBackend):
+        def verify_audiovisual(self, video, audio, performance_metadata):
+            del video, audio, performance_metadata
+            return AnimationMeasurements(
+                lip_sync_confidence=0.8013,
+                audiovisual_offset_ms_p95=83.333,
+                performance_consistency=0.9886,
+                audiovisual_backend="diony-local-av-motion-sync-v1",
+                qualified_for_visual_retake=False,
+            )
+
+    project, _, take = _spoken_take()
+    backend = DiagnosticBackend()
+    pipeline = VoicePerformancePipeline(
+        vault=tmp_path,
+        synthesizer=backend,
+        embedder=backend,
+        aligner=backend,
+        audio_processor=backend,
+        audiovisual_qc=backend,
+    )
+    pipeline.prepare_take(project, take)
+    negative = tmp_path / "negative.mp4"
+    negative.write_bytes(b"video evidence" * 8)
+
+    failed = pipeline.verify_animation(project, take, negative)
+
+    assert failed.qc.passed is False
+    assert failed.qc.audiovisual_measurement_qualified is False
+    assert failed.qc.audiovisual_backend == "diony-local-av-motion-sync-v1"
+
+
+def test_animation_uses_the_locked_performance_threshold_not_identity_threshold(tmp_path) -> None:
+    class MarginalPerformanceBackend(DeterministicVoiceTestBackend):
+        def verify_audiovisual(self, video, audio, performance_metadata):
+            del video, audio, performance_metadata
+            return AnimationMeasurements(
+                lip_sync_confidence=0.97,
+                audiovisual_offset_ms_p95=20.0,
+                performance_consistency=0.95,
+                audiovisual_backend="syncnet-local-v1",
+                qualified_for_visual_retake=True,
+            )
+
+    project, _, take = _spoken_take()
+    backend = MarginalPerformanceBackend()
+    pipeline = VoicePerformancePipeline(
+        vault=tmp_path,
+        synthesizer=backend,
+        embedder=backend,
+        aligner=backend,
+        audio_processor=backend,
+        audiovisual_qc=backend,
+    )
+    package = pipeline.prepare_take(project, take)
+    package.qc.project_consistency_min = 0.90
+    package.qc.performance_consistency_min = 0.98
+    negative = tmp_path / "negative.mp4"
+    negative.write_bytes(b"video evidence" * 8)
+
+    failed = pipeline.verify_animation(project, take, negative)
+
+    assert failed.qc.animation_passed is False
 
 
 def test_multiple_dialogue_turns_keep_separate_voice_profiles_and_overlap_intent(tmp_path) -> None:
@@ -550,6 +619,8 @@ def test_voice_failure_message_reports_the_actual_av_thresholds(tmp_path) -> Non
     package.qc.lip_sync_confidence = 0.7956
     package.qc.audiovisual_offset_ms_p95 = 83.333
     package.qc.performance_consistency = 1.0
+    package.qc.audiovisual_backend = "syncnet-local-v1"
+    package.qc.audiovisual_measurement_qualified = True
 
     message = _voice_performance_failure(package)
 

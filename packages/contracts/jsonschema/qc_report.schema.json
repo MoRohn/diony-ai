@@ -230,6 +230,23 @@
       "default": null,
       "title": "Audiovisual Offset Ms P95"
     },
+    "audiovisual_backend": {
+      "default": "",
+      "title": "Audiovisual Backend",
+      "type": "string"
+    },
+    "audiovisual_measurement_qualified": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Audiovisual Measurement Qualified"
+    },
     "reference_asset_ids": {
       "items": {
         "type": "string"

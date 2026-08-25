@@ -192,7 +192,7 @@ def test_studio_open_from_idea() -> None:
     project = res.json()
     assert project["customer_kind"] == "feature"
     assert project["brief"]["target_minutes"] == 5
-    assert len(project["shots"]) == 60
+    assert len(project["shots"]) == 99
     assert project["bible"]["width"] == 1920
     rolled = client.post("/api/studio/roll")
     assert rolled.status_code == 200
@@ -211,7 +211,7 @@ def test_studio_open_length_goal_is_a_goal_not_trt() -> None:
     )
     assert short.status_code == 200
     assert short.json()["brief"]["target_minutes"] == 0.5
-    assert len(short.json()["shots"]) == 6
+    assert len(short.json()["shots"]) == 10
     hour = client.post(
         "/api/studio/open",
         json={
