@@ -310,6 +310,12 @@ def _clip_rows(project: Project, farm: dict, finish: dict | None = None) -> list
                 "attempt_label": (
                     f"attempt {take.attempt} of {RETAKE_CAP}" if take is not None else ""
                 ),
+                "av_diagnostic_only": bool(
+                    take
+                    and take.qc
+                    and take.qc.audiovisual_backend
+                    and not take.qc.audiovisual_measurement_qualified
+                ),
                 "av_evidence_label": (
                     "Qualified AV"
                     if take
@@ -998,8 +1004,7 @@ def run_payload(
         tally_note = (
             "QC hold · Take preserved"
             if any(
-                clip.get("state") == "failed"
-                and clip.get("av_evidence_label") == "Diagnostic AV only"
+                clip.get("state") == "failed" and clip.get("av_diagnostic_only")
                 for clip in clips
             )
             else "Wan failed"

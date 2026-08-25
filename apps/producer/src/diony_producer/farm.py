@@ -53,7 +53,11 @@ from diony_producer.camera import (
 from diony_producer.gallery_join import probe_media, resolve_media_tool
 from diony_producer.performance import PerformanceJournal
 from diony_producer.brain import direct_retake
-from diony_producer.calibration import calibrated_thresholds, measured_qc_required_default
+from diony_producer.calibration import (
+    calibrated_thresholds,
+    maybe_auto_calibrate,
+    measured_qc_required_default,
+)
 from diony_producer.quality import MEASUREMENT_VERSION, measure_negative_quality
 from diony_producer.vault import persist_project, record_activity, vault_root
 from diony_producer.voice import prepare_voice_for_take, verify_voice_animation
@@ -493,6 +497,11 @@ def resume_camera(project: Project) -> Project:
                     selected = project.take(shot.selected_take_id)
                 except KeyError:
                     continue
+                if shot.hero:
+                    try:
+                        selected = select_hero_print(project, shot)
+                    except RuntimeError:
+                        pass
                 retry = auto_retake_for_qc_failure(project, selected)
                 if retry is not None:
                     queued = [retry]
@@ -672,6 +681,66 @@ def select_hero_print(project: Project, shot) -> Take:
             shot_id=shot.id,
         )
     return best
+
+
+def refresh_take_measurement(project: Project, take: Take) -> bool:
+    """Re-measure temporal evidence for a stored PASS whose measurement version is stale.
+
+    Anti-grandfathering demands current evidence, but a measurement-version bump
+    must offer a re-measure path instead of silently stalling advance: the
+    landed negative is still on disk, so measuring again costs one small decode
+    and no render. Runs at most once per take (the version becomes current).
+    """
+    qc = take.qc
+    if qc is None or qc.verdict != QCVerdict.PASS:
+        return False
+    if not qc.measurement_version or qc.measurement_version == MEASUREMENT_VERSION:
+        return False
+    negative = next(
+        (item for item in take.artifacts if item.kind == ArtifactKind.NEGATIVE_720),
+        None,
+    )
+    if negative is None:
+        return False
+    path = vault_root() / negative.path
+    if not path.is_file():
+        return False
+    temporal = measure_negative_quality(path, thresholds=calibrated_thresholds())
+    if not temporal.measured:
+        return False
+    qc.measurement_version = MEASUREMENT_VERSION
+    qc.measured_frame_count = temporal.frame_count
+    qc.temporal_delta_p95 = temporal.temporal_delta_p95
+    qc.temporal_residual_p95 = temporal.temporal_residual_p95
+    qc.flicker_luma_p95 = temporal.flicker_luma_p95
+    qc.morph_ok = temporal.morph_ok
+    qc.flicker_ok = temporal.flicker_ok
+    qc.motion_ok = temporal.motion_ok
+    qc.camera_ok = temporal.morph_ok
+    qc.lighting_ok = temporal.flicker_ok
+    if measured_qc_required_default() and not (
+        temporal.morph_ok and temporal.flicker_ok and temporal.motion_ok
+    ):
+        qc.verdict = QCVerdict.FAIL
+        if not temporal.motion_ok:
+            qc.notes = (
+                f"Measured motion failed (delta p95 {temporal.temporal_delta_p95:.4f}); "
+                "the plate is effectively frozen."
+            )
+        elif not temporal.morph_ok:
+            qc.notes = (
+                f"Measured temporal coherence failed (residual p95 "
+                f"{temporal.temporal_residual_p95:.4f})."
+            )
+        else:
+            qc.notes = f"Measured flicker failed (luma-change p95 {temporal.flicker_luma_p95:.4f})."
+    persist_project(project)
+    record_activity(
+        "qc",
+        f"{take.shot_id} · re-measured temporal evidence at {MEASUREMENT_VERSION}",
+        shot_id=take.shot_id,
+    )
+    return True
 
 
 def _auto_retake_quality_failure(take: Take) -> bool:
@@ -1126,12 +1195,21 @@ def adopt_live_farm(project: Project) -> None:
                 measured_qc_required=True if attention_receipt is not None else None,
             )
             persist_project(project)
-            integrity_error = _take_integrity_error(take)
+            adopted_shot = project.shot(take.shot_id)
+            landed = take
+            if adopted_shot.hero:
+                # Recovery must score whatever candidates landed before spending
+                # a retake on one whose sibling may already be the better print.
+                try:
+                    landed = select_hero_print(project, adopted_shot)
+                except RuntimeError:
+                    landed = take
+            integrity_error = _take_integrity_error(landed)
             if integrity_error:
                 _error = integrity_error[:400]
                 _detail = _error[:240]
-                record_activity("qc", f"{take.shot_id} · {_detail}", level="fail", shot_id=take.shot_id)
-                retry = auto_retake_for_qc_failure(project, take)
+                record_activity("qc", f"{landed.shot_id} · {_detail}", level="fail", shot_id=landed.shot_id)
+                retry = auto_retake_for_qc_failure(project, landed)
                 if retry is not None:
                     try:
                         if attention_receipt is not None:
@@ -2114,6 +2192,13 @@ def start_farm(project: Project, takes: list[Take]) -> None:
                 if failed:
                     project.mark_production_end()
                     persist_project(project)
+                else:
+                    try:
+                        # Enough verified clips on this site arms measured QC
+                        # for the next roll; a problem just defers arming.
+                        maybe_auto_calibrate()
+                    except Exception:  # noqa: BLE001 — arming may never stall a run
+                        pass
                 maybe_advance_run(project)
 
     threading.Thread(target=loop, name="diony-farm", daemon=True).start()

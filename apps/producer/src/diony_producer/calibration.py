@@ -23,7 +23,7 @@ from diony_producer.quality import (
     TemporalThresholds,
     measure_negative_quality,
 )
-from diony_producer.vault import vault_root
+from diony_producer.vault import record_activity, vault_root
 
 CALIBRATION_VERSION = "diony-qc-calibration-v1"
 CALIBRATION_REL = ".cluster/measured-qc-calibration.json"
@@ -223,6 +223,49 @@ def verified_negative_paths() -> list[Path]:
                 if path.is_file():
                     found.append(path)
     return found
+
+
+def maybe_auto_calibrate(*, calibrated_by: str = "conductor-auto") -> dict | None:
+    """Arm measured picture QC once the vault holds enough verified clips.
+
+    Runs at the end of a successful farm pass. An explicit operator
+    DIONY_MEASURED_QC_REQUIRED choice (either way) always wins, an existing
+    valid receipt is never overwritten, and any measurement problem simply
+    defers to the next run — arming is a visible activity line, never a stall.
+    """
+    # Only an explicit operator OFF suppresses calibration. With the env forced
+    # on, the gate already runs — a calibrated receipt then replaces the
+    # shipped defaults with thresholds measured from this site's own material.
+    if os.environ.get("DIONY_MEASURED_QC_REQUIRED", "").strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        return None
+    if load_calibration() is not None:
+        return None
+    paths = [
+        path
+        for path in verified_negative_paths()
+        if path.suffix.lower() in {".mp4", ".mov"} and path.stat().st_size > 32
+    ]
+    if len(paths) < MIN_CALIBRATION_CLIPS:
+        return None
+    try:
+        payload = write_calibration(paths, calibrated_by=calibrated_by)
+    except (CalibrationError, OSError):
+        return None
+    thresholds = payload["thresholds"]
+    record_activity(
+        "qc",
+        (
+            f"Measured picture QC armed: calibrated from {payload['clip_count']} verified "
+            f"clips (motion floor {thresholds['delta_p95_min']:g}, residual max "
+            f"{thresholds['residual_p95_max']:g}, flicker max {thresholds['flicker_p95_max']:g})."
+        ),
+    )
+    return payload
 
 
 def main(argv: list[str] | None = None) -> int:

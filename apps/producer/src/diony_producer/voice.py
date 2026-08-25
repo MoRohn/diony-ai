@@ -123,6 +123,35 @@ def _cosine(left: list[float], right: list[float]) -> float:
     return max(-1.0, min(1.0, numerator / (left_norm * right_norm)))
 
 
+def _deliverable_frames(shot: Shot) -> int:
+    """Frames the camera will actually deliver for this booking.
+
+    Voice timing must target camera truth: a legacy over-booked Shot renders at
+    the 81-frame lane cap, and audio sized to the fictional booking would fail
+    AV duration consistency after one wasted render.
+    """
+    from diony_contracts.live import wan_frame_num
+
+    booked = max(1, int(shot.duration_frames))
+    return min(booked, wan_frame_num(booked, shot.fps or 23.976))
+
+
+def _project_cast_rank(project: Project, profiles: list) -> dict[str, int]:
+    """Stable per-character cast order from the project roster.
+
+    The prompt-library clip a character is cast from must not depend on which
+    other characters happen to speak in a given shot: index by first appearance
+    in the project's voice-profile roster, so a two-hander's second lead keeps
+    the same voice in a later solo shot.
+    """
+    roster: dict[str, int] = {}
+    for profile in project.voice_profiles:
+        roster.setdefault(profile.character_id, len(roster))
+    for profile in profiles:
+        roster.setdefault(profile.character_id, len(roster))
+    return {profile.id: roster[profile.character_id] for profile in profiles}
+
+
 def _enabled(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -368,7 +397,7 @@ def optimize_voice_script(
     if not turns:
         raise VoicePipelineError(f"{shot.id} has no dialogue to optimize")
     by_character = {profile.character_id: profile for profile in profiles}
-    clip_ms = max(1, round(shot.duration_frames / shot.fps * 1000))
+    clip_ms = max(1, round(_deliverable_frames(shot) / shot.fps * 1000))
     default_line_ms = max(250, clip_ms // len(turns))
     lines: list[PerformanceScriptLine] = []
     cursor = 0
@@ -908,7 +937,9 @@ class VoicePerformancePipeline:
         registry = VoiceProfileRegistry(project)
         enrolled_profiles: list[VoiceProfile] = []
         marker = ":synthetic-enrollment-v1"
-        for cast_index, profile in enumerate(profiles):
+        enrollment_rank = _project_cast_rank(project, profiles)
+        for profile in profiles:
+            cast_index = enrollment_rank.get(profile.id, 0)
             if profile.source != VoiceProfileSource.SYNTHETIC or profile.speaker_embedding_model.endswith(marker):
                 enrolled_profiles.append(profile)
                 continue
@@ -1114,7 +1145,7 @@ class VoicePerformancePipeline:
         cache_root = self.vault / "projects" / project.id / "voice" / "cache" / cache_key
         cache_root.mkdir(parents=True, exist_ok=True)
         profile_by_id = {profile.id: profile for profile in profiles}
-        cast_rank = {profile.id: index for index, profile in enumerate(profiles)}
+        cast_rank = _project_cast_rank(project, profiles)
         line_audio: list[tuple[Path, PerformanceScriptLine]] = []
         alignments: list[dict[str, Any]] = []
         speaker_scores: list[float] = []
@@ -1247,7 +1278,7 @@ class VoicePerformancePipeline:
         clean_path = cache_root / "clean-dialogue.wav"
         final_path = cache_root / "final-clip-mix.wav"
         performance_path = cache_root / "performance.json"
-        clip_ms = max(1, round(shot.duration_frames / shot.fps * 1000))
+        clip_ms = max(1, round(_deliverable_frames(shot) / shot.fps * 1000))
         target_lufs = -24.0 if project.bible.loudness == LoudnessTarget.BROADCAST else -16.0
         measurements: AudioMeasurements | None = None
         for attempt in range(1, retake_cap + 1):

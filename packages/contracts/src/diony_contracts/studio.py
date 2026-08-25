@@ -207,6 +207,9 @@ WAN_LANE_FRAMES = 81
 STITCH_OVERLAP_FRAMES = 8
 WAN_LANE_NET_FRAMES = WAN_LANE_FRAMES - STITCH_OVERLAP_FRAMES
 WAN_MIN_SHOT_FRAMES = 17
+# A booking must be at least this long to host a natural-rate dialogue window
+# (~3 s of speech at 120 wpm); shorter lane-tail bookings stay picture-only.
+DIALOGUE_MIN_SHOT_FRAMES = 72
 WAN_QUALITY_SECONDS = WAN_LANE_FRAMES / TIMELINE_FPS
 MAX_QUALITY_SHOTS = 120
 FIRST_REEL_SHOTS = 12
@@ -1217,10 +1220,20 @@ def expand_idea(
     image_ids = [a.id for a in held if a.kind == AssetKind.IMAGE]
     video_ids = [a.id for a in held if a.kind == AssetKind.VIDEO]
     audio_ids = [a.id for a in held if a.kind == AssetKind.AUDIO]
+    # Dialogue rides only on bookings long enough to hold a natural-rate
+    # window; a short lane-tail booking never receives speech it cannot fit.
+    dialogue_eligible = [
+        index
+        for index, recipe in enumerate(recipes)
+        if int(recipe.get("duration_frames") or round(recipe["seconds"] * TIMELINE_FPS))
+        >= DIALOGUE_MIN_SHOT_FRAMES
+    ] or list(range(n))
     dialogue_windows = _fit_dialogue_to_shots(
         _script_dialogue(brief.idea, default_speaker=book.lead_name),
-        shot_count=n,
-        seconds_per_shot=sum(float(recipe["seconds"]) for recipe in recipes) / len(recipes),
+        shot_count=len(dialogue_eligible),
+        seconds_per_shot=min(
+            float(recipes[index]["seconds"]) for index in dialogue_eligible
+        ),
     )
     sound_requested = bool(dialogue_windows) or _asks_for_sound(idea)
     spoken_direction = _spoken_direction_script(brief.idea)
@@ -1260,8 +1273,11 @@ def expand_idea(
         character.voice_profile_id = profile.id
     dialogue_by_shot: dict[int, list[ScriptDialogue]] = {}
     for index, window in enumerate(dialogue_windows):
-        shot_index = min(n - 1, (index * n) // len(dialogue_windows))
-        dialogue_by_shot.setdefault(shot_index, []).extend(window)
+        slot = min(
+            len(dialogue_eligible) - 1,
+            (index * len(dialogue_eligible)) // len(dialogue_windows),
+        )
+        dialogue_by_shot.setdefault(dialogue_eligible[slot], []).extend(window)
     visual_idea = (
         _visual_only_text(idea)
         or "A Bible-locked performance in the authored setting."

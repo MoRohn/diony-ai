@@ -75,13 +75,22 @@ def test_voice_script_optimizer_is_deterministic_and_profile_aware() -> None:
     first = optimize_voice_script(project, shot, [profile])
     second = optimize_voice_script(project, shot, [profile])
 
+    from diony_contracts.live import wan_frame_num
+
+    # Voice targets camera truth: the fixture's legacy 120-frame booking
+    # renders at the 81-frame lane cap, and audio must fit what lands.
+    deliverable_ms = round(
+        min(shot.duration_frames, wan_frame_num(shot.duration_frames, shot.fps))
+        / shot.fps
+        * 1000
+    )
     assert first.content_sha256 == second.content_sha256
     assert first.lines[0].voice_profile_id == profile.id
-    assert first.lines[0].target_duration_ms <= round(shot.duration_frames / shot.fps * 1000)
+    assert first.lines[0].target_duration_ms <= deliverable_ms
     assert first.lines[0].breath_after_word_indices
     assert first.lines[0].intensity_curve
     assert shot.camera_move.value in first.camera_language
-    assert first.pacing_target_ms == round(shot.duration_frames / shot.fps * 1000)
+    assert first.pacing_target_ms == deliverable_ms
     assert project.bible.logline in first.narrative_context
 
 

@@ -314,7 +314,13 @@ def _finish_one(project: Project, take: Take) -> None:
         verify_finished_media(dest, label=f"1080 finish for {take.id}")
         # Blueprint 06/19: the finish may not add identity drift or temporal
         # boil the negative does not have. A violation holds this take only.
-        verify_post_sr(src, dest, label=f"post-SR QC for {take.id}")
+        try:
+            verify_post_sr(src, dest, label=f"post-SR QC for {take.id}")
+        except PostSRQCError:
+            # A rejected master must not linger at the canonical path where the
+            # next pass's adoption branch would attach it.
+            dest.unlink(missing_ok=True)
+            raise
     digest = _sha256_file(dest)
     measured_frames = media_frame_count(dest) if _visual_qc_required() else 0
     _attach_1080(
@@ -365,10 +371,54 @@ def _attach_1080(
     ]
 
 
+def _selected_take(project: Project, shot) -> Take | None:
+    if shot.selected_take_id:
+        try:
+            return project.take(shot.selected_take_id)
+        except KeyError:
+            return None
+    takes = project.takes_for(shot.id)
+    return takes[-1] if takes else None
+
+
+def _adopted_master_post_sr_ok(source_artifact: Artifact, existing: Path, take: Take) -> bool:
+    """An adopted pre-existing master must clear the same post-SR gate a fresh
+    finish would — a previously rejected file may not re-enter through adoption."""
+    negative = vault_root() / source_artifact.path
+    if not negative.is_file():
+        return False
+    try:
+        verify_post_sr(negative, existing, label=f"adopted post-SR QC for {take.id}")
+        return True
+    except FinishError:
+        return False
+
+
 def _stitch_program(project: Project) -> None:
     assemble_program(project)
     if not project.timeline:
         raise FinishError("selected takes are missing 1080 masters")
+    # Migration for pre-lane projects: a Shot that still books more frames than
+    # its landed master decodes would make the trim-only conform refuse the
+    # whole stitch. Reconcile such bookings to camera truth (the same rule the
+    # farm applies at attach time) and rebuild the timeline once, visibly.
+    reconciled = 0
+    for shot in project.shots:
+        take = _selected_take(project, shot)
+        art = _take_1080(project, take, verify_hash=False) if take else None
+        if art is None:
+            continue
+        measured = media_frame_count(vault_root() / art.path)
+        if 0 < measured < shot.duration_frames - 1:
+            shot.duration_frames = max(17, measured)
+            reconciled += 1
+    if reconciled:
+        assemble_program(project)
+        persist_project(project)
+        record_activity(
+            "sr",
+            f"Reconciled {reconciled} legacy over-booked shot(s) to measured camera truth before stitch.",
+        )
     clips: list[tuple[Path, int, int]] = []
     source_hashes: list[str] = []
     for event, shot in zip(project.timeline.events, project.shots, strict=True):
@@ -431,7 +481,11 @@ def start_finish(project: Project, takes: list[Take]) -> None:
                     if source_artifact is not None and negative_lineage_valid(
                         project, take, verify_hash=True
                     ) and (
-                        not _visual_qc_required() or finished_media_has_picture(existing)
+                        not _visual_qc_required()
+                        or (
+                            finished_media_has_picture(existing)
+                            and _adopted_master_post_sr_ok(source_artifact, existing, take)
+                        )
                     ):
                         _attach_1080(
                             project,
@@ -440,7 +494,10 @@ def start_finish(project: Project, takes: list[Take]) -> None:
                             existing.stat().st_size,
                             source_artifact=source_artifact,
                             digest=_sha256_file(existing),
-                            duration_frames=project.shot(take.shot_id).duration_frames,
+                            duration_frames=(
+                                media_frame_count(existing)
+                                or project.shot(take.shot_id).duration_frames
+                            ),
                         )
                         persist_project(project)
                         with _lock:

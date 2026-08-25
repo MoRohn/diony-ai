@@ -8,7 +8,12 @@ from diony_contracts.enums import GateName, MixLockState, PictureLockState, Proj
 from diony_contracts.live import inference_live
 from diony_contracts.models import Gate, Project, Take
 from diony_producer.camera import live_camera
-from diony_producer.farm import farm_status, qc_contract_valid, take_has_live_negative
+from diony_producer.farm import (
+    farm_status,
+    qc_contract_valid,
+    refresh_take_measurement,
+    take_has_live_negative,
+)
 from diony_producer.finish import (
     enter_finish,
     finish_status,
@@ -58,6 +63,9 @@ def farm_ready_for_finish(project: Project, *, live: bool) -> bool:
         take = _selected_take(project, shot.id)
         if take is None:
             return False
+        if live:
+            # A stale measurement version re-measures once instead of stalling.
+            refresh_take_measurement(project, take)
         if take.qc and take.qc.verdict == QCVerdict.FAIL:
             return False
         if live and (take.qc is None or take.qc.verdict != QCVerdict.PASS):
@@ -76,6 +84,10 @@ def apply_picture_lock(project: Project, locked_by: str = "producer") -> None:
         return
     if any(_selected_take(project, shot.id) is None for shot in project.shots):
         raise ValueError("picture lock needs a selected take on every shot")
+    for shot in project.shots:
+        take = _selected_take(project, shot.id)
+        if take is not None:
+            refresh_take_measurement(project, take)
     failed = [
         (shot.id, take.id)
         for shot in project.shots

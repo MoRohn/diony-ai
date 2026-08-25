@@ -628,9 +628,13 @@ def _av_qc(request: dict[str, Any]) -> dict[str, Any]:
     disqualifiers: list[str] = []
     if length < _AV_MIN_POINTS:
         disqualifiers.append(f"only {length} comparable frames; need {_AV_MIN_POINTS}")
-    quiet_floor = float(np.percentile(envelope_array, 20)) if length else 0.0
+    # Activity is judged against the clip's own loud level, not its quiet
+    # percentile: for wall-to-wall dialogue the 20th percentile is already at
+    # speech level, and a quiet-relative threshold would disqualify exactly
+    # the densest performances.
+    loud_level = float(np.percentile(envelope_array, 95)) if length else 0.0
     active_fraction = (
-        float(np.mean(envelope_array > max(1e-4, quiet_floor * 2.5))) if length else 0.0
+        float(np.mean(envelope_array > max(1e-4, 0.25 * loud_level))) if length else 0.0
     )
     if active_fraction < _AV_MIN_ACTIVE_AUDIO:
         disqualifiers.append(

@@ -364,7 +364,7 @@ def _refine_batch(batch: list[Shot], bible: Bible) -> int:
             max_tokens=BATCH_MAX_TOKENS,
         )
         verdicts = _candidates_by_id(_json_object(critic_text))
-    except (httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+    except (httpx.HTTPError, json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError):
         return refined
     for shot in refined_shots:
         verdict = verdicts.get(shot.id)
@@ -509,7 +509,7 @@ def direct_retake(project: Project, shot: Shot, take: Take) -> bool:
                 max_tokens=SINGLE_MAX_TOKENS,
             )
         )
-    except (httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+    except (httpx.HTTPError, json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError):
         record_activity(
             "brain",
             f"{shot.id} · retake director unavailable; keyword repair table stands.",
@@ -570,9 +570,11 @@ def plan_production(project: Project, shots: list[Shot]) -> None:
     budget_seconds = _planning_budget_seconds()
     started = time.monotonic()
     try:
-        if _refine_bible(project):
+        # Bible authorship happens once, before any take exists. A recovery
+        # roll must not rewrite the grammar that landed takes were shot under.
+        if not project.takes and _refine_bible(project):
             record_activity("brain", "DeepSeek authored the project logline and visual grammar.")
-    except (httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+    except (httpx.HTTPError, json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError) as exc:
         record_activity(
             "brain",
             f"DeepSeek bible pass fell back to the playbook grammar: {str(exc)[:160]}",
@@ -595,7 +597,7 @@ def plan_production(project: Project, shots: list[Shot]) -> None:
             break
         try:
             refined_total += _refine_batch(batch, project.bible)
-        except (httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        except (httpx.HTTPError, json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError) as exc:
             record_activity(
                 "brain",
                 f"DeepSeek batch {index}/{len(batches)} fell back to compiled plans: {str(exc)[:160]}",

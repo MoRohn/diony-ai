@@ -216,8 +216,13 @@ silently reduce the picture codec or bit depth.
 - spatial residual p95 after removing coherent exposure change;
 - global luminance-change p95.
 
-Measured temporal QC turns **on by default once the site is calibrated**. The
-calibration receipt (`{vault}/.cluster/measured-qc-calibration.json`, written by
+Measured temporal QC turns **on by default once the site is calibrated**, and
+the site calibrates itself: at the end of a successful farm pass, if no valid
+receipt exists and no explicit `DIONY_MEASURED_QC_REQUIRED` choice is set, the
+conductor calibrates from the vault's PASS-verdict negatives once at least 12
+exist, announcing the armed gates as an activity line. The operator CLI
+remains for explicit control. The calibration receipt
+(`{vault}/.cluster/measured-qc-calibration.json`, written by
 `python -m diony_producer.calibration` from at least 12 verified-good 720p
 negatives — explicit paths or `--from-vault` PASS-verdict takes) derives the
 motion floor, morph residual ceiling, and flicker ceiling with margin around

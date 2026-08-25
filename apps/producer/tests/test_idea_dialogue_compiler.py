@@ -231,7 +231,7 @@ def test_thirty_second_program_packs_turns_by_total_natural_speaking_time() -> N
         ("Marcus", "Hugo. Your turn. Be vulnerable."),
         (
             "Hugo",
-            "I am grateful that neither of you can legally force me to continue this.",
+            "I am grateful that neither of you can force me to continue this.",
         ),
     ]
     idea = "A clay ensemble performs in a shared kitchen.\n" + "\n".join(
@@ -262,7 +262,10 @@ def test_thirty_second_program_packs_turns_by_total_natural_speaking_time() -> N
     ]
 
     assert len(project.shots) == 10
-    assert len([shot for shot in project.shots if shot.dialogue_turns]) == 10
+    # Dialogue rides only on bookings long enough for a natural-rate window:
+    # the 62-frame lane tail stays picture-only.
+    assert len([shot for shot in project.shots if shot.dialogue_turns]) == 9
+    assert not project.shots[-1].dialogue_turns
     assert all(
         sum(len(turn.text.split()) for turn in shot.dialogue_turns) <= 6
         for shot in project.shots

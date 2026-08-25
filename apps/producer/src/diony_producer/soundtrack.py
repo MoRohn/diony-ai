@@ -138,6 +138,20 @@ def _cue_seconds(path: Path) -> float:
         return 0.0
 
 
+def sound_library_present() -> bool:
+    """Cheap existence probe — the full scan (ffprobe + sha256 per clip) waits
+    until planning is actually going to happen."""
+    root = sound_library_root()
+    for role in STEM_ROLES:
+        folder = root / role
+        if not folder.is_dir():
+            continue
+        for path in folder.iterdir():
+            if path.is_file() and path.suffix.lower() in _AUDIO_SUFFIXES:
+                return True
+    return False
+
+
 def scan_sound_library() -> list[LibraryCue]:
     root = sound_library_root()
     cues: list[LibraryCue] = []
@@ -173,6 +187,10 @@ def scan_sound_library() -> list[LibraryCue]:
 
 def plan_path(project: Project) -> Path:
     return vault_root() / "projects" / project.id / "audio" / "soundtrack-plan.json"
+
+
+def soundtrack_plan_exists(project: Project) -> bool:
+    return plan_path(project).is_file()
 
 
 def _generated_root(project: Project) -> Path:
@@ -273,9 +291,8 @@ def _validated_rows(
 
 def plan_soundtrack(project: Project) -> dict | None:
     """Author and persist the soundtrack edit list. Never raises; always visible."""
-    catalog = {cue.id: cue for cue in scan_sound_library()}
     allow_generation = generation_enabled(project)
-    if not catalog and not allow_generation:
+    if not sound_library_present() and not allow_generation:
         return None
     if os.environ.get("DIONY_DRY_RUN", "").strip().lower() in {"1", "true", "yes", "on"}:
         # The dry-run desktop has no brain by design; skip without a warning.
@@ -286,6 +303,9 @@ def plan_soundtrack(project: Project) -> dict | None:
             "Soundtrack planning skipped: brain is offline; the dialogue-only mix stands.",
             level="warn",
         )
+        return None
+    catalog = {cue.id: cue for cue in scan_sound_library()}
+    if not catalog and not allow_generation:
         return None
     shots = [
         {
@@ -322,7 +342,7 @@ def plan_soundtrack(project: Project) -> dict | None:
         payload = _json_object(
             _chat(SOUNDTRACK_SYSTEM, "Production: " + json.dumps(context), max_tokens=PLAN_MAX_TOKENS)
         )
-    except (httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+    except (httpx.HTTPError, json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError) as exc:
         record_activity(
             "brain",
             f"Soundtrack planning fell back to the dialogue-only mix: {str(exc)[:160]}",

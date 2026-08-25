@@ -23,7 +23,12 @@ from diony_finish.pipeline import FinishError, finished_media_has_picture, verif
 
 from diony_producer.gallery_join import resolve_media_tool
 from diony_producer.gallery import gallery_program_preview_path
-from diony_producer.soundtrack import PlannedCue, ensure_generated_cues, load_soundtrack_plan
+from diony_producer.soundtrack import (
+    PlannedCue,
+    ensure_generated_cues,
+    load_soundtrack_plan,
+    soundtrack_plan_exists,
+)
 from diony_producer.vault import abs_path, persist_project, record_activity, vault_root
 
 
@@ -571,7 +576,15 @@ def bounce_mix(project: Project) -> None:
     revision = _mix_revision(project)
     script = _dialogue_script(project)
     ensure_generated_cues(project)
-    planned_cues = load_soundtrack_plan(project) or []
+    planned_cues = load_soundtrack_plan(project)
+    if planned_cues is None and soundtrack_plan_exists(project):
+        # A planned soundtrack that fails verification is a hold, never a
+        # silently stripped master ("visibly, never silently").
+        raise MixError(
+            "The soundtrack plan failed verification: a planned library cue is "
+            "missing or its bytes changed. Restore the library or re-plan before Mix."
+        )
+    planned_cues = planned_cues or []
     if not script and not planned_cues:
         raise MixError(
             "No authored dialogue or verified content-bearing audio is available; "

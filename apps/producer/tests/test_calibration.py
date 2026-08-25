@@ -203,3 +203,73 @@ def test_v2_analysis_proxy_measures_a_real_clip(tmp_path) -> None:
     assert 20 <= receipt.frame_count <= 28
     assert receipt.motion_ok is True
     assert receipt.morph_ok is True
+
+
+def _vault_with_verified_negatives(tmp_path, monkeypatch, count: int) -> None:
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
+    project_dir = tmp_path / "vault" / "projects" / "studio-auto"
+    project_dir.mkdir(parents=True)
+    takes = []
+    for index in range(count):
+        rel = f"projects/studio-auto/takes/sh-{index:03d}-t1/negative_720.mp4"
+        negative = tmp_path / "vault" / rel
+        negative.parent.mkdir(parents=True)
+        negative.write_bytes(b"\x00\x00\x00\x18ftypmp42" + bytes([index]) * 64)
+        takes.append(
+            {
+                "qc": {"verdict": "pass"},
+                "artifacts": [{"kind": "negative_720", "path": rel}],
+            }
+        )
+    (project_dir / "project.json").write_text(json.dumps({"takes": takes}))
+
+
+def test_auto_calibration_arms_after_enough_verified_clips(tmp_path, monkeypatch) -> None:
+    from diony_producer.calibration import maybe_auto_calibrate
+
+    monkeypatch.delenv("DIONY_MEASURED_QC_REQUIRED", raising=False)
+    _vault_with_verified_negatives(tmp_path, monkeypatch, 12)
+    monkeypatch.setattr(
+        calibration_module,
+        "measure_negative_quality",
+        lambda path: TemporalQualityReceipt(
+            measured=True,
+            frame_count=40,
+            temporal_delta_p95=0.009,
+            temporal_residual_p95=0.06,
+            flicker_luma_p95=0.012,
+            morph_ok=True,
+            flicker_ok=True,
+            motion_ok=True,
+        ),
+    )
+    activity = []
+    monkeypatch.setattr(
+        calibration_module, "record_activity", lambda src, text, **kw: activity.append(text)
+    )
+
+    payload = maybe_auto_calibrate()
+
+    assert payload is not None
+    assert payload["calibrated_by"] == "conductor-auto"
+    assert measured_qc_required_default() is True
+    assert any("Measured picture QC armed" in text for text in activity)
+
+    # An existing receipt is never overwritten.
+    assert maybe_auto_calibrate() is None
+
+
+def test_auto_calibration_defers_below_the_floor_and_honors_operator_choice(
+    tmp_path, monkeypatch
+) -> None:
+    from diony_producer.calibration import maybe_auto_calibrate
+
+    monkeypatch.delenv("DIONY_MEASURED_QC_REQUIRED", raising=False)
+    _vault_with_verified_negatives(tmp_path, monkeypatch, 5)
+    assert maybe_auto_calibrate() is None  # not enough verified clips yet
+
+    # An explicit operator choice — even "off" — always wins over auto-arming.
+    monkeypatch.setenv("DIONY_MEASURED_QC_REQUIRED", "0")
+    _vault_with_verified_negatives(tmp_path / "second", monkeypatch, 12)
+    assert maybe_auto_calibrate() is None
