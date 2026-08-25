@@ -658,3 +658,107 @@ def test_reset_clears_local_site_lock_keeps_hf_token(tmp_path) -> None:
     assert read_site_lock() is None
     assert not site_lock_path().is_file()
     assert hf_token_set()
+
+
+def test_apply_fail_text_names_the_stale_git_lock_not_the_download_bars() -> None:
+    """The B200 run on 2026-08-25: pack finished, pip's sam-2 checkout hit index.lock."""
+    from types import SimpleNamespace
+
+    stderr = (
+        "███▊| 438/444 [02:22<00:06,  1.13s/it]\n"
+        "Fetching 444 files:  99%|█████████▉| 439/444 [02:22<00:05,  1.04s/it]\n"
+        "Fetching 14 files:  93%|█████████▎| 13/14 [01:54<00:19, 19.58s/it][A\n"
+        "Fetching 444 files: 100%|██████████| 444/444 [03:01<00:00,  2.44it/s]\n"
+        "Cloning into '/opt/wan22'...\n"
+        "  Running command git reset --hard -q 0e78a118995e66bb27d78518c4bd9a3e95b4e266\n"
+        "  fatal: Unable to create '/workspace/runtime/wan/venv/src/sam-2/.git/index.lock': File exists.\n"
+        "\n"
+        "  Another git process seems to be running in this repository, e.g.\n"
+        "  error: subprocess-exited-with-error\n"
+        "error: subprocess-exited-with-error\n"
+        "note: This error originates from a subprocess, and is likely not a problem with pip.\n"
+    )
+    stdout = "\n".join(
+        [
+            "HF_START",
+            "HF_PULL Wan-AI/Wan2.2-Animate-14B -> /models/wan/Wan2.2-Animate-14B",
+            "HF_DONE Wan-AI/Wan2.2-Animate-14B",
+            "HF_OK",
+            "WAN_HOST_OVERLAY_REPAIR",
+        ]
+    )
+    message = apply_fail_text(SimpleNamespace(ok=False, code=1, stdout=stdout, stderr=stderr, text=stderr))
+
+    assert message.startswith("Setup stopped at: Repairing the Wan host runtime.")
+    assert "/workspace/runtime/wan/venv/src/sam-2/.git/index.lock" in message
+    assert "Retry validation" in message
+    assert "Fetching" not in message
+    assert "%|" not in message
+    assert len(message) < 300  # Studio shows the first 300 characters
+
+
+def test_apply_fail_text_generic_error_leads_with_the_cause_line() -> None:
+    from types import SimpleNamespace
+
+    stderr = (
+        "Fetching 32 files: 100%|██████████| 32/32 [10:01<00:00, 18.80s/it]\n"
+        "ERROR: Could not install packages due to an OSError: [Errno 28] No space left on device\n"
+    )
+    message = apply_fail_text(SimpleNamespace(ok=False, code=1, stdout="HF_OK\nPACK_DEDUPE_START", stderr=stderr, text=stderr))
+    assert message.startswith("Setup stopped at: Consolidating shared model assets. ERROR: Could not install")
+    assert "No space left on device" in message
+    assert "Fetching" not in message
+
+
+def test_apply_fail_text_explains_busy_host_and_gated_download() -> None:
+    from types import SimpleNamespace
+
+    busy = "DIONY_APPLY_BUSY another Diony setup still holds /diony/vault/.cluster/apply.lock"
+    message = apply_fail_text(SimpleNamespace(ok=False, code=75, stdout="", stderr=busy, text=busy))
+    assert "Another Diony setup is still running" in message
+    assert "DIONY_APPLY_BUSY" not in message
+
+    gated = (
+        "HF_FAIL deepseek-ai/DeepSeek-V4-Flash-0731: 403 Client Error: Forbidden (GatedRepoError)\n"
+        "Traceback (most recent call last):\n  File \"<stdin>\", line 40\nGatedRepoError: 403\n"
+    )
+    message = apply_fail_text(SimpleNamespace(ok=False, code=1, stdout="HF_START", stderr=gated, text=gated))
+    assert message.startswith("Model download failed for DeepSeek-V4-Flash-0731: 403")
+    assert "Diony-Enterprise HF Token" in message
+    assert "Traceback" not in message
+
+
+def test_apply_progress_text_reports_file_counts_and_lock_repair() -> None:
+    assert apply_progress_text("HF_PROGRESS Wan-AI/Wan2.2-Animate-14B 438/444") == (
+        "Downloading Wan2.2-Animate-14B · 438/444 files"
+    )
+    assert apply_progress_text("WAN_GIT_LOCK_CLEARED /workspace/runtime/wan/venv/src/sam-2/.git/index.lock") == (
+        "Clearing a stale git lock left by an interrupted install"
+    )
+    assert apply_progress_text("Fetching 444 files:  99%|█████████▉| 439/444 [02:22<00:05,  1.04s/it]") == ""
+
+
+def test_remote_setup_script_is_quiet_locked_and_clears_stale_git_locks(monkeypatch) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    script = remote_setup_script("/opt/diony-ai", "/workspace")
+
+    assert "export HF_HUB_DISABLE_PROGRESS_BARS=1" in script
+    assert "HF_PROGRESS {repo_id} {done}/{total}" in script
+    assert "flock -n 9" in script
+    assert "DIONY_APPLY_BUSY" in script
+    assert script.find("exec 9>&-") < script.find("nohup env PATH")
+    assert "_diony_clear_stale_git_locks()" in script
+    assert "WAN_GIT_LOCK_CLEARED" in script
+    assert script.find("WAN_HOST_OVERLAY_REPAIR\n") < script.find('_diony_clear_stale_git_locks "$(cd')
+    assert script.find('_diony_clear_stale_git_locks "$(cd') < script.find("facebookresearch/sam2.git@")
+    assert subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True).returncode == 0
+
+
+def test_reset_apply_terminates_the_streamed_session(monkeypatch) -> None:
+    import diony_wizard.apply as apply_module
+
+    calls: list[str] = []
+    monkeypatch.setattr(apply_module, "terminate_streaming", lambda: calls.append("stop") or 1)
+    reset_apply()
+    assert calls == ["stop"]

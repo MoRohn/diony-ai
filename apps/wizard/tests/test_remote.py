@@ -115,3 +115,28 @@ def test_ssh_connect_advice_maps_refused() -> None:
     assert "Resume the pod" in msg
     assert "SSH over exposed TCP" in msg
     assert ssh_connect_advice("198.13.252.68", 28231, "Permission denied") is None
+
+
+def test_ssh_args_keep_long_pulls_alive() -> None:
+    args = ssh_args()
+    assert "ServerAliveInterval=30" in args
+    assert "ServerAliveCountMax=8" in args
+
+
+def test_terminate_streaming_stops_registered_sessions() -> None:
+    import subprocess
+
+    from diony_wizard import remote
+
+    proc = subprocess.Popen(["sleep", "30"])
+    with remote._streaming_lock:
+        remote._streaming_procs.add(proc)
+    try:
+        assert remote.terminate_streaming() == 1
+        assert proc.poll() is not None
+    finally:
+        with remote._streaming_lock:
+            remote._streaming_procs.discard(proc)
+        if proc.poll() is None:
+            proc.kill()
+    assert remote.terminate_streaming() == 0

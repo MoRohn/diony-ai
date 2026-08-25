@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -25,6 +26,7 @@ from diony_wizard.remote import (
     ssh_connect_advice,
     ssh_port,
     ssh_user,
+    terminate_streaming,
 )
 
 HF_PACK = [
@@ -413,6 +415,25 @@ export DIONY_VOLUME_MIN_FREE_GB="${{DIONY_VOLUME_MIN_FREE_GB:-100}}"
 export DIONY_MODEL_HOT_CACHE="${{DIONY_MODEL_HOT_CACHE:-auto}}"
 export DIONY_MODEL_HOT_CACHE_GB="${{DIONY_MODEL_HOT_CACHE_GB:-320}}"
 export DIONY_MODEL_HOT_CACHE_MIN_FREE_GB="${{DIONY_MODEL_HOT_CACHE_MIN_FREE_GB:-64}}"
+_diony_clear_stale_git_locks() {{
+  # pip checks VCS requirements out under <venv>/src. An interrupted run leaves
+  # .git/index.lock behind and every later pip install fails with
+  # "Another git process seems to be running". Clear it when no git is live.
+  local root lock
+  for root in "$@"; do
+    [ -d "$root" ] || continue
+    for lock in "$root"/*/.git/*.lock "$root"/.git/*.lock; do
+      [ -e "$lock" ] || continue
+      if pgrep -x git >/dev/null 2>&1; then
+        echo "WAN_GIT_LOCK_BUSY $lock" >&2
+        continue
+      fi
+      echo "WAN_GIT_LOCK_CLEARED $lock"
+      rm -f -- "$lock"
+    done
+  done
+  return 0
+}}
 _diony_host_wan_pip() {{
   [ -f /opt/wan22/requirements.txt ] || return 0
   local probe="$_diony_repo/apps/wan/src/diony_wan/runtime.py"
@@ -427,6 +448,7 @@ _diony_host_wan_pip() {{
     return 0
   fi
   echo WAN_HOST_OVERLAY_REPAIR
+  _diony_clear_stale_git_locks "$(cd "$(dirname "$wan_py")/.." && pwd)/src" /opt/wan22
   PIP_ROOT_USER_ACTION=ignore \\
     "$wan_py" -m pip install --disable-pip-version-check \\
       --upgrade-strategy only-if-needed -r "$overlay"
@@ -585,12 +607,57 @@ echo PACK_DEDUPE_OK
 """
 
 
+_PROGRESS_NOISE = re.compile(
+    r"(\d{1,3}%\|"                # tqdm percentage + bar
+    r"|[█-▏]+\|"        # bare block-character bar fragment
+    r"|\d+/\d+ \[\d{1,2}:\d{2}<"  # n/total [mm:ss<
+    r"|\d+(\.\d+)?(it/s|s/it)\]"  # rate suffix
+    r"|^\s*\[A\s*$)"              # stripped tqdm cursor-up escape
+)
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_CAUSE_LINE = re.compile(
+    r"^\s*(?:×\s*)?(fatal:|error:|ERROR:|Error:|OSError:|PermissionError:|"
+    r"FileNotFoundError:|RuntimeError:|HF_FAIL |No space left on device|"
+    r"Killed|Connection (?:closed|reset)|client_loop: send disconnect)",
+)
+
+
+def strip_progress_noise(text: str) -> str:
+    """Drop tqdm/progress-bar refreshes so an excerpt shows only real output."""
+    kept: list[str] = []
+    for raw in _ANSI.sub("", str(text or "")).replace("\r", "\n").splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        if _PROGRESS_NOISE.search(line):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def apply_stage_text(stdout: str) -> str:
+    """Name the last Studio stage the remote setup reported on stdout."""
+    for line in reversed(str(stdout or "").splitlines()):
+        label = apply_progress_text(line)
+        if label:
+            return label
+    return ""
+
+
+def _stage_prefix(stdout: str) -> str:
+    stage = apply_stage_text(stdout)
+    return f"Setup stopped at: {stage}. " if stage else ""
+
+
 def apply_fail_text(result) -> str:
-    """Operator excerpt. Do not treat pip 'already satisfied' as the miss."""
+    """Operator excerpt. Lead with the cause; never with download-bar noise."""
     out = getattr(result, "stdout", "") or ""
     err = getattr(result, "stderr", "") or ""
     code = getattr(result, "code", None)
-    blob = f"{out}\n{err}".strip()
+    raw = f"{out}\n{err}".strip()
+    blob = strip_progress_noise(raw)
+    prefix = _stage_prefix(out)
+
     if "diony_wan/runtime.py" in blob and "_write_report" in blob:
         cause = next(
             (
@@ -604,6 +671,40 @@ def apply_fail_text(result) -> str:
             "Wan runtime readiness report could not be finalized. "
             f"Retry validation. {cause[-600:]}"
         )
+    if "DIONY_APPLY_BUSY" in blob:
+        return (
+            "Another Diony setup is still running on this host. Wait for it to finish "
+            "or fail, then retry validation. Diony did not start a second install."
+        )
+    lock_match = re.search(r"Unable to create '([^']+\.git/[^']*\.lock)': File exists", blob)
+    if lock_match:
+        return (
+            f"{prefix}A previous install was interrupted and left a git lock at "
+            f"{lock_match.group(1)}. Retry validation: Diony now clears stale git locks "
+            "before repairing the Wan host runtime."
+        )
+    hf_fail = next(
+        (line.strip() for line in reversed(blob.splitlines()) if line.strip().startswith("HF_FAIL ")),
+        "",
+    )
+    if hf_fail:
+        repo, _, reason = hf_fail.removeprefix("HF_FAIL ").partition(":")
+        name = repo.strip().rsplit("/", 1)[-1] or repo.strip()
+        hint = ""
+        if re.search(r"\b(401|403)\b|gated|GatedRepo|authenticat", reason, re.IGNORECASE):
+            hint = " Check the Diony-Enterprise HF Token and the model's access grant."
+        elif re.search(r"No space left|ENOSPC|disk quota", reason, re.IGNORECASE):
+            hint = " The attached volume is full. Free space, then retry validation."
+        return f"Model download failed for {name}: {reason.strip()[-500:] or 'unknown error'}.{hint}"
+    for marker, text in (
+        ("WAN_RUNTIME_PROBE_MISSING", "the Wan runtime probe"),
+        ("WAN_RUNTIME_OVERLAY_MISSING", "the Wan host overlay requirements"),
+    ):
+        if marker in blob:
+            return (
+                f"{prefix}The repo sync to this host is incomplete: {text} is missing. "
+                "Retry validation to re-sync the Diony repo."
+            )
     pip_noise = "Requirement already satisfied" in blob or (
         "huggingface_hub" in blob and "site-packages" in blob and "Traceback" not in blob
     )
@@ -612,12 +713,18 @@ def apply_fail_text(result) -> str:
             "Pack pull stopped at pip. huggingface_hub is already on this GPU. "
             "Retry Pull pack. Studio now skips that pip step and starts Hugging Face."
         )
-    for marker in ("Traceback (most recent call last):", "\nERROR:", "\nError:"):
-        idx = blob.rfind(marker)
-        if idx >= 0:
-            return blob[idx:][-2000:]
-    tail = blob[-2000:] or (f"apply exited {code}" if code is not None else "apply failed")
-    return tail
+    idx = blob.rfind("Traceback (most recent call last):")
+    if idx >= 0:
+        return f"{prefix}{blob[idx:][-2000:]}"
+    lines = blob.splitlines()
+    for line_no in range(len(lines) - 1, -1, -1):
+        if _CAUSE_LINE.search(lines[line_no]):
+            excerpt = "\n".join(lines[line_no : line_no + 4]).strip()
+            return f"{prefix}{excerpt[:1200]}"
+    tail = "\n".join(lines[-12:])[-1200:]
+    if not tail:
+        tail = f"apply exited {code}" if code is not None else "apply failed"
+    return f"{prefix}{tail}"
 
 
 def apply_progress_text(line: str) -> str:
@@ -631,6 +738,13 @@ def apply_progress_text(line: str) -> str:
     if clean.startswith("HF_DONE "):
         repo = clean.removeprefix("HF_DONE ").strip()
         return f"{repo.rsplit('/', 1)[-1]} ready"
+    if clean.startswith("HF_PROGRESS "):
+        parts = clean.removeprefix("HF_PROGRESS ").split()
+        if len(parts) >= 2 and "/" in parts[1]:
+            return f"Downloading {parts[0].rsplit('/', 1)[-1]} · {parts[1]} files"
+        return ""
+    if clean.startswith("WAN_GIT_LOCK_CLEARED "):
+        return "Clearing a stale git lock left by an interrupted install"
     stages = {
         "HF_START": "Checking the pinned model pack",
         "HF_OK": "Pinned model pack ready",
@@ -680,9 +794,20 @@ export DIONY_BIND=0.0.0.0
 export DIONY_WAN_REPO=/opt/wan22
 export PYTHONPATH=/opt/wan22${{PYTHONPATH:+:$PYTHONPATH}}
 export DIONY_REPO={quoted_repo}
+# Studio reads stage markers, not progress bars. Bars only flood the SSH stream.
+export HF_HUB_DISABLE_PROGRESS_BARS=1
+export TQDM_DISABLE=1
+export PIP_PROGRESS_BAR=off
+export GIT_TERMINAL_PROMPT=0
 mkdir -p /models/deepseek /models/wan /models/diony /opt
 {mount}
 mkdir -p /diony/vault/.cluster
+# One setup per host. A second run would collide with the first on pip/git.
+exec 9>/diony/vault/.cluster/apply.lock
+if ! flock -n 9; then
+  echo "DIONY_APPLY_BUSY another Diony setup still holds /diony/vault/.cluster/apply.lock" >&2
+  exit 75
+fi
 {model_storage}
 {py}
 {hub}
@@ -699,9 +824,39 @@ try:
 except ValueError:
     pull_workers, file_workers = 2, 4
 
+import threading
+import time
+
+def _completed_files(dest):
+    count = 0
+    for root, dirs, files in os.walk(dest):
+        dirs[:] = [d for d in dirs if d != ".cache"]
+        count += sum(1 for name in files if not name.endswith(".incomplete"))
+    return count
+
+_active = {{}}
+_active_lock = threading.Lock()
+
+def _monitor():
+    last = {{}}
+    while True:
+        time.sleep(float(os.environ.get("DIONY_HF_PROGRESS_SECONDS", "20")))
+        with _active_lock:
+            snapshot = dict(_active)
+        if not snapshot:
+            return
+        for repo_id, (dest, expected) in snapshot.items():
+            done = min(_completed_files(dest), expected) if expected else _completed_files(dest)
+            if last.get(repo_id) != done:
+                last[repo_id] = done
+                total = expected or "?"
+                print(f"HF_PROGRESS {{repo_id}} {{done}}/{{total}}", flush=True)
+
 def pull(item):
-    repo_id, dest, filename, revision, _expected_files, _expected_bytes = item
+    repo_id, dest, filename, revision, expected_files, _expected_bytes = item
     print(f"HF_PULL {{repo_id}} -> {{dest}}", flush=True)
+    with _active_lock:
+        _active[repo_id] = (dest, 1 if filename else int(expected_files or 0))
     os.makedirs(dest, exist_ok=True)
     try:
         if filename:
@@ -721,8 +876,12 @@ def pull(item):
     except Exception as exc:
         print(f"HF_FAIL {{repo_id}}: {{exc}}", file=sys.stderr, flush=True)
         raise
+    finally:
+        with _active_lock:
+            _active.pop(repo_id, None)
     return repo_id
 
+threading.Thread(target=_monitor, name="diony-hf-progress", daemon=True).start()
 with ThreadPoolExecutor(max_workers=min(pull_workers, len(PACK))) as pool:
     futures = [pool.submit(pull, item) for item in PACK]
     for future in as_completed(futures):
@@ -783,6 +942,7 @@ print("COSYVOICE_OK", flush=True)
 PY
 test -d /models/wan/Wan2.2-T2V-A14B
 test -e /models/diony/diony_sr_v1/RealESRGAN_x2.pth || ls /models/diony/diony_sr_v1/*.pth >/dev/null
+exec 9>&-
 if ! pgrep -f "diony-producer" >/dev/null 2>&1; then
   nohup env PATH="$PATH" DIONY_VAULT=/diony/vault DIONY_BIND=0.0.0.0 DIONY_WAN_REPO=/opt/wan22 \\
     DIONY_PYTHON="${{DIONY_PYTHON:-/usr/bin/python3}}" \\
@@ -855,6 +1015,9 @@ def reset_apply() -> None:
     global _apply_epoch
     with _lock:
         _apply_epoch += 1
+    # Stop the previous streamed setup before a new one can start on the host.
+    terminate_streaming()
+    with _lock:
         _job.update(
             {
                 "running": False,

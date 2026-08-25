@@ -88,6 +88,10 @@ def ssh_args() -> list[str]:
         "StrictHostKeyChecking=accept-new",
         "-o",
         "ConnectTimeout=20",
+        "-o",
+        "ServerAliveInterval=30",
+        "-o",
+        "ServerAliveCountMax=8",
     ]
     key = os.environ.get("DIONY_SSH_KEY", "").strip()
     if key:
@@ -96,6 +100,36 @@ def ssh_args() -> list[str]:
     if port != 22:
         args.extend(["-p", str(port)])
     return args
+
+
+_streaming_lock = threading.Lock()
+_streaming_procs: set[subprocess.Popen] = set()
+
+
+def terminate_streaming() -> int:
+    """Stop every in-flight streamed apply session (Start Over / reset).
+
+    Without this, the previous ssh keeps the remote setup running on the host
+    while a new apply starts, and the two pip/git runs collide on the same venv
+    (the "another git process seems to be running" index.lock failure).
+    """
+    with _streaming_lock:
+        procs = list(_streaming_procs)
+    stopped = 0
+    for proc in procs:
+        if proc.poll() is not None:
+            continue
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+            stopped += 1
+        except Exception:  # noqa: BLE001 — best effort during reset
+            continue
+    return stopped
 
 
 def _exec_streaming(
@@ -117,9 +151,14 @@ def _exec_streaming(
         bufsize=1,
         env=env,
     )
+    with _streaming_lock:
+        _streaming_procs.add(proc)
     if remote and proc.stdin is not None:
-        proc.stdin.write(script)
-        proc.stdin.close()
+        try:
+            proc.stdin.write(script)
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass
 
     stdout: list[str] = []
     stderr: list[str] = []
@@ -154,6 +193,9 @@ def _exec_streaming(
             output="".join(stdout),
             stderr="".join(stderr),
         )
+    finally:
+        with _streaming_lock:
+            _streaming_procs.discard(proc)
     for reader in readers:
         reader.join(timeout=2)
     return RemoteResult(host, code == 0, code, "".join(stdout), "".join(stderr))
