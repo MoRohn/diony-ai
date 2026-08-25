@@ -649,6 +649,30 @@ def _stage_prefix(stdout: str) -> str:
     return f"Setup stopped at: {stage}. " if stage else ""
 
 
+def summarize_traceback(text: str) -> str:
+    """Exception line first, then the innermost frame. Fits Studio's 300 chars."""
+    lines = [line.rstrip() for line in str(text or "").splitlines() if line.strip()]
+    if not lines:
+        return ""
+    last_frame = max(
+        (index for index, line in enumerate(lines) if re.match(r'\s*File "', line)),
+        default=-1,
+    )
+    exc_line = next(
+        (line.strip() for line in lines[last_frame + 1 :] if not line.startswith(" ")),
+        lines[-1].strip(),
+    )
+    frame = ""
+    for line in reversed(lines):
+        match = re.match(r'\s*File "([^"]+)", line (\d+)', line)
+        if match and match.group(1) not in {"<string>", "<stdin>"}:
+            parts = match.group(1).replace("\\", "/").split("/")
+            short = "/".join(parts[-3:]) if len(parts) > 3 else match.group(1)
+            frame = f" — raised in {short} line {match.group(2)}"
+            break
+    return f"{exc_line[:400]}{frame}."
+
+
 def apply_fail_text(result) -> str:
     """Operator excerpt. Lead with the cause; never with download-bar noise."""
     out = getattr(result, "stdout", "") or ""
@@ -713,9 +737,25 @@ def apply_fail_text(result) -> str:
             "Pack pull stopped at pip. huggingface_hub is already on this GPU. "
             "Retry Pull pack. Studio now skips that pip step and starts Hugging Face."
         )
+    if "COSYVOICE_OVERLAY_MISSING" in blob:
+        return (
+            f"{prefix}The repo sync to this host is incomplete: infra/runtime/cosyvoice-overlay.txt "
+            "is missing. Retry validation to re-sync the Diony repo."
+        )
     idx = blob.rfind("Traceback (most recent call last):")
     if idx >= 0:
-        return f"{prefix}{blob[idx:][-2000:]}"
+        summary = summarize_traceback(blob[idx:])
+        missing = re.search(r"ModuleNotFoundError: No module named '([^']+)'", summary)
+        if missing and "COSYVOICE_IMPORT_FAILED" in blob:
+            return (
+                f"{prefix}The CosyVoice2 venv is missing the Python package "
+                f"'{missing.group(1)}'. Retry validation: Diony now installs "
+                "cosyvoice-overlay.txt (transformers, diffusers, x-transformers) "
+                "alongside Wan's requirements_s2v.txt."
+            )
+        if missing:
+            return f"{prefix}Python package '{missing.group(1)}' is missing on the host. {summary}"
+        return f"{prefix}{summary}"
     lines = blob.splitlines()
     for line_no in range(len(lines) - 1, -1, -1):
         if _CAUSE_LINE.search(lines[line_no]):
@@ -913,13 +953,30 @@ ln -sfn "$COSY_ROOT" /opt/wan22/CosyVoice
 if [ ! -x "$COSY_PY" ]; then
   "$_DIONY_HOST_PYTHON" -m venv --system-site-packages "$COSY_RUNTIME/venv"
 fi
-if ! PYTHONPATH="$COSY_ROOT:$COSY_ROOT/third_party/Matcha-TTS" "$COSY_PY" -c "from cosyvoice.cli.cosyvoice import CosyVoice2; import modelscope" >/dev/null 2>&1; then
+COSY_OVERLAY="$_diony_repo/infra/runtime/cosyvoice-overlay.txt"
+[ -f "$COSY_OVERLAY" ] || {{ echo "COSYVOICE_OVERLAY_MISSING $COSY_OVERLAY" >&2; exit 14; }}
+_diony_cosyvoice_ready() {{
+  PYTHONPATH="$COSY_ROOT:$COSY_ROOT/third_party/Matcha-TTS" "$COSY_PY" - <<'PY' 2>&1
+import importlib.util
+import sys
+missing = [name for name in ("transformers", "diffusers", "x_transformers", "hyperpyyaml", "onnxruntime", "modelscope", "librosa", "soundfile") if importlib.util.find_spec(name) is None]
+if missing:
+    print("COSYVOICE_MISSING " + " ".join(missing))
+    sys.exit(1)
+from cosyvoice.cli.cosyvoice import CosyVoice2  # noqa: F401
+import modelscope  # noqa: F401
+PY
+}}
+if ! _diony_cosyvoice_ready >/dev/null 2>&1; then
   echo COSYVOICE_RUNTIME_INSTALL
   PIP_BREAK_SYSTEM_PACKAGES=1 PIP_ROOT_USER_ACTION=ignore \
     "$COSY_PY" -m pip install --disable-pip-version-check \
-      --upgrade-strategy only-if-needed -r /opt/wan22/requirements_s2v.txt
+      --upgrade-strategy only-if-needed -r /opt/wan22/requirements_s2v.txt -r "$COSY_OVERLAY"
 fi
-PYTHONPATH="$COSY_ROOT:$COSY_ROOT/third_party/Matcha-TTS" "$COSY_PY" -c "from cosyvoice.cli.cosyvoice import CosyVoice2; import modelscope"
+if ! _diony_cosyvoice_ready; then
+  echo "COSYVOICE_IMPORT_FAILED the CosyVoice2 venv cannot import cosyvoice after installing requirements_s2v.txt + cosyvoice-overlay.txt" >&2
+  exit 15
+fi
 export DIONY_COSYVOICE_PYTHON="$COSY_PY"
 export DIONY_COSYVOICE_ROOT="$COSY_ROOT"
 export DIONY_COSYVOICE_MODEL=/diony/vault/models/audio/CosyVoice2-0.5B

@@ -5,6 +5,7 @@ import sys
 from fastapi.testclient import TestClient
 
 from diony_wizard.app import app
+from diony_wizard.prep import repo_root
 from diony_wizard.apply import (
     apply_exception_text,
     apply_fail_text,
@@ -762,3 +763,64 @@ def test_reset_apply_terminates_the_streamed_session(monkeypatch) -> None:
     monkeypatch.setattr(apply_module, "terminate_streaming", lambda: calls.append("stop") or 1)
     reset_apply()
     assert calls == ["stop"]
+
+
+def test_remote_setup_installs_cosyvoice_overlay_and_reports_import_failures(monkeypatch) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    script = remote_setup_script("/opt/diony-ai", "/workspace")
+
+    assert 'COSY_OVERLAY="$_diony_repo/infra/runtime/cosyvoice-overlay.txt"' in script
+    assert "COSYVOICE_OVERLAY_MISSING" in script
+    assert '-r /opt/wan22/requirements_s2v.txt -r "$COSY_OVERLAY"' in script
+    assert "COSYVOICE_IMPORT_FAILED" in script
+    assert script.count("_diony_cosyvoice_ready") >= 3
+    assert '"transformers", "diffusers", "x_transformers"' in script
+    overlay = (repo_root() / "infra" / "runtime" / "cosyvoice-overlay.txt").read_text()
+    assert "transformers==" in overlay
+    assert "diffusers==" in overlay
+    assert "x-transformers==" in overlay
+    assert "torch==" not in overlay  # never clobber the host CUDA torch
+
+
+def test_apply_fail_text_summarizes_cosyvoice_import_traceback() -> None:
+    """The B200 run on 2026-08-25 after the git-lock fix: transformers missing in the CosyVoice venv."""
+    from types import SimpleNamespace
+
+    traceback = (
+        "Traceback (most recent call last):\n"
+        '  File "<string>", line 1, in <module>\n'
+        '  File "/diony/vault/runtime/cosyvoice/CosyVoice/cosyvoice/cli/cosyvoice.py", line 24, in <module>\n'
+        "    from cosyvoice.utils.class_utils import get_model_type\n"
+        '  File "/diony/vault/runtime/cosyvoice/CosyVoice/cosyvoice/llm/llm.py", line 24, in <module>\n'
+        "    from transformers import Qwen2ForCausalLM\n"
+        "ModuleNotFoundError: No module named 'transformers'\n"
+    )
+    stdout = "HF_OK\nCOSYVOICE_RUNTIME_INSTALL"
+    message = apply_fail_text(SimpleNamespace(ok=False, code=1, stdout=stdout, stderr=traceback, text=traceback))
+    assert message.startswith("Setup stopped at: Installing the CosyVoice2 runtime.")
+    assert "No module named 'transformers'" in message
+    assert "cosyvoice/llm/llm.py line 24" in message
+    assert "Traceback" not in message
+    assert len(message) < 300
+
+    marked = traceback + "COSYVOICE_IMPORT_FAILED the CosyVoice2 venv cannot import cosyvoice\n"
+    message = apply_fail_text(SimpleNamespace(ok=False, code=15, stdout=stdout, stderr=marked, text=marked))
+    assert "The CosyVoice2 venv is missing the Python package 'transformers'" in message
+    assert "cosyvoice-overlay.txt" in message
+    assert len(message) < 300
+
+
+def test_summarize_traceback_leads_with_the_exception() -> None:
+    from diony_wizard.apply import summarize_traceback
+
+    text = (
+        "Traceback (most recent call last):\n"
+        '  File "/opt/diony-ai/apps/wan/src/diony_wan/runner.py", line 40, in <module>\n'
+        "    main()\n"
+        "OSError: [Errno 28] No space left on device\n"
+        "SOME_MARKER after the traceback\n"
+    )
+    assert summarize_traceback(text) == (
+        "OSError: [Errno 28] No space left on device — raised in src/diony_wan/runner.py line 40."
+    )
