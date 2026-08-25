@@ -116,6 +116,14 @@ if [[ -L "$LEGACY_STABLE_APP" ]]; then
   /bin/unlink "$LEGACY_STABLE_APP"
 fi
 
+# Prune old local builds, keeping the newest KEEP_BUILDS (build IDs sort by timestamp).
+KEEP_BUILDS="${DIONY_KEEP_LOCAL_BUILDS:-5}"
+CURRENT_BUILD="$(basename "$(dirname "$(readlink "$STABLE_APP")")")"
+for old in $(ls "$BUILDS" | sort -r | tail -n +"$((KEEP_BUILDS + 1))"); do
+  [[ "$old" == "$CURRENT_BUILD" ]] && continue
+  /bin/rm -rf "$BUILDS/$old"
+done
+
 echo "Built local-only Diony AI $VERSION for $ARCH."
 echo "This app is not Developer ID-signed, notarized, or publishable."
 echo "$STABLE_APP"
