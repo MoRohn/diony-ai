@@ -184,12 +184,114 @@ def test_local_synthetic_voice_enrolls_from_a_render_before_identity_qc(
     package = pipeline.prepare_take(project, take)
 
     profile = project.voice_profiles[0]
-    assert backend.enrollment_calls == 1
-    assert backend.synthesis_calls == 2
+    # Two enrollment witnesses: the first line and the fixed calibration text.
+    assert backend.enrollment_calls == 2
+    assert backend.synthesis_calls == 3
     assert profile.speaker_embedding == tuple(backend.enrolled_embedding)
-    assert profile.speaker_embedding_model == "cosyvoice-campplus-v1:synthetic-enrollment-v1"
+    assert profile.speaker_embedding_model == "cosyvoice-campplus-v1:synthetic-enrollment-v2"
+    assert profile.enrollment_similarity == 1.0
+    assert profile.speaker_similarity_min == 0.90, "a self-identical pair still caps the floor"
     assert package.qc.speaker_similarity == 1.0
-    assert package.qc.speaker_similarity_min == 0.92
+    assert package.qc.speaker_similarity_min == 0.90
+    assert package.qc.project_consistency_min == 0.90
+
+
+def test_identity_floor_is_measured_and_bounded() -> None:
+    from diony_producer.voice import identity_floor_from
+
+    assert identity_floor_from(0.777) == 0.697
+    assert identity_floor_from(1.0) == 0.90
+    assert identity_floor_from(0.3) == 0.60
+
+
+def test_legacy_single_render_profile_is_calibrated_in_place(tmp_path, monkeypatch) -> None:
+    """A v1 profile is re-enrolled from two fresh renders and gains a measured floor."""
+    from diony_contracts.voice import VoiceProfile
+
+    class CalibratingBackend(DeterministicVoiceTestBackend):
+        name = "measured-local-voice"
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.enroll_lines: list[str] = []
+            self.calibration_embedding: list[float] = []
+
+        def enroll_synthetic(self, line, profile, output, *, cast_index=0):
+            del cast_index
+            self.enroll_lines.append(line.text)
+            self.synthesize(line, profile, output, seed=profile.seed, reference_paths=[])
+            # Same voice, different text: mostly the anchor with a measurable drift.
+            vector = [0.0] * len(profile.speaker_embedding)
+            vector[0] = 0.9
+            vector[1] = 0.436
+            self.calibration_embedding = vector
+            return vector
+
+        def speaker_embedding(self, audio, profile):
+            del audio
+            return list(profile.speaker_embedding)
+
+    prompt = tmp_path / "conditioning-prompt.wav"
+    prompt.write_bytes(b"RIFF" + b"0" * 128)
+    monkeypatch.setenv("DIONY_COSYVOICE_PROMPT_AUDIO", str(prompt))
+    monkeypatch.setenv("DIONY_SPEAKER_EMBEDDING_MODEL", "cosyvoice-campplus-v1")
+    project, _, take = _spoken_take()
+    registry = VoiceProfileRegistry(project)
+    seeded = registry.ensure_synthetic(project.bible.characters[0].id)
+    anchor = [0.0] * len(seeded.speaker_embedding)
+    anchor[0] = 1.0
+    legacy = registry.enroll_synthetic_render(
+        seeded,
+        speaker_embedding=anchor,
+        speaker_embedding_model="cosyvoice-campplus-v1:synthetic-enrollment-v1",
+    )
+    assert legacy.speaker_similarity_min is None
+    backend = CalibratingBackend()
+    pipeline = VoicePerformancePipeline(
+        vault=tmp_path,
+        synthesizer=backend,
+        embedder=backend,
+        aligner=backend,
+        audio_processor=backend,
+        audiovisual_qc=backend,
+    )
+
+    package = pipeline.prepare_take(project, take)
+
+    profile = VoiceProfile.model_validate(project.voice_profiles[0].model_dump(mode="json"))
+    # Both witnesses are rendered fresh: the v1 anchor predates per-character casting.
+    assert len(backend.enroll_lines) == 2
+    assert backend.enroll_lines[1] == "The kettle has started to sing, and the morning light is warm across the kitchen table."
+    assert profile.speaker_embedding_model.endswith(":synthetic-enrollment-v2")
+    assert profile.enrollment_similarity == 1.0
+    assert profile.speaker_similarity_min == 0.90
+    assert profile.speaker_embedding[0] > profile.speaker_embedding[1] > 0.0
+    assert package.qc.speaker_similarity_min == profile.speaker_similarity_min
+    assert package.qc.audio_passed
+
+
+def test_closest_rival_only_considers_other_calibrated_cast_voices() -> None:
+    from diony_producer.voice import _closest_rival
+
+    project, _, _ = _spoken_take()
+    registry = VoiceProfileRegistry(project)
+    marcus = registry.ensure_synthetic(project.bible.characters[0].id)
+    observed = [1.0] + [0.0] * (len(marcus.speaker_embedding) - 1)
+    calibrated = marcus.model_copy(
+        update={
+            "id": "voice-char-other-v1",
+            "character_id": "char-other",
+            "speaker_embedding": tuple(observed),
+            "speaker_similarity_min": 0.7,
+            "enrollment_similarity": 0.78,
+        }
+    )
+    uncalibrated = marcus.model_copy(update={"id": "voice-char-third-v1", "character_id": "char-third"})
+
+    rival = _closest_rival(observed, marcus, [marcus, calibrated, uncalibrated])
+
+    assert rival == ("char-other", 1.0)
+    assert _closest_rival(observed, marcus, [marcus, uncalibrated]) is None
 
 
 def test_audiovisual_qc_promotes_package_only_after_video_evidence(tmp_path) -> None:

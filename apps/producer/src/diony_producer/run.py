@@ -1003,7 +1003,7 @@ def run_payload(
         phase = "farm"
         waiting = None
         held = sum(1 for clip in clips if clip.get("state") == "failed")
-        if passed_shown or held > 1:
+        if not farm.get("error") and (passed_shown or held > 1):
             # The camera worked the whole rundown; a measured hold on some
             # clips is a review item, not a stopped Wan.
             now = (

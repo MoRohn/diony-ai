@@ -1447,3 +1447,59 @@ def test_measured_qc_hold_is_per_shot_not_a_production_stop() -> None:
 
     take.qc = report(QCVerdict.PASS, "")
     assert _measured_qc_hold(take) is False
+
+
+def _farm_run(monkeypatch, run_one, tmp_path):
+    from diony_producer import farm as farm_module
+
+    project = demo_project()
+    shot = project.shots[0]
+    first_take = project.takes_for(shot.id)[0]
+    project.takes = [take for take in project.takes if take.shot_id != shot.id]
+    project.takes.insert(0, first_take)
+    shot.selected_take_id = first_take.id
+    activity: list[str] = []
+    farm_module.reset_farm()
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "vault"))
+    monkeypatch.setattr("diony_wan.runner.prove_generate", lambda: None)
+    monkeypatch.setattr(farm_module, "run_one", run_one)
+    monkeypatch.setattr(farm_module, "record_activity", lambda _src, text, **_kw: activity.append(text))
+    monkeypatch.setattr("diony_producer.advance.maybe_advance_run", lambda project: None)
+    farm_module.start_farm(project, [first_take])
+    deadline = time.time() + 5
+    status = farm_module.farm_status()
+    while status["busy"] and time.time() < deadline:
+        time.sleep(0.01)
+        status = farm_module.farm_status()
+    return project, first_take, status, activity
+
+
+def test_bounded_voice_identity_verdict_holds_the_shot_without_a_camera_render(tmp_path, monkeypatch) -> None:
+    from diony_producer.voice import VoicePipelineError
+
+    def refuse(_project, _take, **_kwargs) -> None:
+        raise VoicePipelineError("Voice identity failed for turn-sh-010-1 after 3 bounded attempts")
+
+    project, take, status, activity = _farm_run(monkeypatch, refuse, tmp_path)
+
+    assert status["error"] == ""
+    assert status["queued"] == 0
+    assert take.qc is not None and take.qc.verdict == QCVerdict.FAIL
+    assert take.qc.notes.startswith("Voice identity failed")
+    assert take.qc.voice_ready_ok is False
+    assert any("held for review; Production continues" in line for line in activity)
+    assert project.production_ended_at is not None
+
+
+def test_missing_voice_backend_still_stops_production(tmp_path, monkeypatch) -> None:
+    from diony_producer.voice import VoicePipelineError
+
+    def missing(_project, _take, **_kwargs) -> None:
+        raise VoicePipelineError("Voice is required, but no local studio voice backend is configured.")
+
+    _project, take, status, activity = _farm_run(monkeypatch, missing, tmp_path)
+
+    assert status["error"].startswith("Voice is required")
+    assert not (take.qc and take.qc.notes.startswith("Voice is required"))
+    assert not any("held for review" in line for line in activity)

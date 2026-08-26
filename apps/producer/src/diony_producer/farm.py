@@ -61,7 +61,7 @@ from diony_producer.calibration import (
 )
 from diony_producer.quality import MEASUREMENT_VERSION, measure_negative_quality
 from diony_producer.vault import persist_project, record_activity, vault_root
-from diony_producer.voice import prepare_voice_for_take, verify_voice_animation
+from diony_producer.voice import VoicePipelineError, prepare_voice_for_take, verify_voice_animation
 
 _lock = threading.Lock()
 _busy = False
@@ -742,6 +742,36 @@ def refresh_take_measurement(project: Project, take: Take) -> bool:
         shot_id=take.shot_id,
     )
     return True
+
+
+_VOICE_HOLD_PREFIXES = (
+    "Voice identity failed",
+    "Voice timing failed",
+    "Voice audio failed",
+    "Voice performance failed",
+)
+
+
+def _voice_hold_message(message: str) -> bool:
+    """A bounded, measured voice verdict on one line; not a missing backend."""
+    return any(message.startswith(prefix) for prefix in _VOICE_HOLD_PREFIXES)
+
+
+def _pre_camera_hold_report(take: Take, message: str) -> QCReport:
+    """Record a voice verdict that stopped this Take before any Wan render."""
+    return QCReport(
+        id=f"qc-{take.id}",
+        take_id=take.id,
+        shot_id=take.shot_id,
+        verdict=QCVerdict.FAIL,
+        identity_ok=False,
+        morph_ok=True,
+        flicker_ok=True,
+        duration_ok=True,
+        legal_ok=True,
+        voice_ready_ok=False,
+        notes=message,
+    )
 
 
 def _measured_qc_hold(take: Take) -> bool:
@@ -2110,6 +2140,37 @@ def start_farm(project: Project, takes: list[Take]) -> None:
                     if not _wait_for_infrastructure_retry(project):
                         break
                     continue
+                except VoicePipelineError as exc:
+                    message = str(exc)[:400]
+                    if _voice_hold_message(message):
+                        # The voice pipeline measured this line and refused it
+                        # within its bounded attempts. Hold the Shot for review
+                        # without spending a camera render; keep the rundown moving.
+                        take.qc = _pre_camera_hold_report(take, message)
+                        persist_project(project)
+                        held_shots.add(take.shot_id)
+                        with _lock:
+                            _done += 1
+                            _error = ""
+                            _detail = f"QC hold · {take.shot_id} · continuing with the next clip"
+                        record_activity(
+                            "qc",
+                            f"{take.shot_id} · held for review; Production continues · {message[:200]}",
+                            level="fail",
+                            shot_id=take.shot_id,
+                        )
+                        continue
+                    with _lock:
+                        _pending.insert(0, take)
+                        _error = message
+                        _detail = message.splitlines()[-1][:240]
+                    record_activity(
+                        "qc",
+                        f"{take.shot_id} · {_detail}",
+                        level="fail",
+                        shot_id=take.shot_id,
+                    )
+                    break
                 except Exception as exc:  # noqa: BLE001 — never consume the rundown silently
                     from diony_wan.runner import classify_wan_log
 

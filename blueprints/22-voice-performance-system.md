@@ -128,11 +128,14 @@ Casting is per character, never one shared voice. `synthesize` and
 `enroll-synthetic` resolve their cloning prompt in order: the character's own
 attached reference sample, then a clip from the local
 `DIONY_COSYVOICE_PROMPT_LIBRARY` keyed by cast order, then the single
-`DIONY_COSYVOICE_PROMPT_AUDIO` default. The resolved prompt path, source, and
-sha256 are recorded in the response. Because synthetic profiles enroll from
+`DIONY_COSYVOICE_PROMPT_AUDIO` default. Studio setup seeds that library at
+`/diony/vault/runtime/voice/prompt-library` from three distinct open-licensed
+clips already on the host (`cast-00` male 148 Hz, `cast-01` female 249 Hz,
+`cast-02` 203 Hz); library order is cast order, so renaming files recasts.
+The resolved prompt path, source, and sha256 are recorded in the response. Because synthetic profiles enroll from
 their own first render, self-similarity is tautological; the pipeline therefore
 fails a script when two distinct speaking characters measure pairwise speaker
-similarity above the `DIONY_VOICE_CAST_DISTINCT_MAX` ceiling (default 0.90) —
+similarity above the `DIONY_VOICE_CAST_DISTINCT_MAX` ceiling (default 0.60; the same voice on different text measures 0.73–0.78 on CAM++, distinct prompt voices ≤ 0.39) —
 a collapsed cast is a voice QC failure with an actionable diagnostic, not a
 deliverable.
 
@@ -191,9 +194,26 @@ Default hard floors:
 | p95 audiovisual offset | ≤ 40 ms |
 | physical-performance consistency | ≥ 0.85 |
 
+Speaker identity is measured against a *calibrated* floor, never a fixed one.
+A synthetic voice enrolls from two renders on different text — its first line
+and a fixed calibration sentence — so the profile embedding is their centroid
+and `enrollment_similarity` is the voice's own within-speaker similarity on
+CAM++ (measured 0.78 for a CosyVoice2 zero-shot voice; a single utterance
+compared with itself is 1.0 and proves nothing). The profile's
+`speaker_similarity_min` is that measurement minus 0.08, bounded to
+[0.60, 0.90]; every later line must reach it and must also sit at least 0.05
+closer to its own profile than to any other calibrated cast voice. Profiles
+enrolled before calibration (`:synthetic-enrollment-v1`) gain their calibration
+witness in place on first use. The receipt's `speaker_similarity_min` and
+`project_consistency_min` carry the profile floor so a failure names the real
+threshold. Retake seeds are applied after the CosyVoice2 model is constructed:
+its flow module reseeds the process to 0 during construction, and a seed set
+earlier produces the same tokens on every "retake".
+
 Identity synthesis and studio-audio processing retry automatically up to
 `DIONY_VOICE_RETAKE_CAP` (default 3, maximum 5). Each attempt records its seed,
-metrics, and diagnostic. A visual performance failure uses the normal immutable
+metrics, and diagnostic. A line that exhausts its attempts is a per-Shot QC hold
+recorded on the Take before any camera render; the rundown keeps rolling. A visual performance failure uses the normal immutable
 Take retake path and counts against the four camera Take cap only when the AV
 backend explicitly returns qualified mouth-sync evidence. Qualification is
 measured, not categorical. The local mouth-sync check

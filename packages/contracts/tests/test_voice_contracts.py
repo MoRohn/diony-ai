@@ -282,3 +282,56 @@ def test_verified_clip_package_requires_exact_video_lineage() -> None:
             state=VoiceRenderState.VERIFIED,
             qc=passing_voice_qc(),
         )
+
+
+def test_profiles_persisted_before_identity_calibration_still_validate() -> None:
+    """The calibration fields must not change the locked hash of older profiles."""
+    import hashlib
+    import json
+
+    from diony_contracts.fixture import demo_project
+
+    project = demo_project()
+    if not project.voice_profiles:
+        from diony_contracts.enums import VoiceProfileSource
+        from diony_contracts.voice import EmotionPerformance, ProsodySignature, VoiceProfile
+
+        profile = VoiceProfile(
+            id="voice-char-a-v1",
+            project_id=project.id,
+            character_id="char-a",
+            source=VoiceProfileSource.SYNTHETIC,
+            speaker_embedding_model="diony-synthetic-speaker-space-v1",
+            speaker_embedding=(0.6, 0.8),
+            prosody=ProsodySignature(
+                pitch_floor_hz=105,
+                pitch_ceiling_hz=310,
+                speaking_rate_syllables_per_second=4.0,
+                breath_interval_seconds=5.0,
+                vocal_fry=0.08,
+                pause_bias=0.5,
+            ),
+            emotion_map=(EmotionPerformance(emotion="neutral", timbre="locked"),),
+            seed=7,
+            style_lock="style:v1",
+        )
+    else:
+        profile = project.voice_profiles[0]
+    from diony_contracts.voice import VoiceProfile
+
+    legacy = profile.model_dump(mode="json")
+    legacy.pop("enrollment_similarity", None)
+    legacy.pop("speaker_similarity_min", None)
+    hashed = {k: v for k, v in legacy.items() if k not in {"content_sha256", "created_at"}}
+    old_contract_hash = hashlib.sha256(
+        json.dumps(hashed, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    assert profile.content_sha256 == old_contract_hash
+    restored = VoiceProfile.model_validate(legacy)
+    assert restored.content_sha256 == old_contract_hash
+    assert restored.speaker_similarity_min is None
+
+    calibrated = VoiceProfile.model_validate(
+        {**legacy, "content_sha256": "", "speaker_similarity_min": 0.7, "enrollment_similarity": 0.78}
+    )
+    assert calibrated.content_sha256 != old_contract_hash, "a calibrated floor is part of the lock"

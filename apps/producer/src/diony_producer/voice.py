@@ -113,6 +113,45 @@ def _stable_embedding(*parts: str, dimensions: int = 192) -> list[float]:
     return [round(value / norm, 8) for value in vector]
 
 
+# Synthetic identity calibration. A synthetic voice enrolls from its own
+# render, so a single-utterance embedding compared with itself is tautological
+# (1.0) while the same voice on different text lands far lower (CAM++ measured
+# 0.78 on a CosyVoice2 zero-shot voice). The floor is therefore *measured*: two
+# renders on different text give the within-speaker similarity, the profile
+# embedding becomes their centroid, and the floor sits a margin below the
+# measurement, bounded so a lucky pair cannot demand near-identity and an
+# unlucky one cannot accept anyone.
+SYNTHETIC_ENROLLMENT_V1 = ":synthetic-enrollment-v1"
+SYNTHETIC_ENROLLMENT_V2 = ":synthetic-enrollment-v2"
+CALIBRATION_TEXT = (
+    "The kettle has started to sing, and the morning light is warm across the kitchen table."
+)
+IDENTITY_FLOOR_MARGIN = 0.08
+IDENTITY_FLOOR_MIN = 0.60
+IDENTITY_FLOOR_MAX = 0.90
+LEGACY_IDENTITY_FLOOR = 0.92
+CAST_IDENTITY_MARGIN = 0.05
+
+
+def identity_floor_from(within_similarity: float) -> float:
+    return round(min(IDENTITY_FLOOR_MAX, max(IDENTITY_FLOOR_MIN, within_similarity - IDENTITY_FLOOR_MARGIN)), 4)
+
+
+def profile_identity_floor(profile: VoiceProfile) -> float:
+    return LEGACY_IDENTITY_FLOOR if profile.speaker_similarity_min is None else float(profile.speaker_similarity_min)
+
+
+def _unit(vector: list[float]) -> list[float]:
+    norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+    return [value / norm for value in vector]
+
+
+def _centroid(left: list[float], right: list[float]) -> list[float]:
+    left_unit = _unit(left)
+    right_unit = _unit(right)
+    return _unit([0.5 * (a + b) for a, b in zip(left_unit, right_unit, strict=True)])
+
+
 def _cosine(left: list[float], right: list[float]) -> float:
     if len(left) != len(right) or not left:
         return -1.0
@@ -122,6 +161,24 @@ def _cosine(left: list[float], right: list[float]) -> float:
     if not left_norm or not right_norm:
         return -1.0
     return max(-1.0, min(1.0, numerator / (left_norm * right_norm)))
+
+
+def _closest_rival(
+    observed: list[float],
+    profile: VoiceProfile,
+    cast: list[VoiceProfile],
+) -> tuple[str, float] | None:
+    """The other calibrated cast voice this render resembles most, if any."""
+    best: tuple[str, float] | None = None
+    for other in cast:
+        if other.character_id == profile.character_id or other.speaker_similarity_min is None:
+            continue
+        if len(other.speaker_embedding) != len(observed):
+            continue
+        score = _cosine(list(other.speaker_embedding), observed)
+        if best is None or score > best[1]:
+            best = (other.character_id, score)
+    return best
 
 
 def _deliverable_frames(shot: Shot) -> int:
@@ -337,8 +394,10 @@ class VoiceProfileRegistry:
         *,
         speaker_embedding: list[float],
         speaker_embedding_model: str,
+        speaker_similarity_min: float | None = None,
+        enrollment_similarity: float | None = None,
     ) -> VoiceProfile:
-        """Finalize an unreferenced synthetic identity from its first measured render."""
+        """Finalize an unreferenced synthetic identity from its measured renders."""
         current = self.current(profile.character_id)
         if current is None or current.id != profile.id:
             raise VoicePipelineError("synthetic voice enrollment profile is no longer current")
@@ -352,6 +411,8 @@ class VoiceProfileRegistry:
                 "identity_lineage_id": "",
                 "speaker_embedding_model": speaker_embedding_model,
                 "speaker_embedding": speaker_embedding,
+                "speaker_similarity_min": speaker_similarity_min,
+                "enrollment_similarity": enrollment_similarity,
                 "content_sha256": "",
                 "locked_at": datetime.now(timezone.utc),
             }
@@ -362,6 +423,28 @@ class VoiceProfileRegistry:
                 self.project.voice_profiles[index] = enrolled
                 break
         return enrolled
+
+
+def _calibration_line(line: PerformanceScriptLine) -> PerformanceScriptLine:
+    """The same voice on fixed, different text: the second enrollment witness."""
+    return line.model_copy(
+        update={
+            "id": f"{line.id}-calibration",
+            "text": CALIBRATION_TEXT,
+            "spoken_text": CALIBRATION_TEXT,
+            "emotion": "neutral",
+            "intensity_curve": [0.25, 0.4, 0.3],
+            "phonetic_guidance": {},
+            "breath_after_word_indices": [],
+            "stress_word_indices": [],
+            "micro_pauses_ms": [],
+            "start_ms": 0,
+            "target_duration_ms": 8000,
+            "overlap_ms": 0,
+            "interrupts_line_id": None,
+            "subtext": "",
+        }
+    )
 
 
 def _dialogue_turns(project: Project, shot: Shot) -> list[DialogueTurn]:
@@ -937,11 +1020,13 @@ class VoicePerformancePipeline:
             return profiles
         registry = VoiceProfileRegistry(project)
         enrolled_profiles: list[VoiceProfile] = []
-        marker = ":synthetic-enrollment-v1"
         enrollment_rank = _project_cast_rank(project, profiles)
+        model = os.environ.get("DIONY_SPEAKER_EMBEDDING_MODEL", "cosyvoice-campplus-v1").strip()
         for profile in profiles:
             cast_index = enrollment_rank.get(profile.id, 0)
-            if profile.source != VoiceProfileSource.SYNTHETIC or profile.speaker_embedding_model.endswith(marker):
+            if profile.source != VoiceProfileSource.SYNTHETIC or profile.speaker_embedding_model.endswith(
+                SYNTHETIC_ENROLLMENT_V2
+            ):
                 enrolled_profiles.append(profile)
                 continue
             line = next(
@@ -950,28 +1035,33 @@ class VoicePerformancePipeline:
             )
             if line is None:
                 raise VoicePipelineError(f"synthetic voice {profile.id} has no enrollment line")
-            output = (
-                self.vault
-                / "projects"
-                / project.id
-                / "voice"
-                / "profiles"
-                / profile.id
-                / "synthetic-enrollment.wav"
-            )
-            output.parent.mkdir(parents=True, exist_ok=True)
-            embedding = [float(value) for value in enroll(line, profile, output, cast_index=cast_index)]
-            if not output.is_file() or output.stat().st_size <= 44:
+            profile_dir = self.vault / "projects" / project.id / "voice" / "profiles" / profile.id
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            # A v1 profile was a single render under one-voice casting; it is
+            # re-enrolled from scratch rather than blended into a centroid.
+            anchor_output = profile_dir / "synthetic-enrollment.wav"
+            anchor = [float(value) for value in enroll(line, profile, anchor_output, cast_index=cast_index)]
+            if not anchor_output.is_file() or anchor_output.stat().st_size <= 44:
                 raise VoicePipelineError("synthetic voice enrollment returned no audio evidence")
-            model = os.environ.get(
-                "DIONY_SPEAKER_EMBEDDING_MODEL",
-                "cosyvoice-campplus-v1",
-            ).strip()
+            calibration_output = profile_dir / "synthetic-calibration.wav"
+            calibration = [
+                float(value)
+                for value in enroll(
+                    _calibration_line(line), profile, calibration_output, cast_index=cast_index
+                )
+            ]
+            if not calibration_output.is_file() or calibration_output.stat().st_size <= 44:
+                raise VoicePipelineError("synthetic voice calibration returned no audio evidence")
+            if len(calibration) != len(anchor):
+                raise VoicePipelineError("synthetic calibration embedding dimensions do not match")
+            within = _cosine(anchor, calibration)
             enrolled_profiles.append(
                 registry.enroll_synthetic_render(
                     profile,
-                    speaker_embedding=embedding,
-                    speaker_embedding_model=f"{model}{marker}",
+                    speaker_embedding=_centroid(anchor, calibration),
+                    speaker_embedding_model=f"{model}{SYNTHETIC_ENROLLMENT_V2}",
+                    speaker_similarity_min=identity_floor_from(within),
+                    enrollment_similarity=round(within, 6),
                 )
             )
         return enrolled_profiles
@@ -984,10 +1074,12 @@ class VoicePerformancePipeline:
         is tautological; distinctness across the cast is the check that actually
         proves casting worked.
         """
+        # Calibrated on CAM++ over CosyVoice2 zero-shot voices: the same voice on
+        # different text measures 0.73-0.78, distinct prompt voices at most 0.39.
         try:
-            ceiling = float(os.environ.get("DIONY_VOICE_CAST_DISTINCT_MAX", "0.90"))
+            ceiling = float(os.environ.get("DIONY_VOICE_CAST_DISTINCT_MAX", "0.60"))
         except ValueError:
-            ceiling = 0.90
+            ceiling = 0.60
         ceiling = min(0.999, max(0.5, ceiling))
         speakers: dict[str, VoiceProfile] = {}
         for profile in profiles:
@@ -1200,16 +1292,37 @@ class VoicePerformancePipeline:
                     continue
                 observed = self.embedder.speaker_embedding(candidate, profile)
                 selected_score = _cosine(profile.speaker_embedding, observed)
-                if selected_score < 0.92:
+                floor = profile_identity_floor(profile)
+                rival = _closest_rival(observed, profile, profiles)
+                if selected_score < floor:
                     attempts.append(
                         {
                             "line_id": line.id,
                             "attempt": attempt,
                             "seed": seed,
                             "speaker_similarity": round(selected_score, 6),
+                            "speaker_similarity_min": floor,
                             "diagnostic": (
-                                "speaker identity drift; regenerate with the exact locked profile "
-                                "and stronger identity conditioning"
+                                f"speaker identity drift: similarity {selected_score:.4f} is below the "
+                                f"profile's measured floor {floor:.2f}; regenerate with a new seed"
+                            ),
+                        }
+                    )
+                    last_failure = "identity"
+                    continue
+                if rival is not None and selected_score < rival[1] + CAST_IDENTITY_MARGIN:
+                    attempts.append(
+                        {
+                            "line_id": line.id,
+                            "attempt": attempt,
+                            "seed": seed,
+                            "speaker_similarity": round(selected_score, 6),
+                            "rival_character_id": rival[0],
+                            "rival_similarity": round(rival[1], 6),
+                            "diagnostic": (
+                                f"speaker identity is not distinct: {rival[0]} measures {rival[1]:.4f} "
+                                f"against this render, within {CAST_IDENTITY_MARGIN:.2f} of "
+                                f"{profile.character_id}'s {selected_score:.4f}"
                             ),
                         }
                     )
@@ -1382,10 +1495,11 @@ class VoicePerformancePipeline:
             and set(item.voice_package.voice_profile_ids) & {profile.id for profile in profiles}
         ]
         project_consistency = min([speaker_similarity, *historical]) if historical else speaker_similarity
+        identity_floor = min(profile_identity_floor(profile) for profile in profiles)
         audio_passed = all(
             (
-                speaker_similarity >= 0.92,
-                project_consistency >= 0.90,
+                speaker_similarity >= identity_floor,
+                project_consistency >= identity_floor,
                 measurements.snr_db >= 30,
                 measurements.speech_presence_score >= 0.20,
                 abs(measurements.integrated_lufs - target_lufs) <= 1.0,
@@ -1397,7 +1511,9 @@ class VoicePerformancePipeline:
         qc = VoiceQCReceipt(
             measurement_version=VOICE_QC_VERSION,
             speaker_similarity=speaker_similarity,
+            speaker_similarity_min=identity_floor,
             project_consistency=project_consistency,
+            project_consistency_min=identity_floor,
             snr_db=measurements.snr_db,
             speech_presence_score=measurements.speech_presence_score,
             integrated_lufs=measurements.integrated_lufs,

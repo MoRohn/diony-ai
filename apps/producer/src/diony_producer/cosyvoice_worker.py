@@ -46,12 +46,15 @@ def main() -> int:
     import torchaudio
     from cosyvoice.cli.cosyvoice import CosyVoice2
 
+    voice = CosyVoice2(args.model)
     if args.seed is not None:
+        # CosyVoice2's CausalConditionalCFM calls set_all_random_seed(0) while
+        # the model is constructed, so a seed set before construction is wiped
+        # and every "retake" samples the same tokens. Seed after construction.
         random.seed(args.seed)
         torch.manual_seed(args.seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(args.seed)
-    voice = CosyVoice2(args.model)
     if args.embed_audio:
         if not args.embedding_output:
             parser.error("--embedding-output is required with --embed-audio")

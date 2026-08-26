@@ -906,6 +906,10 @@ def test_remote_setup_pins_the_mouth_sync_models_after_cosyvoice() -> None:
         assert name in script and sha256 in script and str(size) in script
         assert len(sha256) == 64
     assert "VOICEQC_PIN_MISMATCH" in script
+    assert "/diony/vault/runtime/voice/prompt-library/cast-00-cross_lingual_prompt.wav" in script
+    assert "/diony/vault/runtime/voice/prompt-library/cast-01-zero_shot_prompt.wav" in script
+    assert "/diony/vault/runtime/voice/prompt-library/cast-02-talk.wav" in script
+    assert 'echo "VOICEQC_CAST $_diony_cast_count"' in script
     assert [stage for stage, _label, _weight in SETUP_STAGES].index("voiceqc") == (
         [stage for stage, _label, _weight in SETUP_STAGES].index("cosyvoice") + 1
     )

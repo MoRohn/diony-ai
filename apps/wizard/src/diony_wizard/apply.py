@@ -107,6 +107,15 @@ MOUTH_SYNC_MODELS: tuple[tuple[str, str, str, int], ...] = (
     ),
 )
 MOUTH_SYNC_MODEL_DIR = "/diony/vault/runtime/voice/models"
+# Per-character casting prompts (Blueprint 22): three distinct open-licensed
+# speech clips already on the host (CosyVoice and Wan2.2 example assets),
+# measured on CAM++ at <=0.39 pairwise similarity. Library order is cast order.
+VOICE_PROMPT_LIBRARY_DIR = "/diony/vault/runtime/voice/prompt-library"
+VOICE_PROMPT_LIBRARY: tuple[tuple[str, str], ...] = (
+    ("$COSY_ROOT/asset/cross_lingual_prompt.wav", "cast-00-cross_lingual_prompt.wav"),
+    ("$COSY_ROOT/asset/zero_shot_prompt.wav", "cast-01-zero_shot_prompt.wav"),
+    ("/opt/wan22/examples/talk.wav", "cast-02-talk.wav"),
+)
 
 COSYVOICE_MODEL = (
     "FunAudioLLM/CosyVoice2-0.5B",
@@ -237,6 +246,7 @@ _STAGE_MARKERS: dict[str, tuple[str, str, str]] = {
     "VOICEQC_INSTALL": ("voiceqc", "active", "Installing the face landmark runtime"),
     "VOICEQC_PULL": ("voiceqc", "active", "Downloading the pinned face models"),
     "VOICEQC_OK": ("voiceqc", "done", "Mouth-sync QC models ready"),
+    "VOICEQC_CAST": ("voiceqc", "done", "Per-character casting prompts ready"),
     "PRODUCER_START": ("producer", "active", "Starting Producer"),
     "APPLY_OK": ("producer", "done", "Producer is running"),
 }
@@ -1092,6 +1102,7 @@ def apply_progress_text(line: str) -> str:
         "VOICEQC_INSTALL": "Installing the face landmark runtime",
         "VOICEQC_PULL": "Downloading the pinned face models",
         "VOICEQC_OK": "Mouth-sync QC models ready",
+        "VOICEQC_CAST": "Per-character casting prompts ready",
         "WAN_HOST_OVERLAY_REPAIR": "Repairing the Wan host runtime",
         "WAN_HOST_PYTHON_OK": "Wan host runtime ready",
         "APPLY_OK": "Compute setup complete",
@@ -1118,6 +1129,11 @@ def remote_setup_script(repo: str, nas: str = "") -> str:
     mouth_sync_models = repr(MOUTH_SYNC_MODELS)
     mouth_sync_dir = MOUTH_SYNC_MODEL_DIR
     mouth_sync_dir_repr = repr(MOUTH_SYNC_MODEL_DIR)
+    prompt_library_dir = VOICE_PROMPT_LIBRARY_DIR
+    prompt_library_lines = "\n".join(
+        f'if [ -f "{source}" ]; then [ -f "{VOICE_PROMPT_LIBRARY_DIR}/{name}" ] || cp "{source}" "{VOICE_PROMPT_LIBRARY_DIR}/{name}"; _diony_cast_count=$((_diony_cast_count+1)); fi'
+        for source, name in VOICE_PROMPT_LIBRARY
+    )
     quoted_repo = shlex.quote(repo)
     mount = "\n".join(vault_mount_lines(nas))
     py = _python_bootstrap(repo)
@@ -1342,6 +1358,10 @@ for url, name, sha256, size in models:
     os.replace(tmp, dest)
 print("VOICEQC_OK", flush=True)
 PY
+mkdir -p {prompt_library_dir}
+_diony_cast_count=0
+{prompt_library_lines}
+echo "VOICEQC_CAST $_diony_cast_count"
 test -d /models/wan/Wan2.2-T2V-A14B
 test -e /models/diony/diony_sr_v1/RealESRGAN_x2.pth || ls /models/diony/diony_sr_v1/*.pth >/dev/null
 exec 9>&-

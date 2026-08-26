@@ -57,6 +57,13 @@ downloading, and naming exactly which pack files are still missing when it
 cannot. An explicit `DIONY_VOICE_BACKEND_COMMAND` or
 `/diony/vault/runtime/voice/bin/diony-voice-backend` always wins.
 
+Speaker identity uses a measured floor: each synthetic voice enrolls from two
+renders (its first line plus a fixed calibration sentence), the profile stores
+their centroid, the within-speaker similarity, and a floor 0.08 below it
+(bounded to 0.60–0.90). Lines must reach that floor and be distinctly closer to
+their own character than to any other calibrated cast voice. Retake seeds are
+applied after CosyVoice2 loads; the model reseeds itself to 0 while loading.
+
 Audiovisual QC is a real mouth measurement (`diony_producer.av_sync`,
 `diony-local-mouth-sync-v3`): YuNet finds every face at native resolution,
 MediaPipe FaceLandmarker measures each mouth, the speaking face is the one

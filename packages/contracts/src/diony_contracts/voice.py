@@ -91,6 +91,11 @@ class VoiceProfile(BaseModel):
     texture_descriptor: str = ""
     seed: int
     style_lock: str
+    # Measured at enrollment: cosine similarity between two renders of the same
+    # synthetic voice on different text, and the identity floor derived from it.
+    # None means the profile predates calibration and uses the legacy floor.
+    enrollment_similarity: float | None = Field(default=None, ge=-1, le=1)
+    speaker_similarity_min: float | None = Field(default=None, ge=-1, le=1)
     locked: bool = False
     locked_at: datetime | None = None
     content_sha256: str = ""
@@ -125,7 +130,12 @@ class VoiceProfile(BaseModel):
                 "identity_lineage_id",
                 f"voice-identity-{hashlib.sha256(identity_blob).hexdigest()[:20]}",
             )
-        expected = _content_sha256(self, exclude={"content_sha256", "created_at"})
+        exclude = {"content_sha256", "created_at"}
+        if self.enrollment_similarity is None and self.speaker_similarity_min is None:
+            # Profiles persisted before identity calibration existed hash
+            # without these fields; keep their locked hash valid.
+            exclude |= {"enrollment_similarity", "speaker_similarity_min"}
+        expected = _content_sha256(self, exclude=exclude)
         if self.content_sha256 and self.content_sha256 != expected:
             raise ValueError("voice profile content hash does not match its locked fields")
         if not self.content_sha256:
