@@ -231,7 +231,9 @@ class VoiceQCReceipt(BaseModel):
     audiovisual_backend: str = ""
     audiovisual_measurement_qualified: bool | None = None
     performance_consistency: float | None = Field(default=None, ge=0, le=1)
-    performance_consistency_min: float = Field(default=0.90, ge=0, le=1)
+    # Balanced agreement between speech activity and measured mouth modulation.
+    # 0.85 is calibrated for landmark-measured small faces; see diony_producer.av_sync.
+    performance_consistency_min: float = Field(default=0.85, ge=0, le=1)
     audio_passed: bool = False
     animation_passed: bool = False
     passed: bool = False

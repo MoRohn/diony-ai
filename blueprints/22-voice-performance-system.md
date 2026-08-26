@@ -189,21 +189,39 @@ Default hard floors:
 | sibilance | ≤ 0.25 normalized score |
 | lip-sync confidence | ≥ 0.90 |
 | p95 audiovisual offset | ≤ 40 ms |
-| physical-performance consistency | ≥ 0.90 |
+| physical-performance consistency | ≥ 0.85 |
 
 Identity synthesis and studio-audio processing retry automatically up to
 `DIONY_VOICE_RETAKE_CAP` (default 3, maximum 5). Each attempt records its seed,
 metrics, and diagnostic. A visual performance failure uses the normal immutable
 Take retake path and counts against the four camera Take cap only when the AV
 backend explicitly returns qualified mouth-sync evidence. Qualification is
-measured, not categorical: the local performance-motion check
-(`diony-local-av-motion-sync-v2`) measures at the clip's true frame rate,
-refines the offset to sub-frame resolution around the correlation peak, and
-qualifies only when both signals carry structure (enough comparable frames,
-active audio, an unambiguous interior correlation peak). Degenerate evidence —
-a static plate, near-silence, an edge-of-window peak — stays an unqualified
-one-take QC hold and must not spend another Wan render. Infrastructure and
-missing-backend failures do not invent output.
+measured, not categorical. The local mouth-sync check
+(`diony-local-mouth-sync-v3`, `diony_producer.av_sync`) finds every face at
+the clip's native raster with OpenCV YuNet, landmarks each face crop with
+MediaPipe FaceLandmarker, and blends the inner-lip gap with the `jawOpen`
+blendshape into one aperture signal per face track. Over the *delivered* span
+(the script's pacing target — the frames the finish stage keeps) it correlates
+each track against the clean dialogue's per-frame RMS envelope across ±6 frames
+of lag; the track whose mouth follows the line best is the speaker, and
+listeners with a still mouth are rejected by aperture variance, not position.
+Lip-sync confidence is `0.75 + 0.25 × syllable-smoothed peak correlation`
+(the 0.90 floor means correlation ≥ 0.60); the offset comes from the
+unsmoothed peak with parabolic sub-frame refinement and reports its resolution
+(one frame period — 62.5 ms at Wan S2V's native 16 fps); consistency is the
+balanced agreement between speech activity and mouth *modulation* (speech is
+oscillatory jaw motion; a held smile is not) with one frame of hysteresis at
+each speech boundary. Evidence qualifies only when a face is tracked across
+≥ 60 % of the span, its mouth moves, audio is active, and the correlation peak
+is strong, prominent, and interior. Degenerate evidence — no face, a still
+mouth, near-silence, an edge-of-window peak — stays an unqualified one-take QC
+hold and must not spend another Wan render. Studio pins both models
+(`/diony/vault/runtime/voice/models`, SHA-256 verified) and the
+`mediapipe` runtime during setup; without them the older whole-frame motion
+check still runs but is explicitly diagnostic only. A measured hold on one
+Shot never stops the rundown: the farm records the hold and keeps rolling the
+remaining Shots; only infrastructure and integrity faults stop Production.
+Infrastructure and missing-backend failures do not invent output.
 
 Voiced-speech presence measures energy-modulated periodic frames in the final
 clip mix. It is deliberately separate from SNR and loudness: steady generated

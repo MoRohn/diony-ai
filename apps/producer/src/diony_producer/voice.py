@@ -1501,7 +1501,10 @@ HOST_VOICE_ENV_KEYS = (
     "DIONY_COSYVOICE_MODEL",
     "DIONY_COSYVOICE_PROMPT_AUDIO",
     "DIONY_COSYVOICE_PROMPT_LIBRARY",
+    "DIONY_FACE_DETECTOR_MODEL",
+    "DIONY_FACE_LANDMARKER_MODEL",
 )
+MOUTH_SYNC_MODEL_FILES = ("face_detection_yunet_2023mar.onnx", "face_landmarker.task")
 
 
 def host_voice_env(*, vault: Path | None = None, wan_repo: Path | None = None) -> tuple[dict[str, str], list[str]]:
@@ -1557,6 +1560,13 @@ def host_voice_env(*, vault: Path | None = None, wan_repo: Path | None = None) -
     library = vault / "runtime" / "voice" / "prompt-library"
     if library.is_dir():
         env["DIONY_COSYVOICE_PROMPT_LIBRARY"] = str(library)
+    models = vault / "runtime" / "voice" / "models"
+    detector = models / MOUTH_SYNC_MODEL_FILES[0]
+    landmarker = models / MOUTH_SYNC_MODEL_FILES[1]
+    if detector.is_file() and landmarker.is_file():
+        # Without both, audiovisual QC stays diagnostic and says so per take.
+        env["DIONY_FACE_DETECTOR_MODEL"] = str(detector)
+        env["DIONY_FACE_LANDMARKER_MODEL"] = str(landmarker)
     return env, []
 
 

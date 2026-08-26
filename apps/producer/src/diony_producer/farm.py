@@ -744,6 +744,20 @@ def refresh_take_measurement(project: Project, take: Take) -> bool:
     return True
 
 
+def _measured_qc_hold(take: Take) -> bool:
+    """A measured content verdict on one clip: hold that Shot, keep the rundown moving.
+
+    Unqualified evidence, or a measured failure past the retake cap, is a
+    per-Shot QC hold for the finish stage. Only infrastructure and integrity
+    faults (raster, tools, missing media) stop the whole Production.
+    """
+    qc = take.qc
+    if qc is None or qc.verdict != QCVerdict.FAIL:
+        return False
+    note = qc.notes.strip()
+    return any(note.startswith(prefix) for prefix in _AUTO_RETAKE_QC_PREFIXES)
+
+
 def _auto_retake_quality_failure(take: Take) -> bool:
     qc = take.qc
     if qc is None or qc.verdict != QCVerdict.FAIL:
@@ -1954,6 +1968,7 @@ def start_farm(project: Project, takes: list[Take]) -> None:
             persist_project(project)
             record_activity("qc", msg.splitlines()[-1][:240] if msg else "Wan2.2 failed", level="fail")
             return
+        held_shots: set[str] = set()
         try:
             while True:
                 with _lock:
@@ -2213,6 +2228,18 @@ def start_farm(project: Project, takes: list[Take]) -> None:
                     else:
                         _done += 1
                     if integrity_error and retry is None:
+                        if _measured_qc_hold(take):
+                            held_shots.add(take.shot_id)
+                            _error = ""
+                            _detail = f"QC hold · {take.shot_id} · continuing with the next clip"
+                            record_activity(
+                                "qc",
+                                f"{take.shot_id} · held for review; Production continues · "
+                                f"{integrity_error[:200]}",
+                                level="fail",
+                                shot_id=take.shot_id,
+                            )
+                            continue
                         _error = integrity_error[:400]
                         _detail = _error[:240]
                         _pending.clear()
@@ -2239,10 +2266,12 @@ def start_farm(project: Project, takes: list[Take]) -> None:
             elif not cancelled:
                 from diony_producer.advance import maybe_advance_run
 
-                if failed:
+                if failed or held_shots:
+                    # A QC hold leaves the rundown complete but unfinishable
+                    # until someone acts on the held Shot: freeze the clock.
                     project.mark_production_end()
                     persist_project(project)
-                else:
+                if not failed:
                     try:
                         # Enough verified clips on this site arms measured QC
                         # for the next roll; a problem just defers arming.

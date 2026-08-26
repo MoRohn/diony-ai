@@ -991,7 +991,8 @@ def test_farm_preserves_rundown_when_pre_dispatch_raises(monkeypatch) -> None:
     assert "readable still image" in status["error"]
 
 
-def test_farm_stops_for_human_only_after_four_failed_auto_retakes(monkeypatch) -> None:
+def test_farm_holds_the_shot_for_review_after_four_failed_auto_retakes(monkeypatch) -> None:
+    """The retake cap ends in a per-Shot QC hold, not a Production-wide stop."""
     from diony_producer import farm as farm_module
 
     project = demo_project()
@@ -1020,9 +1021,11 @@ def test_farm_stops_for_human_only_after_four_failed_auto_retakes(monkeypatch) -
             notes="Shot boundary continuity failed (first/last SSIM 0.6778; required 0.75).",
         )
 
+    activity: list[str] = []
     farm_module.reset_farm()
     monkeypatch.setattr("diony_wan.runner.prove_generate", lambda: None)
     monkeypatch.setattr(farm_module, "run_one", fail_continuity)
+    monkeypatch.setattr(farm_module, "record_activity", lambda _src, text, **_kw: activity.append(text))
     monkeypatch.setattr("diony_producer.advance.maybe_advance_run", lambda project: None)
     farm_module.start_farm(project, [first_take])
 
@@ -1036,7 +1039,9 @@ def test_farm_stops_for_human_only_after_four_failed_auto_retakes(monkeypatch) -
     assert len(project.takes_for(shot.id)) == 4
     assert project.shot(shot.id).selected_take_id == f"{shot.id}-t4"
     assert status["queued"] == 0
-    assert status["error"] == "Shot boundary continuity failed (first/last SSIM 0.6778; required 0.75)."
+    assert status["error"] == "", "a measured hold is not a farm error"
+    assert project.take(f"{shot.id}-t4").qc.verdict == QCVerdict.FAIL
+    assert any("held for review; Production continues" in line for line in activity)
     assert project.production_ended_at is not None
 
 
@@ -1406,3 +1411,39 @@ def test_staging_listener_drives_the_status_line_and_announces_once(monkeypatch)
         "sh-010 · staging s2v-14B into the GPU hot tier (46 GB, first use on this box); "
         "Wan starts when the copy verifies"
     ]
+
+
+def test_measured_qc_hold_is_per_shot_not_a_production_stop() -> None:
+    from diony_contracts.enums import QCVerdict
+    from diony_contracts.fixture import demo_project
+    from diony_contracts.models import QCReport
+    from diony_producer.farm import _measured_qc_hold
+
+    project = demo_project()
+    take = project.take(project.shots[0].selected_take_id)
+    def report(verdict: QCVerdict, notes: str) -> QCReport:
+        return QCReport(
+            id=f"qc-{take.id}",
+            take_id=take.id,
+            shot_id=take.shot_id,
+            verdict=verdict,
+            identity_ok=True,
+            morph_ok=True,
+            flicker_ok=True,
+            duration_ok=True,
+            legal_ok=True,
+            notes=notes,
+        )
+
+    take.qc = report(
+        QCVerdict.FAIL,
+        "Voice performance failed: qualified mouth-sync evidence is unavailable; "
+        "diony-local-av-motion-sync-v2 is diagnostic only, so Diony preserved this Take.",
+    )
+    assert _measured_qc_hold(take) is True
+
+    take.qc = report(QCVerdict.FAIL, "Wan negative is 640×360; Diony requires native 1280×720.")
+    assert _measured_qc_hold(take) is False, "an integrity fault still stops Production"
+
+    take.qc = report(QCVerdict.PASS, "")
+    assert _measured_qc_hold(take) is False

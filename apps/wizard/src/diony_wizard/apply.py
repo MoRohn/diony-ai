@@ -89,6 +89,25 @@ HF_PACK = [
     ),
 ]
 
+# Mouth-sync QC (Blueprint 22 audiovisual evidence): OpenCV YuNet face detector
+# and MediaPipe FaceLandmarker, both Apache-2.0, pinned by SHA-256 and served
+# from the vault so Production never downloads on demand.
+MOUTH_SYNC_MODELS: tuple[tuple[str, str, str, int], ...] = (
+    (
+        "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+        "face_detection_yunet_2023mar.onnx",
+        "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+        232589,
+    ),
+    (
+        "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+        "face_landmarker.task",
+        "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+        3758596,
+    ),
+)
+MOUTH_SYNC_MODEL_DIR = "/diony/vault/runtime/voice/models"
+
 COSYVOICE_MODEL = (
     "FunAudioLLM/CosyVoice2-0.5B",
     "/diony/vault/models/audio/CosyVoice2-0.5B",
@@ -124,7 +143,8 @@ SETUP_STAGES: list[tuple[str, str, int]] = [
     ("pack", "Pinned model pack", 55),
     ("dedupe", "Shared model assets", 3),
     ("wan", "Wan2.2 runtime", 12),
-    ("cosyvoice", "CosyVoice2 runtime", 12),
+    ("cosyvoice", "CosyVoice2 runtime", 10),
+    ("voiceqc", "Mouth-sync QC models", 2),
     ("producer", "Producer", 4),
 ]
 
@@ -213,6 +233,10 @@ _STAGE_MARKERS: dict[str, tuple[str, str, str]] = {
     "COSYVOICE_RUNTIME_INSTALL": ("cosyvoice", "active", "Installing CosyVoice2 requirements"),
     "COSYVOICE_PULL": ("cosyvoice", "active", "Downloading the CosyVoice2 voice model"),
     "COSYVOICE_OK": ("cosyvoice", "done", "CosyVoice2 voice model ready"),
+    "VOICEQC_START": ("voiceqc", "active", "Preparing the mouth-sync QC models"),
+    "VOICEQC_INSTALL": ("voiceqc", "active", "Installing the face landmark runtime"),
+    "VOICEQC_PULL": ("voiceqc", "active", "Downloading the pinned face models"),
+    "VOICEQC_OK": ("voiceqc", "done", "Mouth-sync QC models ready"),
     "PRODUCER_START": ("producer", "active", "Starting Producer"),
     "APPLY_OK": ("producer", "done", "Producer is running"),
 }
@@ -533,6 +557,10 @@ cosy_required = (
     "speech_tokenizer_v2.onnx",
 )
 cosy_ready = all((cosy_model / name).is_file() for name in cosy_required)
+voiceqc_dir = Path("/diony/vault/runtime/voice/models")
+voiceqc_ready = all(
+    (voiceqc_dir / name).is_file() for name in ("face_detection_yunet_2023mar.onnx", "face_landmarker.task")
+)
 volume_root = Path("/diony/vault/models").resolve()
 model_volume = all(
     (Path("/models") / kind).resolve() == volume_root / kind
@@ -1060,6 +1088,10 @@ def apply_progress_text(line: str) -> str:
         "PACK_DEDUPE_OK": "Shared model assets ready",
         "COSYVOICE_RUNTIME_INSTALL": "Installing the CosyVoice2 runtime",
         "COSYVOICE_OK": "CosyVoice2 voice model ready",
+        "VOICEQC_START": "Preparing the mouth-sync QC models",
+        "VOICEQC_INSTALL": "Installing the face landmark runtime",
+        "VOICEQC_PULL": "Downloading the pinned face models",
+        "VOICEQC_OK": "Mouth-sync QC models ready",
         "WAN_HOST_OVERLAY_REPAIR": "Repairing the Wan host runtime",
         "WAN_HOST_PYTHON_OK": "Wan host runtime ready",
         "APPLY_OK": "Compute setup complete",
@@ -1083,6 +1115,9 @@ def remote_setup_script(repo: str, nas: str = "") -> str:
         token_line = "true"
     pack = repr(HF_PACK)
     cosy_model = repr(COSYVOICE_MODEL)
+    mouth_sync_models = repr(MOUTH_SYNC_MODELS)
+    mouth_sync_dir = MOUTH_SYNC_MODEL_DIR
+    mouth_sync_dir_repr = repr(MOUTH_SYNC_MODEL_DIR)
     quoted_repo = shlex.quote(repo)
     mount = "\n".join(vault_mount_lines(nas))
     py = _python_bootstrap(repo)
@@ -1265,6 +1300,47 @@ missing = [name for name in required if not os.path.isfile(os.path.join(dest, na
 if missing:
     raise RuntimeError(f"CosyVoice snapshot incomplete: {{', '.join(missing)}}")
 print("COSYVOICE_OK", flush=True)
+PY
+echo VOICEQC_START
+VOICEQC_OVERLAY="$_diony_repo/infra/runtime/voice-qc-overlay.txt"
+[ -f "$VOICEQC_OVERLAY" ] || {{ echo "VOICEQC_OVERLAY_MISSING $VOICEQC_OVERLAY" >&2; exit 16; }}
+if ! ldconfig -p 2>/dev/null | grep -q "libEGL.so.1"; then
+  echo VOICEQC_INSTALL
+  export DEBIAN_FRONTEND=noninteractive
+  if ! apt-get install -y -q libegl1 libgles2 >/dev/null 2>&1; then
+    apt-get update -q >/dev/null 2>&1 || true
+    apt-get install -y -q libegl1 libgles2 >/dev/null 2>&1 || {{ echo "VOICEQC_EGL_MISSING libEGL.so.1 could not be installed (apt libegl1)" >&2; exit 16; }}
+  fi
+fi
+_diony_voiceqc_ready() {{
+  _diony_python -c "import cv2, mediapipe; from mediapipe.tasks.python import vision; assert hasattr(cv2, 'FaceDetectorYN')"
+}}
+if ! _diony_voiceqc_ready >/dev/null 2>&1; then
+  echo VOICEQC_INSTALL
+  _diony_pip install -q --disable-pip-version-check --upgrade-strategy only-if-needed -r "$VOICEQC_OVERLAY"
+fi
+_diony_voiceqc_ready >/dev/null 2>&1 || {{ echo "VOICEQC_IMPORT_FAILED the Diony venv cannot import mediapipe/cv2 after installing voice-qc-overlay.txt" >&2; exit 16; }}
+mkdir -p {mouth_sync_dir}
+_diony_python - <<'PY'
+import hashlib, os, urllib.request
+models = {mouth_sync_models}
+root = {mouth_sync_dir_repr}
+def pinned(path, sha256, size):
+    if not os.path.isfile(path) or os.path.getsize(path) != size:
+        return False
+    return hashlib.sha256(open(path, "rb").read()).hexdigest() == sha256
+for url, name, sha256, size in models:
+    dest = os.path.join(root, name)
+    if pinned(dest, sha256, size):
+        continue
+    print(f"VOICEQC_PULL {{name}}", flush=True)
+    tmp = dest + ".partial"
+    urllib.request.urlretrieve(url, tmp)
+    if not pinned(tmp, sha256, size):
+        os.remove(tmp)
+        raise SystemExit(f"VOICEQC_PIN_MISMATCH {{name}} did not match its pinned SHA-256/size")
+    os.replace(tmp, dest)
+print("VOICEQC_OK", flush=True)
 PY
 test -d /models/wan/Wan2.2-T2V-A14B
 test -e /models/diony/diony_sr_v1/RealESRGAN_x2.pth || ls /models/diony/diony_sr_v1/*.pth >/dev/null

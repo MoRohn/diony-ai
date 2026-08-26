@@ -57,6 +57,10 @@ def test_gpu_producer_start_repairs_and_validates_wan_host_python() -> None:
     for name in ("cosyvoice2.yaml", "llm.pt", "flow.pt", "hift.pt", "speech_tokenizer_v2.onnx"):
         assert name in script
     assert script.find("_diony_cosyvoice_pack_ready() {") < script.find("if _diony_cosyvoice_pack_ready; then")
+    # Mouth-sync QC models ride along when Studio pinned them.
+    assert "/diony/vault/runtime/voice/models/face_landmarker.task" in script
+    assert 'DIONY_FACE_DETECTOR_MODEL="${DIONY_FACE_DETECTOR_MODEL:-}"' in script
+    assert 'grep -Fqx "DIONY_FACE_LANDMARKER_MODEL=$DIONY_FACE_LANDMARKER_MODEL"' in script
     assert script.find('"$RUNTIME_OVERLAY"') < script.find("/tmp/diony-wan-req.txt")
     assert script.find("_diony_wan_host_ready") < script.find("GPU_PRODUCER_OK")
 

@@ -78,7 +78,7 @@ def passing_voice_qc() -> VoiceQCReceipt:
         audiovisual_backend="syncnet-local-v1",
         audiovisual_measurement_qualified=True,
         performance_consistency=0.95,
-        performance_consistency_min=0.90,
+        performance_consistency_min=0.85,
         audio_passed=True,
         animation_passed=True,
         passed=True,

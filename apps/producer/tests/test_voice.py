@@ -872,3 +872,20 @@ def test_host_voice_env_prefers_the_operator_backend_binary(tmp_path) -> None:
 
     assert env == {"DIONY_VOICE_BACKEND_COMMAND": str(binary)}
     assert missing == []
+
+
+def test_host_voice_env_binds_the_pinned_mouth_sync_models(tmp_path) -> None:
+    vault = tmp_path / "vault"
+    wan_repo = tmp_path / "wan22"
+    _host_voice_pack(vault, wan_repo)
+    env, missing = host_voice_env(vault=vault, wan_repo=wan_repo)
+    assert missing == []
+    assert "DIONY_FACE_LANDMARKER_MODEL" not in env, "no models pinned yet: QC stays diagnostic"
+
+    models = vault / "runtime" / "voice" / "models"
+    models.mkdir(parents=True)
+    (models / "face_detection_yunet_2023mar.onnx").write_bytes(b"onnx")
+    (models / "face_landmarker.task").write_bytes(b"task")
+    env, _missing = host_voice_env(vault=vault, wan_repo=wan_repo)
+    assert env["DIONY_FACE_DETECTOR_MODEL"] == str(models / "face_detection_yunet_2023mar.onnx")
+    assert env["DIONY_FACE_LANDMARKER_MODEL"] == str(models / "face_landmarker.task")

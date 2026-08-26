@@ -43,6 +43,7 @@ GPU_STAMP_FILES = (
     "apps/producer/src/diony_producer/voice.py",
     "apps/producer/src/diony_producer/cosyvoice_backend.py",
     "apps/producer/src/diony_producer/cosyvoice_worker.py",
+    "apps/producer/src/diony_producer/av_sync.py",
     "apps/finish/src/diony_finish/rrdb.py",
     "apps/finish/src/diony_finish/pipeline.py",
     "apps/wan/src/diony_wan/runner.py",
@@ -784,6 +785,11 @@ fi
 if [ -x /diony/vault/runtime/voice/bin/diony-voice-backend ]; then
   export DIONY_VOICE_BACKEND_COMMAND=/diony/vault/runtime/voice/bin/diony-voice-backend
 fi
+if [ -f /diony/vault/runtime/voice/models/face_detection_yunet_2023mar.onnx ] && \
+   [ -f /diony/vault/runtime/voice/models/face_landmarker.task ]; then
+  export DIONY_FACE_DETECTOR_MODEL=/diony/vault/runtime/voice/models/face_detection_yunet_2023mar.onnx
+  export DIONY_FACE_LANDMARKER_MODEL=/diony/vault/runtime/voice/models/face_landmarker.task
+fi
 RUNTIME_PROBE=/opt/diony-ai/apps/wan/src/diony_wan/runtime.py
 RUNTIME_OVERLAY=/opt/diony-ai/infra/runtime/wan-host-overlay.txt
 RUNTIME_REPORT=/diony/vault/.cluster/wan-host-runtime.json
@@ -879,6 +885,9 @@ _diony_existing_producer_ready() {
     printf '%s\n' "$active_env" | grep -Fqx "DIONY_VOICE_BACKEND_COMMAND=$DIONY_VOICE_BACKEND_COMMAND" || return 1
     printf '%s\n' "$active_env" | grep -Fqx "DIONY_SPEAKER_EMBEDDING_MODEL=$DIONY_SPEAKER_EMBEDDING_MODEL" || return 1
   fi
+  if [ -n "${DIONY_FACE_LANDMARKER_MODEL:-}" ]; then
+    printf '%s\n' "$active_env" | grep -Fqx "DIONY_FACE_LANDMARKER_MODEL=$DIONY_FACE_LANDMARKER_MODEL" || return 1
+  fi
 }
 _diony_production_busy() {
   # A code/env refresh may never kill the owner of a live camera, finish, or
@@ -929,6 +938,8 @@ nohup env -u DIONY_DRY_RUN PATH="$PATH" DIONY_VAULT=/diony/vault DIONY_BIND=0.0.
   DIONY_COSYVOICE_MODEL="${DIONY_COSYVOICE_MODEL:-}" \
   DIONY_COSYVOICE_PROMPT_AUDIO="${DIONY_COSYVOICE_PROMPT_AUDIO:-}" \
   DIONY_COSYVOICE_PROMPT_LIBRARY="${DIONY_COSYVOICE_PROMPT_LIBRARY:-}" \
+  DIONY_FACE_DETECTOR_MODEL="${DIONY_FACE_DETECTOR_MODEL:-}" \
+  DIONY_FACE_LANDMARKER_MODEL="${DIONY_FACE_LANDMARKER_MODEL:-}" \
   DIONY_SOUND_LIBRARY="${DIONY_SOUND_LIBRARY:-}" \
   DIONY_AUDIOGEN="${DIONY_AUDIOGEN:-}" \
   DIONY_AUDIOGEN_COMMAND="${DIONY_AUDIOGEN_COMMAND:-}" \

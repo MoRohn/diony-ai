@@ -569,7 +569,57 @@ _AV_MIN_PROMINENCE = 0.10
 _AV_MIN_ACTIVE_AUDIO = 0.20
 
 
+def _mouth_sync_models() -> tuple[Path, Path] | None:
+    """Both pinned mouth-sync models, or None when Studio has not prepared them."""
+    detector = os.environ.get("DIONY_FACE_DETECTOR_MODEL", "").strip()
+    landmarker = os.environ.get("DIONY_FACE_LANDMARKER_MODEL", "").strip()
+    if not detector or not landmarker:
+        return None
+    detector_path = Path(detector)
+    landmarker_path = Path(landmarker)
+    if not detector_path.is_file() or not landmarker_path.is_file():
+        return None
+    return detector_path, landmarker_path
+
+
 def _av_qc(request: dict[str, Any]) -> dict[str, Any]:
+    """Qualified mouth-sync evidence when the pinned face models are present.
+
+    Without them the whole-frame motion check below still runs, but it is
+    diagnostic only and says so: it cannot see a mouth in a wide shot.
+    """
+    models = _mouth_sync_models()
+    if models is None:
+        payload = _av_qc_motion(request)
+        payload["diagnostics"].append(
+            "unqualified: mouth-sync models are not pinned on this host "
+            "(DIONY_FACE_DETECTOR_MODEL, DIONY_FACE_LANDMARKER_MODEL); "
+            "whole-frame motion is diagnostic only"
+        )
+        payload["qualified_for_visual_retake"] = False
+        return payload
+    try:
+        from diony_producer.av_sync import measure_clip
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from diony_producer.av_sync import measure_clip
+    video = Path(str(request.get("video") or ""))
+    audio = Path(str(request.get("audio") or ""))
+    metadata = Path(str(request.get("performance_metadata") or ""))
+    if not video.is_file() or not audio.is_file() or not metadata.is_file():
+        raise BackendError("audiovisual QC inputs are incomplete")
+    return measure_clip(
+        video,
+        audio,
+        metadata,
+        detector_model=models[0],
+        landmarker_model=models[1],
+        ffmpeg=_ffmpeg(),
+        ffprobe=_ffprobe(),
+    )
+
+
+def _av_qc_motion(request: dict[str, Any]) -> dict[str, Any]:
     """Measure audio-to-performance-motion timing at the clip's true frame rate.
 
     The offset is refined to sub-frame resolution with a parabolic fit around

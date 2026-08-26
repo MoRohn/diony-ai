@@ -1002,7 +1002,16 @@ def run_payload(
     elif farm_failed:
         phase = "farm"
         waiting = None
-        now = f"Wan2.2 stopped. {fail_notes[0]}"
+        held = sum(1 for clip in clips if clip.get("state") == "failed")
+        if passed_shown or held > 1:
+            # The camera worked the whole rundown; a measured hold on some
+            # clips is a review item, not a stopped Wan.
+            now = (
+                f"Camera finished · {held} clip{'s' if held != 1 else ''} on QC hold. "
+                f"{fail_notes[0]}"
+            )
+        else:
+            now = f"Wan2.2 stopped. {fail_notes[0]}"
         denominator = farm_total or shots
         tally = (
             f"{passed_shown} passed · {failed_clip_count} failed / {denominator}"

@@ -10,6 +10,7 @@ import pytest
 from diony_producer.cosyvoice_backend import (
     BackendError,
     _av_qc,
+    _av_qc_motion,
     alignment_payload,
     cosine_similarity,
     prompt_audio_for,
@@ -259,7 +260,7 @@ def _write_correlated_clip(tmp_path, *, audio_shift_frames: float = 0.0):
 
 def test_av_qc_qualifies_synced_performance_and_measures_a_real_offset(tmp_path) -> None:
     video, audio, metadata = _write_correlated_clip(tmp_path)
-    payload = _av_qc(
+    payload = _av_qc_motion(
         {"video": str(video), "audio": str(audio), "performance_metadata": str(metadata)}
     )
     assert payload["backend"] == "diony-local-av-motion-sync-v2"
@@ -270,7 +271,7 @@ def test_av_qc_qualifies_synced_performance_and_measures_a_real_offset(tmp_path)
     shifted_video, shifted_audio, shifted_metadata = _write_correlated_clip(
         tmp_path / "shifted", audio_shift_frames=3.0
     )
-    shifted = _av_qc(
+    shifted = _av_qc_motion(
         {
             "video": str(shifted_video),
             "audio": str(shifted_audio),
@@ -307,8 +308,46 @@ def test_av_qc_stays_unqualified_on_a_static_plate(tmp_path) -> None:
     )
     metadata = tmp_path / "performance.json"
     metadata.write_text(json.dumps({"lines": []}))
-    payload = _av_qc(
+    payload = _av_qc_motion(
         {"video": str(video), "audio": str(audio), "performance_metadata": str(metadata)}
     )
     assert payload["qualified_for_visual_retake"] is False
     assert any("unqualified" in row for row in payload["diagnostics"])
+
+
+def test_av_qc_without_pinned_face_models_is_explicitly_diagnostic(tmp_path, monkeypatch) -> None:
+    video, audio, metadata = _write_correlated_clip(tmp_path)
+    monkeypatch.delenv("DIONY_FACE_DETECTOR_MODEL", raising=False)
+    monkeypatch.delenv("DIONY_FACE_LANDMARKER_MODEL", raising=False)
+    payload = _av_qc(
+        {"video": str(video), "audio": str(audio), "performance_metadata": str(metadata)}
+    )
+    assert payload["backend"] == "diony-local-av-motion-sync-v2"
+    assert payload["qualified_for_visual_retake"] is False
+    assert any("mouth-sync models are not pinned" in row for row in payload["diagnostics"])
+
+
+def test_av_qc_routes_to_the_mouth_sync_measurement_when_models_are_pinned(tmp_path, monkeypatch) -> None:
+    from diony_producer import cosyvoice_backend
+
+    video, audio, metadata = _write_correlated_clip(tmp_path)
+    detector = tmp_path / "yunet.onnx"
+    landmarker = tmp_path / "face_landmarker.task"
+    detector.write_bytes(b"onnx")
+    landmarker.write_bytes(b"task")
+    monkeypatch.setenv("DIONY_FACE_DETECTOR_MODEL", str(detector))
+    monkeypatch.setenv("DIONY_FACE_LANDMARKER_MODEL", str(landmarker))
+    seen = {}
+
+    def fake_measure(video_path, audio_path, metadata_path, **kwargs):
+        seen.update(kwargs)
+        return {"backend": "diony-local-mouth-sync-v3", "qualified_for_visual_retake": True,
+                "lip_sync_confidence": 0.93, "audiovisual_offset_ms_p95": 12.0,
+                "performance_consistency": 0.9, "diagnostics": []}
+
+    monkeypatch.setattr("diony_producer.av_sync.measure_clip", fake_measure)
+    payload = cosyvoice_backend._av_qc(
+        {"video": str(video), "audio": str(audio), "performance_metadata": str(metadata)}
+    )
+    assert payload["backend"] == "diony-local-mouth-sync-v3"
+    assert seen["detector_model"] == detector and seen["landmarker_model"] == landmarker

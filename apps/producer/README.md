@@ -57,6 +57,16 @@ downloading, and naming exactly which pack files are still missing when it
 cannot. An explicit `DIONY_VOICE_BACKEND_COMMAND` or
 `/diony/vault/runtime/voice/bin/diony-voice-backend` always wins.
 
+Audiovisual QC is a real mouth measurement (`diony_producer.av_sync`,
+`diony-local-mouth-sync-v3`): YuNet finds every face at native resolution,
+MediaPipe FaceLandmarker measures each mouth, the speaking face is the one
+whose aperture follows the clean dialogue, and confidence / offset /
+consistency are computed over the delivered span. Studio setup pins the two
+models under `/diony/vault/runtime/voice/models` (`DIONY_FACE_DETECTOR_MODEL`,
+`DIONY_FACE_LANDMARKER_MODEL`) and installs `infra/runtime/voice-qc-overlay.txt`
+into the Producer venv; without them the check is diagnostic only and every
+spoken take says so.
+
 Registry APIs:
 
 - `GET /api/voice-profiles`

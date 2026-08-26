@@ -831,7 +831,7 @@ def test_setup_stage_tracker_reports_weighted_percentages() -> None:
 
     plan = setup_stage_plan()
     assert [stage["id"] for stage in plan] == [
-        "site", "sync", "storage", "python", "pack", "dedupe", "wan", "cosyvoice", "producer",
+        "site", "sync", "storage", "python", "pack", "dedupe", "wan", "cosyvoice", "voiceqc", "producer",
     ]
     pack = next(stage for stage in plan if stage["id"] == "pack")
     assert {item["label"] for item in pack["items"]} >= {"Wan2.2-Animate-14B", "DeepSeek-V4-Flash-0731", "Real-ESRGAN"}
@@ -885,3 +885,31 @@ def test_remote_setup_script_emits_stage_markers(monkeypatch) -> None:
     positions = [script.find(marker) for marker in order]
     assert all(pos >= 0 for pos in positions), positions
     assert positions == sorted(positions)
+
+
+def test_remote_setup_pins_the_mouth_sync_models_after_cosyvoice() -> None:
+    from diony_wizard.apply import (
+        MOUTH_SYNC_MODELS,
+        SETUP_STAGES,
+        apply_progress_text,
+        apply_stage_event,
+        remote_setup_script,
+    )
+
+    script = remote_setup_script("/opt/diony-ai")
+    assert script.find("COSYVOICE_OK") < script.find("VOICEQC_START") < script.find("PRODUCER_START")
+    assert "infra/runtime/voice-qc-overlay.txt" in script
+    assert "libEGL.so.1" in script and "apt-get install -y -q libegl1" in script
+    assert "hasattr(cv2, 'FaceDetectorYN')" in script
+    assert "/diony/vault/runtime/voice/models" in script
+    for _url, name, sha256, size in MOUTH_SYNC_MODELS:
+        assert name in script and sha256 in script and str(size) in script
+        assert len(sha256) == 64
+    assert "VOICEQC_PIN_MISMATCH" in script
+    assert [stage for stage, _label, _weight in SETUP_STAGES].index("voiceqc") == (
+        [stage for stage, _label, _weight in SETUP_STAGES].index("cosyvoice") + 1
+    )
+    assert sum(weight for _stage, _label, weight in SETUP_STAGES) == 97
+    assert apply_progress_text("VOICEQC_OK") == "Mouth-sync QC models ready"
+    event = apply_stage_event("VOICEQC_PULL face_landmarker.task")
+    assert event and event["stage"] == "voiceqc" and event["status"] == "active"
