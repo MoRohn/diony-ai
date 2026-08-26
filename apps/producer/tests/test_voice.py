@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from diony_contracts.enums import Engine, VoiceProfileSource, VoiceRenderState
 from diony_contracts.fixture import demo_project
+import pytest
+
 from diony_producer.voice import (
+    COSYVOICE_MODEL_FILES,
+    HOST_VOICE_ENV_KEYS,
     AnimationMeasurements,
     DeterministicVoiceTestBackend,
+    LocalVoiceCommandBackend,
     VoicePerformancePipeline,
+    VoicePipelineError,
     VoiceProfileRegistry,
+    default_voice_backend,
+    host_voice_env,
     optimize_voice_script,
 )
 
@@ -773,3 +782,93 @@ def test_voice_registry_api_locks_synthetic_identity_once() -> None:
     assert registry.json()["profiles"][0]["locked"] is True
     assert registry.json()["profiles"][0]["project_id"] == locked.json()["project_id"]
     assert registry.json()["profiles"][0]["texture_descriptor"] == "warm alto"
+
+
+def _host_voice_pack(vault: Path, wan_repo: Path, *, model_files=COSYVOICE_MODEL_FILES) -> None:
+    python = vault / "runtime" / "cosyvoice" / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\n")
+    python.chmod(0o755)
+    (vault / "runtime" / "cosyvoice" / "CosyVoice").mkdir(parents=True)
+    model = vault / "models" / "audio" / "CosyVoice2-0.5B"
+    model.mkdir(parents=True)
+    for name in model_files:
+        (model / name).write_bytes(b"x")
+    prompt = wan_repo / "examples" / "zero_shot_prompt.wav"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_bytes(b"RIFF")
+
+
+def _unset_host_voice_env(monkeypatch) -> None:
+    monkeypatch.delenv("DIONY_DRY_RUN", raising=False)
+    for key in HOST_VOICE_ENV_KEYS:
+        # setenv records the pre-test value so the late binding cannot leak.
+        monkeypatch.setenv(key, "")
+
+
+def test_default_voice_backend_late_binds_a_pack_that_finished_after_launch(tmp_path, monkeypatch) -> None:
+    vault = tmp_path / "vault"
+    wan_repo = tmp_path / "wan22"
+    _host_voice_pack(vault, wan_repo)
+    _unset_host_voice_env(monkeypatch)
+    monkeypatch.setenv("DIONY_VAULT", str(vault))
+    monkeypatch.setenv("DIONY_WAN_REPO", str(wan_repo))
+
+    backend = default_voice_backend()
+
+    assert isinstance(backend, LocalVoiceCommandBackend)
+    assert backend.command[-1].endswith("cosyvoice_backend.py")
+    assert os.environ["DIONY_COSYVOICE_PYTHON"] == str(vault / "runtime" / "cosyvoice" / "venv" / "bin" / "python")
+    assert os.environ["DIONY_COSYVOICE_MODEL"] == str(vault / "models" / "audio" / "CosyVoice2-0.5B")
+    assert os.environ["DIONY_COSYVOICE_PROMPT_AUDIO"] == str(wan_repo / "examples" / "zero_shot_prompt.wav")
+    assert os.environ["DIONY_SPEAKER_EMBEDDING_MODEL"] == "cosyvoice-campplus-v1"
+    assert os.environ["DIONY_COSYVOICE_PROMPT_LIBRARY"] == ""
+    activity = (vault / ".cluster" / "activity.jsonl").read_text()
+    assert "bound after Producer launch" in activity
+
+
+def test_default_voice_backend_names_what_an_unfinished_pack_still_lacks(tmp_path, monkeypatch) -> None:
+    vault = tmp_path / "vault"
+    wan_repo = tmp_path / "wan22"
+    _host_voice_pack(vault, wan_repo, model_files=("cosyvoice2.yaml",))
+    _unset_host_voice_env(monkeypatch)
+    monkeypatch.setenv("DIONY_VAULT", str(vault))
+    monkeypatch.setenv("DIONY_WAN_REPO", str(wan_repo))
+
+    with pytest.raises(VoicePipelineError) as excinfo:
+        default_voice_backend()
+
+    message = str(excinfo.value)
+    assert "raw or post-picture TTS is forbidden" in message
+    assert "llm.pt" in message and "hift.pt" in message
+    assert os.environ["DIONY_VOICE_BACKEND_COMMAND"] == ""
+
+
+def test_explicit_voice_backend_wins_over_host_discovery(tmp_path, monkeypatch) -> None:
+    vault = tmp_path / "vault"
+    wan_repo = tmp_path / "wan22"
+    _host_voice_pack(vault, wan_repo)
+    _unset_host_voice_env(monkeypatch)
+    monkeypatch.setenv("DIONY_VAULT", str(vault))
+    monkeypatch.setenv("DIONY_WAN_REPO", str(wan_repo))
+    monkeypatch.setenv("DIONY_VOICE_BACKEND_COMMAND", "/opt/site/voice-backend --strict")
+
+    backend = default_voice_backend()
+
+    assert backend.command == ["/opt/site/voice-backend", "--strict"]
+    assert os.environ["DIONY_COSYVOICE_MODEL"] == ""
+
+
+def test_host_voice_env_prefers_the_operator_backend_binary(tmp_path) -> None:
+    vault = tmp_path / "vault"
+    wan_repo = tmp_path / "wan22"
+    _host_voice_pack(vault, wan_repo)
+    binary = vault / "runtime" / "voice" / "bin" / "diony-voice-backend"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+
+    env, missing = host_voice_env(vault=vault, wan_repo=wan_repo)
+
+    assert env == {"DIONY_VOICE_BACKEND_COMMAND": str(binary)}
+    assert missing == []

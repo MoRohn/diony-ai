@@ -227,7 +227,7 @@ def test_farm_prewarms_an_approved_resident_before_first_shot_timer(
     monkeypatch.setattr("diony_wan.runner.prove_generate", lambda: None)
     monkeypatch.setattr("diony_contracts.live.ckpt_dir", lambda _task: checkpoint)
     monkeypatch.setattr(
-        "diony_wan.storage.prepare_checkpoint", lambda _task, source: checkpoint
+        "diony_wan.storage.prepare_checkpoint", lambda _task, source, **_kw: checkpoint
     )
     monkeypatch.setattr("diony_wan.runner.prewarm_validated_resident", prewarm)
     monkeypatch.setattr(farm, "camera_task_for", lambda *_args: "s2v-14B")
@@ -1374,3 +1374,35 @@ def test_live_roll_queues_two_candidates_for_hero_shots_only(tmp_path, monkeypat
     rolled = client.post("/api/studio/roll")
     takes = rolled.json()["takes"]
     assert len(takes) == len(shots)
+
+
+def test_staging_detail_shows_landed_bytes_rate_and_time_left() -> None:
+    from diony_producer.farm import _staging_detail
+
+    gib = 1024**3
+    early = _staging_detail("i2v-A14B", "sh-010", 0, 126 * gib, 0.5)
+    assert early == "Staging i2v-A14B on the GPU hot tier · sh-010 · 0 / 126 GB"
+
+    later = _staging_detail("i2v-A14B", "sh-010", 60 * gib, 126 * gib, 300.0)
+    assert later.startswith("Staging i2v-A14B on the GPU hot tier · sh-010 · 60 / 126 GB · 205 MB/s · about 6 min left")
+    assert "?" not in later
+
+
+def test_staging_listener_drives_the_status_line_and_announces_once(monkeypatch) -> None:
+    from diony_producer import farm
+
+    lines: list[str] = []
+    monkeypatch.setattr(farm, "record_activity", lambda _src, text, **_kw: lines.append(text))
+    monkeypatch.setattr(farm, "_shot_id", "sh-010")
+    monkeypatch.setattr(farm, "_detail", "")
+    farm._staging_clock.clear()
+    gib = 1024**3
+
+    farm._on_staging("s2v-14B", 0, 46 * gib)
+    farm._on_staging("s2v-14B", 10 * gib, 46 * gib)
+
+    assert farm._detail.startswith("Staging s2v-14B on the GPU hot tier · sh-010 · 10 / 46 GB")
+    assert lines == [
+        "sh-010 · staging s2v-14B into the GPU hot tier (46 GB, first use on this box); "
+        "Wan starts when the copy verifies"
+    ]

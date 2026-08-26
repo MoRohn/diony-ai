@@ -45,6 +45,7 @@ from diony_contracts.studio import refresh_reference_shot
 from diony_contracts.wan_prompt import prompt_receipt_sha256, repair_wan_prompt_for_qc
 from diony_producer.camera import (
     camera_task_for,
+    staged_camera_task,
     continuity_frame,
     generate_clip,
     live_camera,
@@ -1720,6 +1721,43 @@ def _take_integrity_error(take: Take) -> str:
     return ""
 
 
+_staging_clock: dict[str, float] = {}
+
+
+def _on_staging(task: str, copied: int, total: int) -> None:
+    """Storage listener: any foreground hot-tier copy becomes the live status line."""
+    global _detail
+    now = time.monotonic()
+    started = _staging_clock.get(task)
+    if started is None:
+        _staging_clock.clear()
+        _staging_clock[task] = started = now
+        record_activity(
+            "wan",
+            f"{_shot_id or 'Camera'} · staging {task} into the GPU hot tier "
+            f"({total / 1024**3:.0f} GB, first use on this box); Wan starts when the copy verifies",
+            level="live",
+            shot_id=_shot_id,
+        )
+    with _lock:
+        _detail = _staging_detail(task, _shot_id, copied, total, now - started)
+
+
+def _staging_detail(task: str, shot_id: str, copied: int, total: int, elapsed: float) -> str:
+    """Showrunner copy for a hot-tier stage: bytes landed, rate, and time left."""
+    gib = 1024**3
+    parts = [f"Staging {task} on the GPU hot tier", shot_id]
+    if total > 0:
+        parts.append(f"{copied / gib:.0f} / {total / gib:.0f} GB")
+        rate = copied / elapsed if elapsed >= 3.0 and copied > 0 else 0.0
+        if rate > 0:
+            parts.append(f"{rate / 1048576:.0f} MB/s")
+            remaining = max(0.0, total - copied) / rate
+            left = f"{remaining / 60:.0f} min" if remaining >= 90 else f"{remaining:.0f} s"
+            parts.append(f"about {left} left")
+    return " · ".join(part for part in parts if part)
+
+
 def run_one(
     project: Project,
     take: Take,
@@ -1731,10 +1769,14 @@ def run_one(
     token = farm_generation()
     started = time.monotonic()
     shot = project.shot(take.shot_id)
+    _shot_id = shot.id
     refresh_reference_shot(project, shot)
+    if shot.audio_line or shot.dialogue_turns:
+        # CosyVoice2 cold-loads on the first spoken clip; say so instead of
+        # leaving the last staging line on screen for a minute or more.
+        _detail = f"Locking the voice performance before camera · {shot.id}"
     prepare_voice_for_take(project, take)
     persist_project(project)
-    _shot_id = shot.id
     task = camera_task_for(project, shot)
     _detail = f"Generating 720p · {task} · {shot.id}"
     blocked = camera_disk_block()
@@ -1956,10 +1998,18 @@ def start_farm(project: Project, takes: list[Take]) -> None:
                 active_checkpoint: Path | None = None
                 try:
                     from diony_contracts.live import ckpt_dir
-                    from diony_wan.storage import prepare_checkpoint, prefetch_checkpoint
+                    from diony_wan.storage import (
+                        prefetch_checkpoint,
+                        prepare_checkpoint,
+                        set_staging_listener,
+                    )
 
-                    active_task = camera_task_for(project, project.shot(take.shot_id))
-                    _detail = f"Staging {active_task} on the GPU hot tier · {take.shot_id}"
+                    active_task = staged_camera_task(project, project.shot(take.shot_id))
+                    with _lock:
+                        _shot_id = take.shot_id
+                        _detail = f"Staging {active_task} on the GPU hot tier · {take.shot_id}"
+                    _staging_clock.clear()
+                    set_staging_listener(_on_staging)
                     source_checkpoint = ckpt_dir(active_task)
                     active_checkpoint = prepare_checkpoint(active_task, source=source_checkpoint)
                     if active_checkpoint != source_checkpoint:
@@ -1972,7 +2022,7 @@ def start_farm(project: Project, takes: list[Take]) -> None:
                     with _lock:
                         upcoming = _pending[0] if _pending else None
                     if upcoming is not None:
-                        upcoming_task = camera_task_for(
+                        upcoming_task = staged_camera_task(
                             project,
                             project.shot(upcoming.shot_id),
                         )

@@ -72,6 +72,8 @@ _tunnel: subprocess.Popen[bytes] | None = None
 _tunnel_key = ""
 _last_error = ""
 _synced_stamp = ""
+_sync_deferred_at = 0.0
+_SYNC_DEFER_SECONDS = 60.0
 _ssh_fail_at = 0.0
 _ssh_fail_key = ""
 
@@ -575,17 +577,25 @@ def _probe_ssh(conn: dict) -> bool:
     return False
 
 
-def _sync_gpu_apps(conn: dict) -> None:
-    """Push Producer + Wan Python onto /opt/diony-ai. Never --delete the GPU venv."""
-    global _synced_stamp
+def _sync_gpu_apps(conn: dict) -> bool:
+    """Push Producer + Wan Python onto /opt/diony-ai. Never --delete the GPU venv.
+
+    Returns True when the GPU now carries the desk's code (freshly pushed or
+    already current). A deferred push during live Production returns False and
+    stamps ``_sync_deferred_at`` so the caller does not hammer the box with a
+    restart attempt on every controller tick.
+    """
+    global _synced_stamp, _sync_deferred_at
     if in_pytest():
-        return
+        return False
     stamp = _code_stamp()
-    if not stamp or stamp == _synced_stamp:
-        return
+    if not stamp:
+        return False
+    if stamp == _synced_stamp:
+        return True
     root = desk_repo()
     if root is None:
-        return
+        return False
     seen = [
         "ssh",
         *_ssh_args(conn["ssh_port"]),
@@ -597,9 +607,10 @@ def _sync_gpu_apps(conn: dict) -> None:
     if marked.returncode == 0 and (marked.stdout or "").strip() == stamp:
         if _remote_code_matches(conn, root):
             _synced_stamp = stamp
-            return
+            return True
     if _remote_producer_busy(conn):
-        return
+        _sync_deferred_at = time.time()
+        return False
     remote = [
         "ssh",
         *_ssh_args(conn["ssh_port"]),
@@ -614,7 +625,7 @@ def _sync_gpu_apps(conn: dict) -> None:
             "Studio App did not leave /opt/diony-ai on this GPU. "
             "App Continue, then Ready Test GPU. Produce farms that box, not this desk."
         )
-        return
+        return False
     ssh_e = " ".join(shlex.quote(p) for p in ["ssh", *_ssh_args(conn["ssh_port"])])
     for rel, dest in GPU_SYNC_TREES:
         src = root / rel
@@ -635,13 +646,13 @@ def _sync_gpu_apps(conn: dict) -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, check=False)
         if proc.returncode != 0:
             _set_error((proc.stderr or proc.stdout or "rsync failed")[:800])
-            return
+            return False
     if not _remote_code_matches(conn, root):
         _set_error(
             "GPU sync integrity check failed: one or more runtime source files "
             "are missing or do not match their local SHA-256 digest."
         )
-        return
+        return False
     mark = [
         "ssh",
         *_ssh_args(conn["ssh_port"]),
@@ -664,9 +675,10 @@ def _sync_gpu_apps(conn: dict) -> None:
     )
     if marked.returncode != 0:
         _set_error((marked.stderr or marked.stdout or "GPU sync stamp write failed")[:800])
-        return
+        return False
     _synced_stamp = stamp
     _restart_gpu_producer_bind(conn)
+    return True
 
 
 def _restart_gpu_producer_bind(conn: dict) -> None:
@@ -740,9 +752,17 @@ fi
 HOST_PY="$WAN_VENV/bin/python"
 "$HOST_PY" -c "import torch" >/dev/null 2>&1 || { echo GPU_HOST_PYTHON_WITH_TORCH_MISSING; exit 13; }
 export DIONY_PYTHON="$HOST_PY"
-if [ -x /diony/vault/runtime/cosyvoice/venv/bin/python ] && \
-   [ -d /diony/vault/runtime/cosyvoice/CosyVoice ] && \
-   [ -d /diony/vault/models/audio/CosyVoice2-0.5B ]; then
+_diony_cosyvoice_pack_ready() {
+  # Same completeness bar as diony_producer.voice.host_voice_env: a model
+  # directory that Studio App is still filling is not a voice pack yet.
+  [ -x /diony/vault/runtime/cosyvoice/venv/bin/python ] || return 1
+  [ -d /diony/vault/runtime/cosyvoice/CosyVoice ] || return 1
+  for _diony_cosy_file in cosyvoice2.yaml llm.pt flow.pt hift.pt speech_tokenizer_v2.onnx; do
+    [ -f "/diony/vault/models/audio/CosyVoice2-0.5B/$_diony_cosy_file" ] || return 1
+  done
+  return 0
+}
+if _diony_cosyvoice_pack_ready; then
   export DIONY_COSYVOICE_PYTHON=/diony/vault/runtime/cosyvoice/venv/bin/python
   export DIONY_COSYVOICE_ROOT=/diony/vault/runtime/cosyvoice/CosyVoice
   export DIONY_COSYVOICE_MODEL=/diony/vault/models/audio/CosyVoice2-0.5B
@@ -1004,10 +1024,17 @@ def ensure_gpu_producer() -> str | None:
             res = httpx.get(gpu_producer_base() + "/api/site", timeout=2.0)
             if res.status_code == 200:
                 _set_error("")
-                if _code_stamp() and _code_stamp() != _synced_stamp and _probe_ssh(conn):
+                if (
+                    _code_stamp()
+                    and _code_stamp() != _synced_stamp
+                    and time.time() - _sync_deferred_at >= _SYNC_DEFER_SECONDS
+                    and _probe_ssh(conn)
+                ):
                     persist_connect(conn)
-                    _sync_gpu_apps(conn)
-                    _start_gpu_producer(conn)
+                    if _sync_gpu_apps(conn):
+                        # Only a landed push earns a restart; a deferred one
+                        # would just run the start script to be told "busy".
+                        _start_gpu_producer(conn)
                 return gpu_producer_base()
         except httpx.HTTPError:
             pass

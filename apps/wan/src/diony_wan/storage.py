@@ -17,12 +17,29 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from diony_contracts.live import ckpt_dir
 
 
 _GIB = 1024**3
 _PREFETCH_LOCK = threading.Lock()
+_PROGRESS_INTERVAL_SECONDS = 2.0
+ProgressCallback = Callable[[int, int], None]
+StagingListener = Callable[[str, int, int], None]
+_STAGING_LISTENER: StagingListener | None = None
+
+
+def set_staging_listener(listener: StagingListener | None) -> None:
+    """Observe every foreground hot-tier copy in this process as (task, copied, total).
+
+    Producer registers one listener so a copy started deep inside the Wan
+    runner reports the same moving numbers as one the farm loop started.
+    Background prefetches never report; they must not masquerade as the clip
+    that is rolling.
+    """
+    global _STAGING_LISTENER
+    _STAGING_LISTENER = listener
 _PREFETCH: dict[str, threading.Thread] = {}
 
 
@@ -186,10 +203,36 @@ def _room_for(
     return used + need <= budget
 
 
-def _copy_snapshot(source: Path, pending: Path) -> None:
+def _landed_bytes(root: Path, total: int) -> int:
+    """Bytes landed so far, clamped to the payload total (sidecars are not payload)."""
+    landed = _tree_bytes(root)
+    return min(landed, total) if total > 0 else landed
+
+
+def _tree_bytes(root: Path) -> int:
+    total = 0
+    try:
+        for path in root.rglob("*"):
+            try:
+                if path.is_file() and not path.is_symlink():
+                    total += path.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return total
+
+
+def _copy_snapshot(
+    source: Path,
+    pending: Path,
+    *,
+    total: int = 0,
+    progress: ProgressCallback | None = None,
+) -> None:
     rsync = shutil.which("rsync")
     if rsync:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             [
                 rsync,
                 "-aH",
@@ -199,12 +242,24 @@ def _copy_snapshot(source: Path, pending: Path) -> None:
                 f"{source}/",
                 f"{pending}/",
             ],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            check=False,
         )
+        # A 100+ GB family takes minutes even at NVMe speed. Report bytes landed
+        # in the pending tree so Production can show a moving copy instead of
+        # dead air; rsync's own stdout stays quiet in -a mode.
+        while progress is not None:
+            try:
+                proc.wait(timeout=_PROGRESS_INTERVAL_SECONDS)
+                break
+            except subprocess.TimeoutExpired:
+                progress(_landed_bytes(pending, total), total)
+        stdout, stderr = proc.communicate()
         if proc.returncode != 0:
-            raise OSError((proc.stderr or proc.stdout or "rsync failed")[-1000:])
+            raise OSError((stderr or stdout or "rsync failed")[-1000:])
+        if progress is not None:
+            progress(_landed_bytes(pending, total), total)
         return
     shutil.copytree(
         source,
@@ -221,6 +276,8 @@ def _prepare_checkpoint(
     *,
     source: Path,
     allow_evict: bool,
+    progress: ProgressCallback | None = None,
+    report: bool = True,
 ) -> Path:
     if not _enabled():
         return source
@@ -245,8 +302,14 @@ def _prepare_checkpoint(
         pending = root / f"{source.name}.partial-{os.getpid()}-{threading.get_ident()}"
         shutil.rmtree(pending, ignore_errors=True)
         pending.mkdir(parents=True)
+        listener = _STAGING_LISTENER
+        if progress is None and report and listener is not None:
+
+            def progress(copied: int, total: int, _task: str = task, _listener=listener) -> None:
+                _listener(_task, copied, total)
+
         try:
-            _copy_snapshot(source, pending)
+            _copy_snapshot(source, pending, total=contract.payload_bytes, progress=progress)
             copied = _snapshot_contract(pending)
             if copied is None or copied.signature != contract.signature:
                 raise OSError("hot-cache verification did not match the persistent snapshot")
@@ -271,10 +334,19 @@ def _prepare_checkpoint(
             return source
 
 
-def prepare_checkpoint(task: str, *, source: Path | None = None) -> Path:
-    """Return a verified overlay checkpoint, or the persistent source on any miss."""
+def prepare_checkpoint(
+    task: str,
+    *,
+    source: Path | None = None,
+    progress: ProgressCallback | None = None,
+) -> Path:
+    """Return a verified overlay checkpoint, or the persistent source on any miss.
+
+    ``progress(copied_bytes, total_bytes)`` fires every couple of seconds while a
+    family is being staged; it never fires on a cache hit.
+    """
     canonical = source or ckpt_dir(task)
-    return _prepare_checkpoint(task, source=canonical, allow_evict=True)
+    return _prepare_checkpoint(task, source=canonical, allow_evict=True, progress=progress)
 
 
 def prefetch_checkpoint(task: str, *, source: Path | None = None) -> None:
@@ -286,7 +358,7 @@ def prefetch_checkpoint(task: str, *, source: Path | None = None) -> None:
             return
 
         def work() -> None:
-            _prepare_checkpoint(task, source=canonical, allow_evict=False)
+            _prepare_checkpoint(task, source=canonical, allow_evict=False, report=False)
 
         thread = threading.Thread(target=work, name=f"diony-prefetch-{task}", daemon=True)
         _PREFETCH[task] = thread

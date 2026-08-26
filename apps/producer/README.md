@@ -47,6 +47,16 @@ are Blueprint `22`. Missing backend or evidence blocks the spoken Shot. The
 deterministic backend is enabled only by `DIONY_DRY_RUN=1` and is not media or
 signed-site quality proof.
 
+On the signed GPU the Connect start script exports the CosyVoice2 pack
+(`DIONY_COSYVOICE_*`, `DIONY_VOICE_BACKEND_COMMAND`) when it launches the GPU
+Producer. Studio App can still be pulling the CosyVoice2-0.5B weights at that
+moment, so a Producer launched with an empty `DIONY_VOICE_BACKEND_COMMAND`
+re-derives the same values from the host layout (`host_voice_env`) when the
+first spoken Take needs them — only filling keys the launch left empty, never
+downloading, and naming exactly which pack files are still missing when it
+cannot. An explicit `DIONY_VOICE_BACKEND_COMMAND` or
+`/diony/vault/runtime/voice/bin/diony-voice-backend` always wins.
+
 Registry APIs:
 
 - `GET /api/voice-profiles`

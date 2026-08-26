@@ -15,6 +15,7 @@ import shlex
 import shutil
 import struct
 import subprocess
+import sys
 import wave
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -1491,15 +1492,103 @@ def default_voice_pipeline() -> VoicePerformancePipeline:
     )
 
 
+COSYVOICE_MODEL_FILES = ("cosyvoice2.yaml", "llm.pt", "flow.pt", "hift.pt", "speech_tokenizer_v2.onnx")
+HOST_VOICE_ENV_KEYS = (
+    "DIONY_VOICE_BACKEND_COMMAND",
+    "DIONY_SPEAKER_EMBEDDING_MODEL",
+    "DIONY_COSYVOICE_PYTHON",
+    "DIONY_COSYVOICE_ROOT",
+    "DIONY_COSYVOICE_MODEL",
+    "DIONY_COSYVOICE_PROMPT_AUDIO",
+    "DIONY_COSYVOICE_PROMPT_LIBRARY",
+)
+
+
+def host_voice_env(*, vault: Path | None = None, wan_repo: Path | None = None) -> tuple[dict[str, str], list[str]]:
+    """Late-bind the Studio-prepared voice pack from the GPU host layout.
+
+    The GPU Producer inherits its voice environment when the Connect line
+    launches it, but Studio App can still be pulling CosyVoice2 at that moment
+    (the model pull is the slowest setup stage). Rather than farm spoken Shots
+    with a stale empty ``DIONY_VOICE_BACKEND_COMMAND``, Production re-derives
+    the same values the Connect start script exports, from the same host
+    layout, when the first spoken Take needs them. Nothing is downloaded here.
+
+    Returns ``(env, missing)``: ``env`` is complete or empty; ``missing`` names
+    what an incomplete pack still lacks so the failure is actionable.
+    """
+    from diony_producer.vault import vault_root
+
+    vault = vault or vault_root()
+    wan_repo = wan_repo or Path(os.environ.get("DIONY_WAN_REPO", "").strip() or "/opt/wan22")
+    explicit = vault / "runtime" / "voice" / "bin" / "diony-voice-backend"
+    if explicit.is_file() and os.access(explicit, os.X_OK):
+        return {"DIONY_VOICE_BACKEND_COMMAND": str(explicit)}, []
+    missing: list[str] = []
+    cosy_python = vault / "runtime" / "cosyvoice" / "venv" / "bin" / "python"
+    if not (cosy_python.is_file() and os.access(cosy_python, os.X_OK)):
+        missing.append(f"CosyVoice2 venv {cosy_python}")
+    cosy_root = vault / "runtime" / "cosyvoice" / "CosyVoice"
+    if not cosy_root.is_dir():
+        missing.append(f"CosyVoice2 checkout {cosy_root}")
+    model = vault / "models" / "audio" / "CosyVoice2-0.5B"
+    absent = [name for name in COSYVOICE_MODEL_FILES if not (model / name).is_file()]
+    if absent:
+        missing.append(f"CosyVoice2-0.5B weights {model} ({', '.join(absent)})")
+    backend = Path(__file__).with_name("cosyvoice_backend.py")
+    worker = Path(__file__).with_name("cosyvoice_worker.py")
+    if not (backend.is_file() and worker.is_file()):
+        missing.append(f"voice adapter {backend}")
+    prompt_audio = wan_repo / "examples" / "zero_shot_prompt.wav"
+    if not prompt_audio.is_file():
+        prompt_audio = cosy_root / "asset" / "zero_shot_prompt.wav"
+    if not prompt_audio.is_file():
+        missing.append("shared zero-shot prompt clip")
+    if missing:
+        return {}, missing
+    env = {
+        "DIONY_VOICE_BACKEND_COMMAND": shlex.join([sys.executable, str(backend)]),
+        "DIONY_SPEAKER_EMBEDDING_MODEL": "cosyvoice-campplus-v1",
+        "DIONY_COSYVOICE_PYTHON": str(cosy_python),
+        "DIONY_COSYVOICE_ROOT": str(cosy_root),
+        "DIONY_COSYVOICE_MODEL": str(model),
+        "DIONY_COSYVOICE_PROMPT_AUDIO": str(prompt_audio),
+    }
+    library = vault / "runtime" / "voice" / "prompt-library"
+    if library.is_dir():
+        env["DIONY_COSYVOICE_PROMPT_LIBRARY"] = str(library)
+    return env, []
+
+
 def default_voice_backend() -> DeterministicVoiceTestBackend | LocalVoiceCommandBackend:
     if _enabled("DIONY_DRY_RUN"):
         return DeterministicVoiceTestBackend()
     command = os.environ.get("DIONY_VOICE_BACKEND_COMMAND", "").strip()
     if not command:
-        raise VoicePipelineError(
-            "Voice is required, but no local studio voice backend is configured. "
-            "Set DIONY_VOICE_BACKEND_COMMAND; raw or post-picture TTS is forbidden."
-        )
+        discovered, missing = host_voice_env()
+        if discovered:
+            # Fill only what the launch left empty: an operator's explicit
+            # backend or prompt library always wins over host discovery. The
+            # adapter subprocess and the embedding readers share this process
+            # environment, so the late-bound pack is visible to all of them.
+            for key, value in discovered.items():
+                if not os.environ.get(key, "").strip():
+                    os.environ[key] = value
+            command = os.environ["DIONY_VOICE_BACKEND_COMMAND"]
+            from diony_producer.vault import record_activity
+
+            record_activity(
+                "voice",
+                "Voice backend bound after Producer launch: CosyVoice2 pack found on this host.",
+                level="info",
+            )
+        else:
+            detail = "; ".join(missing) if missing else "no host voice pack"
+            raise VoicePipelineError(
+                "Voice is required, but no local studio voice backend is configured. "
+                "Set DIONY_VOICE_BACKEND_COMMAND; raw or post-picture TTS is forbidden. "
+                f"Studio Connect has not finished the voice pack on this host (missing: {detail})."
+            )
     return LocalVoiceCommandBackend(command)
 
 

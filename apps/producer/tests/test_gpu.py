@@ -52,6 +52,11 @@ def test_gpu_producer_start_repairs_and_validates_wan_host_python() -> None:
     assert "DIONY_VOICE_BACKEND_COMMAND" in script
     assert "DIONY_SPEAKER_EMBEDDING_MODEL" in script
     assert "/diony/vault/models/audio/CosyVoice2-0.5B" in script
+    # A model directory Studio App is still filling is not a voice pack yet.
+    assert "_diony_cosyvoice_pack_ready" in script
+    for name in ("cosyvoice2.yaml", "llm.pt", "flow.pt", "hift.pt", "speech_tokenizer_v2.onnx"):
+        assert name in script
+    assert script.find("_diony_cosyvoice_pack_ready() {") < script.find("if _diony_cosyvoice_pack_ready; then")
     assert script.find('"$RUNTIME_OVERLAY"') < script.find("/tmp/diony-wan-req.txt")
     assert script.find("_diony_wan_host_ready") < script.find("GPU_PRODUCER_OK")
 
@@ -228,11 +233,57 @@ def test_gpu_sync_defers_remote_replacement_while_production_is_working(tmp_path
     monkeypatch.setattr(gpu.subprocess, "run", fake_run)
     monkeypatch.setattr(gpu, "_synced_stamp", "")
 
-    gpu._sync_gpu_apps({"ssh_port": "28869", "ssh_user": "root", "host": "gpu"})
+    monkeypatch.setattr(gpu, "_sync_deferred_at", 0.0)
+
+    assert gpu._sync_gpu_apps({"ssh_port": "28869", "ssh_user": "root", "host": "gpu"}) is False
 
     assert len(calls) == 1
     assert calls[0][-2:] == ["cat", "/diony/vault/.cluster/desk.stamp"]
     assert gpu._synced_stamp == ""
+    assert gpu._sync_deferred_at > 0.0
+
+
+def test_gpu_fast_path_waits_a_minute_before_retrying_a_deferred_sync(monkeypatch) -> None:
+    import diony_producer.gpu as gpu
+
+    conn = {"ssh_port": "28869", "ssh_user": "root", "host": "gpu"}
+    synced: list[str] = []
+    started: list[str] = []
+
+    def deferred_sync(_conn):
+        synced.append("sync")
+        gpu._sync_deferred_at = gpu.time.time()
+        return False
+
+    monkeypatch.setattr(gpu, "should_proxy", lambda: True)
+    monkeypatch.setattr(gpu, "sync_connect_from_wizard", lambda: None)
+    monkeypatch.setattr(gpu, "connect_from_lock", lambda: dict(conn))
+    monkeypatch.setattr(gpu, "apply_ssh_env", lambda _conn: None)
+    monkeypatch.setattr(gpu, "_port_open", lambda _port: True)
+    monkeypatch.setattr(gpu, "_tunnel_key", "")
+    monkeypatch.setattr(gpu, "_code_stamp", lambda: "new-stamp")
+    monkeypatch.setattr(gpu, "_synced_stamp", "")
+    monkeypatch.setattr(gpu, "_sync_deferred_at", 0.0)
+    monkeypatch.setattr(gpu, "_probe_ssh", lambda _conn: True)
+    monkeypatch.setattr(gpu, "persist_connect", lambda _conn: None)
+    monkeypatch.setattr(gpu, "_sync_gpu_apps", deferred_sync)
+    monkeypatch.setattr(gpu, "_start_gpu_producer", lambda _conn: started.append("start"))
+    monkeypatch.setattr(
+        gpu.httpx, "get", lambda *_args, **_kwargs: type("Res", (), {"status_code": 200})()
+    )
+
+    assert gpu.ensure_gpu_producer() == gpu.gpu_producer_base()
+    assert synced == ["sync"]
+    assert started == [], "a deferred push must not run the GPU start script"
+
+    assert gpu.ensure_gpu_producer() == gpu.gpu_producer_base()
+    assert synced == ["sync"], "the deferred push is retried once a minute, not every tick"
+
+    gpu._sync_deferred_at = 0.0
+    monkeypatch.setattr(gpu, "_sync_gpu_apps", lambda _conn: (synced.append("sync"), True)[1])
+    assert gpu.ensure_gpu_producer() == gpu.gpu_producer_base()
+    assert synced == ["sync", "sync"]
+    assert started == ["start"], "a landed push restarts the GPU Producer exactly once"
 
 
 def test_gpu_remote_busy_boundary_includes_mix(monkeypatch) -> None:

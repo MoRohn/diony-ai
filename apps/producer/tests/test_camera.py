@@ -239,3 +239,19 @@ def test_http_camera_surfaces_durable_node_error(tmp_path, monkeypatch) -> None:
             tmp_path / "bad.mp4",
             timeout=30,
         )
+
+
+def test_staged_camera_task_predicts_s2v_for_a_spoken_shot_before_voice_lock() -> None:
+    """The farm stages the family the take will roll on, not the pre-voice engine."""
+    from diony_contracts.enums import Engine
+    from diony_contracts.fixture import demo_project
+    from diony_producer import camera
+
+    project = demo_project()
+    spoken = next(shot for shot in project.shots if shot.audio_line or shot.dialogue_turns)
+    spoken.engine = Engine.I2V_A14B
+    assert camera.staged_camera_task(project, spoken) == "s2v-14B"
+
+    silent = next(shot for shot in project.shots if not (shot.audio_line or shot.dialogue_turns))
+    silent.engine = Engine.T2V_A14B
+    assert camera.staged_camera_task(project, silent) == camera.camera_task_for(project, silent) == "t2v-A14B"

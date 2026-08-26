@@ -149,7 +149,10 @@ Not an upstream model. Pipeline in Blueprint `06`. Worker: `diony-finish` (`apps
   qualified replacement), ECAPA-TDNN/CAM++-class embeddings, forced alignment,
   deterministic studio processing, and audiovisual QC behind
   `DIONY_VOICE_BACKEND_COMMAND`. Studio prepares the complete pinned backend pack;
-  Production never downloads dependencies on demand.
+  Production never downloads dependencies on demand. Because the GPU Producer
+  can launch while Studio is still pulling that pack, Production late-binds the
+  finished pack from the host layout on the first spoken Take instead of
+  farming with a stale empty backend variable.
 - Spoken intent must lock a VoiceProfile, PerformanceScript, clean dialogue,
   final clip mix, timing/performance metadata, seeds, and audio QC before camera.
   Missing preparation blocks the Shot; room tone and post-picture TTS are forbidden.

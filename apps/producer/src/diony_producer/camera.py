@@ -108,6 +108,20 @@ def camera_task_for(project: Project, shot: Shot) -> str:
     )
 
 
+def staged_camera_task(project: Project, shot: Shot) -> str:
+    """Family to stage into the hot tier before this shot's voice is locked.
+
+    ``camera_task_for`` answers for the shot as it is now. A spoken shot is
+    conditioned to S2V by the voice pipeline moments before camera, so staging
+    its current engine would copy the wrong 100+ GB family and then load S2V
+    cold. Predict the conditioned family instead; preflight still resolves the
+    real inputs when the take rolls.
+    """
+    if shot.audio_line or shot.dialogue_turns:
+        return "s2v-14B"
+    return camera_task_for(project, shot)
+
+
 def _wan_http_up() -> bool:
     try:
         res = httpx.get(wan_base() + "/health", timeout=2.0)

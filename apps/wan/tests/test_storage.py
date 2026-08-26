@@ -90,3 +90,51 @@ def test_prefetch_never_evicts_a_cache_that_generation_may_be_using(tmp_path, mo
 
     assert (cached / "weights.safetensors").is_file()
     assert not (cache_root / second.name / "weights.safetensors").exists()
+
+
+def test_hot_checkpoint_reports_copy_progress_only_while_staging(tmp_path, monkeypatch) -> None:
+    from diony_wan import storage
+
+    source = _snapshot(tmp_path / "volume" / "Wan2.2-I2V-A14B", size=4096)
+    monkeypatch.setenv("DIONY_MODEL_HOT_CACHE", "1")
+    monkeypatch.setenv("DIONY_MODEL_HOT_CACHE_ROOT", str(tmp_path / "overlay"))
+    monkeypatch.setenv("DIONY_MODEL_HOT_CACHE_GB", "1")
+    monkeypatch.setenv("DIONY_MODEL_HOT_CACHE_MIN_FREE_GB", "0")
+    monkeypatch.setattr(storage, "_PROGRESS_INTERVAL_SECONDS", 0.01)
+    seen: list[tuple[int, int]] = []
+
+    hot = storage.prepare_checkpoint("i2v-A14B", source=source, progress=lambda c, t: seen.append((c, t)))
+
+    assert hot != source
+    assert seen, "a real copy must report progress"
+    assert all(total == 4096 for _copied, total in seen)
+    assert seen[-1][0] == 4096
+
+    seen.clear()
+    assert storage.prepare_checkpoint("i2v-A14B", source=source, progress=lambda c, t: seen.append((c, t))) == hot
+    assert seen == []
+
+
+def test_staging_listener_hears_foreground_copies_but_never_prefetch(tmp_path, monkeypatch) -> None:
+    from diony_wan import storage
+
+    first = _snapshot(tmp_path / "volume" / "Wan2.2-S2V-14B", size=2048)
+    second = _snapshot(tmp_path / "volume" / "Wan2.2-I2V-A14B", size=2048)
+    monkeypatch.setenv("DIONY_MODEL_HOT_CACHE", "1")
+    monkeypatch.setenv("DIONY_MODEL_HOT_CACHE_ROOT", str(tmp_path / "overlay"))
+    monkeypatch.setenv("DIONY_MODEL_HOT_CACHE_GB", "1")
+    monkeypatch.setenv("DIONY_MODEL_HOT_CACHE_MIN_FREE_GB", "0")
+    monkeypatch.setattr(storage, "_PROGRESS_INTERVAL_SECONDS", 0.01)
+    heard: list[tuple[str, int, int]] = []
+    storage.set_staging_listener(lambda task, copied, total: heard.append((task, copied, total)))
+    try:
+        assert storage.prepare_checkpoint("s2v-14B", source=first) != first
+        assert heard and all(task == "s2v-14B" and total == 2048 for task, _c, total in heard)
+        assert heard[-1][1] == 2048
+
+        heard.clear()
+        storage.prefetch_checkpoint("i2v-A14B", source=second)
+        storage.wait_for_prefetch("i2v-A14B")
+        assert heard == []
+    finally:
+        storage.set_staging_listener(None)

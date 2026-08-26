@@ -629,6 +629,14 @@ def _monitoring_summary(
             title = f"Finishing {current['shot_id']} at 1080p"
             detail = "diony_sr_v1 is building the selected clip master."
             eyebrow = "PICTURE · LIVE"
+        elif str(current.get("note") or "").startswith("Staging "):
+            title = f"Staging the camera for {current['shot_id']}"
+            detail = str(current["note"])
+            eyebrow = "CAMERA · STAGING"
+        elif str(current.get("note") or "").startswith("Locking the voice"):
+            title = f"Locking the voice for {current['shot_id']}"
+            detail = "CosyVoice2 is performing the line and locking studio audio before Wan rolls."
+            eyebrow = "VOICE · LIVE"
         else:
             title = f"Building {current['shot_id']} at 720p"
             detail = "Wan2.2 is creating the camera negative on the signed GPU."

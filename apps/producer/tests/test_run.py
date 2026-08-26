@@ -685,3 +685,35 @@ def test_monitor_hides_unmeasured_denoise_placeholders(monkeypatch) -> None:
     assert board["now"].startswith("Denoise starting")
     assert "?" not in board["clips"][1]["note"]
     assert board["monitoring"]["signal"]["detail"] == "Denoise is starting"
+
+
+def test_monitoring_summary_names_staging_and_voice_lock_instead_of_a_fake_camera_roll() -> None:
+    from diony_producer.run import _monitoring_summary
+
+    def summary(note: str) -> dict:
+        clip = {"state": "rolling", "stage": "camera", "shot_id": "sh-010", "note": note, "progress": {}}
+        return _monitoring_summary(
+            [clip],
+            phase="farm",
+            now=note,
+            failed=False,
+            monitor={},
+            activity=[],
+            progress={},
+            master_ready=False,
+            material_label="720p camera negative",
+        )["signal"]
+
+    staging = summary("Staging i2v-A14B on the GPU hot tier · sh-010 · 60 / 126 GB · 205 MB/s · about 6 min left")
+    assert staging["title"] == "Staging the camera for sh-010"
+    assert staging["eyebrow"] == "CAMERA · STAGING"
+    assert "60 / 126 GB" in staging["detail"] and "about 6 min left" in staging["detail"]
+
+    voice = summary("Locking the voice performance before camera · sh-010")
+    assert voice["title"] == "Locking the voice for sh-010"
+    assert voice["eyebrow"] == "VOICE · LIVE"
+    assert "CosyVoice2" in voice["detail"]
+
+    rolling = summary("Generating 720p · i2v-A14B · sh-010")
+    assert rolling["title"] == "Building sh-010 at 720p"
+    assert rolling["eyebrow"] == "CAMERA · LIVE"
