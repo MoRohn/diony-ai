@@ -987,3 +987,90 @@ def test_wizard_signed_reads_the_whole_state_payload(monkeypatch) -> None:
     monkeypatch.setattr(boot.http.client, "HTTPConnection", Conn)
     assert boot.wizard_signed() is True
     assert boot.wizard_state_ok() is True
+
+
+def _studio_conn(payload: dict):
+    import json as _json
+
+    body = _json.dumps(payload).encode()
+
+    class Resp:
+        status = 200
+
+        def read(self, size=None):
+            return body if size is None else body[:size]
+
+    class Conn:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def request(self, *args, **kwargs):
+            pass
+
+        def getresponse(self):
+            return Resp()
+
+        def close(self):
+            pass
+
+    return Conn
+
+
+def test_a_restored_lock_is_not_signed_until_studio_identifies_its_gpu(monkeypatch) -> None:
+    """The desk must not send a launch to Producer for a lease that was recycled."""
+    from diony_desk import boot
+
+    base = {"complete": True, "active_step": None, "steps": []}
+    for status in ("unverified", "identifying"):
+        monkeypatch.setattr(
+            boot.http.client, "HTTPConnection", _studio_conn({**base, "signed_gpu": {"status": status}})
+        )
+        assert boot.studio_signed_state() == "identifying"
+        assert boot.wizard_signed() is False
+        assert boot.studio_identifying() is True
+    monkeypatch.setattr(
+        boot.http.client, "HTTPConnection", _studio_conn({**base, "signed_gpu": {"status": "missing"}})
+    )
+    assert boot.studio_signed_state() == "unsigned"
+    assert boot.wizard_signed() is False
+    for status in ("identified", "recorded", ""):
+        monkeypatch.setattr(
+            boot.http.client, "HTTPConnection", _studio_conn({**base, "signed_gpu": {"status": status}})
+        )
+        assert boot.wizard_signed() is True
+    # A Studio without the field (older payload) still reads as signed.
+    monkeypatch.setattr(boot.http.client, "HTTPConnection", _studio_conn(base))
+    assert boot.wizard_signed() is True
+    assert boot.studio_identifying() is False
+
+
+def test_landing_waits_through_identification_then_lands_on_the_answer(monkeypatch) -> None:
+    from diony_desk import boot
+
+    monkeypatch.setattr(boot.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(boot, "port_open", lambda port: True)
+
+    def script(states: list[str]) -> None:
+        idx = {"n": -1}
+
+        def signed(host="127.0.0.1", port=None):
+            idx["n"] = min(idx["n"] + 1, len(states) - 1)
+            return states[idx["n"]] == "signed"
+
+        def identifying(host="127.0.0.1", port=None):
+            return states[max(idx["n"], 0)] == "identifying"
+
+        monkeypatch.setattr(boot, "wizard_signed", signed)
+        monkeypatch.setattr(boot, "studio_identifying", identifying)
+
+    # Identified after a few polls: Producer.
+    script(["identifying"] * 3 + ["signed"])
+    assert boot.landing_url(wait=0.0, identify_wait=5.0) == boot.PRODUCER_URL
+
+    # Missing after identification: Studio (Connect), even though the lock said complete.
+    script(["identifying"] * 3 + ["unsigned"])
+    assert boot.landing_url(wait=0.0, identify_wait=5.0) == boot.STUDIO_URL
+
+    # Identification that never resolves falls back to Studio once identify_wait expires.
+    script(["identifying"])
+    assert boot.landing_url(wait=0.0, identify_wait=0.0) == boot.STUDIO_URL

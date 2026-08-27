@@ -951,8 +951,8 @@ def open_browser(url: str) -> None:
         pass
 
 
-def wizard_signed(host: str = "127.0.0.1", port: int | None = None) -> bool:
-    """True when Studio reports the site signed (Production lives on Producer)."""
+def _studio_state(host: str = "127.0.0.1", port: int | None = None) -> dict | None:
+    """GET /api/state from Studio as a dict, or None when it is not answering."""
     dest = WIZARD_PORT if port is None else port
     try:
         conn = http.client.HTTPConnection(host, dest, timeout=1.5)
@@ -963,25 +963,66 @@ def wizard_signed(host: str = "127.0.0.1", port: int | None = None) -> bool:
         raw = resp.read() if resp.status == 200 else b""
         conn.close()
     except OSError:
-        return False
+        return None
     try:
         payload = json.loads(raw.decode()) if raw else {}
     except (ValueError, UnicodeDecodeError):
-        return False
-    return isinstance(payload, dict) and payload.get("complete") is True
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
-def landing_url(*, wait: float = 3.0) -> str:
+def studio_signed_state(host: str = "127.0.0.1", port: int | None = None) -> str:
+    """'signed', 'identifying', or 'unsigned'.
+
+    A restored site lock reads complete the instant Studio starts, before
+    Studio has identified the signed GPU on its Connect line. A launch must not
+    land on Producer for a lease that has since been recycled: while Studio is
+    still identifying, the launch waits; a missing GPU is an unsigned site.
+    """
+    payload = _studio_state(host, port)
+    if not payload or payload.get("complete") is not True:
+        return "unsigned"
+    signed_gpu = payload.get("signed_gpu")
+    status = str(signed_gpu.get("status") or "") if isinstance(signed_gpu, dict) else ""
+    if status in {"unverified", "identifying"}:
+        return "identifying"
+    if status == "missing":
+        return "unsigned"
+    return "signed"
+
+
+def wizard_signed(host: str = "127.0.0.1", port: int | None = None) -> bool:
+    """True when Studio reports the site signed and its GPU identified."""
+    return studio_signed_state(host, port) == "signed"
+
+
+def studio_identifying(host: str = "127.0.0.1", port: int | None = None) -> bool:
+    """True while Studio is still identifying a restored site's GPU."""
+    return studio_signed_state(host, port) == "identifying"
+
+
+IDENTIFY_WAIT_SECONDS = 20.0  # one TCP timeout plus one SSH attempt on the signed line
+
+
+def landing_url(*, wait: float = 3.0, identify_wait: float = IDENTIFY_WAIT_SECONDS) -> str:
     """Where a launch should bring the user: Producer once signed, else Studio.
 
     Studio may still be reading its site lock right after start; give it a
-    moment before deciding the user belongs on the setup page.
+    moment before deciding the user belongs on the setup page. While Studio is
+    identifying the signed GPU, keep waiting (bounded) so a recycled lease
+    lands on Connect instead of a Producer with no camera.
     """
-    deadline = time.monotonic() + max(0.0, wait)
+    now = time.monotonic()
+    deadline = now + max(0.0, wait)
+    identify_deadline = now + max(0.0, wait, identify_wait)
     while True:
         if wizard_signed():
             return PRODUCER_URL if port_open(PRODUCER_PORT) else STUDIO_URL
-        if time.monotonic() >= deadline:
+        now = time.monotonic()
+        if studio_identifying() and now < identify_deadline:
+            time.sleep(0.25)
+            continue
+        if now >= deadline:
             return STUDIO_URL
         time.sleep(0.25)
 
