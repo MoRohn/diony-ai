@@ -24,8 +24,10 @@ Picture may never be generated first and given required dialogue afterward.
 Program Mix may assemble verified clip packages, but it may not synthesize raw
 TTS. A visual-only Shot remains visual-only. Generated room tone, white noise,
 pink noise, or a test tone is never accepted as a content-bearing soundtrack.
-If a Project has no verified dialogue, score, SFX, or recorded audio, Mix holds
-instead of manufacturing noise and representing it as finished audio.
+If a Project has no verified dialogue, score, SFX, or recorded audio (an
+image-only Idea, for example), Mix delivers a mute picture-only master with the
+policy on its receipt instead of manufacturing noise and representing it as
+finished audio.
 
 ## Contracts
 
@@ -222,8 +224,9 @@ the clip's native raster with OpenCV YuNet, landmarks each face crop with
 MediaPipe FaceLandmarker, and blends the inner-lip gap with the `jawOpen`
 blendshape into one aperture signal per face track. Over the *delivered* span
 (the script's pacing target — the frames the finish stage keeps) it correlates
-each track against the clean dialogue's per-frame RMS envelope across ±6 frames
-of lag; the track whose mouth follows the line best is the speaker, and
+each track against the clean dialogue's per-frame RMS envelope across ±12 frames
+of lag (±750 ms at 16 fps, so a large S2V lag is measured as a qualified
+failure rather than clipped at the window edge); the track whose mouth follows the line best is the speaker, and
 listeners with a still mouth are rejected by aperture variance, not position.
 Lip-sync confidence is `0.75 + 0.25 × syllable-smoothed peak correlation`
 (the 0.90 floor means correlation ≥ 0.60); the offset comes from the
@@ -233,9 +236,13 @@ balanced agreement between speech activity and mouth *modulation* (speech is
 oscillatory jaw motion; a held smile is not) with one frame of hysteresis at
 each speech boundary. Evidence qualifies only when a face is tracked across
 ≥ 60 % of the span, its mouth moves, audio is active, and the correlation peak
-is strong, prominent, and interior. Degenerate evidence — no face, a still
-mouth, near-silence, an edge-of-window peak — stays an unqualified one-take QC
-hold and must not spend another Wan render. Studio pins both models
+is strong, prominent, and interior. Only degenerate evidence — no tracked
+face, inactive audio, too few comparable frames — stays an unqualified one-take
+QC hold that must not spend another Wan render; a tracked, audible clip whose
+mouth is still, does not follow the line, or lags past the search window is a
+*measured defect* (confidence reports the floor) and a qualified failure that
+earns a bounded retake. A hold is re-judged with the current backend when
+Production resumes. Studio pins both models
 (`/diony/vault/runtime/voice/models`, SHA-256 verified) and the
 `mediapipe` runtime during setup; without them the older whole-frame motion
 check still runs but is explicitly diagnostic only. A measured hold on one

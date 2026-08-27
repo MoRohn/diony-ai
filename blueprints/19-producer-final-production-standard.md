@@ -388,8 +388,11 @@ the site kill switch.
   program-level two-pass linear loudnorm to the Bible target;
 - a picture-only request does not invent dialogue, route a template beat to
   S2V, or synthesize noise merely to populate a soundtrack; without authored
-  dialogue or verified content-bearing audio (licensed planned cues qualify),
-  Mix remains open and blocks the deliverable;
+  dialogue or verified content-bearing audio (licensed planned cues qualify)
+  the program delivers **mute** — digital silence muxed so the master keeps
+  an audio stream, loudness gates waived, `MixLock.picture_only` and the
+  policy recorded, and a visible warning in the log. Mute clips are allowed;
+  manufactured noise presented as a soundtrack is not;
 - room tone, white noise, pink noise, test tones, and silence never satisfy
   dialogue or finished-soundtrack evidence;
 - final Mix assembles verified per-clip VoiceClipPackages and licensed library

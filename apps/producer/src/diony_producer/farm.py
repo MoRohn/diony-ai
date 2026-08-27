@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -30,7 +31,7 @@ from diony_contracts.enums import (
     ReferenceLock,
     TakeOrigin,
 )
-from diony_contracts.live import inference_live, wan_frame_num
+from diony_contracts.live import s2v_frame_num, inference_live, wan_frame_num
 from diony_contracts.models import (
     Artifact,
     GenerationExecutionReceipt,
@@ -39,6 +40,7 @@ from diony_contracts.models import (
     QCReport,
     Shot,
     Take,
+    quality_contract_satisfied,
 )
 from diony_contracts.stitch import assemble_program
 from diony_contracts.studio import refresh_reference_shot
@@ -50,6 +52,7 @@ from diony_producer.camera import (
     generate_clip,
     live_camera,
     reference_frame,
+    conditioning_image,
 )
 from diony_producer.gallery_join import probe_media, resolve_media_tool
 from diony_producer.performance import PerformanceJournal
@@ -89,6 +92,9 @@ _INFRASTRUCTURE_QC_PREFIXES = (
     "GPU overlay has less than",
     "GPU overlay has ",
     "Vault has ",
+    # Runner bookkeeping, not clip quality: re-queue and re-judge on resume.
+    "Wan execution receipt",
+    "Wan generation completed without",
 )
 _PERFORMANCE = PerformanceJournal()
 _ATTENTION_RECEIPT_NAME = "wan-cudnn-sdpa-validation.json"
@@ -482,11 +488,16 @@ def resume_camera(project: Project) -> Project:
     if project.production_pause is not None:
         adopt_live_farm(project)
         reclaim_landed_negatives(project)
+        settle_exhausted_shots(project)
         if not list_generate_jobs():
             clear_camera_lock()
         return project
     adopt_live_farm(project)
     reclaim_landed_negatives(project)
+    # A Shot that already spent its retake cap proceeds on its best attempt
+    # whether or not a render is live right now; after reclaim, so a landed
+    # but unjudged attempt is measured before it is ranked.
+    settle_exhausted_shots(project)
     jobs = list_generate_jobs()
     if not jobs:
         clear_camera_lock()
@@ -503,6 +514,7 @@ def resume_camera(project: Project) -> Project:
                         selected = select_hero_print(project, shot)
                     except RuntimeError:
                         pass
+                _rejudge_unqualified_voice_hold(project, selected)
                 retry = auto_retake_for_qc_failure(project, selected)
                 if retry is not None:
                     queued = [retry]
@@ -558,9 +570,14 @@ def _load_generation_receipt(take: Take, negative: Path) -> GenerationExecutionR
     if receipt.status != "succeeded":
         raise RuntimeError(f"Wan execution lane reported {receipt.status}: {receipt.error}")
     if not receipt.quality_contract_matched:
-        raise RuntimeError(
-            "Wan execution receipt does not match the pinned 720p BF16 quality contract."
-        )
+        if quality_contract_satisfied(receipt):
+            # A runner that still pinned the lane cap wrote "unmatched" for a
+            # shorter booking; the delivered fields satisfy the contract.
+            receipt = receipt.model_copy(update={"quality_contract_matched": True})
+        else:
+            raise RuntimeError(
+                "Wan execution receipt does not match the pinned 720p BF16 quality contract."
+            )
     actual_sha256 = _sha256_file(negative)
     actual_bytes = negative.stat().st_size
     if receipt.output_sha256 != actual_sha256 or receipt.output_bytes != actual_bytes:
@@ -646,7 +663,11 @@ def _candidate_score(take: Take) -> tuple:
     qc = take.qc
     if qc is None:
         return (-1, 0.0, 0.0, 0.0, 0.0, -take.attempt)
-    verdict_rank = {QCVerdict.PASS: 2, QCVerdict.WARN: 1, QCVerdict.FAIL: 0}.get(qc.verdict, 0)
+    verdict_rank = {QCVerdict.PASS: 3, QCVerdict.WARN: 1, QCVerdict.FAIL: 0}.get(qc.verdict, 0)
+    if qc.settled_by_policy:
+        # A print settled at the retake cap outranks every rejection and any
+        # queued placeholder; only a measured PASS beats it.
+        verdict_rank = 2
     reference = qc.reference_similarity
     if reference is None and qc.reference_similarities:
         reference = min(qc.reference_similarities.values())
@@ -669,6 +690,11 @@ def select_hero_print(project: Project, shot) -> Take:
     ]
     if not candidates:
         raise RuntimeError(f"{shot.id} has no landed candidates to select from")
+    settled = settled_print(project, shot.id)
+    if settled is not None and not any(
+        item.qc is not None and item.qc.verdict == QCVerdict.PASS for item in candidates
+    ):
+        return settled
     best = max(candidates, key=_candidate_score)
     if shot.selected_take_id != best.id:
         previous = shot.selected_take_id
@@ -801,8 +827,191 @@ def _auto_retake_quality_failure(take: Take) -> bool:
     return any(note.startswith(prefix) for prefix in _AUTO_RETAKE_QC_PREFIXES)
 
 
+_SCORE_WEIGHTS = (
+    ("lip_sync", 0.30),
+    ("sync_offset", 0.25),
+    ("performance", 0.20),
+    ("reference", 0.15),
+    ("temporal", 0.10),
+)
+
+
+def attempt_score(take: Take) -> float:
+    """Measured quality of one attempt on a 0–1 scale, for best-of selection.
+
+    A weighted mean of whatever this attempt measured: lip-sync confidence,
+    audiovisual offset (500 ms scores zero), physical performance consistency,
+    reference identity similarity, and temporal residual (0.1 scores zero).
+    Missing measurements drop out of the mean instead of counting as zero, so
+    a silent shot is scored on identity and temporal evidence alone.
+    """
+    qc = take.qc
+    if qc is None:
+        return 0.0
+    reference = qc.reference_similarity
+    if reference is None and qc.reference_similarities:
+        reference = min(qc.reference_similarities.values())
+    parts: dict[str, float | None] = {
+        "lip_sync": qc.lip_sync_confidence,
+        "sync_offset": (
+            max(0.0, 1.0 - qc.audiovisual_offset_ms_p95 / 500.0)
+            if qc.audiovisual_offset_ms_p95 is not None
+            else None
+        ),
+        "performance": qc.voice_performance_consistency,
+        "reference": reference,
+        "temporal": (
+            max(0.0, 1.0 - qc.temporal_residual_p95 / 0.1)
+            if qc.temporal_residual_p95 is not None
+            else None
+        ),
+    }
+    total = 0.0
+    weight = 0.0
+    for key, w in _SCORE_WEIGHTS:
+        value = parts[key]
+        if value is None:
+            continue
+        total += w * max(0.0, min(1.0, float(value)))
+        weight += w
+    return round(total / weight, 4) if weight else 0.0
+
+
+def settled_print(project: Project, shot_id: str) -> Take | None:
+    """The Shot's selected print when it proceeds by retake-cap policy."""
+    try:
+        shot = project.shot(shot_id)
+        take = project.take(shot.selected_take_id or "")
+    except KeyError:
+        return None
+    return take if take.qc is not None and take.qc.settled_by_policy else None
+
+
+def settle_exhausted_shot(project: Project, shot) -> Take | None:
+    """After the retake cap, the best-scoring attempt proceeds as the print.
+
+    Four measured rejections are the evidence that this line does not pass
+    the studio thresholds on this box today; holding the Shot for review
+    stalled every Production behind it. The highest-scoring attempt is
+    selected, its verdict recorded as WARN with the measured notes kept, and
+    the rundown keeps moving. Finish, picture lock, and mix accept a settled
+    print explicitly (`settled_by_policy`), never a plain rejection.
+    """
+    already = settled_print(project, shot.id)
+    if already is not None:
+        return already
+    generations = [
+        item
+        for item in project.takes_for(shot.id)
+        if item.origin == TakeOrigin.GENERATION
+    ]
+    if len(generations) < RETAKE_CAP:
+        return None
+    measured = [
+        item
+        for item in generations
+        if item.qc is not None and take_has_live_negative(item, project)
+    ]
+    if not measured or any(item.qc.verdict == QCVerdict.PASS for item in measured):
+        return None
+    best = max(measured, key=lambda item: (attempt_score(item), item.attempt))
+    score = attempt_score(best)
+    verdict_note = best.qc.notes.strip()
+    best.qc.verdict = QCVerdict.WARN
+    best.qc.settled_best_of = len(generations)
+    best.qc.settled_score = score
+    best.qc.notes = (
+        f"Best of {len(generations)} attempts selected by policy (score {score:.2f})"
+        + (f" · {verdict_note}" if verdict_note else "")
+    )
+    previous = shot.selected_take_id
+    shot.selected_take_id = best.id
+    assemble_program(project)
+    persist_project(project)
+    ranked = ", ".join(
+        f"{item.id} {attempt_score(item):.2f}"
+        for item in sorted(measured, key=lambda item: (-attempt_score(item), -item.attempt))
+    )
+    record_activity(
+        "qc",
+        (
+            f"{shot.id} · {len(generations)} attempts spent; best attempt {best.id} proceeds "
+            f"by policy (score {score:.2f}; ranked {ranked})"
+            + (f"; replaces {previous}" if previous and previous != best.id else "")
+        ),
+        level="live",
+        shot_id=shot.id,
+    )
+    return best
+
+
+def settle_exhausted_shots(project: Project) -> list[Take]:
+    """Settle every Shot that already spent its retake cap (restart recovery)."""
+    settled: list[Take] = []
+    for shot in project.shots:
+        if settled_print(project, shot.id) is not None:
+            continue
+        take = settle_exhausted_shot(project, shot)
+        if take is not None:
+            settled.append(take)
+    return settled
+
+
+_APERTURE_STD = re.compile(r"speaker face at .*?aperture std=([0-9.]+)")
+STILL_MOUTH_APERTURE_STD = 0.02  # av_sync.MIN_APERTURE_STD: below this the mouth did not perform
+ARTICULATION_DRIVE_STEP = 1.0
+ARTICULATION_DRIVE_MAX = 7.5
+
+
+def _measured_aperture_std(take: Take) -> float | None:
+    package = take.voice_package
+    if package is None:
+        return None
+    for line in package.qc.diagnostics:
+        found = _APERTURE_STD.search(line)
+        if found:
+            try:
+                return float(found.group(1))
+            except ValueError:
+                return None
+    return None
+
+
+def _raise_articulation_drive(project: Project, shot, take: Take) -> float | None:
+    """A take whose mouth measured still retakes with more audio guidance.
+
+    S2V's guidance scale is the strength of the line's drive on the visible
+    face (its unconditional branch drops the audio). A still mouth is not a
+    seed accident to reroll: the same face, prompt, and audio at the same
+    drive tend to repeat it. Each still-mouth rejection raises the Shot's
+    drive by one step, capped, and the receipt records the value used.
+    """
+    from diony_contracts.models import lane_guide_scale
+
+    measured = _measured_aperture_std(take)
+    if measured is None or measured >= STILL_MOUTH_APERTURE_STD:
+        return None
+    current = shot.s2v_guide_scale or lane_guide_scale("s2v-14B") or 4.5
+    raised = min(ARTICULATION_DRIVE_MAX, round(current + ARTICULATION_DRIVE_STEP, 2))
+    if raised <= current:
+        return None
+    shot.s2v_guide_scale = raised
+    record_activity(
+        "qc",
+        f"{shot.id} · mouth measured still on {take.id} (aperture std {measured:.4f}); "
+        f"raising the line's articulation drive from {current:g} to {raised:g} for the retake",
+        level="live",
+        shot_id=shot.id,
+    )
+    return raised
+
+
 def auto_retake_for_qc_failure(project: Project, take: Take) -> Take | None:
-    """Replace a rejected selected print until the four-generation Take cap."""
+    """Replace a rejected selected print until the four-generation Take cap.
+
+    At the cap the best-scoring attempt proceeds by policy (see
+    ``settle_exhausted_shot``) and no retake is returned.
+    """
     if project.production_stop is not None or project.production_pause is not None:
         return None
     if not _auto_retake_quality_failure(take):
@@ -816,6 +1025,7 @@ def auto_retake_for_qc_failure(project: Project, take: Take) -> Take | None:
         if item.origin == TakeOrigin.GENERATION
     ]
     if len(generations) >= RETAKE_CAP:
+        settle_exhausted_shot(project, shot)
         return None
     refresh_reference_shot(project, shot)
     # Evidence-driven direction first: DeepSeek addresses every measured symptom
@@ -823,6 +1033,7 @@ def auto_retake_for_qc_failure(project: Project, take: Take) -> Take | None:
     # applied after the contract refresh, so the revision survives to dispatch.
     if not direct_retake(project, shot, take):
         repair_wan_prompt_for_qc(shot, take.qc.notes if take.qc else "")
+    _raise_articulation_drive(project, shot, take)
     retry = new_generation_take(project, shot, live=True)
     project.takes.append(retry)
     shot.selected_take_id = retry.id
@@ -908,7 +1119,10 @@ def _reference_similarities(
     shot = project.shot(take.shot_id)
     if not shot.keyframe_asset_ids:
         return {}
-    reference = reference_frame(project, shot)
+    # The lock is measured against the still that conditioned this negative
+    # (speaker close-up, previous print's last frame) when the camera
+    # recorded it; the wide subject still is the legacy fallback.
+    reference = conditioning_image(negative) or reference_frame(project, shot)
     if reference is None:
         return {}
     fps = float(media.get("fps") or shot.fps or 23.976)
@@ -1159,7 +1373,12 @@ def reclaim_landed_negatives(project: Project) -> int:
         if str(job.get("save") or "").strip()
     }
     for take in project.takes:
-        if take_has_live_negative(take, project) and take.qc and take.qc.verdict == QCVerdict.PASS:
+        if take_has_live_negative(take, project) and take.qc and (
+            take.qc.verdict != QCVerdict.WARN or take.qc.settled_by_policy
+        ):
+            # Already judged (pass or fail) or settled by policy: a restart
+            # re-attaches only negatives that landed unjudged, never
+            # re-measures every rejected take or overwrites a standing decision.
             continue
         shot = project.shot(take.shot_id)
         rel = negative_rel(project, take)
@@ -1255,7 +1474,11 @@ def adopt_live_farm(project: Project) -> None:
                 _detail = _error[:240]
                 record_activity("qc", f"{landed.shot_id} · {_detail}", level="fail", shot_id=landed.shot_id)
                 retry = auto_retake_for_qc_failure(project, landed)
-                if retry is not None:
+                settled = settled_print(project, landed.shot_id) if retry is None else None
+                if settled is not None:
+                    _error = ""
+                    _detail = f"Best of {settled.qc.settled_best_of} attempts · {settled.id} proceeds"
+                elif retry is not None:
                     try:
                         if attention_receipt is not None:
                             _rebind_attention_canary(
@@ -1441,6 +1664,185 @@ def _clear_fail_for_reroll(take: Take) -> None:
         take.qc.notes = "Queued for Wan2.2 on this pair. 720p negative, not a 1080 master."
 
 
+def _rejudge_unqualified_voice_hold(project: Project, take: Take) -> None:
+    """Re-measure a Take held on unqualified mouth-sync evidence with the current backend.
+
+    A hold is a one-take pause, not a verdict: after a restart the measurement
+    may have improved (wider lag search, pinned models). A pass lands the
+    negative; a qualified failure re-enters the bounded retake path.
+    """
+    qc = take.qc
+    if (
+        qc is None
+        or qc.verdict != QCVerdict.FAIL
+        or not qc.notes.startswith("Voice performance failed")
+        or qc.audiovisual_measurement_qualified is True
+        or take.voice_package is None
+    ):
+        return
+    negative = vault_root() / negative_rel(project, take)
+    if not negative.is_file() or negative.stat().st_size <= 32:
+        return
+    try:
+        package = verify_voice_animation(project, take, negative)
+    except Exception as exc:  # noqa: BLE001 — a re-judge must never block resume
+        record_activity(
+            "qc", f"{take.shot_id} · re-judge skipped · {str(exc)[:200]}", level="warn", shot_id=take.shot_id
+        )
+        return
+    if package is None:
+        return
+    take.voice_package = package
+    measured = package.qc
+    passed = bool(measured.passed)
+    update = {
+        "voice_ready_ok": passed,
+        "lipsync_ok": bool(measured.animation_passed),
+        "loudness_ok": bool(measured.audio_passed),
+        "audiovisual_measurement_qualified": measured.audiovisual_measurement_qualified,
+        "lip_sync_confidence": measured.lip_sync_confidence,
+        "audiovisual_offset_ms_p95": measured.audiovisual_offset_ms_p95,
+        "voice_performance_consistency": measured.performance_consistency,
+        "audiovisual_backend": measured.audiovisual_backend,
+        "verdict": QCVerdict.PASS if passed else QCVerdict.FAIL,
+        "notes": (
+            "Wan2.2 720p negative. Re-judged mouth-sync evidence passed. Not a 1080 master."
+            if passed
+            else _voice_performance_failure(package)
+        ),
+    }
+    take.qc = qc.model_copy(update=update)
+    persist_project(project)
+    record_activity(
+        "qc",
+        f"{take.shot_id} · re-judged with {measured.audiovisual_backend}: {take.qc.notes[:160]}",
+        level="live" if passed else "fail",
+        shot_id=take.shot_id,
+    )
+
+
+_SPEAKER_FACE = re.compile(r"speaker face at \((\d+),(\d+)\)")
+_REFINED_LAG = re.compile(r"refined_lag_frames=(-?[\d.]+)")
+_CORRELATION = re.compile(r"mouth-audio correlation=([\d.]+)")
+
+
+def _measured_lag(diagnostics) -> tuple[float, float] | None:
+    """(refined lag frames, correlation) from mouth-sync diagnostics."""
+    lag = None
+    corr = None
+    for line in diagnostics:
+        m = _REFINED_LAG.search(line)
+        if m:
+            lag = float(m.group(1))
+        c = _CORRELATION.search(line)
+        if c:
+            corr = float(c.group(1))
+    return (lag, corr) if lag is not None and corr is not None else None
+
+
+def align_spoken_head(project: Project, take: Take, negative: Path) -> int:
+    """Trim a measured late lip lag from the head of a spoken negative.
+
+    S2V renders headroom; when the mouth trails the locked audio by a whole
+    number of frames (strong correlation, qualified evidence), those frames
+    are dropped from the head and the locked audio muxed back, so the take
+    lands on the line at t=0 instead of spending a retake. Returns the trim.
+    """
+    from diony_contracts.live import S2V_HEADROOM_FRAMES
+    from diony_producer.camera import _audio_reference
+    from diony_producer.voice import default_voice_pipeline
+    from diony_wan.runner import rebind_generation_receipt, trim_head_and_remux
+
+    shot = project.shot(take.shot_id)
+    if str(getattr(take.engine, "value", take.engine) or "") != "s2v-14B":
+        return 0
+    package = take.voice_package
+    if package is None or not negative.is_file():
+        return 0
+    audio = _audio_reference(project, shot)
+    if audio is None:
+        return 0
+    pipeline = default_voice_pipeline()
+    clean = project.asset(package.clean_dialogue_asset_id)
+    metadata = project.asset(package.performance_metadata_asset_id)
+    measured = pipeline.audiovisual_qc.verify_audiovisual(
+        negative, pipeline._asset_path(clean), pipeline._asset_path(metadata)
+    )
+    if not measured.qualified_for_visual_retake:
+        return 0
+    found = _measured_lag(measured.diagnostics)
+    if found is None:
+        return 0
+    lag, correlation = found
+    shift = int(round(lag))
+    if correlation < 0.6 or shift == 0 or abs(shift) > S2V_HEADROOM_FRAMES:
+        return 0
+    from diony_contracts.live import s2v_frame_num
+    from diony_wan.runner import hold_head_and_remux
+
+    delivered = int(
+        (
+            probe_media(
+                negative,
+                fallback_fps=shot.fps,
+                fallback_frames=shot.duration_frames,
+                fallback_width=0,
+                fallback_height=0,
+            )
+            or {}
+        ).get("frames")
+        or 0
+    )
+    if shift > 0:
+        if delivered and delivered - shift < s2v_frame_num(shot.duration_frames, shot.fps):
+            # No headroom to spend (an older render): leave it to the retake path.
+            return 0
+        trim_head_and_remux(negative, lead_frames=shift, audio=audio)
+        rebind_generation_receipt(negative, lead_frames=shift)
+        record_activity(
+            "qc",
+            f"{shot.id} · lip motion measured {lag:+.2f} frames late (correlation {correlation:.2f}); "
+            f"trimmed {shift} head frames onto the locked line",
+            level="live",
+            shot_id=shot.id,
+        )
+        return shift
+    hold = -shift
+    if delivered and delivered - hold < s2v_frame_num(shot.duration_frames, shot.fps):
+        return 0
+    hold_head_and_remux(negative, hold_frames=hold, audio=audio)
+    rebind_generation_receipt(negative, head_hold_frames=hold)
+    record_activity(
+        "qc",
+        f"{shot.id} · lip motion measured {lag:+.2f} frames early (correlation {correlation:.2f}); "
+        f"held the first frame {hold} frames onto the locked line",
+        level="live",
+        shot_id=shot.id,
+    )
+    return -hold
+_FACES_TRACKED = re.compile(r"faces tracked=(\d+)")
+
+
+def _speaker_face_from(voice_package) -> tuple[float, float] | None:
+    """The measured speaker face centre from a qualified, passing, multi-face take."""
+    if voice_package is None or not voice_package.qc.passed:
+        return None
+    if voice_package.qc.audiovisual_measurement_qualified is not True:
+        return None
+    faces = 0
+    center: tuple[float, float] | None = None
+    for line in voice_package.qc.diagnostics:
+        tracked = _FACES_TRACKED.search(line)
+        if tracked:
+            faces = int(tracked.group(1))
+        seen = _SPEAKER_FACE.search(line)
+        if seen:
+            center = (float(seen.group(1)), float(seen.group(2)))
+    # A close-up crop holds one face; only a wide take teaches where the
+    # speaker sits in the subject still.
+    return center if faces >= 2 and center is not None else None
+
+
 def _voice_performance_failure(voice_package) -> str:
     """Describe the measured voice gate that failed instead of hiding it."""
     if voice_package is None:
@@ -1485,6 +1887,7 @@ def attach_negative(
 ) -> None:
     dest = vault_root() / dest_rel
     size = dest.stat().st_size if dest.is_file() else 0
+    standing = take.qc if take.qc is not None and take.qc.settled_by_policy else None
     addressed = take.generation_receipt
     digest = (
         addressed.output_sha256
@@ -1510,7 +1913,12 @@ def attach_negative(
     measured_frames = int(media.get("frames") or 0)
     # The camera contract is trim-only conform: Wan must deliver at least the
     # booked frames (or the 81-frame lane ceiling when a legacy Shot over-books).
-    expected_frames = min(shot.duration_frames, wan_frame_num(shot.duration_frames, shot.fps))
+    spoken_lane = str(getattr(take.engine, "value", take.engine) or "") == "s2v-14B"
+    expected_frames = (
+        s2v_frame_num(shot.duration_frames, shot.fps)
+        if spoken_lane
+        else min(shot.duration_frames, wan_frame_num(shot.duration_frames, shot.fps))
+    )
     duration_ok = (
         measured_frames + 1 >= expected_frames
         if live and not err and dest.is_file()
@@ -1539,9 +1947,11 @@ def attach_negative(
     dialogue_required = bool(shot.audio_line or shot.dialogue_turns)
     voice_failure = ""
     voice_package = take.voice_package
+    speaker_seen: tuple[float, float] | None = None
     if dialogue_required and not err and dest.is_file():
         try:
             voice_package = verify_voice_animation(project, take, dest)
+            speaker_seen = _speaker_face_from(voice_package)
         except Exception as exc:  # noqa: BLE001 — missing AV evidence is a hard clip gate
             voice_failure = f"Voice performance failed: {exc}"
     voice_ready_ok = (
@@ -1696,6 +2106,20 @@ def attach_negative(
         failure = f"Measured flicker failed (luma-change p95 {measured:.4f})."
     if not failure and not legal_ok:
         failure = "Measured 720p media integrity failed before the mandatory Rec.709 finish."
+    if ok and speaker_seen is not None and dialogue_required:
+        try:
+            from diony_producer.camera import learn_speaker_face
+
+            speaker = next((turn.character_id for turn in shot.dialogue_turns if turn.character_id), "")
+            if speaker:
+                learn_speaker_face(project, speaker, speaker_seen)
+                record_activity(
+                    "qc",
+                    f"{shot.id} · {speaker}'s face learned at ({speaker_seen[0]:.0f},{speaker_seen[1]:.0f}) for close-up framing",
+                    shot_id=shot.id,
+                )
+        except Exception:  # noqa: BLE001 — a framing aid never blocks a passing take
+            pass
     take.qc = QCReport(
         id=f"qc-{take.id}",
         take_id=take.id,
@@ -1752,11 +2176,34 @@ def attach_negative(
             )
         ),
     )
-    if live and duration_ok and 0 < measured_frames < shot.duration_frames:
+    if standing is not None and take.qc.verdict != QCVerdict.PASS:
+        # A print settled at the retake cap keeps proceeding by policy; a
+        # re-measurement refreshes the evidence, not the decision.
+        take.qc = take.qc.model_copy(
+            update={
+                "verdict": QCVerdict.WARN,
+                "settled_best_of": standing.settled_best_of,
+                "settled_score": standing.settled_score,
+                "notes": (
+                    f"Best of {standing.settled_best_of} attempts selected by policy "
+                    f"(score {standing.settled_score:.2f}) · {take.qc.notes.strip()}"
+                    if standing.settled_score is not None
+                    else take.qc.notes
+                ),
+            }
+        )
+    media_fps = float(media.get("fps") or shot.fps or 23.976)
+    booking_fps = float(shot.fps or 23.976)
+    # Camera truth in the booking's own frame rate: a 57-frame 16 fps S2V
+    # negative covers an 81-frame 23.976 booking; a 77-frame 24 fps one does not.
+    delivered_booking_frames = (
+        int(math.floor(measured_frames / media_fps * booking_fps)) if media_fps > 0 else measured_frames
+    )
+    if live and duration_ok and 0 < delivered_booking_frames < shot.duration_frames:
         # Reconcile the timeline to camera truth: a legacy Shot that booked more
-        # frames than the 81-frame lane can deliver keeps only measured frames,
-        # so assembly conforms by trim and never by a silent time-stretch.
-        shot.duration_frames = max(17, measured_frames)
+        # frames than the lane can deliver keeps only delivered frames, so
+        # assembly conforms by trim and never by a silent time-stretch.
+        shot.duration_frames = max(17, delivered_booking_frames)
 
 
 def _take_integrity_error(take: Take) -> str:
@@ -1851,6 +2298,12 @@ def run_one(
         if farm_cancelled(token):
             return
         if dest.is_file():
+            try:
+                align_spoken_head(project, take, dest)
+            except Exception as exc:  # noqa: BLE001 — alignment is an aid; QC still judges the take
+                record_activity(
+                    "qc", f"{shot.id} · head alignment skipped · {str(exc)[:160]}", level="warn", shot_id=shot.id
+                )
             _load_generation_receipt(take, dest)
         attach_negative(
             project,
@@ -2278,6 +2731,7 @@ def start_farm(project: Project, takes: list[Take]) -> None:
                     take = select_hero_print(project, landed_shot)
                     integrity_error = _take_integrity_error(take)
                 retry = auto_retake_for_qc_failure(project, take)
+                settled = settled_print(project, take.shot_id) if retry is None else None
                 with _lock:
                     if retry is not None:
                         _pending.insert(0, retry)
@@ -2288,6 +2742,12 @@ def start_farm(project: Project, takes: list[Take]) -> None:
                         )
                     else:
                         _done += 1
+                    if settled is not None:
+                        _error = ""
+                        _detail = (
+                            f"Best of {settled.qc.settled_best_of} attempts · {settled.id} proceeds"
+                        )
+                        continue
                     if integrity_error and retry is None:
                         if _measured_qc_hold(take):
                             held_shots.add(take.shot_id)

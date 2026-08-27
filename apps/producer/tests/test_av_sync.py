@@ -69,19 +69,29 @@ def test_measure_sync_scores_a_held_smile_as_silence_not_talking() -> None:
     assert smiling["performance_consistency"] >= 0.90
 
 
-def test_measure_sync_stays_unqualified_on_a_still_mouth_or_silence() -> None:
+def test_absent_performance_is_a_qualified_failure_not_a_hold() -> None:
+    """A tracked, audible clip whose mouth never moves is measured, not degenerate."""
     fps = 24.0
     envelope = _speech_envelope(72, fps)
     still = measure_sync(np.full(72, 0.003), envelope, fps)
-    assert any("still" in reason for reason in still["disqualifiers"])
-
-    silent = measure_sync(_mouth_from(envelope), np.zeros(72), fps)
-    assert any("active audio" in reason for reason in silent["disqualifiers"])
+    assert still["disqualifiers"] == []
+    assert any("still" in reason for reason in still["defects"])
+    assert still["lip_sync_confidence"] <= 0.75
 
     rng = np.random.default_rng(9)
     unrelated = measure_sync(0.1 + 0.1 * rng.random(72), envelope, fps)
+    assert unrelated["disqualifiers"] == []
+    assert unrelated["defects"], "chance-level correlation is a defect"
     assert unrelated["lip_sync_confidence"] < 0.90
-    assert unrelated["disqualifiers"], "noise must not pass as qualified sync"
+
+
+def test_measure_sync_stays_unqualified_only_on_degenerate_evidence() -> None:
+    fps = 24.0
+    envelope = _speech_envelope(72, fps)
+    silent = measure_sync(_mouth_from(envelope), np.zeros(72), fps)
+    assert any("active audio" in reason for reason in silent["disqualifiers"])
+    short = measure_sync(_mouth_from(envelope)[:8], envelope[:8], fps)
+    assert any("comparable frames" in reason for reason in short["disqualifiers"])
 
 
 def test_choose_speaker_prefers_the_face_whose_mouth_follows_the_line() -> None:
@@ -140,3 +150,25 @@ def test_delivered_span_reads_the_script_pacing_target(tmp_path: Path) -> None:
 
 def test_backend_name_is_the_mouth_sync_v3_identity() -> None:
     assert BACKEND_NAME == "diony-local-mouth-sync-v3"
+
+
+def test_choose_speaker_never_prefers_a_still_face_over_a_moving_one() -> None:
+    """A listener's z-scored jitter can out-correlate the real speaker by chance."""
+    fps = 16.0
+    frames = 55
+    envelope = _speech_envelope(frames, fps)
+    rng = np.random.default_rng(21)
+    # Real speaker: moves with the line but leads it by 5 frames (weak correlation at lag 0).
+    early = FaceTrack(
+        frames=list(range(frames)), jaw=list(np.roll(_mouth_from(envelope), -5)),
+        gap=list(0.5 * np.roll(_mouth_from(envelope), -5)), centers=[(874.0, 183.0)] * frames,
+    )
+    # Still listener whose 1e-4 jitter happens to line up with the envelope.
+    jitter = 0.0005 + 0.0002 * (envelope > 0) + 0.00005 * rng.random(frames)
+    still = FaceTrack(frames=list(range(frames)), jaw=list(jitter), gap=list(jitter), centers=[(316.0, 210.0)] * frames)
+
+    chosen, result, _notes = choose_speaker([still, early], envelope, fps, frames)
+
+    assert chosen is early
+    assert result is not None and result["aperture_std"] >= 0.02
+    assert abs(result["best_lag_frames"]) >= 4

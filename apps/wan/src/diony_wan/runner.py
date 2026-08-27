@@ -15,7 +15,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from diony_contracts.live import ckpt_dir, generate_py, wan_frame_num, wan_repo
+from diony_contracts.live import S2V_MAX_LEAD_FRAMES, ckpt_dir, generate_py, s2v_render_frames, wan_frame_num, wan_repo
+from diony_contracts.models import accepted_sample_steps, lane_guide_scale, lane_sample_steps, wan_lane_frames_valid
 from diony_wan.resident import (
     QUALITY_CONTRACT_SHA256,
     ResidentError,
@@ -41,11 +42,11 @@ TASKS = {
 def s2v_infer_frames(frame_num: int) -> int:
     """Return the smallest one-bucket VAE window covering the requested frames.
 
-    Upstream S2V requires a multiple of four. An 81-frame negative therefore
-    uses one 84-frame inference window; Diony's publish overlay retains exactly
-    the first 81 encoded frames while padding the shorter locked audio tail.
-    The old 80-frame window crossed the five-second audio bucket boundary and
-    paid for a second full denoise pass that was mostly discarded.
+    Upstream S2V requires a multiple of four and its clean first-clip path
+    drops the three frames decoded from the reference latent, so a 4n+1
+    booking renders exactly from one (4n+4)-frame window: 57 → 60, 65 → 68,
+    81 → 84. The old 80-frame window crossed the five-second audio bucket
+    boundary and paid for a second full denoise pass that was mostly discarded.
     """
     required = max(16, int(frame_num))
     return ((required + 3) // 4) * 4
@@ -109,11 +110,13 @@ def _write_generation_receipt(
     attention_backend: str,
     inference_frames_per_pass: int | None = None,
     denoise_passes: int = 1,
+    lead_frames: int = 0,
     resident_reason: str = "",
     resident_receipt_sha256: str = "",
     resident_kernel_mode: str = "",
     fallback_reason: str = "",
     error: str = "",
+    guide_scale: float | None = None,
 ) -> None:
     output_sha256 = ""
     output_bytes = 0
@@ -128,13 +131,17 @@ def _write_generation_receipt(
     reported_width = int(measured.get("width") or width)
     reported_height = int(measured.get("height") or height)
     reported_frames = int(measured.get("frames") or frame_num)
+    # Quality is raster, steps, and conditioning. The frame count follows the
+    # booking: the camera must deliver exactly the requested, lane-valid count
+    # (a spoken lane's lead is rendered in addition and trimmed from the head).
     quality_contract_matched = bool(
         measured
         and backend == "native"
         and reported_width == 1280
         and reported_height == 720
-        and reported_frames == 81
-        and steps == 24
+        and wan_lane_frames_valid(int(frame_num) + int(lead_frames))
+        and reported_frames == int(frame_num)
+        and steps == lane_sample_steps(task)
         and negative_conditioning
     )
     payload = {
@@ -147,13 +154,15 @@ def _write_generation_receipt(
         "native_height": reported_height,
         "frame_num": reported_frames,
         "sample_steps": steps,
+        "sample_guide_scale": guide_scale if guide_scale is not None else lane_guide_scale(task),
         "inference_frames_per_pass": (
             inference_frames_per_pass
             if inference_frames_per_pass is not None
-            else s2v_infer_frames(frame_num)
+            else s2v_infer_frames(frame_num + lead_frames)
             if task == "s2v-14B"
             else frame_num
         ),
+        "lead_frames": int(lead_frames),
         "denoise_passes": denoise_passes,
         "effective_denoise_steps": steps * denoise_passes,
         "sample_solver": "unipc" if backend == "native" else "backend_configured",
@@ -441,6 +450,7 @@ def spark_argv(
     offload: bool | None = None,
     steps: int = 24,
     checkpoint: Path | None = None,
+    guide_scale: float | None = None,
 ) -> list[str]:
     if task not in TASKS:
         task = "t2v-A14B"
@@ -500,7 +510,15 @@ def spark_argv(
         cmd.extend(["--image", str(image)])
     if audio is not None and task == "s2v-14B" and audio.suffix.lower() in {".wav", ".mp3", ".flac"}:
         cmd.extend(["--audio", str(audio)])
-        cmd.extend(["--infer_frames", str(s2v_infer_frames(frame_num)), "--start_from_ref"])
+        # No --start_from_ref: upstream builds that first clip's motion context
+        # from 67 black frames and 6 copies of the frozen reference still, and
+        # the model "continues" from a freeze — mouths started late and moved
+        # sparsely. The default first-clip path (drop_first_motion) starts clean
+        # from the reference latent and delivers infer_frames − 3 = frame_num.
+        cmd.extend(["--infer_frames", str(s2v_infer_frames(frame_num))])
+    effective_guide = guide_scale if guide_scale is not None else lane_guide_scale(task)
+    if effective_guide is not None:
+        cmd.extend(["--sample_guide_scale", f"{effective_guide:g}"])
     if animate_root is not None and task == "animate-14B":
         cmd.extend(["--src_root_path", str(animate_root)])
     if "wan2.2-animate-relighting" in lora_ids:
@@ -914,6 +932,94 @@ def stop_stray_generate() -> None:
             continue
 
 
+def trim_head_and_remux(save_file: Path, *, lead_frames: int, audio: Path, fps: int = 16) -> None:
+    """Drop the rendered lead from the head and mux the original locked audio.
+
+    The rendered negative is our own H.264 stream, so the head trim is a
+    frame-exact re-encode at near-lossless quality; the 1080 finish rebuilds
+    the picture from these frames anyway.
+    """
+    ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+    pending = save_file.with_name(f".{save_file.stem}.lead.part{save_file.suffix}")
+    pending.unlink(missing_ok=True)
+    command = [
+        ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(save_file), "-i", str(audio),
+        # Picture governs the length: the locked audio is padded with digital
+        # silence to the trimmed picture, never the other way round.
+        "-filter_complex", f"[0:v]select='gte(n\\,{lead_frames})',setpts=N/{fps}/TB[v];[1:a]apad[a]",
+        "-map", "[v]", "-map", "[a]",
+        "-r", str(fps),
+        "-c:v", "libx264", "-preset", "slow", "-crf", "8", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        "-shortest",
+        str(pending),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode or not pending.is_file() or pending.stat().st_size <= 32:
+        pending.unlink(missing_ok=True)
+        raise WanError(f"S2V lead trim failed: {(result.stderr or '').strip()[-300:]}")
+    pending.replace(save_file)
+
+
+def hold_head_and_remux(save_file: Path, *, hold_frames: int, audio: Path, fps: int = 16) -> None:
+    """Delay early mouth motion: hold frame 0 for ``hold_frames``, drop the same from the tail."""
+    ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+    total = int((_probe_generated_video(save_file) or {}).get("frames") or 0)
+    if total <= hold_frames:
+        raise WanError("S2V head hold exceeds the rendered frames")
+    pending = save_file.with_name(f".{save_file.stem}.hold.part{save_file.suffix}")
+    pending.unlink(missing_ok=True)
+    command = [
+        ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(save_file), "-i", str(audio),
+        "-filter_complex",
+        f"[0:v]tpad=start={hold_frames}:start_mode=clone,trim=end_frame={total},setpts=N/{fps}/TB[v];[1:a]apad[a]",
+        "-map", "[v]", "-map", "[a]",
+        "-r", str(fps),
+        "-c:v", "libx264", "-preset", "slow", "-crf", "8", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        "-shortest",
+        str(pending),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode or not pending.is_file() or pending.stat().st_size <= 32:
+        pending.unlink(missing_ok=True)
+        raise WanError(f"S2V head hold failed: {(result.stderr or '').strip()[-300:]}")
+    pending.replace(save_file)
+
+
+def rebind_generation_receipt(save_file: Path, *, lead_frames: int = 0, head_hold_frames: int = 0) -> dict:
+    """Re-address an aligned negative: delivered frames, head trim/hold, hash, bytes."""
+    path = generation_receipt_path(save_file)
+    receipt = json.loads(path.read_text(encoding="utf-8"))
+    measured = _probe_generated_video(save_file)
+    delivered = int(measured.get("frames") or receipt.get("frame_num") or 0)
+    digest = hashlib.sha256()
+    with save_file.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    receipt["frame_num"] = delivered
+    receipt["lead_frames"] = int(lead_frames)
+    receipt["head_hold_frames"] = int(head_hold_frames)
+    receipt["output_sha256"] = digest.hexdigest()
+    receipt["output_bytes"] = save_file.stat().st_size
+    rendered = delivered + int(lead_frames)
+    receipt["quality_contract_matched"] = bool(
+        measured
+        and receipt.get("backend") == "native"
+        and int(measured.get("width") or 0) == 1280
+        and int(measured.get("height") or 0) == 720
+        and wan_lane_frames_valid(rendered)
+        and int(receipt.get("sample_steps") or 0) in accepted_sample_steps(str(receipt.get("task") or ""))
+        and receipt.get("negative_conditioning") is True
+    )
+    if receipt.get("task") == "s2v-14B":
+        receipt["inference_frames_per_pass"] = s2v_infer_frames(rendered)
+    path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return receipt
+
+
 def run_generate(
     *,
     task: str,
@@ -930,18 +1036,27 @@ def run_generate(
     negative_prompt: str | None = None,
     width: int = 1280,
     height: int = 720,
-    steps: int = 24,
+    steps: int | None = None,
     cfg: float = 3.5,
     sampler: str = "euler",
     scheduler: str = "beta",
     attention_backend: str | None = None,
     timeout: int | None = None,
+    s2v_lead_frames: int | None = None,
+    guide_scale: float | None = None,
 ) -> Path:
     """Run the selected local Wan backend and write a 720p negative."""
+    if steps is None:
+        steps = lane_sample_steps(task)
     started_at = datetime.now(timezone.utc)
     started_monotonic = time.monotonic()
-    frames = wan_frame_num(duration_frames, fps)
+    # S2V renders at its native 16 fps: book the seconds plus alignment
+    # headroom, not the 24 fps lane cap. Producer measures the take's lip lag
+    # afterwards and trims the late frames from the head (see align_spoken_head).
+    frames = s2v_render_frames(duration_frames, fps) if task == "s2v-14B" else wan_frame_num(duration_frames, fps)
+    del s2v_lead_frames  # alignment is measured per take, never pre-applied
     save_file.parent.mkdir(parents=True, exist_ok=True)
+    conditioning_audio = audio
     if wan_backend() == "comfyui":
         from diony_wan.comfy import (
             DEFAULT_NEGATIVE_PROMPT,
@@ -1020,12 +1135,13 @@ def run_generate(
         save_file=save_file,
         frame_num=frames,
         image=image,
-        audio=audio,
+        audio=conditioning_audio,
         animate_root=animate_root,
         quality_lora_ids=quality_lora_ids,
         offload=offload,
         steps=steps,
         checkpoint=checkpoint,
+        guide_scale=guide_scale,
     )
     env, py_root = _wan_env(attention_backend=attention_backend)
     limit = timeout or int(os.environ.get("DIONY_WAN_TIMEOUT", "7200"))
@@ -1037,7 +1153,7 @@ def run_generate(
         decision.enabled
         and resident_selected
         and frames == 81
-        and steps == 24
+        and steps == lane_sample_steps(task)
         and width == 1280
         and height == 720
         and last_image is None
@@ -1058,7 +1174,7 @@ def run_generate(
             frame_num=frames,
             image=image,
             log_path=log_path,
-            audio=audio,
+            audio=conditioning_audio,
         )
         try:
             run_resident(
@@ -1085,6 +1201,7 @@ def run_generate(
                     height=height,
                     steps=steps,
                     negative_conditioning=True,
+                guide_scale=guide_scale,
                     attention_backend=attention_backend or "auto",
                     resident_reason=decision.reason,
                     resident_receipt_sha256=decision.receipt_sha256,
@@ -1140,6 +1257,7 @@ def run_generate(
                 height=height,
                 steps=steps,
                 negative_conditioning=True,
+                guide_scale=guide_scale,
                 attention_backend=attention_backend or "auto",
                 resident_reason=decision.reason,
                 resident_receipt_sha256=decision.receipt_sha256,

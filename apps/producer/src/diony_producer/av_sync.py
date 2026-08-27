@@ -11,7 +11,7 @@ module measures it from two open, offline models Studio App pins on the host:
 
 Per face track the two aperture signals are combined and compared with the
 clean dialogue's per-frame RMS envelope over the *delivered* span (the frames
-the finish stage keeps), searching ±6 frames of lag. The track whose mouth
+the finish stage keeps), searching ±12 frames of lag (±750 ms at 16 fps). The track whose mouth
 follows the line best is the speaker; listeners with a still mouth are rejected
 by their aperture variance, not by position. Confidence, offset, and
 consistency are all measured quantities:
@@ -29,8 +29,10 @@ consistency are all measured quantities:
   modulation, so the talking floor is two-thirds of it and the locked default
   floor is 0.85 (see ``VoiceQCReceipt.performance_consistency_min``).
 
-Degenerate evidence — no face, a still mouth, near-silence, an ambiguous or
-edge-of-window peak — stays unqualified with the reason in the diagnostics.
+Only degenerate evidence — no tracked face, inactive audio, too few frames —
+stays unqualified (a one-take hold). A tracked, audible clip whose mouth is
+still, does not follow the line, or lags past the search window is a
+*measured* defect: a qualified failure that earns a retake.
 """
 
 from __future__ import annotations
@@ -47,9 +49,10 @@ import numpy as np
 BACKEND_NAME = "diony-local-mouth-sync-v3"
 
 MIN_POINTS = 12
-LAG_RANGE_FRAMES = 6
+LAG_RANGE_FRAMES = 12  # ±750 ms at 16 fps: a large S2V lag must be measured, not clipped at the edge
 MIN_CORRELATION = 0.30
 MIN_PROMINENCE = 0.05
+NOISE_MARGIN = 1.25  # floor = 1.25 × the chance-correlation ceiling for the search
 MIN_ACTIVE_AUDIO = 0.20
 MIN_TRACK_COVERAGE = 0.60
 MIN_APERTURE_STD = 0.02
@@ -198,8 +201,11 @@ def measure_sync(aperture: np.ndarray, envelope: np.ndarray, fps: float) -> dict
     if active_fraction < MIN_ACTIVE_AUDIO:
         disqualifiers.append(f"active audio fraction {active_fraction:.2f} is below {MIN_ACTIVE_AUDIO:.2f}")
     aperture_std = float(np.std(aperture)) if length else 0.0
+    # Measured defects: the clip was measurable but the performance is absent
+    # or weak. These fail the take (and earn a retake); they do not hold it.
+    defects: list[str] = []
     if aperture_std < MIN_APERTURE_STD:
-        disqualifiers.append(f"mouth aperture is still (std {aperture_std:.4f} below {MIN_APERTURE_STD:.2f})")
+        defects.append(f"mouth aperture is still (std {aperture_std:.4f} below {MIN_APERTURE_STD:.2f})")
     envelope_std = float(np.std(envelope)) if length else 0.0
 
     raw_corr = 0.0
@@ -218,16 +224,25 @@ def measure_sync(aperture: np.ndarray, envelope: np.ndarray, fps: float) -> dict
         smooth_best = max(smooth_scores, key=lambda lag: smooth_scores[lag])
         smooth_corr = smooth_scores[smooth_best]
         prominence = smooth_corr - float(np.median(list(smooth_scores.values())))
-        if smooth_corr < MIN_CORRELATION:
-            disqualifiers.append(f"peak correlation {smooth_corr:.4f} is below {MIN_CORRELATION:.2f}")
-        elif prominence < MIN_PROMINENCE:
-            disqualifiers.append(
-                f"correlation peak prominence {prominence:.4f} is below {MIN_PROMINENCE:.2f}"
+        # Searching L lags over N frames, unrelated signals reach about
+        # sqrt(2 ln L / N) by chance; the floor must sit clear of that.
+        lags_searched = 2 * LAG_RANGE_FRAMES + 1
+        noise_ceiling = math.sqrt(2.0 * math.log(lags_searched) / max(1, length))
+        correlation_floor = max(MIN_CORRELATION, NOISE_MARGIN * noise_ceiling)
+        if smooth_corr < correlation_floor:
+            defects.append(
+                f"mouth motion does not follow the line: peak correlation {smooth_corr:.4f} is below "
+                f"{correlation_floor:.2f} (chance ceiling {noise_ceiling:.2f} over {lags_searched} lags × {length} frames)"
             )
+        elif prominence < MIN_PROMINENCE:
+            defects.append(f"correlation peak prominence {prominence:.4f} is below {MIN_PROMINENCE:.2f}")
         if abs(best_lag) >= LAG_RANGE_FRAMES:
-            disqualifiers.append("correlation peak sits at the search edge; the true offset may be larger")
-    elif length >= MIN_POINTS:
-        disqualifiers.append("motion or audio signal carries no measurable structure")
+            defects.append(
+                f"correlation peak sits at the ±{LAG_RANGE_FRAMES}-frame search edge; the offset is at least "
+                f"{LAG_RANGE_FRAMES * 1000.0 / fps:.0f} ms"
+            )
+    elif length >= MIN_POINTS and envelope_std <= 1e-9:
+        disqualifiers.append("audio signal carries no measurable structure")
 
     # Consistency: does the mouth modulate when, and only when, the line is spoken?
     consistency = 0.0
@@ -256,6 +271,11 @@ def measure_sync(aperture: np.ndarray, envelope: np.ndarray, fps: float) -> dict
     frame_period_ms = 1000.0 / fps if fps > 0 else 0.0
     offset_ms = abs(refined_lag) * frame_period_ms
     confidence = max(0.0, min(1.0, 0.75 + 0.25 * max(0.0, smooth_corr)))
+    if defects and not disqualifiers:
+        # A measured absence of performance is a failing measurement, never a
+        # pass by accident: a still mouth or chance-level correlation carries
+        # no lip-sync evidence, so confidence reports the floor.
+        confidence = min(confidence, 0.75)
     return {
         "frames": length,
         "raw_correlation": round(raw_corr, 4),
@@ -272,6 +292,7 @@ def measure_sync(aperture: np.ndarray, envelope: np.ndarray, fps: float) -> dict
         "true_positive_rate": round(true_positive_rate, 3),
         "true_negative_rate": round(true_negative_rate, 3),
         "disqualifiers": disqualifiers,
+        "defects": defects,
     }
 
 
@@ -309,7 +330,20 @@ def choose_speaker(
         result = measure_sync(combined_aperture(frame_count, track), envelope, fps)
         result["coverage"] = round(coverage, 3)
         result["center"] = track.center
-        if best is None or result["correlation"] > best[1]["correlation"]:
+        notes.append(
+            f"face at ({track.center[0]:.0f},{track.center[1]:.0f}): aperture std={result['aperture_std']:.4f} "
+            f"correlation={result['correlation']:.3f} lag={result['best_lag_frames']}"
+        )
+        # A still mouth can score a chance correlation once z-scored; a face
+        # that actually moves always outranks one that does not.
+        moving = result["aperture_std"] >= MIN_APERTURE_STD
+        if best is None:
+            best = (track, result)
+            continue
+        best_moving = best[1]["aperture_std"] >= MIN_APERTURE_STD
+        if moving and not best_moving:
+            best = (track, result)
+        elif moving == best_moving and result["correlation"] > best[1]["correlation"]:
             best = (track, result)
     if best is None:
         return None, None, notes
@@ -500,6 +534,26 @@ def face_tracks(
     return tracks
 
 
+def detect_faces(image: Path, *, detector_model: Path) -> list[tuple[float, float, float, float, float]]:
+    """Faces in one still as (x, y, w, h, score) in pixels, largest first."""
+    import cv2  # noqa: PLC0415 — host-only dependency
+
+    frame = cv2.imread(str(image), cv2.IMREAD_COLOR)
+    if frame is None or frame.size == 0:
+        raise MouthSyncError(f"still could not be decoded: {image}")
+    height, width = frame.shape[:2]
+    detector = cv2.FaceDetectorYN.create(
+        str(detector_model), "", (width, height), score_threshold=0.5, nms_threshold=0.3, top_k=50
+    )
+    _, detections = detector.detect(np.ascontiguousarray(frame))
+    faces = [
+        (float(d[0]), float(d[1]), float(d[2]), float(d[3]), float(d[14]))
+        for d in ([] if detections is None else detections)
+        if float(d[2]) > 0 and float(d[3]) > 0
+    ]
+    return sorted(faces, key=lambda f: f[2] * f[3], reverse=True)
+
+
 # --------------------------------------------------------------------------- entry
 
 
@@ -553,6 +607,7 @@ def measure_clip(
             f"mouth modulation agreement: speech {result['true_positive_rate']:.2f} · silence {result['true_negative_rate']:.2f}",
         ]
     )
+    diagnostics.extend(f"defect: {reason}" for reason in result.get("defects", []))
     diagnostics.extend(f"unqualified: {reason}" for reason in result["disqualifiers"])
     return {
         "lip_sync_confidence": result["lip_sync_confidence"],

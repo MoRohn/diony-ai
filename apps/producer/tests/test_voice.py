@@ -428,7 +428,8 @@ def test_multiple_dialogue_turns_keep_separate_voice_profiles_and_overlap_intent
     assert len(package.script.lines) == 2
     assert package.script.lines[1].overlap_ms == 300
     assert package.script.lines[1].interrupts_line_id == "turn-mara"
-    assert backend.synthesis_calls == 2
+    # Two lines, plus one identity probe for the 1.4 s interruption (too short to embed).
+    assert backend.synthesis_calls == 3
 
 
 def test_independent_dialogue_lines_synthesize_in_parallel(tmp_path) -> None:
@@ -991,3 +992,46 @@ def test_host_voice_env_binds_the_pinned_mouth_sync_models(tmp_path) -> None:
     env, _missing = host_voice_env(vault=vault, wan_repo=wan_repo)
     assert env["DIONY_FACE_DETECTOR_MODEL"] == str(models / "face_detection_yunet_2023mar.onnx")
     assert env["DIONY_FACE_LANDMARKER_MODEL"] == str(models / "face_landmarker.task")
+
+
+def test_short_lines_are_identity_checked_on_a_calibration_length_probe(tmp_path, monkeypatch) -> None:
+    """A half-second turn is judged on a probe render, and the line itself is delivered."""
+    from diony_producer import voice as voice_module
+    from diony_producer.voice import CALIBRATION_TEXT, IDENTITY_PROBE_MIN_SECONDS
+
+    pipeline = voice_module.default_voice_pipeline()
+    synthesized: list[tuple[str, Path]] = []
+
+    class Synth:
+        name = "stub"
+
+        def synthesize(self, line, profile, output, *, seed, reference_paths, cast_index=0):
+            synthesized.append((line.text, output))
+            output.write_bytes(b"RIFF" + b"\0" * 64)
+
+    pipeline.synthesizer = Synth()
+    durations = {}
+    monkeypatch.setattr(
+        voice_module, "_media_duration_seconds", lambda path: durations.get(path.name, 0.5)
+    )
+    from types import SimpleNamespace
+
+    from diony_contracts.voice import PerformanceScriptLine
+
+    fields = {name: None for name in PerformanceScriptLine.model_fields}
+    line = PerformanceScriptLine.model_construct(**{**fields, "id": "turn-1", "shot_id": "sh-050", "character_id": "char-marcus", "text": "you two."})
+    profile = SimpleNamespace(id="voice-1")
+    candidate = tmp_path / "line-01-turn-1-a1.wav"
+    candidate.write_bytes(b"RIFF" + b"\0" * 64)
+    durations[candidate.name] = 0.5
+    durations["line-01-turn-1-a1.identity-probe.wav"] = 4.2
+    probe, note = pipeline._identity_probe(line, profile, candidate, seed=7, reference_paths=[], cast_index=0)
+    assert probe.name == "line-01-turn-1-a1.identity-probe.wav"
+    assert synthesized and synthesized[0][0] == f"you two. {CALIBRATION_TEXT}"
+    assert "4.2 s probe" in note and "0.5 s line" in note
+
+    # A line already long enough is embedded directly, with no probe render.
+    synthesized.clear()
+    durations[candidate.name] = IDENTITY_PROBE_MIN_SECONDS + 1
+    assert pipeline._identity_probe(line, profile, candidate, seed=7, reference_paths=[], cast_index=0) == (candidate, "")
+    assert not synthesized

@@ -68,9 +68,10 @@ def farm_ready_for_finish(project: Project, *, live: bool) -> bool:
             refresh_take_measurement(project, take)
         if take.qc and take.qc.verdict == QCVerdict.FAIL:
             return False
-        if live and (take.qc is None or take.qc.verdict != QCVerdict.PASS):
+        settled = take.qc is not None and take.qc.settled_by_policy
+        if live and not settled and (take.qc is None or take.qc.verdict != QCVerdict.PASS):
             return False
-        if live and not qc_contract_valid(project, take):
+        if live and not settled and not qc_contract_valid(project, take):
             return False
         if live and not take_has_live_negative(take, project):
             return False

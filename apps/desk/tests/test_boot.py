@@ -128,12 +128,29 @@ def test_duplicate_launch_brings_studio_back_to_the_user(monkeypatch) -> None:
     monkeypatch.setattr("diony_desk.boot.claim_desk_port", lambda root=None: True)
     monkeypatch.setattr("diony_desk.boot.desk_already_installed", lambda root=None: True)
     monkeypatch.setattr("diony_desk.boot.product_names_live", lambda: True)
+    monkeypatch.setattr("diony_desk.boot.wizard_signed", lambda host="127.0.0.1", port=None: False)
     monkeypatch.setattr("diony_desk.boot.open_browser", opened.append)
 
     from diony_desk.boot import main
 
     assert main([]) == 0
     assert opened == [STUDIO_URL]
+
+
+def test_duplicate_launch_on_a_signed_site_lands_on_producer(monkeypatch) -> None:
+    """Reopening the app during Production must not send the user back to Setup."""
+    opened: list[str] = []
+    monkeypatch.setattr("diony_desk.boot.claim_desk_port", lambda root=None: True)
+    monkeypatch.setattr("diony_desk.boot.desk_already_installed", lambda root=None: True)
+    monkeypatch.setattr("diony_desk.boot.product_names_live", lambda: True)
+    monkeypatch.setattr("diony_desk.boot.wizard_signed", lambda host="127.0.0.1", port=None: True)
+    monkeypatch.setattr("diony_desk.boot.port_open", lambda port: True)
+    monkeypatch.setattr("diony_desk.boot.open_browser", opened.append)
+
+    from diony_desk.boot import PRODUCER_URL, main
+
+    assert main([]) == 0
+    assert opened == [PRODUCER_URL]
 
 
 def test_duplicate_launch_does_not_repeat_startup_work(monkeypatch) -> None:
@@ -936,3 +953,37 @@ def test_work_checks_each_runtime_once_and_repairs_stale_producer(monkeypatch) -
     assert len(find_calls) == 1
     assert repaired
     assert public_state()["phase"] == "ready"
+
+
+def test_wizard_signed_reads_the_whole_state_payload(monkeypatch) -> None:
+    """A signed site's state is larger than any fixed read cap."""
+    import json as _json
+
+    from diony_desk import boot
+
+    big = {"complete": True, "active_step": None, "steps": [{"log": ["x" * 500] * 40}]}
+    body = _json.dumps(big).encode()
+    assert len(body) > 12000
+
+    class Resp:
+        status = 200
+
+        def read(self, size=None):
+            return body if size is None else body[:size]
+
+    class Conn:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def request(self, *args, **kwargs):
+            pass
+
+        def getresponse(self):
+            return Resp()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(boot.http.client, "HTTPConnection", Conn)
+    assert boot.wizard_signed() is True
+    assert boot.wizard_state_ok() is True

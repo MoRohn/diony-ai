@@ -14,6 +14,7 @@ from diony_contracts.cluster import (
     WIZARD_APP_PATHS,
     bind_host,
     clear_local_locks,
+    read_site_lock,
     site_lock_path,
     write_mode_lock,
     write_site_lock,
@@ -176,6 +177,74 @@ def _active_id() -> str | None:
 
 def _complete() -> bool:
     return all(s.status == "passed" for s in _steps)
+
+
+def restore_signed_site() -> bool:
+    """Rehydrate a signed site from ``{vault}/.cluster/site.json`` at Studio start.
+
+    Sign is durable: Producer, Conductor, and the desk all read the lock, but
+    Studio kept the fact only in memory, so every Studio restart (each desk
+    rebuild or reopen) sent the operator back through Setup and a fresh
+    existing-compute validation. A signed lock now restores the signed state.
+    Returns True when a signed lock was restored.
+    """
+    global _steps, _completed_at, _probe
+    if _completed_at is not None or any(s.status == "passed" for s in _steps):
+        return False
+    lock = read_site_lock()
+    if not isinstance(lock, dict):
+        return False
+    path = str(lock.get("compute_path") or "").strip()
+    signed_at = str(lock.get("signed_at") or "").strip()
+    if not path or not signed_at:
+        return False
+    compute = lock.get("compute") if isinstance(lock.get("compute"), dict) else {}
+    _bind_site(
+        {
+            "site": path,
+            "provider": str(compute.get("provider") or ""),
+            "gpu_class": str(compute.get("gpu_class") or ""),
+            "signer": str(lock.get("exception_by") or ""),
+        }
+    )
+    connect = lock.get("connect") if isinstance(lock.get("connect"), dict) else {}
+    host = str(connect.get("host") or "").strip()
+    if host:
+        _workbook["connect"] = {
+            "hosts": host,
+            "ssh_user": str(connect.get("ssh_user") or "root").strip(),
+            "ssh_port": str(connect.get("ssh_port") or "22").strip(),
+            "nas_ip": str(connect.get("vault") or "").strip(),
+        }
+        bind_ssh_env(_workbook["connect"])
+    if lock.get("gpu_ready"):
+        _probe = {
+            "ok": True,
+            "live": not bool(lock.get("dry_run")),
+            "host": host,
+            "user": str(connect.get("ssh_user") or ""),
+            "port": str(connect.get("ssh_port") or ""),
+            "scope": "gpu",
+            "checks": [],
+            "source": "site-lock",
+        }
+        _workbook["gpu_prove"] = dict(_probe)
+        _workbook["prove"] = {"agent": "passed"}
+    _workbook["producer"] = {
+        "url": str(lock.get("producer_url") or "http://producer.diony.local"),
+        "ready": "Ready",
+        "floors": "Idea, Production, Gallery",
+        "source": "site-lock",
+    }
+    site_step = _steps[0]
+    site_step.status = "passed"
+    _steps = attach_rail(path, site_step)
+    for step in _steps:
+        step.status = "passed"
+        step.log.append(f"Restored from the signed site lock ({signed_at}).")
+    _completed_at = signed_at
+    _refresh_dry()
+    return True
 
 
 def _pack(include_texts: bool = False) -> dict | None:
@@ -966,6 +1035,13 @@ def reset() -> dict:
     _probe = {}
     unbind_ssh_env()
     reset_apply()
+    try:
+        # A deliberate Start Over must not be undone by the next Studio start.
+        site_lock_path().unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
     _provisioner.reset()
     clear_local_locks()
     return _state()
@@ -979,6 +1055,7 @@ def main() -> None:
     from diony_wizard.gateway import ensure_product_urls, gateway_healthy, start_product_gateway
 
     start_product_gateway()
+    restore_signed_site()
     skip = os.environ.get("DIONY_NAMES_SKIP", "").strip().lower() in {"1", "true", "yes"}
     if not skip and sys.stdin.isatty() and not gateway_healthy():
         ensure_product_urls()

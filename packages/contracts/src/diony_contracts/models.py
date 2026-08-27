@@ -398,6 +398,9 @@ class Shot(BaseModel):
     focal_mm: float
     t_stop: float
     lighting_ratio: str
+    # Spoken-lane classifier-free guidance override, raised by the farm when a
+    # take measured a still mouth (None: the lane default, see LANE_GUIDE_SCALE).
+    s2v_guide_scale: float | None = Field(default=None, gt=0, le=10)
     camera_move: CameraMove
     prompt: str
     negative_prompt: str = ""
@@ -492,8 +495,17 @@ class QCReport(BaseModel):
     temporal_residual_p95: float | None = Field(default=None, ge=0)
     flicker_luma_p95: float | None = Field(default=None, ge=0)
     measured_frame_count: int = Field(default=0, ge=0)
+    # Retake-cap policy: after every bounded attempt failed measured QC, the
+    # best-scoring attempt proceeds as the print. The measured verdict stays
+    # in `notes`; `settled_best_of` is the attempt count it was chosen from.
+    settled_best_of: int | None = Field(default=None, ge=1)
+    settled_score: float | None = Field(default=None, ge=0, le=1)
     notes: str = ""
     created_at: datetime = Field(default_factory=_now)
+
+    @property
+    def settled_by_policy(self) -> bool:
+        return self.settled_best_of is not None
 
     @model_validator(mode="after")
     def fail_means_fail(self) -> QCReport:
@@ -530,6 +542,80 @@ class QCReport(BaseModel):
         return self
 
 
+WAN_LANE_MAX_FRAMES = 81
+# Upstream Wan2.2 recipes: T2V/I2V A14B denoise in 24 UniPC steps; S2V-14B
+# ships with 40 (shift 3, guide 4.5). Under-stepping S2V leaves its lip motion
+# loosely coupled to the line; the spoken lane follows its own recipe.
+LANE_SAMPLE_STEPS = {"s2v-14B": 40}
+DEFAULT_SAMPLE_STEPS = 24
+# Receipts already delivered under the earlier pinned S2V lane (24 steps) stay
+# valid evidence; new spoken renders follow the 40-step recipe.
+ACCEPTED_SAMPLE_STEPS = {"s2v-14B": frozenset({24, 40})}
+
+
+# Wan S2V classifier-free guidance drops the audio in its unconditional
+# branch (audio_input × 0), so the guide scale is literally how hard the
+# mouth is driven by the line. Upstream defaults to 4.5; measured takes at 4.5
+# under-articulated (two mouth openings across three phrases).
+LANE_GUIDE_SCALE: dict[str, float] = {"s2v-14B": 5.5}
+
+
+def lane_guide_scale(task: str) -> float | None:
+    """The classifier-free guidance scale a lane dispatches with, or None for upstream default."""
+    return LANE_GUIDE_SCALE.get(str(task or ""))
+
+
+def lane_sample_steps(task: str) -> int:
+    return LANE_SAMPLE_STEPS.get(str(task or ""), DEFAULT_SAMPLE_STEPS)
+
+
+def accepted_sample_steps(task: str) -> frozenset[int]:
+    return ACCEPTED_SAMPLE_STEPS.get(str(task or ""), frozenset({DEFAULT_SAMPLE_STEPS}))
+
+
+def wan_lane_frames_valid(frames: int) -> bool:
+    """Wan A14B renders 4n+1 frames; the 720p lane caps at 81 (about 3.4 s at 23.976)."""
+    return 17 <= int(frames) <= WAN_LANE_MAX_FRAMES and (int(frames) - 1) % 4 == 0
+
+
+def s2v_inference_frames(frames: int) -> int:
+    """Upstream S2V denoises one four-aligned window covering the booked frames."""
+    required = max(16, int(frames))
+    return ((required + 3) // 4) * 4
+
+
+def quality_contract_satisfied(receipt: "GenerationExecutionReceipt") -> bool:
+    """The pinned 720p BF16 quality contract, judged on what the camera delivered.
+
+    Quality is raster, steps, solver, precision, and negative conditioning.
+    The frame count is the booking's business: it must be a valid lane count
+    and the camera must deliver exactly what was requested — a 49-frame second
+    shot of a five-second sample is as much in contract as an 81-frame one.
+    """
+    requested = receipt.inference_frames_per_pass or receipt.frame_num
+    # A spoken lane may render a measured lead of frames that is trimmed from
+    # the head so the mouth lands on the locked audio; the camera booking is
+    # the delivered count plus that lead.
+    rendered = receipt.frame_num + max(0, int(receipt.lead_frames or 0))
+    if receipt.task == "s2v-14B":
+        frames_ok = receipt.inference_frames_per_pass == s2v_inference_frames(rendered)
+    else:
+        frames_ok = requested == receipt.frame_num
+    return bool(
+        receipt.backend == "native"
+        and receipt.native_width == 1280
+        and receipt.native_height == 720
+        and wan_lane_frames_valid(rendered)
+        and frames_ok
+        and receipt.sample_steps in accepted_sample_steps(receipt.task)
+        and receipt.denoise_passes == 1
+        and receipt.effective_denoise_steps == receipt.sample_steps
+        and receipt.sample_solver == "unipc"
+        and receipt.precision == "bfloat16"
+        and receipt.negative_conditioning
+    )
+
+
 class GenerationExecutionReceipt(BaseModel):
     """Immutable evidence for the generation lane that actually produced a Take."""
 
@@ -552,6 +638,13 @@ class GenerationExecutionReceipt(BaseModel):
     quality_contract_sha256: str = Field(min_length=64, max_length=64)
     quality_contract_matched: bool
     attention_backend: str = "auto"
+    # S2V latency compensation: frames of silence prepended to the conditioning
+    # audio and trimmed from the head of the delivered negative.
+    lead_frames: int = Field(default=0, ge=0, le=32)
+    # Early mouth motion is aligned by holding the first frame this many frames.
+    head_hold_frames: int = Field(default=0, ge=0, le=32)
+    # Classifier-free guidance the lane dispatched with (None: upstream default).
+    sample_guide_scale: float | None = Field(default=None, gt=0)
     resident_reason: str = ""
     resident_receipt_sha256: str = ""
     resident_kernel_mode: str = ""
@@ -586,22 +679,7 @@ class GenerationExecutionReceipt(BaseModel):
             raise ValueError("succeeded generation receipt requires addressed output")
         if not self.finish_required:
             raise ValueError("Diony production generation must require Finish")
-        if self.quality_contract_matched and (
-            self.backend != "native"
-            or self.native_width != 1280
-            or self.native_height != 720
-            or self.frame_num != 81
-            or self.sample_steps != 24
-            or self.denoise_passes != 1
-            or self.effective_denoise_steps != 24
-            or (
-                self.task == "s2v-14B"
-                and self.inference_frames_per_pass != 84
-            )
-            or self.sample_solver != "unipc"
-            or self.precision != "bfloat16"
-            or not self.negative_conditioning
-        ):
+        if self.quality_contract_matched and not quality_contract_satisfied(self):
             raise ValueError("matched Wan quality contract has inconsistent generation fields")
         return self
 
@@ -665,6 +743,11 @@ class MixLock(BaseModel):
     true_peak_dbtp: float | None = None
     stem_asset_ids: list[str] = Field(default_factory=list)
     picture_lock_timeline_id: str | None = None
+    # A program with no authored dialogue and no planned cues delivers mute:
+    # digital silence is muxed so the master keeps an audio stream, loudness
+    # gates do not apply, and the policy is recorded here, never hidden.
+    picture_only: bool = False
+    policy: str = ""
 
 
 class Deliverable(BaseModel):

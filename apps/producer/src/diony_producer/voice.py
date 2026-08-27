@@ -25,6 +25,13 @@ from typing import Any, Protocol
 
 from diony_contracts.enums import AssetKind, Engine, LoudnessTarget, VoiceProfileSource, VoiceRenderState
 from diony_contracts.models import Asset, Character, Project, Shot, Take
+from diony_contracts.studio import speaker_name
+from diony_contracts.wan_prompt import (
+    LOCKED_VOICE_AUDIO_STRATEGY,
+    render_negative_prompt,
+    render_wan_prompt,
+    spoken_wan_prompt_plan,
+)
 from diony_contracts.voice import (
     DialogueTurn,
     EmotionPerformance,
@@ -127,6 +134,13 @@ CALIBRATION_TEXT = (
     "The kettle has started to sing, and the morning light is warm across the kitchen table."
 )
 IDENTITY_FLOOR_MARGIN = 0.08
+# CAM++ speaker embeddings are unreliable below ~1.5 s of speech: a two-word
+# turn ("you two.") renders in 0.5 s and scores far under a floor that was
+# calibrated on calibration-length speech. Short lines are judged on a probe
+# render of the line followed by the calibration sentence, under the line's
+# exact conditioning (seed, prompt, references); the delivered audio is the
+# plain line.
+IDENTITY_PROBE_MIN_SECONDS = 1.5
 IDENTITY_FLOOR_MIN = 0.60
 IDENTITY_FLOOR_MAX = 0.90
 LEGACY_IDENTITY_FLOOR = 0.92
@@ -1134,14 +1148,71 @@ class VoicePerformancePipeline:
             return False
         return self._package_assets_valid(project, package)
 
+    def _identity_probe(
+        self,
+        line: PerformanceScriptLine,
+        profile: VoiceProfile,
+        candidate: Path,
+        *,
+        seed: int,
+        reference_paths: list[Path],
+        cast_index: int,
+    ) -> tuple[Path, str]:
+        """The audio speaker identity is measured on: the line, or a longer probe.
+
+        A line shorter than IDENTITY_PROBE_MIN_SECONDS is re-rendered once as
+        the line plus the calibration sentence with identical conditioning,
+        so identity is judged on calibration-length speech — the same length
+        the profile floor was measured at. Any probe failure falls back to the
+        line itself rather than blocking the take.
+        """
+        seconds = _media_duration_seconds(candidate)
+        if seconds >= IDENTITY_PROBE_MIN_SECONDS:
+            return candidate, ""
+        probe = candidate.with_name(f"{candidate.stem}.identity-probe.wav")
+        try:
+            extended = line.model_copy(update={"text": f"{line.text.strip()} {CALIBRATION_TEXT}"})
+            self.synthesizer.synthesize(
+                extended,
+                profile,
+                probe,
+                seed=seed,
+                reference_paths=reference_paths,
+                cast_index=cast_index,
+            )
+        except Exception:  # noqa: BLE001 — a probe never blocks the line
+            return candidate, ""
+        if not probe.is_file() or probe.stat().st_size <= 44:
+            return candidate, ""
+        return probe, (
+            f"identity measured on a {_media_duration_seconds(probe):.1f} s probe render; "
+            f"the {seconds:.1f} s line is too short to embed"
+        )
+
     @staticmethod
-    def _condition_shot(shot: Shot, take: Take, package: VoiceClipPackage) -> None:
+    def _condition_shot(
+        shot: Shot, take: Take, package: VoiceClipPackage, *, speaker: str = "The speaker"
+    ) -> None:
         shot.audio_asset_ids = [package.clean_dialogue_asset_id]
         shot.engine = Engine.S2V_14B
         take.engine = Engine.S2V_14B
         if shot.prompt_plan is not None:
             shot.prompt_plan.generation_method = Engine.S2V_14B.value
-            shot.prompt_plan.audio_strategy = "locked_voice_s2v"
+            shot.prompt_plan.audio_strategy = LOCKED_VOICE_AUDIO_STRATEGY
+            # The locked line dispatches to S2V: the prompt directs the speaker's
+            # performance (articulated mouth, still in pauses, locked-off
+            # close-up), not the five-layer blocking beat. Deterministic, so
+            # every take of the line carries the same direction.
+            directed = spoken_wan_prompt_plan(
+                shot.prompt_plan,
+                speaker=speaker,
+                focal_mm=shot.focal_mm,
+                audio_strategy=LOCKED_VOICE_AUDIO_STRATEGY,
+            )
+            if directed is not None:
+                shot.prompt_plan = directed
+                shot.prompt = render_wan_prompt(directed)
+                shot.negative_prompt = render_negative_prompt(directed)
 
     def _reuse_project_cache(
         self,
@@ -1182,7 +1253,7 @@ class VoicePerformancePipeline:
                 }
             )
             take.voice_package = reused
-            self._condition_shot(shot, take, reused)
+            self._condition_shot(shot, take, reused, speaker=speaker_name(project.bible, shot))
             return reused
         return None
 
@@ -1290,7 +1361,15 @@ class VoicePerformancePipeline:
                         }
                     )
                     continue
-                observed = self.embedder.speaker_embedding(candidate, profile)
+                probe, probe_note = self._identity_probe(
+                    line,
+                    profile,
+                    candidate,
+                    seed=seed,
+                    reference_paths=reference_paths,
+                    cast_index=cast_rank.get(profile.id, 0),
+                )
+                observed = self.embedder.speaker_embedding(probe, profile)
                 selected_score = _cosine(profile.speaker_embedding, observed)
                 floor = profile_identity_floor(profile)
                 rival = _closest_rival(observed, profile, profiles)
@@ -1305,6 +1384,7 @@ class VoicePerformancePipeline:
                             "diagnostic": (
                                 f"speaker identity drift: similarity {selected_score:.4f} is below the "
                                 f"profile's measured floor {floor:.2f}; regenerate with a new seed"
+                                + (f" ({probe_note})" if probe_note else "")
                             ),
                         }
                     )
@@ -1548,7 +1628,7 @@ class VoicePerformancePipeline:
         take.voice_package = package
         if not audio_passed:
             raise VoicePipelineError("Voice audio failed locked identity or studio-audio QC")
-        self._condition_shot(shot, take, package)
+        self._condition_shot(shot, take, package, speaker=speaker_name(project.bible, shot))
         return package
 
     def verify_animation(self, project: Project, take: Take, video: Path) -> VoiceClipPackage:

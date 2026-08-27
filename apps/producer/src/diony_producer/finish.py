@@ -263,7 +263,8 @@ def _finish_one(project: Project, take: Take) -> None:
     global _detail, _frame_done, _frame_total
     if take.qc is not None and take.qc.verdict == QCVerdict.FAIL:
         raise FinishError(f"finish refuses {take.id}: selected Take failed AutoQC")
-    if not qc_contract_valid(project, take):
+    settled = take.qc is not None and take.qc.settled_by_policy
+    if not settled and not qc_contract_valid(project, take):
         raise FinishError(
             f"finish refuses {take.id}: selected Take lacks current reference/continuity QC"
         )

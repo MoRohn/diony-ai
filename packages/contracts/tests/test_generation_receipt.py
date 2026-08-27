@@ -61,10 +61,88 @@ def test_succeeded_generation_receipt_requires_addressed_output_and_exact_qualit
 
 
 def test_s2v_quality_receipt_requires_one_84_frame_inference_window() -> None:
-    receipt = _receipt(task="s2v-14B", inference_frames_per_pass=84)
+    receipt = _receipt(task="s2v-14B", inference_frames_per_pass=84, sample_steps=40, effective_denoise_steps=40)
 
     assert receipt.quality_contract_matched is True
-    assert receipt.effective_denoise_steps == 24
+    assert receipt.effective_denoise_steps == 40
 
     with pytest.raises(ValidationError, match="quality contract"):
-        _receipt(task="s2v-14B", inference_frames_per_pass=88)
+        _receipt(task="s2v-14B", inference_frames_per_pass=88, sample_steps=40, effective_denoise_steps=40)
+
+
+def test_quality_contract_follows_the_booking_not_the_lane_cap() -> None:
+    from diony_contracts.models import quality_contract_satisfied, s2v_inference_frames, wan_lane_frames_valid
+
+    short = _receipt(frame_num=49, inference_frames_per_pass=49)
+    assert short.quality_contract_matched is True
+    assert quality_contract_satisfied(short)
+    assert wan_lane_frames_valid(49) and wan_lane_frames_valid(17) and wan_lane_frames_valid(81)
+    assert not wan_lane_frames_valid(50) and not wan_lane_frames_valid(85)
+
+    with pytest.raises(ValidationError):
+        _receipt(frame_num=50, inference_frames_per_pass=50)
+    with pytest.raises(ValidationError):
+        # Delivered fewer frames than the booking asked for.
+        _receipt(frame_num=77, inference_frames_per_pass=81)
+
+    spoken = _receipt(task="s2v-14B", frame_num=49, inference_frames_per_pass=52, sample_steps=40, effective_denoise_steps=40)
+    assert spoken.quality_contract_matched is True
+    assert s2v_inference_frames(49) == 52 and s2v_inference_frames(81) == 84
+    with pytest.raises(ValidationError):
+        _receipt(task="s2v-14B", frame_num=49, inference_frames_per_pass=84, sample_steps=40, effective_denoise_steps=40)
+
+
+def test_s2v_books_native_rate_frames_for_the_booked_seconds() -> None:
+    from diony_contracts.live import s2v_frame_num, wan_frame_num
+
+    # 81 frames at 23.976 fps is 3.378 s: 55 native frames + 1 margin → 57 (one 60-frame window).
+    assert wan_frame_num(81, 23.976) == 81
+    assert s2v_frame_num(81, 23.976) == 57
+    assert s2v_frame_num(49, 23.976) == 37   # 2.04 s → 33.7 + 1 → 37
+    assert s2v_frame_num(17, 23.976) == 17   # never below the lane floor
+    assert s2v_frame_num(120, 24.0) == 81    # never above the lane cap
+    for frames in (57, 37, 17, 81):
+        assert (frames - 1) % 4 == 0
+
+
+def test_s2v_lead_is_part_of_the_rendered_contract() -> None:
+    """57 delivered + 7 lead = 65 rendered frames in one 68-frame S2V window."""
+    receipt = _receipt(task="s2v-14B", frame_num=58, lead_frames=7, inference_frames_per_pass=68, sample_steps=40, effective_denoise_steps=40)
+    assert receipt.quality_contract_matched is True
+    with pytest.raises(ValidationError):
+        _receipt(task="s2v-14B", frame_num=58, lead_frames=7, inference_frames_per_pass=60, sample_steps=40, effective_denoise_steps=40)
+
+
+def test_s2v_render_frames_adds_headroom_inside_the_lane() -> None:
+    from diony_contracts.live import s2v_frame_num, s2v_render_frames
+
+    assert s2v_frame_num(81, 23.976) == 57
+    assert s2v_render_frames(81, 23.976) == 65
+    assert s2v_render_frames(17, 23.976) == 25
+    assert s2v_render_frames(120, 24.0) == 81
+
+
+def test_s2v_lane_denoises_in_forty_steps_and_the_receipt_knows() -> None:
+    from diony_contracts.models import lane_sample_steps
+
+    assert lane_sample_steps("i2v-A14B") == 24 and lane_sample_steps("t2v-A14B") == 24
+    assert lane_sample_steps("s2v-14B") == 40
+    spoken = _receipt(task="s2v-14B", frame_num=65, inference_frames_per_pass=68, sample_steps=40, effective_denoise_steps=40)
+    assert spoken.quality_contract_matched is True
+    # A receipt delivered under the earlier 24-step S2V lane remains valid evidence.
+    legacy = _receipt(task="s2v-14B", frame_num=65, inference_frames_per_pass=68, sample_steps=24, effective_denoise_steps=24)
+    assert legacy.quality_contract_matched is True
+    with pytest.raises(ValidationError):
+        _receipt(task="s2v-14B", frame_num=65, inference_frames_per_pass=68, sample_steps=30, effective_denoise_steps=30)
+    held = _receipt(task="s2v-14B", frame_num=65, inference_frames_per_pass=68, sample_steps=40, effective_denoise_steps=40, head_hold_frames=5)
+    assert held.head_hold_frames == 5
+
+
+def test_only_the_spoken_lane_dispatches_a_guide_scale_and_receipts_carry_it() -> None:
+    from diony_contracts.models import GenerationExecutionReceipt, lane_guide_scale
+
+    assert lane_guide_scale("s2v-14B") == 5.5
+    assert lane_guide_scale("i2v-A14B") is None
+    assert lane_guide_scale("") is None
+    fields = GenerationExecutionReceipt.model_fields
+    assert fields["sample_guide_scale"].default is None

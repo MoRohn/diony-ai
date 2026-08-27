@@ -123,17 +123,21 @@ def test_picture_lock_writes_1080_master(tmp_path, monkeypatch) -> None:
                 break
         time.sleep(0.2)
     assert master_file is not None, "picture lock should stitch a 1080 program master"
-    deadline = time.time() + 5
-    status = client.get("/api/mix").json()
-    while time.time() < deadline and not status["error"]:
-        time.sleep(0.2)
-        status = client.get("/api/mix").json()
-    assert "refusing a noise-only mix" in status["error"]
+    # No dialogue is authored and no cues are planned: mute clips are allowed,
+    # so the mix delivers a picture-only master with the policy on the receipt
+    # instead of refusing.
+    deadline = time.time() + 20
     project = client.get("/api/project").json()
-    mix_gate = next(gate for gate in project["gates"] if gate["name"] == "mix")
-    assert mix_gate["open"] is True
-    assert project["mix"]["state"] == "open"
-    assert project["mix"]["stem_asset_ids"] == []
+    status = client.get("/api/mix").json()
+    while time.time() < deadline and not project["mix"].get("picture_only") and not status["error"]:
+        time.sleep(0.2)
+        project = client.get("/api/project").json()
+        status = client.get("/api/mix").json()
+    assert status["error"] == ""
+    assert project["mix"]["picture_only"] is True
+    assert project["mix"]["policy"].startswith("mute:")
+    assert len(project["mix"]["stem_asset_ids"]) == 1
+    assert len(project["mix"]["stem_asset_ids"]) == 1, "the mute program stem is the only stem"
 
 
 def test_finish_never_accepts_a_legacy_cross_project_master(tmp_path, monkeypatch) -> None:

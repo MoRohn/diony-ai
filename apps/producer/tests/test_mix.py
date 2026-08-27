@@ -16,7 +16,7 @@ from diony_producer.mix import (
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg is required")
-def test_bounce_mix_refuses_a_noise_only_soundtrack(tmp_path, monkeypatch) -> None:
+def test_bounce_mix_delivers_a_mute_master_for_a_picture_only_program(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DIONY_VAULT", str(tmp_path))
     monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path))
     project = demo_project()
@@ -56,12 +56,21 @@ def test_bounce_mix_refuses_a_noise_only_soundtrack(tmp_path, monkeypatch) -> No
         check=True,
     )
 
-    with pytest.raises(MixError, match="refusing a noise-only mix"):
-        bounce_mix(project)
+    bounce_mix(project)
 
-    assert project.mix.state == MixLockState.OPEN
-    assert project.mix.stem_asset_ids == []
-    assert project.timeline.gallery_removed_at is not None
+    # Mute clips are allowed: a picture-only program delivers with a silent
+    # stream, no invented soundtrack, and the policy on the receipt.
+    assert project.mix.picture_only is True
+    assert project.mix.policy.startswith("mute:")
+    assert project.mix.measured_lufs is None and project.mix.true_peak_dbtp is None
+    assert len(project.mix.stem_asset_ids) == 1
+    stem = project.asset(project.mix.stem_asset_ids[0])
+    assert stem.metadata.get("soundtrack") == "mute"
+    assert project.timeline.gallery_removed_at is None
+    from diony_producer.mix import mix_evidence_blockers, program_master_has_audio
+
+    assert program_master_has_audio(project)
+    assert mix_evidence_blockers(project) == []
 
 
 def test_required_dialogue_never_falls_back_to_room_tone(tmp_path, monkeypatch) -> None:

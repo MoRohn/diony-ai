@@ -134,7 +134,10 @@ def test_native_s2v_and_animate_argv_preserve_their_conditioning_inputs(
     # One VAE-aligned 84-frame S2V window avoids the old second denoise pass;
     # Diony's exact publish overlay trims the encoded negative to 81 frames.
     assert s2v[s2v.index("--infer_frames") + 1] == "84"
-    assert "--start_from_ref" in s2v
+    # The clean first-clip path: no frozen-still motion context.
+    assert "--start_from_ref" not in s2v
+    # CFG drops the audio in its unconditional branch: the lane drives the mouth harder.
+    assert s2v[s2v.index("--sample_guide_scale") + 1] == "5.5"
 
     animate = spark_argv(
         task="animate-14B",
@@ -797,7 +800,7 @@ def test_validated_s2v_lane_preserves_locked_audio_and_one_denoise_window(
         fps=24.0,
         image=locked,
         audio=audio,
-        steps=24,
+        steps=40,
     )
 
     assert result == destination
@@ -809,3 +812,142 @@ def test_validated_s2v_lane_preserves_locked_audio_and_one_denoise_window(
     assert receipt["quality_contract_matched"] is True
     assert receipt["inference_frames_per_pass"] == 84
     assert receipt["denoise_passes"] == 1
+
+
+def test_generation_receipt_matches_a_shorter_booking_delivered_exactly(tmp_path, monkeypatch) -> None:
+    """A 49-frame second shot of a five-second sample is in contract."""
+    import json
+    import time
+    from datetime import datetime, timezone
+
+    import diony_wan.runner as runner
+
+    output = tmp_path / "negative.mp4"
+    output.write_bytes(b"addressed output" * 8)
+    monkeypatch.setattr(
+        runner, "_probe_generated_video", lambda _path: {"width": 1280, "height": 720, "frames": 49}
+    )
+    common = dict(
+        started_at=datetime.now(timezone.utc),
+        started_monotonic=time.monotonic(),
+        status="succeeded",
+        backend="native",
+        selected_lane="wan22_quality_cli",
+        task="i2v-A14B",
+        width=1280,
+        height=720,
+        steps=24,
+        negative_conditioning=True,
+        attention_backend="auto",
+    )
+    runner._write_generation_receipt(output, frame_num=49, **common)
+    receipt = json.loads(output.with_suffix(".generation.json").read_text())
+    assert receipt["frame_num"] == 49
+    assert receipt["quality_contract_matched"] is True
+
+    # The same 49 delivered frames against an 81-frame booking are not.
+    runner._write_generation_receipt(output, frame_num=81, **common)
+    receipt = json.loads(output.with_suffix(".generation.json").read_text())
+    assert receipt["quality_contract_matched"] is False
+
+
+def test_generate_books_s2v_at_native_rate_and_other_tasks_at_the_lane(monkeypatch) -> None:
+    import diony_wan.runner as runner
+    from diony_contracts.live import s2v_frame_num, wan_frame_num
+
+    assert s2v_frame_num(81, 23.976) == 57
+    assert wan_frame_num(81, 23.976) == 81
+    # The S2V window for a native-rate booking is one VAE-aligned 60-frame pass.
+    assert runner.s2v_infer_frames(57) == 60
+
+
+def test_s2v_renders_headroom_and_head_trim_rebinds_the_receipt(tmp_path, monkeypatch) -> None:
+    import shutil
+    import subprocess
+
+    import diony_wan.runner as runner
+    from diony_wan.resident import ResidentDecision
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("FFmpeg tools are required")
+    destination = tmp_path / "negative_720.mp4"
+    still = tmp_path / "still.png"
+    subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=gray:s=64x36:d=1", "-frames:v", "1", str(still)], check=True)
+    audio = tmp_path / "clean-dialogue.wav"
+    subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=16000:duration=3.378", "-c:a", "pcm_s16le", str(audio)], check=True)
+    checkpoint = tmp_path / "Wan2.2-S2V-14B"
+    checkpoint.mkdir()
+    generate = tmp_path / "generate.py"
+    generate.write_text("# pinned upstream")
+    monkeypatch.setenv("DIONY_WAN_GENERATE", str(generate))
+    monkeypatch.setenv("WAN_CKPT_S2V", str(checkpoint))
+    monkeypatch.setattr(runner, "wan_needs_offload", lambda: False)
+    monkeypatch.setattr(runner, "resident_decision", lambda **_kwargs: ResidentDecision(False, "held"))
+    for name in ("ensure_attention_fallback", "ensure_s2v_production_raster", "ensure_s2v_exact_publish", "ensure_negative_prompt_input"):
+        monkeypatch.setattr(runner, name, lambda *a, **k: None)
+    monkeypatch.setattr(runner, "_wan_env", lambda **_k: ({}, str(tmp_path)))
+    captured = {}
+
+    class FakeProc:
+        def __init__(self, cmd, **_kwargs):
+            captured["cmd"] = cmd
+            frames = int(cmd[cmd.index("--frame_num") + 1])
+            subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"color=c=gray:s=1280x720:r=16:d={frames/16:.4f}", "-frames:v", str(frames), "-c:v", "libx264", "-pix_fmt", "yuv420p", str(destination)], check=True)
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda cmd, **kw: FakeProc(cmd, **kw) if "--task" in cmd else real_popen(cmd, **kw))
+
+    result = runner.run_generate(
+        task="s2v-14B", prompt="A line.", negative_prompt="drift", seed=1, save_file=destination,
+        duration_frames=81, fps=23.976, image=still, audio=audio,
+    )
+    assert result == destination
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("--frame_num") + 1] == "65", "57 booked + 8 headroom"
+    assert cmd[cmd.index("--infer_frames") + 1] == "68"
+    assert cmd[cmd.index("--audio") + 1] == str(audio), "the model hears the locked audio untouched"
+    assert cmd[cmd.index("--sample_steps") + 1] == "40", "S2V follows its upstream 40-step recipe"
+    receipt = json.loads(destination.with_suffix(".generation.json").read_text())
+    assert receipt["frame_num"] == 65 and receipt["lead_frames"] == 0 and receipt["quality_contract_matched"] is True
+    assert receipt["sample_steps"] == 40
+
+    runner.hold_head_and_remux(destination, hold_frames=5, audio=audio)
+    held = runner.rebind_generation_receipt(destination, head_hold_frames=5)
+    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=nb_frames", "-of", "csv=p=0", str(destination)], capture_output=True, text=True, check=True)
+    assert int(probe.stdout.strip()) == 65, "a hold keeps the frame count"
+    assert held["head_hold_frames"] == 5 and held["quality_contract_matched"] is True
+
+    runner.trim_head_and_remux(destination, lead_frames=7, audio=audio)
+    rebound = runner.rebind_generation_receipt(destination, lead_frames=7)
+    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=nb_frames", "-of", "csv=p=0", str(destination)], capture_output=True, text=True, check=True)
+    assert int(probe.stdout.strip()) == 58
+    assert rebound["frame_num"] == 58 and rebound["lead_frames"] == 7 and rebound["inference_frames_per_pass"] == 68
+    assert rebound["quality_contract_matched"] is True
+    assert rebound["output_bytes"] == destination.stat().st_size
+
+
+def test_spark_argv_honours_a_per_shot_guide_scale_override(tmp_path, monkeypatch) -> None:
+    import diony_wan.runner as runner
+
+    still = tmp_path / "still.png"
+    still.write_bytes(b"png")
+    audio = tmp_path / "line.wav"
+    audio.write_bytes(b"wav")
+    gen = tmp_path / "generate.py"
+    gen.write_text("")
+    ckpt = tmp_path / "s2v"
+    ckpt.mkdir()
+    monkeypatch.setenv("DIONY_WAN_GENERATE", str(gen))
+    monkeypatch.setenv("WAN_CKPT_S2V", str(ckpt))
+    monkeypatch.setattr(runner, "wan_needs_offload", lambda: False)
+    base = runner.spark_argv(task="s2v-14B", prompt="speaks", seed=1, save_file=tmp_path / "a.mp4", frame_num=65, image=still, audio=audio)
+    assert base[base.index("--sample_guide_scale") + 1] == "5.5"
+    raised = runner.spark_argv(task="s2v-14B", prompt="speaks", seed=1, save_file=tmp_path / "a.mp4", frame_num=65, image=still, audio=audio, guide_scale=6.5)
+    assert raised[raised.index("--sample_guide_scale") + 1] == "6.5"

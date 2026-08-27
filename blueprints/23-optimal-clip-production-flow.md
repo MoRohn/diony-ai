@@ -99,17 +99,109 @@ effective denoise steps, solver, precision, negative conditioning,
 attention backend, accelerator receipt, fallback reason, elapsed time, byte
 count, and output SHA-256. `Take.generation_receipt` persists the validated
 receipt. Producer rejects an unaddressed output, a hash mismatch, or a claimed
-quality match whose fields are not exactly 1280x720, 81 frames, 24 UniPC steps,
+quality match whose fields are not exactly 1280x720, the booked lane frames, the lane's UniPC steps (24; S2V 40),
 BF16, and negative-conditioned.
 
 Production exposes the actual lane on each clip row. “Quality CLI fallback” must
 include the held/missing/rollback reason. An optimization can therefore never
 appear to vanish without evidence.
 
-For an 81-frame spoken negative, S2V runs with
-`--infer_frames 84 --start_from_ref`: the smallest VAE-aligned window that
-covers the 81-frame contract. At 16 video frames per audio bucket this keeps a
-five-second locked WAV inside one bucket and one 24-step denoise pass. The prior
+A spoken Shot is a declared cut to its speaker: the Studio contract books it
+at medium close-up focal length with REFERENCE continuity and overlap 0 (the
+following Shot cuts back the same way), and at camera time Producer crops the
+speaker's face from the subject still into a 16:9 medium close-up keyframe —
+only when that face is known (the still's single face, or the position learned
+from an earlier qualified S2V pass); with several faces and no evidence the
+wide framing is kept and the log says so. S2V animates one prominent face; a
+~90 px speaker in a wide three-character still landed its lip motion 300–500 ms
+off the line across seeds.
+
+Wan2.2 S2V sometimes lands its mouth motion late: two takes of one shot
+measured +7 frames and 0. The lag is per take, so Producer never pre-applies a
+lead. It renders eight frames of headroom, measures the take's lip lag with the
+mouth-sync QC, and — when the evidence is strong (correlation ≥ 0.6) and the
+lag is a whole number of frames inside the headroom — trims exactly those
+frames from the head and muxes the original locked audio back
+(`align_spoken_head`). Early motion is aligned the other way: the first frame
+is held for the measured frames and the same count dropped from the tail. The receipt is re-addressed
+with the delivered count, `lead_frames`/`head_hold_frames`, hash, and bytes;
+the contract judges the rendered count (delivered + trim). A take that measured
++7 or −5 frames off thereby passes on its first attempt instead of spending a
+retake; weak evidence (correlation < 0.6) is never aligned.
+
+**Who is on camera, and why the mouth moves.** Four rules keep a spoken take
+on the right face at the right drive:
+
+* A window of dialogue never spans a speaker change when the rundown can hold
+  it (`_fit_dialogue_to_shots`), and windows are balanced so no two-word
+  orphan turn is left at a boundary (`_balanced_windows`). S2V animates the
+  visible face with every word it hears, so a two-speaker window makes one
+  character mouth the other's line.
+* A spoken Shot whose speaker differs from the prior Shot's is a cut, not a
+  continuation (`_speaker_changes`): it restarts from the reference still and
+  crops its own speaker.
+* The speaker's face is chosen from evidence, never by guessing among equals
+  (`choose_speaker_face`): a face learned from a qualified take; else the
+  only face not already known as another character; else the brief's left /
+  centre / right cue applied among the remaining faces (`staging_cue`). A
+  learned face never overwrites another character's (`learn_speaker_face`).
+* A take whose mouth measured still (aperture std below 0.02) retakes with
+  one step more audio guidance, capped at 7.5 (`_raise_articulation_drive`,
+  `Shot.s2v_guide_scale`, receipt `sample_guide_scale`): the same face,
+  prompt, and audio at the same drive repeat a still mouth; a seed reroll
+  does not fix it.
+* Lines shorter than 1.5 s are identity-checked on a probe render of the line
+  plus the calibration sentence under identical conditioning
+  (`_identity_probe`); CAM++ cannot embed a half-second turn.
+
+**Retake cap → best attempt by policy.** When every one of a Shot's four
+bounded attempts fails measured QC, Producer no longer holds the Shot for
+review (which froze the clock and stalled the rundown). `settle_exhausted_shot`
+scores each landed attempt (`attempt_score`: lip-sync confidence 0.30,
+audiovisual offset 0.25 — 500 ms scores zero —, performance consistency 0.20,
+reference identity 0.15, temporal residual 0.10; missing measurements drop out
+of the mean), selects the highest-scoring attempt as the print, records its
+verdict as WARN with `settled_best_of`/`settled_score` and the measured notes
+kept, and announces the ranking on the activity feed. Finish, picture lock,
+mix (the line's locked audio, which passed its own audio QC), and the
+previous-frame chain accept a settled print explicitly; a plain rejection is
+still refused everywhere. `resume_camera` settles already-exhausted Shots on
+restart.
+
+The spoken lane also follows its own upstream recipe: S2V-14B denoises in
+**40** UniPC steps (shift 3) where T2V/I2V A14B use 24 (`lane_sample_steps`).
+Under-stepping S2V left its lip motion loosely coupled to the line; the
+receipt contract is task-aware. Three more spoken-lane facts are load-bearing:
+
+* **Guidance drives the mouth.** S2V's classifier-free guidance zeroes the
+  audio in its unconditional branch, so the guide scale is how hard the line
+  drives the lips. Diony dispatches `--sample_guide_scale 5.5`
+  (`lane_guide_scale`; upstream default 4.5 measured two mouth openings across
+  three phrases) and the receipt records it.
+* **No `--start_from_ref`.** That flag builds the first clip's motion context
+  from 67 black frames plus six copies of the frozen reference still and asks
+  the model to continue from a freeze; measured mouths started up to eight
+  frames late and moved sparsely. The upstream first-clip path
+  (`drop_first_motion`) starts clean from the reference latent and delivers
+  exactly `infer_frames − 3 = frame_num`.
+* **The prompt directs a performance.** The five-layer template writes every
+  Shot as a blocking beat and pads its motion with a word-limited fragment of
+  the idea; for a spoken Shot that fragment was another character's beat cut
+  mid-sentence, under a "slow steady push-in". `spoken_wan_prompt_plan`
+  rewrites the motion, camera, and environment layers for the S2V lane — the
+  named speaker speaks the line straight to camera, lips, jaw, and cheeks on
+  every syllable, mouth still through each pause, locked-off medium close-up
+  matching the speaker keyframe — keeping the subject and lighting layers, and
+  `refresh_reference_shot` upgrades persisted S2V plans on the next dispatch.
+
+A spoken negative is booked at S2V's native 16 fps: `s2v_frame_num` takes the
+booked seconds (81 frames at 23.976 = 3.378 s), adds one conform frame, and
+rounds up to Wan's 4n+1 — 57 frames — so S2V runs with `--frame_num 57
+--infer_frames 60`: the smallest VAE-aligned window that
+covers the booking, one audio bucket, one 24-step denoise pass, and no third
+of the render spent on padded silence. The 1080 finish conforms the 16 fps
+negative to the 23.976 timeline by frame duplication and trims to the booked
+frames; the farm judges duration in the booking's frame rate. The prior
 80-frame value crossed the upstream audio-bucket boundary and executed two
 24-step passes. Upstream then stream-copied H.264 with the five-second audio as
 `-shortest`; reordered video packets silently reduced the published file to 77

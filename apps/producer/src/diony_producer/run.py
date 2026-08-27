@@ -237,6 +237,19 @@ def _generation_lane_label(lane: str, fallback_reason: str) -> str:
     return lane.replace("_", " ").strip().title()
 
 
+def _retake_reason(project: Project, take: Take | None) -> str:
+    """Why the previous generation of this Shot was rejected, if this is a retake."""
+    if take is None or take.attempt <= 1:
+        return ""
+    previous = next(
+        (item for item in project.takes_for(take.shot_id) if item.attempt == take.attempt - 1),
+        None,
+    )
+    if previous is None or previous.qc is None or previous.qc.verdict != QCVerdict.FAIL:
+        return ""
+    return _humanize_fail(previous.qc.notes)[:200]
+
+
 def _clip_rows(project: Project, farm: dict, finish: dict | None = None) -> list[dict]:
     finish = finish or {}
     stop = project.production_stop
@@ -244,13 +257,34 @@ def _clip_rows(project: Project, farm: dict, finish: dict | None = None) -> list
     rolling = farm.get("shot_id") if farm.get("busy") else ""
     finishing = _finish_take_id(finish) if finish.get("busy") else ""
     rows: list[dict] = []
+    camera = farm.get("camera") if isinstance(farm.get("camera"), dict) else {}
+    rolling_take_id = str(camera.get("take_id") or "") if farm.get("busy") else ""
     for shot in project.shots:
         take = _selected_take(project, shot.id)
+        if farm.get("busy") and shot.id == rolling and rolling_take_id:
+            # The camera may be rolling a retake or a hero sibling while the
+            # shot's selected take is an earlier reject: show the live take.
+            try:
+                take = project.take(rolling_take_id)
+            except KeyError:
+                pass
         negative_ready = bool(take and _live_negative(project, take))
         master_ready = bool(take and _verified_master(take))
         progress: dict = {}
         failed_at = ""
-        if take and take.qc and take.qc.verdict == QCVerdict.FAIL:
+        if farm.get("busy") and shot.id == rolling and take is not None and not master_ready:
+            state = "rolling"
+            stage = "camera"
+            status = "Building 720p negative"
+            progress = _clip_progress(farm.get("progress") or {}, stage="camera")
+            note = progress.get("label") or _clean_progress_detail(
+                farm.get("detail") or "Wan2.2 is making the camera negative"
+            )
+            retake_reason = _retake_reason(project, take)
+            if retake_reason:
+                status = f"Retake {take.attempt} of {RETAKE_CAP}"
+                note = f"{note} · take {take.attempt - 1}: {retake_reason}"
+        elif take and take.qc and take.qc.verdict == QCVerdict.FAIL:
             state = "failed"
             stage = "qc" if negative_ready else "camera"
             failed_at = stage
@@ -290,6 +324,16 @@ def _clip_rows(project: Project, farm: dict, finish: dict | None = None) -> list
             note = progress.get("label") or _clean_progress_detail(
                 farm.get("detail") or "Wan2.2 is making the camera negative"
             )
+            retake_reason = _retake_reason(project, take)
+            if retake_reason:
+                # A retake is not a first attempt: say what AutoQC rejected.
+                status = f"Retake {take.attempt} of {RETAKE_CAP}"
+                note = f"{note} · take {take.attempt - 1}: {retake_reason}"
+        elif negative_ready and take and take.qc and take.qc.settled_by_policy:
+            state = "live"
+            stage = "qc"
+            status = f"Best of {take.qc.settled_best_of} attempts"
+            note = f"Proceeding by policy · {_humanize_fail(take.qc.notes)[:160]}"
         elif negative_ready:
             state = "live"
             stage = "qc"
@@ -637,6 +681,10 @@ def _monitoring_summary(
             title = f"Locking the voice for {current['shot_id']}"
             detail = "CosyVoice2 is performing the line and locking studio audio before Wan rolls."
             eyebrow = "VOICE · LIVE"
+        elif str(current.get("status") or "").startswith("Retake "):
+            title = f"{current['status']} · {current['shot_id']} at 720p"
+            detail = str(current.get("note") or "AutoQC rejected the previous take; Wan2.2 is rolling again.")
+            eyebrow = "CAMERA · RETAKE"
         else:
             title = f"Building {current['shot_id']} at 720p"
             detail = "Wan2.2 is creating the camera negative on the signed GPU."
@@ -1150,6 +1198,8 @@ def run_payload(
         mix_state, mix_note = "rolling", "verifying loudness"
     elif mix_open:
         mix_state, mix_note = "next", ""
+    elif project.mix is not None and project.mix.picture_only:
+        mix_state, mix_note = "done", "mute · picture-only by policy"
     else:
         mix_state, mix_note = "done", "locked"
 

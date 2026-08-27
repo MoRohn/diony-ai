@@ -552,7 +552,7 @@ def wizard_state_ok(host: str = "127.0.0.1", port: int | None = None) -> bool:
         conn.request("GET", "/api/state")
         resp = conn.getresponse()
         code = resp.status
-        raw = resp.read(12000)
+        raw = resp.read()
         conn.close()
     except OSError:
         return False
@@ -951,13 +951,48 @@ def open_browser(url: str) -> None:
         pass
 
 
+def wizard_signed(host: str = "127.0.0.1", port: int | None = None) -> bool:
+    """True when Studio reports the site signed (Production lives on Producer)."""
+    dest = WIZARD_PORT if port is None else port
+    try:
+        conn = http.client.HTTPConnection(host, dest, timeout=1.5)
+        conn.request("GET", "/api/state")
+        resp = conn.getresponse()
+        # The state carries every step's log; never cap the read or the JSON
+        # truncates and a signed site reads as unsigned.
+        raw = resp.read() if resp.status == 200 else b""
+        conn.close()
+    except OSError:
+        return False
+    try:
+        payload = json.loads(raw.decode()) if raw else {}
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return isinstance(payload, dict) and payload.get("complete") is True
+
+
+def landing_url(*, wait: float = 3.0) -> str:
+    """Where a launch should bring the user: Producer once signed, else Studio.
+
+    Studio may still be reading its site lock right after start; give it a
+    moment before deciding the user belongs on the setup page.
+    """
+    deadline = time.monotonic() + max(0.0, wait)
+    while True:
+        if wizard_signed():
+            return PRODUCER_URL if port_open(PRODUCER_PORT) else STUDIO_URL
+        if time.monotonic() >= deadline:
+            return STUDIO_URL
+        time.sleep(0.25)
+
+
 def handoff_to_existing_desk(*, timeout: float = 2.0) -> None:
     """Wake the one existing Desk without repeating any of its startup work."""
     target = ""
     deadline = time.monotonic() + max(0.0, timeout)
     while True:
         if product_names_live():
-            target = STUDIO_URL
+            target = landing_url()
             break
         if desk_state_ok():
             target = lobby_url()
@@ -1242,7 +1277,7 @@ def main(argv: list[str] | None = None) -> int:
     worker.join()
     phase = public_state()["phase"]
     if should_open_studio_after_work(lobby_opened=lobby_opened, phase=phase):
-        open_browser(public_state()["studio"] or STUDIO_URL)
+        open_browser(landing_url())
         print(f"Studio is open at {STUDIO_URL}. You can close this window.", flush=True)
         print(f"Producer is {PRODUCER_URL} after you Sign.", flush=True)
     elif phase == "ready":

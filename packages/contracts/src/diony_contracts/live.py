@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 
@@ -120,6 +121,42 @@ def finish_ready() -> bool:
     if _truthy("DIONY_FINISH_FAKE"):
         return True
     return _dir_has_weights(finish_ckpt())
+
+
+S2V_NATIVE_FPS = 16
+
+
+# Wan2.2 S2V (with --start_from_ref) sometimes lands its mouth motion late:
+# measured takes of the same shot came in at +7 frames and at 0. The lag is
+# per take, so Producer renders headroom and aligns after measuring rather
+# than guessing a lead: the measured late frames are trimmed from the head
+# and the locked audio is muxed back, inside the same lane window.
+S2V_HEADROOM_FRAMES = 8
+S2V_MAX_LEAD_FRAMES = 16
+
+
+def s2v_frame_num(duration_frames: int, fps: float = 23.976) -> int:
+    """Frames Wan S2V must render, at its native 16 fps, to cover a booking.
+
+    S2V conditions on audio at 16 video frames per second. Asking it for the
+    81-frame lane cap against a 3.4 s booking makes it render 5.1 s — 1.7 s
+    of it against padded silence — and the finish stage throws that third
+    away. Book the seconds instead: ceil(seconds × 16) plus one frame of
+    conform margin, rounded up to Wan's 4n+1, capped at the 81-frame lane.
+    """
+    rate = fps if fps > 1 else 23.976
+    seconds = max(1, int(duration_frames)) / rate
+    want = int(math.ceil(seconds * S2V_NATIVE_FPS)) + 1
+    n = max(4, int(math.ceil((want - 1) / 4)))
+    return min(81, 4 * n + 1)
+
+
+def s2v_render_frames(duration_frames: int, fps: float = 23.976) -> int:
+    """Booked S2V frames plus alignment headroom, still a 4n+1 lane count ≤ 81."""
+    booked = s2v_frame_num(duration_frames, fps)
+    want = booked + S2V_HEADROOM_FRAMES
+    n = max(4, (want + 2) // 4)
+    return min(81, 4 * n + 1)
 
 
 def wan_frame_num(duration_frames: int, fps: float = 23.976) -> int:

@@ -359,3 +359,64 @@ def test_boundary_repair_falls_back_compactly_on_a_full_locked_plan() -> None:
     assert "temporal discontinuity" in shot.negative_prompt
     assert "without a temporal jump" in shot.prompt_plan.motion
     assert 80 <= shot.prompt_plan.word_count <= 140
+
+
+def test_spoken_plan_directs_the_performance_within_budget_and_stays_repairable() -> None:
+    from diony_contracts.enums import CameraMove, ContinuityMode, ReferenceLock
+    from diony_contracts.wan_prompt import (
+        SPOKEN_AUDIO_STRATEGY,
+        compile_wan_prompt_plan,
+        render_negative_prompt,
+        render_wan_prompt,
+        repair_wan_prompt_plan,
+        spoken_wan_prompt_plan,
+        validate_wan_prompt_plan,
+    )
+
+    idea = (
+        "In the slightly messy shared kitchen, soft morning light filters as Marcus looks at "
+        "them expectantly, already nodding. Lila doesn't understand what he means yet."
+    )
+    plan = compile_wan_prompt_plan(
+        idea=idea,
+        world="A claymation flat-share: cramped kitchen, mismatched mugs, morning light",
+        wardrobe="Show wardrobe, one silhouette",
+        shot_index=1,
+        focal_mm=50,
+        t_stop=2.8,
+        lighting_ratio="4:1 key/fill, motivated",
+        camera_move=CameraMove.DOLLY_IN,
+        reference_lock=ReferenceLock.CHARACTER,
+        continuity_mode=ContinuityMode.REFERENCE,
+        generation_method="s2v-14B",
+        audio_strategy="native_s2v",
+        sample_seconds=5,
+    )
+    # The template bug that doubled the word is gone from newly compiled scenes.
+    assert "motivated motivated" not in render_wan_prompt(plan)
+
+    spoken = spoken_wan_prompt_plan(plan, speaker="Marcus", focal_mm=50)
+    assert spoken is not None
+    assert spoken.audio_strategy == SPOKEN_AUDIO_STRATEGY
+    assert validate_wan_prompt_plan(spoken) == []
+    prompt = render_wan_prompt(spoken)
+    assert "Marcus speaks the line straight toward camera" in prompt
+    assert "mouth closed and still through each pause" in prompt
+    assert "medium close-up, 50mm lens at T2.8, static camera with no movement" in prompt
+    # No blocking beat, no push-in, no truncated fragment of another character.
+    assert "push-in" not in prompt and "shifting weight" not in prompt
+    assert "Lila" not in prompt and "nodding" not in prompt
+    assert spoken.subject == plan.subject and spoken.identity_anchors == plan.identity_anchors
+    assert 80 <= spoken.word_count <= 140
+    assert "frozen lips" in render_negative_prompt(spoken)
+    # Deterministic and idempotent: re-directing a spoken plan changes nothing.
+    again = spoken_wan_prompt_plan(spoken, speaker="Marcus", focal_mm=50)
+    assert again is not None and render_wan_prompt(again) == prompt
+
+    # A lip-sync retake keeps the direction and only sharpens the negatives.
+    repaired = repair_wan_prompt_plan(
+        spoken, "Voice performance failed: lip-sync confidence 0.87 is below 0.90"
+    )
+    assert repaired is not None
+    assert render_wan_prompt(repaired) == prompt
+    assert validate_wan_prompt_plan(repaired) == []

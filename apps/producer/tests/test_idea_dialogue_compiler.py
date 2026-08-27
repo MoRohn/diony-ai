@@ -105,6 +105,13 @@ def test_compiled_spoken_still_shots_lock_audio_before_routing_to_s2v(tmp_path) 
         assert shot.prompt_plan is not None
         assert shot.prompt_plan.generation_method == Engine.S2V_14B.value
         assert shot.prompt_plan.audio_strategy == "locked_voice_s2v"
+        # The locked line dispatches with the S2V performance direction.
+        from diony_contracts.wan_prompt import is_spoken_plan, validate_wan_prompt_dispatch
+
+        assert is_spoken_plan(shot.prompt_plan)
+        assert "speaks the line straight toward camera" in shot.prompt
+        assert "static camera with no movement" in shot.prompt
+        assert validate_wan_prompt_dispatch(shot) == []
 
 
 def test_title_case_cues_and_curly_quotes_compile_without_stage_directions() -> None:

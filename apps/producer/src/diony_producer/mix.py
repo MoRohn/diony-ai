@@ -213,8 +213,12 @@ def _locked_voice_sources(project: Project) -> list[VoiceRailRow]:
         package = take.voice_package if take is not None else None
         if package is None:
             raise MixError(f"Required dialogue on {shot.id} has no locked voice package")
+        settled = take is not None and take.qc is not None and take.qc.settled_by_policy
         if package.state.value != "verified" or not package.qc.passed:
-            raise MixError(f"Required dialogue on {shot.id} has an unverified voice package")
+            # A print settled by retake-cap policy failed the *visual* voice
+            # gate; its audio was locked and measured before camera rolled.
+            if not (settled and package.qc.audio_passed):
+                raise MixError(f"Required dialogue on {shot.id} has an unverified voice package")
         if (
             package.qc.speech_presence_score is None
             or package.qc.speech_presence_score < package.qc.speech_presence_min
@@ -585,12 +589,21 @@ def bounce_mix(project: Project) -> None:
             "missing or its bytes changed. Restore the library or re-plan before Mix."
         )
     planned_cues = planned_cues or []
-    if not script and not planned_cues:
-        raise MixError(
-            "No authored dialogue or verified content-bearing audio is available; "
-            "refusing a noise-only mix."
-        )
     duration = _duration_seconds(master, ffprobe)
+    if not script and not planned_cues:
+        # Mute clips are allowed. An image-only Idea authors no dialogue and
+        # this site planned no cues, so the program delivers picture-only:
+        # digital silence keeps an audio stream in the master, nothing is
+        # manufactured and presented as a soundtrack, and the policy is
+        # visible on the receipt and in the log.
+        _bounce_mute_program(
+            project,
+            master=master,
+            ffmpeg=ffmpeg,
+            duration=duration,
+            revision=revision,
+        )
+        return
     stems_root = f"projects/{project.id}/program/{project.timeline.id}/stems"
     rails: dict[str, Path] = {}
     rail_assets: list[Asset] = []
@@ -708,6 +721,87 @@ def bounce_mix(project: Project) -> None:
     persist_project(project)
 
 
+def _picture_only_policy(project: Project) -> str:
+    brief = project.brief
+    idea = " ".join(str(getattr(brief, "idea", "") or "").split()) if brief else ""
+    attachments = list(getattr(brief, "attachment_ids", []) or []) if brief else []
+    if not idea and attachments:
+        return "mute: image-only Idea (no text), no dialogue authored, no soundtrack cues planned"
+    return "mute: no dialogue authored and no soundtrack cues planned"
+
+
+def _write_silent_stem(destination: Path, *, ffmpeg: str, duration: float) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    _run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=48000:cl=stereo",
+            "-t",
+            f"{max(0.1, duration):.3f}",
+            "-c:a",
+            "pcm_s24le",
+            str(destination),
+        ],
+        label="mute program stem",
+    )
+
+
+def _bounce_mute_program(
+    project: Project,
+    *,
+    master: Path,
+    ffmpeg: str,
+    duration: float,
+    revision: int,
+) -> None:
+    """Deliver a picture-only program with a mute audio stream and a visible policy."""
+    assert project.mix is not None and project.timeline is not None
+    policy = _picture_only_policy(project)
+    stems_root = f"projects/{project.id}/program/{project.timeline.id}/stems"
+    program_rel = f"{stems_root}/program-mix-v{revision}.wav"
+    program_stem = abs_path(program_rel)
+    _write_silent_stem(program_stem, ffmpeg=ffmpeg, duration=duration)
+    _mux_program(master, program_stem, ffmpeg=ffmpeg)
+    if _visual_qc_required():
+        try:
+            verify_finished_media(master, label="mute 1080 program master")
+        except FinishError as exc:
+            raise MixError(str(exc)) from exc
+    if not program_master_has_audio(project):
+        raise MixError("the mute 1080 program master has no audio stream")
+    asset = _stem_asset(
+        project,
+        rel=program_rel,
+        role="program_mix_stem",
+        revision=revision,
+        metadata={
+            "timeline_id": project.timeline.id,
+            "soundtrack": "mute",
+            "policy": policy,
+            "rails": "",
+            "planned_cue_count": 0,
+        },
+    )
+    project.mix.stem_asset_ids = [asset.id]
+    project.mix.measured_lufs = None
+    project.mix.true_peak_dbtp = None
+    project.mix.picture_only = True
+    project.mix.policy = policy
+    project.mix.picture_lock_timeline_id = project.timeline.id
+    project.timeline.program_sha256 = _sha256(master)
+    project.timeline.gallery_removed_at = None
+    gallery_program_preview_path(project, project.id)
+    persist_project(project)
+    record_activity("mix", f"Mute program delivered · {policy}", level="warn")
+
+
 def start_mix(project: Project) -> bool:
     """Start one idempotent background bounce. Return True when work is active."""
     global _busy, _detail, _error
@@ -760,7 +854,11 @@ def mix_evidence_blockers(project: Project, *, verify_program: bool = False) -> 
         blockers.append("Audio stems are missing.")
     elif not _stem_assets_valid(project):
         blockers.append("Audio stem evidence is invalid.")
-    if mix.measured_lufs is None:
+    if mix.picture_only:
+        # Mute by policy: there is no loudness to measure. The stream itself
+        # and the picture are still verified below.
+        pass
+    elif mix.measured_lufs is None:
         blockers.append("Measured loudness evidence is missing.")
     else:
         target = -24.0 if project.bible.loudness.value == "broadcast" else -16.0
@@ -768,7 +866,9 @@ def mix_evidence_blockers(project: Project, *, verify_program: bool = False) -> 
             blockers.append(
                 f"Measured loudness {mix.measured_lufs:g} LUFS is outside the {target:g} LUFS target."
             )
-    if mix.true_peak_dbtp is None:
+    if mix.picture_only:
+        pass
+    elif mix.true_peak_dbtp is None:
         blockers.append("Measured true-peak evidence is missing.")
     elif mix.true_peak_dbtp > project.bible.true_peak_dbtp:
         blockers.append(

@@ -90,8 +90,20 @@ let provisionTimer = null;
 let provisionAdopting = false;
 let existingFinalizeBusy = false;
 
+function releaseStudioTransition() {
+  if (studioTransitionTimer) clearTimeout(studioTransitionTimer);
+  studioTransitionTimer = null;
+  document.body.classList.remove("studio-scene-transition");
+}
+
 function triggerStudioTransition(previousStep, nextStep) {
   if (!previousStep || previousStep === nextStep) return;
+  // A hidden tab never runs the animation; Safari can then present the
+  // first frame forever. Skip the cue and let the page simply be there.
+  if (document.visibilityState !== "visible") {
+    releaseStudioTransition();
+    return;
+  }
   const order = (state?.steps || []).map((step) => step.id);
   const previousIndex = order.indexOf(previousStep);
   const nextIndex = order.indexOf(nextStep);
@@ -2252,7 +2264,13 @@ async function testGpu() {
 }
 document.getElementById("test-gpu")?.addEventListener("click", () => testGpu());
 window.addEventListener("pageshow", (event) => {
+  releaseStudioTransition();
   if (event.persisted) load();
+});
+document.addEventListener("visibilitychange", releaseStudioTransition);
+window.addEventListener("focus", releaseStudioTransition);
+document.addEventListener("animationend", (event) => {
+  if (event.animationName === "studio-projector-cue") releaseStudioTransition();
 });
 
 const studioEntryMotion = Array.from(document.querySelectorAll(".entry-motion"));

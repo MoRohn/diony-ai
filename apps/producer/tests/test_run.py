@@ -717,3 +717,64 @@ def test_monitoring_summary_names_staging_and_voice_lock_instead_of_a_fake_camer
     rolling = summary("Generating 720p · i2v-A14B · sh-010")
     assert rolling["title"] == "Building sh-010 at 720p"
     assert rolling["eyebrow"] == "CAMERA · LIVE"
+
+
+def test_rolling_retake_says_what_autoqc_rejected() -> None:
+    from diony_contracts.enums import QCVerdict
+    from diony_contracts.fixture import demo_project
+    from diony_contracts.models import QCReport
+    from diony_producer.farm import new_generation_take
+    from diony_producer.run import _clip_rows, _monitoring_summary
+
+    project = demo_project()
+    shot = project.shots[0]
+    first = project.take(shot.selected_take_id)
+    first.qc = QCReport(
+        id=f"qc-{first.id}", take_id=first.id, shot_id=shot.id, verdict=QCVerdict.FAIL,
+        identity_ok=True, morph_ok=True, flicker_ok=True, duration_ok=True, legal_ok=True,
+        notes="Voice performance failed: lip-sync confidence 0.8961 is below 0.90; audiovisual offset p95 63.574 ms exceeds 40 ms.",
+    )
+    second = new_generation_take(project, shot, attempt=first.attempt + 1, live=True)
+    project.takes.append(second)
+    shot.selected_take_id = second.id
+
+    rows = _clip_rows(project, {"busy": True, "shot_id": shot.id, "detail": f"Generating 720p · s2v-14B · {shot.id}", "progress": {}})
+    row = next(r for r in rows if r["shot_id"] == shot.id)
+    assert row["status"] == f"Retake {second.attempt} of 4"
+    assert "lip-sync confidence 0.8961" in row["note"]
+
+    signal = _monitoring_summary(
+        rows, phase="farm", now=row["note"], failed=False, monitor={}, activity=[], progress={},
+        master_ready=False, material_label="720p camera negative",
+    )["signal"]
+    assert signal["eyebrow"] == "CAMERA · RETAKE"
+    assert "take" in signal["detail"] and "0.8961" in signal["detail"]
+
+
+def test_a_rolling_hero_sibling_shows_as_rolling_even_when_the_selected_take_failed() -> None:
+    from diony_contracts.enums import QCVerdict
+    from diony_contracts.fixture import demo_project
+    from diony_contracts.models import QCReport
+    from diony_producer.farm import new_generation_take
+    from diony_producer.run import _clip_rows
+
+    project = demo_project()
+    shot = project.shots[0]
+    first = project.take(shot.selected_take_id)
+    first.qc = QCReport(
+        id=f"qc-{first.id}", take_id=first.id, shot_id=shot.id, verdict=QCVerdict.FAIL,
+        identity_ok=True, morph_ok=True, flicker_ok=True, duration_ok=True, legal_ok=True,
+        notes="Voice performance failed: mouth motion does not follow the line.",
+    )
+    sibling = new_generation_take(project, shot, attempt=first.attempt + 1, live=True)
+    project.takes.append(sibling)
+
+    rows = _clip_rows(
+        project,
+        {"busy": True, "shot_id": shot.id, "detail": f"Denoise starting · {shot.id}", "progress": {},
+         "camera": {"take_id": sibling.id}},
+    )
+    row = next(r for r in rows if r["shot_id"] == shot.id)
+    assert row["state"] == "rolling"
+    assert row["take_id"] == sibling.id
+    assert row["status"].startswith("Retake")

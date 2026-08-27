@@ -51,8 +51,10 @@ from diony_contracts.stitch import stitch_events
 from diony_contracts.wan_prompt import (
     WAN22_PROMPT_STRATEGY_VERSION,
     compile_wan_prompt_plan,
+    is_spoken_plan,
     render_negative_prompt,
     render_wan_prompt,
+    spoken_wan_prompt_plan,
     validate_wan_prompt_plan,
 )
 
@@ -547,9 +549,39 @@ def _install_wan_prompt_plan(
         ),
         sample_seconds=sample_seconds,
     )
+    if shot.engine == Engine.S2V_14B or shot_speaks(shot):
+        # A spoken Shot dispatches to S2V (the camera resolves the task from the
+        # locked audio, whatever engine the Shot booked): direct the speaker.
+        plan = spoken_wan_prompt_plan(
+            plan, speaker=speaker_name(bible, shot), focal_mm=shot.focal_mm
+        ) or plan
     shot.prompt_plan = plan
     shot.prompt = render_wan_prompt(plan)
     shot.negative_prompt = render_negative_prompt(plan)
+
+
+def speaker_name(bible: Bible, shot: Shot) -> str:
+    """The Bible name of the Shot's speaker, for the S2V performance direction."""
+    by_id = {character.id: character for character in bible.characters}
+    for character_id in shot.character_ref_ids:
+        character = by_id.get(character_id)
+        if character is not None and character.name.strip():
+            return character.name.strip()
+    if bible.characters and bible.characters[0].name.strip():
+        return bible.characters[0].name.strip()
+    return "The speaker"
+
+
+def spoken_plan_applied(shot: Shot) -> bool:
+    """Does the plan's direction match whether the Shot speaks?
+
+    A spoken Shot needs the S2V performance direction; a Shot whose line moved
+    elsewhere must not keep it (I2V would render "speaks the line" in silence).
+    """
+    if shot.prompt_plan is None:
+        return True
+    speaks = shot.engine == Engine.S2V_14B or shot_speaks(shot)
+    return speaks == is_spoken_plan(shot.prompt_plan)
 
 
 def _asks_for_sound(idea: str) -> bool:
@@ -754,6 +786,48 @@ def _dialogue_windows_needed(lines: list[ScriptDialogue], seconds_per_shot: floa
     return math.ceil(total_words / _dialogue_window_words(seconds_per_shot))
 
 
+_CLAUSE_END = re.compile(r"[.!?,;:—…]['\"”’)]*$")
+
+
+def _balanced_windows(words: list[str], max_words: int) -> list[tuple[int, int]]:
+    """Split one line into windows of near-equal size, snapped to clause ends.
+
+    Chopping every ``max_words`` left orphan tails — a two-word turn ("you
+    two.") that renders in half a second and cannot be voice-verified or
+    lip-synced. Windows differ by at most one word, and each boundary moves
+    up to two words to land after punctuation when both neighbours stay
+    within the window budget.
+    """
+    count = len(words)
+    if count == 0:
+        return []
+    pieces = max(1, math.ceil(count / max(1, max_words)))
+    base, extra = divmod(count, pieces)
+    bounds: list[int] = []
+    cursor = 0
+    for piece in range(pieces - 1):
+        cursor += base + (1 if piece < extra else 0)
+        bounds.append(cursor)
+    snapped: list[int] = []
+    previous = 0
+    for index, bound in enumerate(bounds):
+        following = bounds[index + 1] if index + 1 < len(bounds) else count
+        choice = bound
+        for offset in (0, -1, 1, -2, 2):
+            candidate = bound + offset
+            if not previous < candidate < following:
+                continue
+            if candidate - previous > max_words or following - candidate > max_words:
+                continue
+            if _CLAUSE_END.search(words[candidate - 1]):
+                choice = candidate
+                break
+        snapped.append(choice)
+        previous = choice
+    edges = [0, *snapped, count]
+    return [(edges[i], edges[i + 1]) for i in range(len(edges) - 1)]
+
+
 def _fit_dialogue_to_shots(
     lines: list[ScriptDialogue],
     *,
@@ -780,17 +854,24 @@ def _fit_dialogue_to_shots(
         words = line.text.split()
         line_start = len(tokens)
         tokens.extend((line_index, line.speaker, word) for word in words)
-        for start in range(0, len(words), max_words):
+        for start, end in _balanced_windows(words, max_words):
             fitted.append(
                 ScriptDialogue(
                     speaker=line.speaker,
-                    text=" ".join(words[start : start + max_words]),
+                    text=" ".join(words[start:end]),
                 )
             )
-            preferred_boundaries.add(
-                min(len(tokens), line_start + start + max_words)
-            )
+            preferred_boundaries.add(min(len(tokens), line_start + end))
     preferred_boundaries.discard(len(tokens))
+    # A window is one camera setup on one speaking face: Wan S2V animates the
+    # visible speaker with every word it hears, so a window that spans a
+    # speaker change makes one character mouth the other's line. Speaker
+    # changes are hard boundaries whenever the rundown can hold them.
+    speaker_changes = {
+        index
+        for index in range(1, len(tokens))
+        if tokens[index - 1][1] != tokens[index][1]
+    }
     if len(fitted) <= shot_count:
         return [[line] for line in fitted]
 
@@ -801,37 +882,49 @@ def _fit_dialogue_to_shots(
     # Short authored turns should not each consume a whole 5s take when their
     # combined natural speaking time fits the rundown. Prefer existing turn and
     # ten-word boundaries, then split the minimum number of turns necessary.
-    cache: dict[tuple[int, int], tuple[int, tuple[int, ...]] | None] = {}
+    def solve(hard_boundaries: set[int]) -> tuple[int, tuple[int, ...]] | None:
+        cache: dict[tuple[int, int], tuple[int, tuple[int, ...]] | None] = {}
 
-    def partition(start: int, windows_left: int) -> tuple[int, tuple[int, ...]] | None:
-        key = (start, windows_left)
-        if key in cache:
-            return cache[key]
-        remaining = len(tokens) - start
-        if remaining < windows_left or remaining > windows_left * max_words:
-            cache[key] = None
-            return None
-        if windows_left == 1:
-            result = (0, (len(tokens),))
-            cache[key] = result
-            return result
+        def crosses(start: int, end: int) -> bool:
+            return any(start < change < end for change in hard_boundaries)
 
-        best: tuple[int, tuple[int, ...]] | None = None
-        minimum_size = max(1, remaining - (windows_left - 1) * max_words)
-        maximum_size = min(max_words, remaining - (windows_left - 1))
-        for size in range(minimum_size, maximum_size + 1):
-            end = start + size
-            tail = partition(end, windows_left - 1)
-            if tail is None:
-                continue
-            cost = (0 if end in preferred_boundaries else 1) + tail[0]
-            candidate = (cost, (end, *tail[1]))
-            if best is None or candidate[0] < best[0]:
-                best = candidate
-        cache[key] = best
-        return best
+        def partition(start: int, windows_left: int) -> tuple[int, tuple[int, ...]] | None:
+            key = (start, windows_left)
+            if key in cache:
+                return cache[key]
+            remaining = len(tokens) - start
+            if remaining < windows_left or remaining > windows_left * max_words:
+                cache[key] = None
+                return None
+            if windows_left == 1:
+                result = None if crosses(start, len(tokens)) else (0, (len(tokens),))
+                cache[key] = result
+                return result
 
-    packed_partition = partition(0, shot_count)
+            best: tuple[int, tuple[int, ...]] | None = None
+            minimum_size = max(1, remaining - (windows_left - 1) * max_words)
+            maximum_size = min(max_words, remaining - (windows_left - 1))
+            for size in range(minimum_size, maximum_size + 1):
+                end = start + size
+                if crosses(start, end):
+                    break
+                tail = partition(end, windows_left - 1)
+                if tail is None:
+                    continue
+                cost = (0 if end in preferred_boundaries else 1) + tail[0]
+                candidate = (cost, (end, *tail[1]))
+                if best is None or candidate[0] < best[0]:
+                    best = candidate
+            cache[key] = best
+            return best
+
+        return partition(0, shot_count)
+
+    packed_partition = solve(speaker_changes)
+    if packed_partition is None:
+        # Not enough shots for one setup per speaker turn: fall back to the
+        # word-budget packing rather than refusing the authored dialogue.
+        packed_partition = solve(set())
     if packed_partition is None:  # Defensive: minimum_windows already proves capacity.
         raise ValueError("Authored dialogue could not be assigned to this rundown.")
 
@@ -1058,6 +1151,36 @@ def _reference_lock(idea: str, *, image_is_subject: bool) -> ReferenceLock:
     return ReferenceLock.CHARACTER
 
 
+SPOKEN_FOCAL_MM = 50.0  # medium close-up in the Wan prompt plan
+
+
+def shot_speaks(shot: Shot) -> bool:
+    return bool(shot.dialogue_turns) or bool(" ".join(str(shot.audio_line or "").split()))
+
+
+def apply_spoken_framing(project: Project, shot: Shot, index: int) -> None:
+    """A spoken Shot is a declared cut to its speaker, and the next Shot cuts back.
+
+    Wan S2V animates one prominent face; in a wide multi-character still the
+    speaker is ~90 px and its lip motion lands hundreds of ms off the line.
+    Spoken Shots therefore book a medium close-up (the camera crops the
+    speaker from the subject still when that face is known), start from their
+    own reference instead of the previous take's last frame, and declare a
+    hard cut (overlap 0) on both sides so the boundary-continuity gate does
+    not compare a wide frame with a close one.
+    """
+    if not project.shots or index < 0 or index >= len(project.shots):
+        return
+    previous = project.shots[index - 1] if index > 0 else None
+    if shot_speaks(shot):
+        shot.continuity_mode = ContinuityMode.REFERENCE
+        shot.overlap_frames = 0
+        shot.focal_mm = max(float(shot.focal_mm or 0.0), SPOKEN_FOCAL_MM)
+    elif previous is not None and shot_speaks(previous):
+        shot.continuity_mode = ContinuityMode.REFERENCE
+        shot.overlap_frames = 0
+
+
 def _upgrade_binding_reference_contract(project: Project) -> None:
     """Promote persisted pre-detector projects to today's binding reference contract."""
     brief = project.brief
@@ -1109,6 +1232,8 @@ def _upgrade_binding_reference_contract(project: Project) -> None:
             spoken_direction_assigned = True
         else:
             item.audio_line = None
+    for index, item in enumerate(project.shots):
+        apply_spoken_framing(project, item, index)
 
 
 def refresh_reference_shot(project: Project, shot: Shot) -> Shot:
@@ -1155,6 +1280,7 @@ def refresh_reference_shot(project: Project, shot: Shot) -> Shot:
     shot.t_stop = sample_camera.get("t_stop", shot.t_stop)
     shot.lighting_ratio = sample_camera.get("lighting_ratio", shot.lighting_ratio)
     shot.camera_move = sample_camera.get("camera_move", shot.camera_move)
+    apply_spoken_framing(project, shot, index)
     idea = (
         _idea_body(project.brief, project.assets)
         if project.brief is not None
@@ -1175,6 +1301,7 @@ def refresh_reference_shot(project: Project, shot: Shot) -> Shot:
         and not validate_wan_prompt_plan(shot.prompt_plan)
         and shot.prompt == render_wan_prompt(shot.prompt_plan)
         and shot.negative_prompt == render_negative_prompt(shot.prompt_plan)
+        and spoken_plan_applied(shot)
     ):
         # The strict contract is already applied and the plan is dispatch-valid.
         # Recompiling here would erase a QC repair or retake directive, replaying

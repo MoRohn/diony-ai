@@ -768,6 +768,10 @@ def test_ui_is_crate_to_system() -> None:
     assert "studio-scene-transition" in js
     assert "studio-scene-transition" in css
     assert "studio-scene-in" in css
+    # Safari can present a filter-animated frame forever; the cue moves and fades only.
+    assert "filter: blur" not in css.split("@keyframes studio-scene-in", 1)[1].split("}\n}", 1)[0]
+    assert "releaseStudioTransition" in js
+    assert 'document.addEventListener("visibilitychange", releaseStudioTransition)' in js
     assert "function showStateFail" in js
     assert "retry-apply" in html
     assert "done-open-note" in html
@@ -1127,3 +1131,64 @@ def test_minimal_wizard_has_a_last_loaded_narrow_layout() -> None:
 def test_ready_only_offers_pull_when_the_pack_is_missing_or_failed() -> None:
     js = TestClient(app).get("/static/app.js").text
     assert 'step === "prove" ? packGone || Boolean(apply.error)' in js
+
+
+def _signed_lock(host: str = "198.13.252.68") -> dict:
+    return {
+        "sku": "b200-v1",
+        "compute_path": "b200",
+        "compute": {"path": "b200", "profile": "b200-v1", "provider": "Runpod", "gpu_class": "1×B200"},
+        "nodes": [host],
+        "vault": "/diony/vault",
+        "vault_export": "/workspace",
+        "recipe": "b200-v1 TP=1",
+        "sequential": True,
+        "gpu_ready": True,
+        "producer_url": "http://producer.diony.local",
+        "producer_href": "http://producer.diony.local",
+        "dry_run": False,
+        "signed_at": "2026-08-26T15:48:27+00:00",
+        "exception_by": "Rohn",
+        "connect": {"host": host, "ssh_user": "root", "ssh_port": "30069", "vault": "/workspace"},
+    }
+
+
+def test_studio_restores_a_signed_site_lock_on_start(isolated_vault, monkeypatch) -> None:
+    """A rebuild or reopen must not send a signed site back through Setup."""
+    from importlib import import_module
+
+    wizard = import_module("diony_wizard.app")
+    from diony_contracts.cluster import write_site_lock
+
+    client = TestClient(app)
+    client.post("/api/reset")
+    write_site_lock(_signed_lock())
+    monkeypatch.setattr(wizard, "bind_ssh_env", lambda _connect: None)
+
+    assert wizard.restore_signed_site() is True
+    state = client.get("/api/state").json()
+    assert state["complete"] is True
+    assert state["active_step"] is None
+    assert state["sku"] == "b200-v1"
+    assert state["compute_path"] == "b200"
+    assert state["gpu_ready"] is True
+    assert all(step["status"] == "passed" for step in state["steps"])
+    # Idempotent: a second call on an already-signed Studio changes nothing.
+    assert wizard.restore_signed_site() is False
+
+
+def test_reset_drops_the_local_site_lock_so_restore_cannot_undo_it(isolated_vault) -> None:
+    from importlib import import_module
+
+    wizard = import_module("diony_wizard.app")
+    from diony_contracts.cluster import site_lock_path, write_site_lock
+
+    client = TestClient(app)
+    write_site_lock(_signed_lock())
+    assert site_lock_path().is_file()
+
+    client.post("/api/reset")
+
+    assert not site_lock_path().is_file()
+    assert wizard.restore_signed_site() is False
+    assert client.get("/api/state").json()["complete"] is False

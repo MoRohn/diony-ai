@@ -293,7 +293,9 @@ def test_exact_last_attached_illustration_drives_scripted_sequence_through_i2v()
     assert project.shots[0].continuity_mode == "reference"
     assert all(shot.continuity_mode == "previous_frame" for shot in project.shots[1:])
     assert all(shot.engine != Engine.S2V_14B for shot in project.shots)
-    assert "walks" in project.shots[0].prompt_plan.motion.casefold()
+    # The narrated opener is a spoken performance; the silent closer keeps its beat.
+    assert project.shots[0].audio_line
+    assert "speaks the line" in project.shots[0].prompt_plan.motion.casefold()
     assert "raises" in project.shots[-1].prompt_plan.motion.casefold()
     assert any(shot.audio_line == "Idea in. Show out." for shot in project.shots)
     assert any(shot.audio_line == "Own the source." for shot in project.shots)
@@ -348,7 +350,8 @@ def test_retake_upgrade_keeps_the_explicit_last_attached_subject() -> None:
 
     assert all(shot.keyframe_asset_ids == [character.id] for shot in project.shots)
     assert project.bible.characters[0].still_asset_ids == [character.id]
-    assert "walks" in project.shots[0].prompt_plan.motion.casefold()
+    assert project.shots[0].audio_line
+    assert "speaks the line" in project.shots[0].prompt_plan.motion.casefold()
     assert "raises" in project.shots[-1].prompt_plan.motion.casefold()
     assert any(shot.audio_line == "The studio is open." for shot in project.shots)
     assert any(shot.audio_line == "Own the source." for shot in project.shots)
@@ -738,3 +741,140 @@ def test_refresh_preserves_a_repaired_current_plan() -> None:
     assert shot.prompt_plan.motion == repaired_motion
     assert shot.prompt == repaired_prompt
     assert "mid-clip freeze" in shot.negative_prompt
+
+
+def test_spoken_shots_are_declared_cuts_to_the_speaker_and_back() -> None:
+    from diony_contracts.enums import ContinuityMode
+    from diony_contracts.fixture import demo_project
+    from diony_contracts.studio import SPOKEN_FOCAL_MM, apply_spoken_framing, shot_speaks
+
+    project = demo_project()
+    shots = project.shots
+    assert len(shots) >= 2
+    spoken_index = next(i for i, shot in enumerate(shots) if shot_speaks(shot))
+    spoken = shots[spoken_index]
+    spoken.continuity_mode = ContinuityMode.PREVIOUS_FRAME
+    spoken.overlap_frames = 8
+    spoken.focal_mm = 24
+    for index, shot in enumerate(shots):
+        apply_spoken_framing(project, shot, index)
+    assert spoken.continuity_mode == ContinuityMode.REFERENCE
+    assert spoken.overlap_frames == 0
+    assert spoken.focal_mm == SPOKEN_FOCAL_MM
+    if spoken_index + 1 < len(shots):
+        following = shots[spoken_index + 1]
+        assert following.continuity_mode == ContinuityMode.REFERENCE
+        assert following.overlap_frames == 0
+
+
+def test_spoken_shots_install_the_spoken_plan_and_persisted_plans_upgrade() -> None:
+    from diony_contracts.studio import refresh_reference_shot, shot_speaks, spoken_plan_applied
+    from diony_contracts.wan_prompt import (
+        SPOKEN_AUDIO_STRATEGY,
+        render_wan_prompt,
+        validate_wan_prompt_dispatch,
+    )
+
+    still = Asset(
+        id="ast-dionysius",
+        kind=AssetKind.IMAGE,
+        filename="Dionysius.png",
+        mime="image/png",
+        bytes=48,
+        path="assets/ast-dionysius/Dionysius.png",
+    )
+    project = expand_idea(
+        Brief(
+            idea=(
+                "Dionysius, the attached character welcomes people to Diony AI. "
+                "Explains the product and uses motto, 'Own your Studio today, and produce at cost'."
+            ),
+            customer_kind=CustomerKind.SERIES,
+            target_minutes=0.5,
+            attachment_ids=[still.id],
+        ),
+        assets=[still],
+    )
+    # The binding upgrade re-seats the narration; direct whoever speaks after it.
+    from diony_contracts.studio import _upgrade_binding_reference_contract
+
+    _upgrade_binding_reference_contract(project)
+    spoken = next(shot for shot in project.shots if shot_speaks(shot))
+    refresh_reference_shot(project, spoken)
+    assert spoken.prompt_plan is not None
+    assert spoken.prompt_plan.audio_strategy == SPOKEN_AUDIO_STRATEGY
+    assert spoken_plan_applied(spoken)
+    assert validate_wan_prompt_dispatch(spoken) == []
+    assert "speaks the line straight toward camera" in spoken.prompt
+    assert "static camera with no movement" in spoken.prompt
+    assert spoken.prompt == render_wan_prompt(spoken.prompt_plan)
+    # Refreshing again keeps the applied plan (a retake directive would survive).
+    before = spoken.prompt
+    refresh_reference_shot(project, spoken)
+    assert spoken.prompt == before
+
+    # A persisted pre-spoken plan (the five-layer beat) is upgraded on the next refresh.
+    spoken.prompt_plan = spoken.prompt_plan.model_copy(update={"audio_strategy": "native_s2v"})
+    spoken.prompt = render_wan_prompt(spoken.prompt_plan)
+    assert not spoken_plan_applied(spoken)
+    refresh_reference_shot(project, spoken)
+    assert spoken.prompt_plan.audio_strategy == SPOKEN_AUDIO_STRATEGY
+    assert validate_wan_prompt_dispatch(spoken) == []
+
+    # Silent Shots keep the five-layer beat, and a Shot whose line moved away
+    # sheds the stale performance direction on its next refresh.
+    silent = next(shot for shot in project.shots if not shot_speaks(shot))
+    silent.prompt_plan = spoken.prompt_plan.model_copy()
+    silent.prompt = render_wan_prompt(silent.prompt_plan)
+    assert not spoken_plan_applied(silent)
+    refresh_reference_shot(project, silent)
+    assert silent.prompt_plan is not None
+    assert silent.prompt_plan.audio_strategy != SPOKEN_AUDIO_STRATEGY
+    assert "speaks the line" not in silent.prompt
+    assert validate_wan_prompt_dispatch(silent) == []
+
+
+def test_dialogue_windows_are_balanced_and_never_leave_orphan_fragments() -> None:
+    from diony_contracts.studio import _balanced_windows, _fit_dialogue_to_shots
+    from diony_contracts.studio import ScriptDialogue
+
+    text = (
+        "We are starting a daily gratitude circle. I'll go first. I'm grateful for hustle, "
+        "vision, and the fact that I haven't given up on you two."
+    )
+    words = text.split()
+    assert len(words) == 26
+    windows = _balanced_windows(words, 10)
+    sizes = [end - start for start, end in windows]
+    assert sum(sizes) == 26 and all(size <= 10 for size in sizes)
+    assert min(sizes) >= 7, sizes  # the old chop produced 10 / 10 / 6; never a 2-word tail
+    # A boundary landed on a clause end when one was within reach.
+    assert any(words[end - 1].endswith((".", ",")) for _, end in windows[:-1])
+
+    fitted = _fit_dialogue_to_shots(
+        [ScriptDialogue(speaker="Marcus", text=text)], shot_count=6, seconds_per_shot=5.0
+    )
+    turns = [turn.text for window in fitted for turn in window]
+    assert all(len(turn.split()) >= 3 for turn in turns), turns
+    assert " ".join(turns) == text
+
+
+def test_dialogue_windows_never_span_a_speaker_change_when_the_rundown_can_hold_it() -> None:
+    """One camera setup animates one speaking face; a window with two speakers makes one mouth the other's line."""
+    from diony_contracts.studio import ScriptDialogue, _fit_dialogue_to_shots
+
+    lines = [
+        ScriptDialogue(speaker="Marcus", text="I'm grateful for hustle and the fact that I haven't given up on you two."),
+        ScriptDialogue(speaker="Lila", text="I'm grateful this will be over soon."),
+        ScriptDialogue(speaker="Hugo", text="Same."),
+    ]
+    fitted = _fit_dialogue_to_shots(lines, shot_count=4, seconds_per_shot=5.0)
+    assert len(fitted) == 4
+    for window in fitted:
+        assert len({turn.speaker for turn in window}) == 1, [t.speaker for t in window]
+    assert " ".join(turn.text for window in fitted for turn in window) == " ".join(line.text for line in lines)
+
+    # Too few shots for one per speaker: the words still fit, briskly, without refusing.
+    packed = _fit_dialogue_to_shots(lines, shot_count=2, seconds_per_shot=5.0)
+    assert len(packed) == 2
+    assert " ".join(turn.text for window in packed for turn in window) == " ".join(line.text for line in lines)

@@ -347,8 +347,11 @@ def _scene_layers(
     elif continuity_mode == ContinuityMode.REFERENCE:
         continuity = "; supplied reference remains the visual anchor"
     sample = f"; {sample_label}" if sample_label else ""
+    lighting = _clean_layer(lighting_ratio)
+    if not lighting.casefold().endswith("motivated"):
+        lighting = f"{lighting} motivated"
     aesthetic = _clean_layer(
-        f"{lighting_ratio} motivated lighting remains stable; {setting}; {texture}; "
+        f"{lighting} lighting remains stable; {setting}; {texture}; "
         "cinematic Rec.709 color, natural contrast, consistent exposure, restrained film grain"
     )
     environment = _clean_layer(
@@ -379,6 +382,97 @@ def negative_terms_for(
     if reference_lock == ReferenceLock.CHARACTER_AND_BACKGROUND:
         terms.extend(_REFERENCE_BACKGROUND_NEGATIVE_TERMS)
     return list(dict.fromkeys(terms))
+
+
+SPOKEN_AUDIO_STRATEGY = "native_s2v_dialogue"
+LOCKED_VOICE_AUDIO_STRATEGY = "locked_voice_s2v"  # stamped by the voice pipeline at audio lock
+SPOKEN_AUDIO_STRATEGIES = frozenset({SPOKEN_AUDIO_STRATEGY, LOCKED_VOICE_AUDIO_STRATEGY})
+
+
+def is_spoken_plan(plan: WanPromptPlan | None) -> bool:
+    """Does this plan carry the S2V performance direction?"""
+    return plan is not None and plan.audio_strategy in SPOKEN_AUDIO_STRATEGIES and "speaks the line" in plan.motion
+_SPOKEN_NEGATIVE_TERMS = (
+    "frozen lips",
+    "late mouth motion",
+    "doubled mouth",
+    "mumbling",
+    "closed mouth while speaking",
+    "mouth moving in silence",
+)
+
+
+def _camera_optics(camera: str) -> tuple[float, float]:
+    focal = re.search(r"\b(\d+(?:\.\d+)?)mm\b", camera)
+    t_stop = re.search(r"\bT(\d+(?:\.\d+)?)\b", camera)
+    return (
+        float(focal.group(1)) if focal else 50.0,
+        float(t_stop.group(1)) if t_stop else 2.8,
+    )
+
+
+def spoken_wan_prompt_plan(
+    plan: WanPromptPlan,
+    *,
+    speaker: str,
+    focal_mm: float | None = None,
+    audio_strategy: str = SPOKEN_AUDIO_STRATEGY,
+) -> WanPromptPlan | None:
+    """Direct a spoken Shot's plan at the S2V lane: a performance, not a walk.
+
+    The five-layer template writes every Shot as a blocking beat ("walks ...
+    toward camera, shifting weight", "slow steady push-in") and pads the
+    motion with a word-limited fragment of the idea — for a spoken Shot that
+    fragment was another character's beat cut mid-sentence. Wan S2V animates
+    what the prompt describes: it needs the speaker, that they are speaking
+    to camera, articulated mouth shapes on every syllable, a still mouth in
+    the pauses, and a locked-off frame that matches the close-up keyframe.
+    Subject (identity anchors) and scene (lighting) carry over unchanged.
+    Returns None when no budget-valid plan exists, so callers keep the
+    compiled plan rather than fail a load.
+    """
+    name = _limited_words(speaker, 4) or "The speaker"
+    plan_focal, t_stop = _camera_optics(plan.camera)
+    focal = float(focal_mm or plan_focal)
+    motion = (
+        f"{name} speaks the line straight toward camera at a steady conversational pace, "
+        "lips, jaw, and cheeks shaping every syllable in time with the voice, mouth closed "
+        "and still through each pause, small natural head gestures and blinks while the "
+        "shoulders settle"
+    )
+    camera = (
+        f"{_framing(focal)}, {focal:g}mm lens at T{t_stop:g}, static camera with no movement, "
+        "eyes on the lens"
+    )
+    environment = (
+        "Background holds steady behind the speaker with gentle ambient motion; "
+        "supplied reference remains the visual anchor"
+    )
+    negative_terms = [*plan.negative_terms, *_SPOKEN_NEGATIVE_TERMS]
+    scene_segments = [segment for segment in plan.scene.split("; ") if segment.strip()]
+    for scene in (plan.scene, "; ".join(scene_segments[:2]), "; ".join(scene_segments[:1])):
+        if not scene.strip():
+            continue
+        candidate = make_wan_prompt_plan(
+            source_idea_sha256=plan.source_idea_sha256,
+            subject=plan.subject,
+            identity_anchors=plan.identity_anchors,
+            motion=motion,
+            camera=camera,
+            scene=scene,
+            environment_dynamics=environment,
+            high_noise_plan=plan.high_noise_plan,
+            low_noise_plan=plan.low_noise_plan,
+            generation_method=plan.generation_method,
+            audio_strategy=audio_strategy if audio_strategy in SPOKEN_AUDIO_STRATEGIES else SPOKEN_AUDIO_STRATEGY,
+            quality_lora_ids=plan.quality_lora_ids,
+            continuity_risks=plan.continuity_risks,
+            negative_terms=negative_terms,
+            strategy_version=plan.strategy_version,
+        )
+        if not candidate.diagnostics:
+            return candidate
+    return None
 
 
 def render_wan_prompt(plan: WanPromptPlan) -> str:
@@ -620,15 +714,20 @@ def repair_wan_prompt_plan(plan: WanPromptPlan, failure_notes: str) -> WanPrompt
             "mouth-sync",
         )
     ):
-        motion = (
-            f"{plan.motion}; the speaking face remains visible as each phoneme drives precise "
-            "lips, mouth, and jaw timing without frozen or doubled mouth motion"
-        )
-        negative_terms.extend(("frozen lips", "late mouth motion", "doubled mouth"))
-        compact_motion = (
-            "speaks toward camera at a steady pace as each phoneme drives precise lip and jaw "
-            "timing, shifting weight before a settled hold"
-        )
+        if is_spoken_plan(plan):
+            # The spoken plan already directs the performance; a retake changes
+            # the seed and the guidance, not the direction that describes it.
+            negative_terms.extend(("frozen lips", "late mouth motion", "doubled mouth"))
+        else:
+            motion = (
+                f"{plan.motion}; the speaking face remains visible as each phoneme drives precise "
+                "lips, mouth, and jaw timing without frozen or doubled mouth motion"
+            )
+            negative_terms.extend(("frozen lips", "late mouth motion", "doubled mouth"))
+            compact_motion = (
+                "speaks toward camera at a steady pace as each phoneme drives precise lip and jaw "
+                "timing, shifting weight before a settled hold"
+            )
     elif any(
         cue in notes
         for cue in (
