@@ -1045,12 +1045,24 @@ function lockRows(report) {
   ];
 }
 
+function signedGpuPending() {
+  const status = state?.signed_gpu?.status || "";
+  return status === "identifying" || status === "unverified";
+}
+
 function showComplete() {
   prepEl.classList.add("hidden");
   passBtn.classList.add("hidden");
   doneEl.classList.remove("hidden");
   doneEl.hidden = false;
   const report = state.report;
+  const signed = state.signed_gpu || {};
+  const pending = signedGpuPending();
+  const headline = doneEl.querySelector("h2");
+  if (headline) {
+    headline.textContent = pending ? "Identifying the signed GPU." : "Setup is locked. Open Producer.";
+  }
+  doneEl.dataset.signedGpu = signed.status || "";
   document.getElementById("done-mandate").textContent = state.mandate;
   const mode = report.dry_run ? "dry-run" : "live";
   document.getElementById("done-meta").textContent =
@@ -1067,15 +1079,23 @@ function showComplete() {
   }
   document.getElementById("done-report").textContent = JSON.stringify(report, null, 2);
   const href = state.producer_href || state.producer_url || "";
-  document.getElementById("done-producer").innerHTML = href
-    ? `<a href="${escapeHtml(href)}">Open Producer</a>`
-    : "";
+  document.getElementById("done-producer").innerHTML =
+    href && !pending ? `<a href="${escapeHtml(href)}">Open Producer</a>` : "";
   const note = document.getElementById("done-open-note");
   if (note) {
-    note.textContent = report.dry_run
-      ? "Producer is http://producer.diony.local. Start diony-producer on this machine if it is not already up."
-      : "Producer is http://producer.diony.local. Sign wrote site.json to /diony/vault.";
+    const line = signed.host ? `${signed.host}:${signed.port || "22"}` : "";
+    if (pending) {
+      note.textContent = `Checking ${line} over SSH. Producer opens when the GPU answers.`;
+    } else if (signed.status === "identified" && signed.gpu) {
+      note.textContent = `${signed.gpu} answered at ${line}. Producer is http://producer.diony.local.`;
+    } else {
+      note.textContent = report.dry_run
+        ? "Producer is http://producer.diony.local. Start diony-producer on this machine if it is not already up."
+        : "Producer is http://producer.diony.local. Sign wrote site.json to /diony/vault.";
+    }
   }
+  if (pending) pollSignedGpu();
+  else stopSignedGpuPoll();
   fetch("/api/report")
     .then((res) => (res.ok ? res.json() : null))
     .then((full) => {
@@ -1083,6 +1103,45 @@ function showComplete() {
         document.getElementById("done-report").textContent = JSON.stringify(full, null, 2);
       }
     });
+}
+
+let signedGpuTimer = null;
+
+function stopSignedGpuPoll() {
+  if (signedGpuTimer) clearInterval(signedGpuTimer);
+  signedGpuTimer = null;
+}
+
+function pollSignedGpu() {
+  // Studio identifies the signed GPU on every open. Until it answers, the
+  // locked sheet waits; when the line is dead, Studio lands on Connect.
+  stopSignedGpuPoll();
+  signedGpuTimer = setInterval(async () => {
+    try {
+      const res = await fetch("/api/state", { cache: "no-store" });
+      const body = await res.json();
+      if (!res.ok || !body || !Array.isArray(body.steps)) return;
+      const status = body.signed_gpu?.status || "";
+      if (status === "identifying" || status === "unverified") return;
+      stopSignedGpuPoll();
+      state = body;
+      if (!state.complete) viewing = state.active_step;
+      render();
+    } catch {
+      /* keep polling */
+    }
+  }, 2000);
+}
+
+function paintSignedGpuNotice() {
+  const signed = state?.signed_gpu || {};
+  if (!statusEl || state?.complete || signed.status !== "missing") return;
+  if ((viewing || state?.active_step) !== "connect") return;
+  const line = `${signed.host || "the signed host"}:${signed.port || "22"}`;
+  const reason = `The signed GPU at ${line} did not answer. RunPod remaps the IP and -p after Stop — paste the new SSH line, then Continue.`;
+  const why = document.getElementById("learn-why");
+  if (why) why.textContent = reason;
+  statusEl.textContent = reason;
 }
 
 function paintSite() {
@@ -1169,6 +1228,10 @@ function paintPass() {
 
 function render() {
   try {
+    if (state?.signed_gpu?.status === "missing" && !state?.complete) {
+      // The signed GPU is gone: the operator is re-connecting, not arriving.
+      sessionStorage.setItem("diony_studio_entry", "start");
+    }
     syncStudioEntry();
     const previousStep = document.body.dataset.step || "";
     const nextStep = state?.complete ? "complete" : state?.active_step || "path";
@@ -1212,7 +1275,7 @@ function render() {
       const interactive = lineInteractive(step);
       paintLesson(cached, state.workbook[stepId] || state.answers || {}, interactive);
     }
-    if (stepId) openLine(stepId);
+    if (stepId) openLine(stepId).then(paintSignedGpuNotice);
   } catch (err) {
     console.error(err);
     if (errEl && formEl && !formEl.querySelector("[data-site], [name=site]")) {

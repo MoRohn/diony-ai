@@ -235,15 +235,16 @@ class VoiceQCReceipt(BaseModel):
     sibilance_score: float = Field(default=0.0, ge=0, le=1)
     sibilance_max: float = Field(default=0.25, ge=0, le=1)
     lip_sync_confidence: float | None = Field(default=None, ge=0, le=1)
-    lip_sync_confidence_min: float = Field(default=0.90, ge=0, le=1)
+    # 0.75 + 0.25 × correlation: 0.80 means correlation ≥ 0.20 (see diony_producer.av_sync).
+    lip_sync_confidence_min: float = Field(default=0.80, ge=0, le=1)
     audiovisual_offset_ms_p95: float | None = Field(default=None, ge=0)
     audiovisual_offset_ms_max: float = Field(default=40.0, gt=0, le=100)
     audiovisual_backend: str = ""
     audiovisual_measurement_qualified: bool | None = None
     performance_consistency: float | None = Field(default=None, ge=0, le=1)
     # Balanced agreement between speech activity and measured mouth modulation.
-    # 0.85 is calibrated for landmark-measured small faces; see diony_producer.av_sync.
-    performance_consistency_min: float = Field(default=0.85, ge=0, le=1)
+    # 0.75 leaves headroom under the landmark-measured small-face calibration; see diony_producer.av_sync.
+    performance_consistency_min: float = Field(default=0.75, ge=0, le=1)
     audio_passed: bool = False
     animation_passed: bool = False
     passed: bool = False

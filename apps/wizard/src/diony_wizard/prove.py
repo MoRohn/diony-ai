@@ -287,6 +287,49 @@ def run_probe(path: str, workbook: dict[str, Any], *, scope: str = "gpu") -> dic
     }
 
 
+def identify_gpu(path: str, workbook: dict[str, Any]) -> dict:
+    """Is the signed GPU still on its Connect line? TCP, SSH, then nvidia-smi.
+
+    Lighter than ``run_probe``: it answers "which GPU is at this line", not
+    "is the pack complete". Worst case is one TCP timeout plus one SSH
+    timeout. Never used by pytest.
+    """
+    host = first_host(workbook, path)
+    port = ssh_port()
+    user = ssh_user()
+    checks: list[dict] = []
+    base = {"host": host, "port": str(port), "user": user, "gpu": ""}
+    if looks_like_ip(host):
+        ok, detail = _tcp_ok(host, port)
+        if not ok:
+            detail = ssh_connect_advice(host, port, detail) or detail
+        checks.append(_check("tcp", "TCP port", ok, detail))
+        if not ok:
+            return {**base, "ok": False, "detail": detail, "checks": checks}
+    ssh = exec_host(
+        host,
+        "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader",
+        timeout=25,
+    )
+    smi = (ssh.stdout or "").strip()
+    if not ssh.ok or not smi:
+        detail = ssh_connect_advice(host, port, ssh.text) or (
+            ssh.text[:240] if ssh.text else f"{user}@{host}:{port} did not answer"
+        )
+        checks.append(_check("ssh", "SSH", False, detail))
+        return {**base, "ok": False, "detail": detail, "checks": checks}
+    checks.append(_check("ssh", "SSH", True, f"{user}@{host}:{port}"))
+    gpu_ok, gpu_detail = match_gpu(path, smi)
+    checks.append(_check("gpu", "GPU", gpu_ok, gpu_detail))
+    return {
+        **base,
+        "ok": gpu_ok,
+        "gpu": smi.splitlines()[0][:160],
+        "detail": gpu_detail,
+        "checks": checks,
+    }
+
+
 def record_dry_run(path: str, workbook: dict[str, Any], *, scope: str = "gpu") -> dict:
     checks = dry_run_checks(path, workbook)
     if scope == "connect":

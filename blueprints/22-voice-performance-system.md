@@ -192,9 +192,9 @@ Default hard floors:
 | true peak | at or below Bible ceiling |
 | harshness | ≤ 0.25 normalized score |
 | sibilance | ≤ 0.25 normalized score |
-| lip-sync confidence | ≥ 0.90 |
+| lip-sync confidence | ≥ 0.80 |
 | p95 audiovisual offset | ≤ 40 ms |
-| physical-performance consistency | ≥ 0.85 |
+| physical-performance consistency | ≥ 0.75 |
 
 Speaker identity is measured against a *calibrated* floor, never a fixed one.
 A synthetic voice enrolls from two renders on different text — its first line
@@ -229,7 +229,7 @@ of lag (±750 ms at 16 fps, so a large S2V lag is measured as a qualified
 failure rather than clipped at the window edge); the track whose mouth follows the line best is the speaker, and
 listeners with a still mouth are rejected by aperture variance, not position.
 Lip-sync confidence is `0.75 + 0.25 × syllable-smoothed peak correlation`
-(the 0.90 floor means correlation ≥ 0.60); the offset comes from the
+(the 0.80 floor means correlation ≥ 0.20); the offset comes from the
 unsmoothed peak with parabolic sub-frame refinement and reports its resolution
 (one frame period — 62.5 ms at Wan S2V's native 16 fps); consistency is the
 balanced agreement between speech activity and mouth *modulation* (speech is

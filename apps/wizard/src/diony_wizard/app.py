@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -67,6 +68,7 @@ from diony_wizard.provisioning import (
 )
 from diony_wizard.prove import (
     connect_confirm,
+    identify_gpu,
     prove_block_reason,
     prove_clicks_live,
     prove_must_pass,
@@ -101,6 +103,11 @@ _sync_ips: list[str] = []
 _workbook: dict[str, dict[str, str]] = {}
 _completed_at: str | None = None
 _probe: dict = {}
+# The signed GPU's identity on its Connect line, refreshed on Studio start and
+# on every Studio open: unverified | identifying | identified | recorded | missing.
+_signed_gpu: dict = {}
+_identify_lock = threading.Lock()
+SIGNED_GPU_RECHECK_SECONDS = 30.0
 _provisioner = ProvisioningService()
 load_hf_token()
 
@@ -188,7 +195,7 @@ def restore_signed_site() -> bool:
     existing-compute validation. A signed lock now restores the signed state.
     Returns True when a signed lock was restored.
     """
-    global _steps, _completed_at, _probe
+    global _steps, _completed_at, _probe, _signed_gpu
     if _completed_at is not None or any(s.status == "passed" for s in _steps):
         return False
     lock = read_site_lock()
@@ -244,6 +251,142 @@ def restore_signed_site() -> bool:
         step.log.append(f"Restored from the signed site lock ({signed_at}).")
     _completed_at = signed_at
     _refresh_dry()
+    if host:
+        _signed_gpu = {
+            "status": "unverified",
+            "host": host,
+            "port": str(connect.get("ssh_port") or "22").strip(),
+            "gpu": "",
+            "detail": "Restored from the signed site lock. Not yet identified on this open.",
+            "checked_at": None,
+        }
+    return True
+
+
+def _signed_line() -> tuple[str, str]:
+    connect = _workbook.get("connect") or {}
+    hosts = str(connect.get("hosts") or "").split()
+    host = hosts[0] if hosts else ""
+    port = str(connect.get("ssh_port") or "22").strip() or "22"
+    return host, port
+
+
+def _reopen_connect(host: str, port: str, detail: str) -> None:
+    """The signed GPU is not on its line: land on Connect with the line prefilled.
+
+    Site stays passed and the Connect workbook keeps host, login, and port, so
+    the operator only pastes the new SSH command (RunPod remaps IP and -p after
+    Stop). The site lock on disk is left alone: the next Sign rewrites it, and
+    a deliberate Start over deletes it.
+    """
+    global _steps, _completed_at, _probe
+    site_step = _steps[0]
+    site_step.status = "passed"
+    _steps = attach_rail(_compute_path or "", site_step)
+    connect = next((s for s in _steps if s.id == "connect"), None)
+    if connect is not None:
+        connect.status = "active"
+        connect.log.append(f"The signed GPU at {host}:{port} did not answer: {detail}")
+        connect.log.append(
+            "RunPod remaps the IP and -p after Stop. Paste the new SSH line, then Continue."
+        )
+    _completed_at = None
+    _probe = {}
+    _workbook.pop("gpu_prove", None)
+    _workbook.pop("prove", None)
+    _refresh_dry()
+
+
+def identify_signed_gpu(*, identify=None) -> dict:
+    """Confirm the signed GPU still answers on its Connect line.
+
+    A signed lock names a leased box by IP and port. After the provider stops
+    or recycles that box the lock is stale: Studio must not open on "Setup is
+    locked" pointing Producer at a GPU that no longer exists. When the line
+    does not answer, or answers with the wrong GPU, Studio reopens Connect.
+    ``identify`` overrides the probe (tests); pytest, ``DIONY_APPLY_FAKE`` and
+    ``DIONY_PROVE_OFF`` record the signed GPU without opening a socket.
+    """
+    global _signed_gpu
+    if _completed_at is None or _compute_path not in WIZARD_APP_PATHS:
+        return dict(_signed_gpu)
+    host, port = _signed_line()
+    if not host:
+        return dict(_signed_gpu)
+    if not _identify_lock.acquire(blocking=False):
+        return dict(_signed_gpu)
+    try:
+        _signed_gpu = {
+            "status": "identifying",
+            "host": host,
+            "port": port,
+            "gpu": "",
+            "detail": f"Identifying the signed GPU at {host}:{port} over SSH.",
+            "checked_at": None,
+        }
+        probe = identify or (identify_gpu if prove_clicks_live() else None)
+        now = datetime.now(timezone.utc).isoformat()
+        if probe is None:
+            _signed_gpu = {
+                **_signed_gpu,
+                "status": "recorded",
+                "detail": "Signed GPU recorded from the site lock without opening a socket.",
+                "checked_at": now,
+            }
+            return dict(_signed_gpu)
+        bind_ssh_env(_workbook.get("connect") or {})
+        try:
+            result = probe(_compute_path, _workbook) or {}
+        except Exception as exc:  # a probe crash is a missing GPU, not a locked Studio
+            result = {"ok": False, "detail": str(exc)[:240]}
+        now = datetime.now(timezone.utc).isoformat()
+        if result.get("ok"):
+            gpu = str(result.get("gpu") or "")
+            _signed_gpu = {
+                **_signed_gpu,
+                "status": "identified",
+                "gpu": gpu,
+                "detail": str(result.get("detail") or gpu or f"{host}:{port} answered."),
+                "checked_at": now,
+            }
+            return dict(_signed_gpu)
+        detail = str(result.get("detail") or f"{host}:{port} did not answer.")
+        _signed_gpu = {
+            **_signed_gpu,
+            "status": "missing",
+            "gpu": str(result.get("gpu") or ""),
+            "detail": detail,
+            "checked_at": now,
+        }
+        _reopen_connect(host, port, detail)
+        return dict(_signed_gpu)
+    finally:
+        _identify_lock.release()
+
+
+def _signed_gpu_is_fresh() -> bool:
+    status = str(_signed_gpu.get("status") or "")
+    if status == "identifying":
+        return True
+    if status not in {"identified", "recorded"}:
+        return False
+    stamp = str(_signed_gpu.get("checked_at") or "")
+    try:
+        checked = datetime.fromisoformat(stamp)
+    except ValueError:
+        return False
+    age = (datetime.now(timezone.utc) - checked).total_seconds()
+    return age < SIGNED_GPU_RECHECK_SECONDS
+
+
+def kick_identify_signed_gpu() -> bool:
+    """Start a background identity check of the signed GPU when one is due."""
+    if _completed_at is None or _compute_path not in WIZARD_APP_PATHS:
+        return False
+    if not _signed_line()[0] or _signed_gpu_is_fresh():
+        return False
+    thread = threading.Thread(target=identify_signed_gpu, name="diony-identify-signed-gpu", daemon=True)
+    thread.start()
     return True
 
 
@@ -479,6 +622,7 @@ def _state() -> dict:
             "apply": apply,
             "prove": public_prove(_probe or _workbook.get("gpu_prove") or {}),
             "gpu_ready": bool((_probe or _workbook.get("gpu_prove") or {}).get("ok")),
+            "signed_gpu": dict(_signed_gpu),
             "can_pull": apply_allowed(_compute_path, _workbook),
             "hf_token": hf_token_set(),
             "confirm": (
@@ -550,6 +694,9 @@ def _record_connect(answers: dict[str, str]) -> None:
 
 @app.get("/")
 def index() -> FileResponse:
+    # Every Studio open re-identifies a signed GPU: a lease recycled since the
+    # last open must land on Connect, not on "Setup is locked".
+    kick_identify_signed_gpu()
     return FileResponse(
         STATIC / "index.html",
         headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
@@ -1024,7 +1171,7 @@ def fail_step(step_id: str, body: AdvanceBody) -> dict:
 
 @app.post("/api/reset")
 def reset() -> dict:
-    global _steps, _workbook, _completed_at, _compute_path, _site, _cluster_name, _probe
+    global _steps, _workbook, _completed_at, _compute_path, _site, _cluster_name, _probe, _signed_gpu
     _steps = initial_steps()
     _sync_ips.clear()
     _workbook = {}
@@ -1033,6 +1180,7 @@ def reset() -> dict:
     _site = None
     _cluster_name = "spark-4x-v1"
     _probe = {}
+    _signed_gpu = {}
     unbind_ssh_env()
     reset_apply()
     try:
@@ -1055,7 +1203,8 @@ def main() -> None:
     from diony_wizard.gateway import ensure_product_urls, gateway_healthy, start_product_gateway
 
     start_product_gateway()
-    restore_signed_site()
+    if restore_signed_site():
+        kick_identify_signed_gpu()
     skip = os.environ.get("DIONY_NAMES_SKIP", "").strip().lower() in {"1", "true", "yes"}
     if not skip and sys.stdin.isatty() and not gateway_healthy():
         ensure_product_urls()

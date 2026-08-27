@@ -1004,7 +1004,7 @@ def test_compute_page_uses_balanced_readable_responsive_layout() -> None:
     js = client.get("/static/app.js").text
     css = client.get("/static/app.css").text
 
-    assert '/static/app.css?v=brand14' in html
+    assert '/static/app.css?v=brand15' in html
     assert 'class="compute-group compute-group-local"' in html
     assert 'class="compute-group compute-group-lease"' in html
     assert 'group.className = `compute-group compute-group-${label.toLowerCase()}`;' in js
@@ -1192,3 +1192,139 @@ def test_reset_drops_the_local_site_lock_so_restore_cannot_undo_it(isolated_vaul
     assert not site_lock_path().is_file()
     assert wizard.restore_signed_site() is False
     assert client.get("/api/state").json()["complete"] is False
+
+
+def _restored_signed_studio(wizard, client, monkeypatch, host: str = "198.13.252.68"):
+    from diony_contracts.cluster import write_site_lock
+
+    client.post("/api/reset")
+    write_site_lock(_signed_lock(host))
+    monkeypatch.setattr(wizard, "bind_ssh_env", lambda _connect: None)
+    assert wizard.restore_signed_site() is True
+    return client.get("/api/state").json()
+
+
+def test_signed_gpu_that_does_not_answer_reopens_connect_with_the_line_prefilled(
+    isolated_vault, monkeypatch
+) -> None:
+    """A lease recycled since Sign must not open Studio on "Setup is locked"."""
+    from importlib import import_module
+
+    wizard = import_module("diony_wizard.app")
+    from diony_contracts.cluster import site_lock_path
+
+    client = TestClient(app)
+    restored = _restored_signed_studio(wizard, client, monkeypatch)
+    assert restored["complete"] is True
+    assert restored["signed_gpu"]["status"] == "unverified"
+    assert restored["signed_gpu"]["host"] == "198.13.252.68"
+    assert restored["signed_gpu"]["port"] == "30069"
+
+    seen: dict = {}
+
+    def dead_line(path: str, workbook: dict) -> dict:
+        seen["path"] = path
+        seen["host"] = workbook["connect"]["hosts"]
+        return {
+            "ok": False,
+            "host": "198.13.252.68",
+            "port": "30069",
+            "detail": "198.13.252.68:30069 timed out. RunPod remaps IP and -p after Stop.",
+        }
+
+    result = wizard.identify_signed_gpu(identify=dead_line)
+    assert result["status"] == "missing"
+    assert seen == {"path": "b200", "host": "198.13.252.68"}
+
+    state = client.get("/api/state").json()
+    assert state["complete"] is False
+    assert state["active_step"] == "connect"
+    assert state["gpu_ready"] is False
+    assert state["signed_gpu"]["status"] == "missing"
+    assert "timed out" in state["signed_gpu"]["detail"]
+    by_id = {step["id"]: step for step in state["steps"]}
+    assert by_id["path"]["status"] == "passed"
+    assert by_id["connect"]["status"] == "active"
+    assert all(by_id[s]["status"] == "pending" for s in ("app", "prove", "producer"))
+    assert any("198.13.252.68:30069 did not answer" in line for line in by_id["connect"]["log"])
+    # The dead line is prefilled: the operator pastes the new SSH command only.
+    assert state["answers"]["hosts"] == "198.13.252.68"
+    assert state["answers"]["ssh_user"] == "root"
+    assert state["answers"]["ssh_port"] == "30069"
+    # Producer keeps its lock until the next Sign rewrites it or Start over deletes it.
+    assert site_lock_path().is_file()
+    # A Studio already on Connect is never re-locked by the restore.
+    assert wizard.restore_signed_site() is False
+    assert client.get("/api/state").json()["active_step"] == "connect"
+
+
+def test_signed_gpu_that_answers_keeps_the_lock(isolated_vault, monkeypatch) -> None:
+    from importlib import import_module
+
+    wizard = import_module("diony_wizard.app")
+
+    client = TestClient(app)
+    _restored_signed_studio(wizard, client, monkeypatch)
+
+    def b200_answers(path: str, workbook: dict) -> dict:
+        return {"ok": True, "gpu": "NVIDIA B200, 183359 MiB", "detail": "NVIDIA B200, 183359 MiB"}
+
+    assert wizard.identify_signed_gpu(identify=b200_answers)["status"] == "identified"
+    state = client.get("/api/state").json()
+    assert state["complete"] is True
+    assert state["active_step"] is None
+    assert state["gpu_ready"] is True
+    assert state["signed_gpu"]["gpu"] == "NVIDIA B200, 183359 MiB"
+    assert state["signed_gpu"]["checked_at"]
+    # A fresh identity is not rechecked on the very next open.
+    assert wizard.kick_identify_signed_gpu() is False
+
+
+def test_signed_gpu_is_recorded_without_a_socket_under_pytest(isolated_vault, monkeypatch) -> None:
+    """Pytest never opens a socket: the signed GPU is recorded, and Studio stays locked."""
+    from importlib import import_module
+
+    wizard = import_module("diony_wizard.app")
+
+    client = TestClient(app)
+    _restored_signed_studio(wizard, client, monkeypatch)
+    assert wizard.identify_signed_gpu()["status"] == "recorded"
+    state = client.get("/api/state").json()
+    assert state["complete"] is True
+    assert state["signed_gpu"]["status"] == "recorded"
+
+
+def test_studio_open_identifies_the_signed_gpu(isolated_vault, monkeypatch) -> None:
+    """Every Studio open re-identifies the signed GPU; an unverified lock is due at once."""
+    import time
+    from importlib import import_module
+
+    wizard = import_module("diony_wizard.app")
+
+    client = TestClient(app)
+    _restored_signed_studio(wizard, client, monkeypatch)
+    assert client.get("/").status_code == 200
+    deadline = time.monotonic() + 5
+    status = ""
+    while time.monotonic() < deadline:
+        status = client.get("/api/state").json()["signed_gpu"]["status"]
+        if status not in {"unverified", "identifying"}:
+            break
+        time.sleep(0.05)
+    assert status == "recorded"
+    # Nothing to identify without a signed lease; Start over clears the record.
+    client.post("/api/reset")
+    assert wizard.kick_identify_signed_gpu() is False
+    assert client.get("/api/state").json()["signed_gpu"] == {}
+
+
+def test_studio_front_end_waits_for_the_signed_gpu_before_offering_producer() -> None:
+    client = TestClient(app)
+    js = client.get("/static/app.js").text
+    assert "function signedGpuPending()" in js
+    assert '"Identifying the signed GPU."' in js
+    assert "href && !pending" in js
+    assert "function pollSignedGpu()" in js
+    assert "function paintSignedGpuNotice()" in js
+    assert 'sessionStorage.setItem("diony_studio_entry", "start")' in js
+    assert "did not answer. RunPod remaps the IP and -p after Stop" in js

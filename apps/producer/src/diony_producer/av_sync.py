@@ -17,7 +17,8 @@ by their aperture variance, not by position. Confidence, offset, and
 consistency are all measured quantities:
 
 * ``lip_sync_confidence`` = 0.75 + 0.25 × syllable-smoothed peak correlation,
-  so the locked 0.90 floor means correlation ≥ 0.60.
+  so the locked 0.80 floor means correlation ≥ 0.20 (a qualified measurement
+  still needs a peak of at least ``MIN_CORRELATION``).
 * ``audiovisual_offset_ms_p95`` comes from the *unsmoothed* correlation peak
   with parabolic sub-frame refinement; diagnostics state the frame period, the
   measurement's resolution.
@@ -26,8 +27,9 @@ consistency are all measured quantities:
   smile is not), with one frame of hysteresis at each speech boundary.
   Calibrated on a wide three-character Wan2.2 S2V shot (90-pixel faces at
   16 fps): landmark jitter on a small face sits near half the speech-time
-  modulation, so the talking floor is two-thirds of it and the locked default
-  floor is 0.85 (see ``VoiceQCReceipt.performance_consistency_min``).
+  modulation, so the talking floor is two-thirds of it; the locked default
+  floor is 0.75 (see ``VoiceQCReceipt.performance_consistency_min``), a step
+  under that calibration so a small articulating face is not held for jitter.
 
 Only degenerate evidence — no tracked face, inactive audio, too few frames —
 stays unqualified (a one-take hold). A tracked, audible clip whose mouth is

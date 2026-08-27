@@ -745,7 +745,7 @@ def test_voice_failure_message_reports_the_actual_av_thresholds(tmp_path) -> Non
 
     message = _voice_performance_failure(package)
 
-    assert "lip-sync confidence 0.7956 is below 0.90" in message
+    assert "lip-sync confidence 0.7956 is below 0.80" in message
     assert "audiovisual offset p95 83.333 ms exceeds 40 ms" in message
 
 
