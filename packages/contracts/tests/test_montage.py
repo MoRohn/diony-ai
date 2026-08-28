@@ -248,3 +248,59 @@ def test_mood_adjectives_are_stripped_and_linted() -> None:
     assert any("mood adjectives" in note for note in notes)
     assert any("generic phrasing" in note for note in notes)
     assert not any(note.startswith("scene leans") for note in lint_wan_prompt_plan(plan))
+
+
+_SCREENPLAY = """Style / look
+
+3D animated, warm lighting. A white-and-orange robot with a single glowing “eye”.
+
+INT. CHILD’S BEDROOM – DAY
+
+Four ducklings stand in a line on the rug, staring at the robot. They waddle toward the door and the robot follows.
+
+INT. BATHROOM – CONTINUOUS
+
+The ducklings leap into the tub one after another. The robot reaches the tub, tilts its head, then jumps in.
+
+Robot: electronic quack-beep “QUACK!”
+Sparks burst from the joints. The eye flickers and goes dark. The robot sinks to the bottom of the tub.
+"""
+
+
+def test_screenplay_line_speaks_the_quote_and_keeps_the_direction() -> None:
+    from diony_contracts.studio import _script_dialogue, _spoken_and_direction
+
+    assert _spoken_and_direction('electronic quack-beep “QUACK!”') == ("QUACK!", "electronic quack-beep")
+    assert _spoken_and_direction('electronic quack-beep “QUACK!') == ("QUACK!", "electronic quack-beep")
+    assert _spoken_and_direction("(whispering) We move now.") == ("We move now.", "whispering")
+    assert _spoken_and_direction("We move now.") == ("We move now.", "")
+    lines = _script_dialogue("MARA (beeping): electronic quack-beep “QUACK!”\nTOM: Then pack tonight.")
+    assert [(l.speaker, l.text, l.direction) for l in lines] == [
+        ("Mara", "QUACK!", "beeping electronic quack-beep"),
+        ("Tom", "Then pack tonight.", ""),
+    ]
+
+
+def test_sluglines_are_scenes_and_dialogue_lands_in_its_scene() -> None:
+    from diony_contracts.studio import _script_dialogue, _script_scenes
+
+    scenes = _script_scenes(_SCREENPLAY)
+    assert [(s.number, s.title) for s in scenes] == [(1, "INT. CHILD’S BEDROOM – DAY"), (2, "INT. BATHROOM – CONTINUOUS")]
+    assert "ducklings" in scenes[1].visual and "Robot:" not in scenes[1].visual.split("QUACK")[0][-10:]
+    lines = _script_dialogue(_SCREENPLAY)
+    assert lines and lines[0].scene == 2 and lines[0].text == "QUACK!"
+    project = expand_idea(Brief(idea=_SCREENPLAY, customer_kind=CustomerKind.SERIES, target_minutes=0.5))
+    spoken = [shot for shot in project.shots if shot.dialogue_turns]
+    assert len(spoken) == 1
+    assert spoken[0].scene == "2", "the line is placed on a shot of the scene it was written in"
+    assert spoken[0].id != project.shots[0].id
+    turn = spoken[0].dialogue_turns[0]
+    assert turn.text == "QUACK!" and turn.emotion == "electronic quack-beep"
+    assert "electronic quack-beep" in spoken[0].prompt_plan.motion or "quack-beep" in spoken[0].prompt
+
+
+def test_numbered_scene_plans_keep_their_placement() -> None:
+    idea = 'Scene 1 — Kitchen (0-10s)\nMARA: "We leave at dawn."\nScene 2 — Dock (10-20s)\nTOM: "Then pack tonight."\n'
+    project = expand_idea(Brief(idea=idea, customer_kind=CustomerKind.SERIES, target_minutes=0.5))
+    spoken = [(shot.scene, shot.dialogue_turns[0].text) for shot in project.shots if shot.dialogue_turns]
+    assert spoken == [("1", "We leave at dawn."), ("2", "Then pack tonight.")]

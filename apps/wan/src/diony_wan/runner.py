@@ -804,6 +804,49 @@ def ensure_s2v_exact_publish(repo: Path | None = None) -> Path | None:
     return generate
 
 
+_S2V_TTS_PROMPT_MARKER = "DIONY_S2V_TTS_PROMPT_PATH"
+
+
+def ensure_s2v_tts_prompt_path(repo: Path | None = None) -> Path | None:
+    """Hand CosyVoice the prompt clip the way the installed checkout expects.
+
+    Wan2.2's `WanS2V.tts` loads the prompt clip to a 16 kHz tensor and passes
+    it to `inference_zero_shot` / `inference_cross_lingual`. CosyVoice checkouts
+    after 2025 take `prompt_wav` as a *path* and call `load_wav` themselves; a
+    tensor there raises `TypeError: Invalid file: tensor(...)` on every spoken
+    Take. The overlay inspects the installed signature at call time and passes
+    the path or the tensor accordingly, so neither an old nor a new checkout
+    can fail the lane. Idempotent; marker-guarded.
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST") and repo is None:
+        return None
+    root = Path(repo) if repo is not None else wan_repo()
+    module = root / "wan" / "speech2video.py"
+    if not module.is_file():
+        return None
+    text = module.read_text(encoding="utf-8")
+    if _S2V_TTS_PROMPT_MARKER in text:
+        return module
+    anchor = "        prompt_speech_16k = load_wav(tts_prompt_audio, 16000)\n"
+    zero = "for i in self.cosyvoice.inference_zero_shot(tts_text, tts_prompt_text, prompt_speech_16k):"
+    cross = "for i in self.cosyvoice.inference_cross_lingual(tts_text, prompt_speech_16k):"
+    if anchor not in text or zero not in text or cross not in text:
+        raise WanError("Wan speech2video.py has no compatible TTS prompt call site")
+    helper = (
+        f"        # {_S2V_TTS_PROMPT_MARKER}: CosyVoice checkouts after 2025 take the prompt clip as a path\n"
+        "        # (frontend load_wav), earlier ones a 16 kHz tensor; hand over whichever the\n"
+        "        # installed API declares so an unpinned clone never turns into a TypeError.\n"
+        "        import inspect as _diony_inspect\n"
+        "        _diony_params = _diony_inspect.signature(self.cosyvoice.inference_cross_lingual).parameters\n"
+        '        prompt_for_cosyvoice = tts_prompt_audio if "prompt_wav" in _diony_params else prompt_speech_16k\n'
+    )
+    text = text.replace(anchor, anchor + helper, 1)
+    text = text.replace(zero, "for i in self.cosyvoice.inference_zero_shot(tts_text, tts_prompt_text, prompt_for_cosyvoice):", 1)
+    text = text.replace(cross, "for i in self.cosyvoice.inference_cross_lingual(tts_text, prompt_for_cosyvoice):", 1)
+    module.write_text(text, encoding="utf-8")
+    return module
+
+
 def ensure_negative_prompt_input(repo: Path | None = None) -> Path | None:
     """Expose Wan's existing `n_prompt` input through official generate.py.
 
@@ -920,6 +963,7 @@ def prove_generate() -> None:
     ensure_optional_engine_lazy_imports()
     ensure_s2v_production_raster()
     ensure_s2v_exact_publish()
+    ensure_s2v_tts_prompt_path()
     ensure_negative_prompt_input()
     env, py_root = _wan_env()
     proc = subprocess.run(
@@ -1090,6 +1134,7 @@ def run_generate(
     if task == "s2v-14B":
         ensure_s2v_production_raster()
         ensure_s2v_exact_publish()
+        ensure_s2v_tts_prompt_path()
         if tts is not None:
             ensure_s2v_speech_pack()
     ensure_negative_prompt_input()

@@ -573,3 +573,14 @@ def test_face_pack_and_surround_reach_the_scripts_and_rail() -> None:
     project = expand_idea(Brief(idea="A keeper repairs the lamp before the storm.", customer_kind=CustomerKind.SERIES, target_minutes=0.5))
     project.bible.audio_layout = "stereo+5.1"
     assert production_standard(project, clips=[], camera="stub")["audio"]["layout"] == "stereo+5.1"
+
+
+def test_transcript_gate_only_judges_lines_long_enough_to_measure() -> None:
+    from diony_contracts.voice import SpeechQCReceipt
+
+    base = dict(measurement_version="v", audio_present=True, speech_presence_score=0.5, speech_tail_ms=300,
+                integrated_lufs=-24.0, true_peak_dbtp=-2.0, window_ms=3000)
+    short = SpeechQCReceipt(**base, transcript_word_accuracy=0.25, transcript_word_count=4)
+    assert not [f for f in short.failures() if "authored line" in f]
+    long = SpeechQCReceipt(**base, transcript_word_accuracy=0.25, transcript_word_count=9)
+    assert any("authored line" in f for f in long.failures())

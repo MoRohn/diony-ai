@@ -512,9 +512,12 @@ def verify_speech_render(project: Project, take: Take, video: Path, *, vault: Pa
 
             heard = transcribe_line(dialogue, package.request.tts_text)
             if heard is not None:
+                from diony_producer.speech_transcript import normalize_words
+
                 receipt_fields["transcript"] = heard.transcript
                 receipt_fields["transcript_word_accuracy"] = heard.word_accuracy
                 receipt_fields["transcript_last_word_ok"] = heard.last_word_ok
+                receipt_fields["transcript_word_count"] = len(normalize_words(package.request.tts_text))
                 diagnostics.append(
                     f"transcript ({heard.model}) matches {heard.word_accuracy:.0%} of the line"
                     + ("" if heard.last_word_ok else "; the last authored word was not heard")

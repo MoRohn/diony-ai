@@ -1098,6 +1098,18 @@
           "title": "Transcript Min Accuracy",
           "type": "number"
         },
+        "transcript_word_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Transcript Word Count",
+          "type": "integer"
+        },
+        "transcript_gate_min_words": {
+          "default": 6,
+          "minimum": 1,
+          "title": "Transcript Gate Min Words",
+          "type": "integer"
+        },
         "passed": {
           "default": false,
           "title": "Passed",

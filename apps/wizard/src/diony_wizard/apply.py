@@ -137,6 +137,11 @@ FACE_PACK = [
 # them where Wan looks, so Production never fetches.
 WAN_TTS_RUNTIME_DIR = "/diony/vault/runtime/wan-tts"
 WAN_TTS_CHECKOUT_LINK = "/opt/wan22/CosyVoice"
+# Pinned CosyVoice revision (Blueprint 22). Wan2.2 targets an older CosyVoice
+# API; Diony's `ensure_s2v_tts_prompt_path` overlay bridges the prompt-clip
+# argument, and this pin keeps every site on the revision that overlay was
+# qualified against instead of whatever `main` is on clone day.
+WAN_TTS_CHECKOUT_REV = "074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc"
 WAN_TTS_MODEL_LINK = "/opt/wan22/CosyVoice2-0.5B"
 WAN_TTS_MODEL = (
     "FunAudioLLM/CosyVoice2-0.5B",
@@ -1327,10 +1332,15 @@ if [ ! -d "$WAN_TTS_ROOT/.git" ]; then
   elif [ -d {WAN_TTS_CHECKOUT_LINK}/.git ] && [ ! -L {WAN_TTS_CHECKOUT_LINK} ]; then
     rsync -a -- {WAN_TTS_CHECKOUT_LINK}/ "$WAN_TTS_ROOT/"
   else
-    git clone --depth 1 --recursive https://github.com/FunAudioLLM/CosyVoice.git "$WAN_TTS_ROOT"
+    git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git "$WAN_TTS_ROOT"
   fi
 fi
 test -d "$WAN_TTS_ROOT/.git"
+# Pin the checkout: a clone-day `main` drifted the prompt-clip API under Wan2.2.
+if [ "$(git -C "$WAN_TTS_ROOT" rev-parse HEAD 2>/dev/null)" != "{WAN_TTS_CHECKOUT_REV}" ]; then
+  git -C "$WAN_TTS_ROOT" fetch --depth 1 origin {WAN_TTS_CHECKOUT_REV} 2>/dev/null || git -C "$WAN_TTS_ROOT" fetch origin
+  git -C "$WAN_TTS_ROOT" checkout --quiet {WAN_TTS_CHECKOUT_REV} && git -C "$WAN_TTS_ROOT" submodule update --init --recursive --depth 1 2>/dev/null || true
+fi
 if [ -d {WAN_TTS_CHECKOUT_LINK} ] && [ ! -L {WAN_TTS_CHECKOUT_LINK} ]; then
   rm -rf -- {WAN_TTS_CHECKOUT_LINK}
 fi

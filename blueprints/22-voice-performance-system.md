@@ -207,3 +207,16 @@ one prompt clip, measured lip timing across complete clips, the loudness table,
 deterministic rerun hashes for casting, request, seed, and Wan version, and no
 hosted network calls. Until then Producer reports a voice readiness or QC hold
 rather than claiming studio-grade output.
+
+## Addendum 2026-08-28 — CosyVoice API pin and the prompt-clip overlay
+
+Studio cloned CosyVoice from `main` on clone day. Wan2.2's `WanS2V.tts` hands
+CosyVoice a 16 kHz *tensor*; CosyVoice revisions after 2025 take the prompt
+clip as a *path* (`inference_cross_lingual(tts_text, prompt_wav)` →
+`load_wav`), so every spoken Take failed with `TypeError: Invalid file:
+tensor(...)` on the live B200. Two fixes, both required: the runner overlay
+`ensure_s2v_tts_prompt_path` (marker `DIONY_S2V_TTS_PROMPT_PATH`, applied at
+dispatch and by the GPU start script) inspects the installed signature and
+passes the path or the tensor accordingly; and Studio pins the checkout to
+`074ca6dc…` (`WAN_TTS_CHECKOUT_REV`, `infra/models/manifest.yaml`) so the
+overlay is exercised against one known revision on every site.

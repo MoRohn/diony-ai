@@ -8,6 +8,7 @@ Only Hugging Face snapshots with complete metadata are eligible for staging.
 from __future__ import annotations
 
 import fcntl
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -271,6 +272,33 @@ def _copy_snapshot(
     )
 
 
+@contextmanager
+def _hot_cache_lock(lock_path: Path):
+    """Exclusive flock held only for verify / reserve / land — never for a copy."""
+    with lock_path.open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _touch(destination: Path) -> None:
+    receipt = _receipt(destination)
+    receipt["last_used_at"] = time.time()
+    (destination / ".diony-hot-cache.json").write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def _join_prefetch(task: str) -> None:
+    """A copy of this same family already in flight is joined, never duplicated."""
+    with _PREFETCH_LOCK:
+        thread = _PREFETCH.get(task)
+    if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+        thread.join()
+
+
 def _prepare_checkpoint(
     task: str,
     *,
@@ -279,6 +307,16 @@ def _prepare_checkpoint(
     progress: ProgressCallback | None = None,
     report: bool = True,
 ) -> Path:
+    """Return a verified overlay checkpoint, or the persistent source on any miss.
+
+    The hot-cache lock guards only the short verify / reserve / land steps. The
+    copy itself runs unlocked into a per-caller `.partial-` directory, so a
+    background prefetch of one family (126 GB, minutes) can never hold the
+    active Take's family behind it (Blueprint 23: prefetch may not consume the
+    active Take's budget). A second caller for the same family joins the
+    in-flight prefetch instead of copying twice; if two copies still race, the
+    later one discards its own bytes and reuses the landed cache.
+    """
     if not _enabled():
         return source
     contract = _snapshot_contract(source)
@@ -288,50 +326,52 @@ def _prepare_checkpoint(
     destination = root / source.name
     root.mkdir(parents=True, exist_ok=True)
     lock_path = root / ".diony-hot-cache.lock"
-    with lock_path.open("a+") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    _join_prefetch(task)
+    with _hot_cache_lock(lock_path):
         if _cache_valid(destination, source, contract):
-            receipt = _receipt(destination)
-            receipt["last_used_at"] = time.time()
-            (destination / ".diony-hot-cache.json").write_text(
-                json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-            )
+            _touch(destination)
             return destination
         if not _room_for(root, destination, contract.payload_bytes, allow_evict=allow_evict):
             return source
-        pending = root / f"{source.name}.partial-{os.getpid()}-{threading.get_ident()}"
-        shutil.rmtree(pending, ignore_errors=True)
-        pending.mkdir(parents=True)
-        listener = _STAGING_LISTENER
-        if progress is None and report and listener is not None:
+    pending = root / f"{source.name}.partial-{os.getpid()}-{threading.get_ident()}"
+    shutil.rmtree(pending, ignore_errors=True)
+    pending.mkdir(parents=True)
+    listener = _STAGING_LISTENER
+    if progress is None and report and listener is not None:
 
-            def progress(copied: int, total: int, _task: str = task, _listener=listener) -> None:
-                _listener(_task, copied, total)
+        def progress(copied: int, total: int, _task: str = task, _listener=listener) -> None:
+            _listener(_task, copied, total)
 
-        try:
-            _copy_snapshot(source, pending, total=contract.payload_bytes, progress=progress)
-            copied = _snapshot_contract(pending)
-            if copied is None or copied.signature != contract.signature:
-                raise OSError("hot-cache verification did not match the persistent snapshot")
-            receipt = {
-                "schema_version": 1,
-                "task": task,
-                "source": str(source.resolve()),
-                "signature": contract.signature,
-                "revision": contract.revision,
-                "payload_bytes": contract.payload_bytes,
-                "payload_files": contract.payload_files,
-                "last_used_at": time.time(),
-            }
-            (pending / ".diony-hot-cache.json").write_text(
-                json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-            )
+    try:
+        _copy_snapshot(source, pending, total=contract.payload_bytes, progress=progress)
+        copied = _snapshot_contract(pending)
+        if copied is None or copied.signature != contract.signature:
+            raise OSError("hot-cache verification did not match the persistent snapshot")
+        receipt = {
+            "schema_version": 1,
+            "task": task,
+            "source": str(source.resolve()),
+            "signature": contract.signature,
+            "revision": contract.revision,
+            "payload_bytes": contract.payload_bytes,
+            "payload_files": contract.payload_files,
+            "last_used_at": time.time(),
+        }
+        (pending / ".diony-hot-cache.json").write_text(
+            json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        with _hot_cache_lock(lock_path):
+            if _cache_valid(destination, source, contract):
+                # Another caller landed the same family while this copy ran.
+                shutil.rmtree(pending, ignore_errors=True)
+                _touch(destination)
+                return destination
             shutil.rmtree(destination, ignore_errors=True)
             pending.replace(destination)
-            return destination
-        except (OSError, subprocess.SubprocessError):
-            shutil.rmtree(pending, ignore_errors=True)
-            return source
+        return destination
+    except (OSError, subprocess.SubprocessError):
+        shutil.rmtree(pending, ignore_errors=True)
+        return source
 
 
 def prepare_checkpoint(

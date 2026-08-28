@@ -88,7 +88,11 @@ _ACTION_VERBS = re.compile(
     r"delivers|discovers|drives|enters|examines?|explores?|finds|fixes|follows|"
     r"gathers?|guides?|holds|lifts?|looks|opens|paints|raises|reads|repairs?|"
     r"restores?|reveals?|runs|searches|smiles?|sorts?|speaks|steps|studies|"
-    r"touches|turns|unlocks?|walks|watches|writes)\b",
+    r"touches|turns|unlocks?|walks|watches|writes|"
+    r"beeps?|catches|climbs?|crawls?|dives?|drops?|falls?|flies|floats?|glides?|grabs?|"
+    r"hops?|jumps?|kneels?|lands?|laughs?|leans?|leaps?|nods?|paddles?|pauses?|points?|"
+    r"pulls?|pushes|reaches|rises?|rolls?|sinks?|sits?|slides?|spins?|splashes|spots?|"
+    r"stands?|stares?|swims?|throws?|tilts?|twitches|waddles?|waits?|waves?)\b",
     re.IGNORECASE,
 )
 _ENVIRONMENT_CUE = re.compile(
@@ -549,6 +553,7 @@ def _camera_optics(camera: str) -> tuple[float, float]:
 
 
 def spoken_performance_direction(speaker: str, *, emotion: str = "") -> str:
+    emotion = _limited_words(strip_mood_adjectives(emotion or ""), 6)
     """The Motion layer for a Wan2.2 S2V take: one on-camera speaker performing the line.
 
     Wan S2V drives lips, jaw, and cheeks from the audio it hears and reads the
@@ -559,12 +564,27 @@ def spoken_performance_direction(speaker: str, *, emotion: str = "") -> str:
     """
     name = _limited_words(speaker, 4) or "The speaker"
     colour = " ".join(str(emotion or "").split()).casefold()
-    delivery = f"with {colour} in the voice and face" if colour and colour != "neutral" else "at a steady conversational pace"
+    # The pace cue is part of the motion contract whatever the colour of the
+    # line; without it a directed line failed validation and the S2V shot
+    # silently dispatched on the blocking template.
+    delivery = (
+        f"with {colour} in the voice and face at a steady conversational pace"
+        if colour and colour != "neutral"
+        else "at a steady conversational pace"
+    )
     return (
         f"{name} speaks the line straight toward camera {delivery}, "
         "lips, jaw, and cheeks shaping every syllable in time with the voice, mouth closed "
         "and still through each pause and after the last word, small natural head gestures "
         "and blinks while the shoulders settle, no one else speaking"
+    )
+
+
+def _spoken_subject(speaker: str, anchors: list[str]) -> str:
+    name = _clean_layer(speaker) or "The speaker"
+    return _clean_layer(
+        f"{name}, the exact supplied subject, same face or design, silhouette, wardrobe, and identifying "
+        f"details throughout; identity anchors: {', '.join(anchors)}"
     )
 
 
@@ -613,12 +633,22 @@ def spoken_wan_prompt_plan(
         lighting,
         _SPOKEN_COLOUR_CONTRACT,
     ]
-    for scene in (*spoken_scenes, plan.scene, "; ".join(scene_segments[:2]), "; ".join(scene_segments[:1])):
+    # A spoken close-up is about the speaker. The compiled subject may be a
+    # word-limited fragment of scene prose ("The ducklings leap into the tub
+    # one after another. The"); when that cannot fit the budget beside the
+    # performance direction, a speaker-first subject with the same anchors is
+    # tried before giving up.
+    subjects = [plan.subject, _spoken_subject(speaker, plan.identity_anchors)]
+    for subject, scene in (
+        (subject, scene)
+        for subject in dict.fromkeys(subjects)
+        for scene in (*spoken_scenes, plan.scene, "; ".join(scene_segments[:2]), "; ".join(scene_segments[:1]))
+    ):
         if not scene.strip():
             continue
         candidate = make_wan_prompt_plan(
             source_idea_sha256=plan.source_idea_sha256,
-            subject=plan.subject,
+            subject=subject,
             identity_anchors=plan.identity_anchors,
             motion=motion,
             camera=camera,

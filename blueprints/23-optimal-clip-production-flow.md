@@ -78,7 +78,11 @@ engine.
 The queue remains sequential on one B200. It may reuse a hot checkpoint or
 resident pipeline, but it may not reorder previous-frame Shots or run concurrent
 A14B Takes. Task-aware prefetch is allowed only when it cannot consume the active
-Take's storage or device budget.
+Take's storage or device budget. Its time budget too: the hot-tier lock
+guards only verify / reserve / land, never a copy, so a first-use family
+staging in the background (I2V-A14B, 126 GB, minutes) can never hold the
+active Take's own checkpoint check behind it; a same-family caller joins
+the in-flight copy instead of copying twice.
 
 ## 3. Receipt-gated lane selector
 

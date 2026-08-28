@@ -226,10 +226,25 @@ body[data-step="path"] .production-folio .grammar {
   opacity: 1;
 }
 
-/* Compute — the card grid answers to the workspace, not the window. */
+/* Compute — the card grid answers to the workspace, not the window. The lease
+   column's floor is capped at the workspace width so a narrow or mis-sized
+   workspace stacks the lanes instead of collapsing the first one to zero. */
 .compute-groups {
-  grid-template-columns: minmax(0, 1.45fr) minmax(21rem, 0.85fr);
+  grid-template-columns: minmax(0, 1.45fr) minmax(min(21rem, 100%), 0.85fr);
   gap: clamp(0.9rem, 1.6cqw, 1.65rem);
+}
+
+.compute-field {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.compute-group {
+  min-width: 0;
+}
+
+.cluster-map {
+  max-width: 100%;
 }
 
 .local-cluster-sketches {
@@ -276,8 +291,12 @@ body[data-step="path"] .production-folio .grammar {
   }
 }
 
-/* Connect — the SSH line is a console card, laid out like the Compute lanes. */
-body[data-step="connect"] .production-folio .fields {
+/* Connect — the SSH line is a console card, laid out like the Compute lanes.
+   Keyed on the line actually painted into the sheet (`.do[data-line]`), never on
+   body[data-step]: a state poll may move the active line while the operator is
+   still looking at another one, and the shared #form must never be re-gridded
+   under the Compute cards. */
+.production-folio .do[data-line="connect"] .fields {
   position: relative;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
@@ -289,7 +308,7 @@ body[data-step="connect"] .production-folio .fields {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
 }
 
-body[data-step="connect"] .production-folio .fields::before {
+.production-folio .do[data-line="connect"] .fields::before {
   content: "SSH LINE · THIS LEASE";
   grid-column: 1 / -1;
   margin: 0 0 -0.15rem;
@@ -298,7 +317,7 @@ body[data-step="connect"] .production-folio .fields::before {
   letter-spacing: 0.18em;
 }
 
-body[data-step="connect"] .production-folio .fields::after {
+.production-folio .do[data-line="connect"] .fields::after {
   content: "";
   position: absolute;
   top: -1px;
@@ -309,22 +328,22 @@ body[data-step="connect"] .production-folio .fields::after {
   background: linear-gradient(90deg, var(--ember), var(--signal));
 }
 
-body[data-step="connect"] .production-folio .fields .field {
+.production-folio .do[data-line="connect"] .fields .field {
   min-width: 0;
   gap: 0.3rem;
 }
 
-body[data-step="connect"] .production-folio .fields label {
+.production-folio .do[data-line="connect"] .fields label {
   gap: 0.32rem;
 }
 
-body[data-step="connect"] .production-folio .fields span {
+.production-folio .do[data-line="connect"] .fields span {
   color: #a7a7a7;
 }
 
-body[data-step="connect"] .production-folio .fields input,
-body[data-step="connect"] .production-folio .fields textarea,
-body[data-step="connect"] .production-folio .fields select {
+.production-folio .do[data-line="connect"] .fields input,
+.production-folio .do[data-line="connect"] .fields textarea,
+.production-folio .do[data-line="connect"] .fields select {
   min-width: 0;
   padding: 0.38rem 0 0.42rem;
   border-bottom: 2px solid rgba(255, 255, 255, 0.16);
@@ -333,18 +352,18 @@ body[data-step="connect"] .production-folio .fields select {
   font-variant-numeric: tabular-nums;
 }
 
-body[data-step="connect"] .production-folio .fields textarea {
+.production-folio .do[data-line="connect"] .fields textarea {
   min-height: 0;
   resize: none;
 }
 
-body[data-step="connect"] .production-folio .fields .field.bad input,
-body[data-step="connect"] .production-folio .fields .field.bad textarea {
+.production-folio .do[data-line="connect"] .fields .field.bad input,
+.production-folio .do[data-line="connect"] .fields .field.bad textarea {
   border-bottom-color: var(--fail);
 }
 
 /* The resulting line reads as a terminal receipt. */
-body[data-step="connect"] .production-folio .confirm {
+.production-folio .do[data-line="connect"] .confirm {
   display: flex;
   align-items: center;
   gap: 0.65rem;
@@ -360,14 +379,14 @@ body[data-step="connect"] .production-folio .confirm {
   overflow-wrap: anywhere;
 }
 
-body[data-step="connect"] .production-folio .confirm::before {
+.production-folio .do[data-line="connect"] .confirm::before {
   content: "$";
   flex: 0 0 auto;
   color: #35d07f;
   font: 500 0.88rem/1 var(--mono);
 }
 
-body[data-step="connect"] .production-folio .confirm:empty {
+.production-folio .do[data-line="connect"] .confirm:empty {
   display: none;
 }
 

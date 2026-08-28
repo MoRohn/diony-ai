@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import pytest
 
@@ -972,3 +971,34 @@ def test_spark_argv_honours_a_per_shot_guide_scale_override(tmp_path, monkeypatc
     assert base[base.index("--sample_guide_scale") + 1] == "5.5"
     raised = runner.spark_argv(task="s2v-14B", prompt="speaks", seed=1, save_file=tmp_path / "a.mp4", frame_num=65, image=still, audio=audio, guide_scale=6.5)
     assert raised[raised.index("--sample_guide_scale") + 1] == "6.5"
+
+
+def test_s2v_tts_overlay_bridges_the_cosyvoice_prompt_api(tmp_path) -> None:
+    from diony_wan.runner import ensure_s2v_tts_prompt_path
+
+    module = tmp_path / "wan" / "speech2video.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(
+        "class WanS2V:\n"
+        "    def tts(self, tts_prompt_audio, tts_prompt_text, tts_text):\n"
+        "        speech_list = []\n"
+        "        prompt_speech_16k = load_wav(tts_prompt_audio, 16000)\n"
+        "        if tts_prompt_text is not None:\n"
+        "            for i in self.cosyvoice.inference_zero_shot(tts_text, tts_prompt_text, prompt_speech_16k):\n"
+        "                speech_list.append(i['tts_speech'])\n"
+        "        else:\n"
+        "            for i in self.cosyvoice.inference_cross_lingual(tts_text, prompt_speech_16k):\n"
+        "                speech_list.append(i['tts_speech'])\n",
+        encoding="utf-8",
+    )
+    assert ensure_s2v_tts_prompt_path(tmp_path) == module
+    text = module.read_text(encoding="utf-8")
+    assert "DIONY_S2V_TTS_PROMPT_PATH" in text
+    assert 'prompt_for_cosyvoice = tts_prompt_audio if "prompt_wav" in _diony_params else prompt_speech_16k' in text
+    assert "inference_cross_lingual(tts_text, prompt_for_cosyvoice)" in text
+    assert "inference_zero_shot(tts_text, tts_prompt_text, prompt_for_cosyvoice)" in text
+    assert "prompt_speech_16k):" not in text
+    compile(text, str(module), "exec")
+    before = module.read_text(encoding="utf-8")
+    ensure_s2v_tts_prompt_path(tmp_path)
+    assert module.read_text(encoding="utf-8") == before

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections import namedtuple
 from pathlib import Path
 
@@ -138,3 +137,70 @@ def test_staging_listener_hears_foreground_copies_but_never_prefetch(tmp_path, m
         assert heard == []
     finally:
         storage.set_staging_listener(None)
+
+
+def test_foreground_family_is_never_held_behind_another_familys_prefetch(tmp_path, monkeypatch) -> None:
+    """Blueprint 23: a prefetch may not consume the active Take's budget. The
+    hot-cache lock guards verify/reserve/land only, never the copy itself."""
+    import threading
+    import time
+
+    from diony_wan import storage
+    from diony_wan.storage import prefetch_checkpoint, prepare_checkpoint, wait_for_prefetch
+
+    big = _snapshot(tmp_path / "volume" / "Wan2.2-I2V-A14B", revision="1" * 40, size=4096)
+    small = _snapshot(tmp_path / "volume" / "Wan2.2-S2V-14B", revision="2" * 40, size=2048)
+    cache_root = tmp_path / "overlay"
+    monkeypatch.setenv("DIONY_MODEL_HOT_CACHE", "1")
+    monkeypatch.setenv("DIONY_MODEL_HOT_CACHE_ROOT", str(cache_root))
+    monkeypatch.setenv("DIONY_MODEL_HOT_CACHE_GB", "1")
+    monkeypatch.setenv("DIONY_MODEL_HOT_CACHE_MIN_FREE_GB", "0")
+    gate = threading.Event()
+    real_copy = storage._copy_snapshot
+
+    def slow_copy(source, pending, **kwargs):
+        if source.name == "Wan2.2-I2V-A14B":
+            gate.wait(timeout=10)  # a 126 GB copy, in miniature
+        return real_copy(source, pending, **kwargs)
+
+    monkeypatch.setattr(storage, "_copy_snapshot", slow_copy)
+    prefetch_checkpoint("i2v-A14B", source=big)
+    time.sleep(0.2)  # the prefetch is now inside its copy
+    started = time.monotonic()
+    hot = prepare_checkpoint("s2v-14B", source=small)
+    elapsed = time.monotonic() - started
+    assert hot != small and (hot / "weights.safetensors").is_file()
+    assert elapsed < 2.0, f"active family waited {elapsed:.1f}s on another family's prefetch"
+    gate.set()
+    wait_for_prefetch("i2v-A14B", timeout=10)
+    assert (cache_root / big.name / "weights.safetensors").is_file()
+    assert not list(cache_root.glob("*.partial-*"))
+
+
+def test_same_family_joins_the_inflight_prefetch_instead_of_copying_twice(tmp_path, monkeypatch) -> None:
+    import threading
+    import time
+
+    from diony_wan import storage
+    from diony_wan.storage import prefetch_checkpoint, prepare_checkpoint
+
+    source = _snapshot(tmp_path / "volume" / "Wan2.2-I2V-A14B", revision="1" * 40, size=4096)
+    cache_root = tmp_path / "overlay"
+    monkeypatch.setenv("DIONY_MODEL_HOT_CACHE", "1")
+    monkeypatch.setenv("DIONY_MODEL_HOT_CACHE_ROOT", str(cache_root))
+    monkeypatch.setenv("DIONY_MODEL_HOT_CACHE_GB", "1")
+    monkeypatch.setenv("DIONY_MODEL_HOT_CACHE_MIN_FREE_GB", "0")
+    copies = []
+    real_copy = storage._copy_snapshot
+
+    def counted(source_path, pending, **kwargs):
+        copies.append(threading.current_thread().name)
+        time.sleep(0.3)
+        return real_copy(source_path, pending, **kwargs)
+
+    monkeypatch.setattr(storage, "_copy_snapshot", counted)
+    prefetch_checkpoint("i2v-A14B", source=source)
+    time.sleep(0.05)
+    hot = prepare_checkpoint("i2v-A14B", source=source)
+    assert hot == cache_root / source.name and (hot / "weights.safetensors").is_file()
+    assert len(copies) == 1 and copies[0].startswith("diony-prefetch-")

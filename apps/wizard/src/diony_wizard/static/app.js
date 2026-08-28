@@ -840,6 +840,17 @@ function paintField(field, answers, interactive) {
 }
 
 function paintLesson(item, answers, interactive) {
+  // The sheet is laid out for the line painted into it. Both the body step and the
+  // report's data-line follow the lesson, so a state poll that moves the active
+  // line can never restyle the form still on screen (Compute under Connect's console).
+  const doSection = document.querySelector(".do");
+  if (doSection) doSection.dataset.line = item.step_id || "";
+  if (formEl) formEl.dataset.line = item.step_id || "";
+  if (!state?.complete && item.step_id) {
+    const previousStep = document.body.dataset.step || "";
+    document.body.dataset.step = item.step_id;
+    if (previousStep && previousStep !== item.step_id) triggerStudioTransition(previousStep, item.step_id);
+  }
   if (!item || !formEl) return;
   const steps = state?.steps || [];
   const idx = steps.findIndex((s) => s.id === item.step_id) + 1;
@@ -1197,7 +1208,11 @@ function pollSignedGpu() {
       if (status === "identifying" || status === "unverified") return;
       stopSignedGpuPoll();
       state = body;
-      if (!state.complete) viewing = state.active_step;
+      // A line the operator opened from the rail stays open; the poll only
+      // moves a viewer who was already on the active line.
+      const railOpened =
+        viewing && viewing !== state.active_step && state.steps.some((s) => s.id === viewing && s.status !== "pending");
+      if (!state.complete && !railOpened) viewing = state.active_step;
       render();
     } catch {
       /* keep polling */

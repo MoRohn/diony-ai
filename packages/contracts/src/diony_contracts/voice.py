@@ -190,6 +190,11 @@ class SpeechQCReceipt(BaseModel):
     transcript_word_accuracy: float | None = Field(default=None, ge=0, le=1)
     transcript_last_word_ok: bool | None = None
     transcript_min_accuracy: float = Field(default=0.6, ge=0, le=1)
+    # Word accuracy is a gate only on lines long enough to measure it: short
+    # or onomatopoeic lines ("QUACK!") are transcribed too loosely to reject a
+    # 15-minute render on. Below this word count the transcript is evidence.
+    transcript_word_count: int = Field(default=0, ge=0)
+    transcript_gate_min_words: int = Field(default=6, ge=1)
     passed: bool = False
     diagnostics: list[str] = Field(default_factory=list)
 
@@ -212,7 +217,11 @@ class SpeechQCReceipt(BaseModel):
         if self.true_peak_dbtp is None or self.true_peak_dbtp > self.true_peak_ceiling_dbtp:
             measured = "unmeasured" if self.true_peak_dbtp is None else f"{self.true_peak_dbtp:.1f} dBTP"
             failed.append(f"dialogue stem true peak {measured} exceeds {self.true_peak_ceiling_dbtp:g} dBTP")
-        if self.transcript_word_accuracy is not None and self.transcript_word_accuracy < self.transcript_min_accuracy:
+        if (
+            self.transcript_word_accuracy is not None
+            and self.transcript_word_count >= self.transcript_gate_min_words
+            and self.transcript_word_accuracy < self.transcript_min_accuracy
+        ):
             failed.append(
                 f"the delivered speech matches only {self.transcript_word_accuracy:.0%} of the authored line "
                 f"(needs {self.transcript_min_accuracy:.0%})"

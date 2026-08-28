@@ -87,6 +87,12 @@ class ScriptScene:
 class ScriptDialogue:
     speaker: str
     text: str
+    # A stage direction authored beside the line ("(beeping)", "electronic
+    # quack-beep") directs the performance; it is never spoken.
+    direction: str = ""
+    # The authored scene the line belongs to, so the window is placed on that
+    # scene's shots instead of spread from shot one.
+    scene: int | None = None
 
 
 PLAYBOOKS: dict[CustomerKind, Playbook] = {
@@ -562,12 +568,18 @@ def _install_wan_prompt_plan(
     if shot.engine == Engine.S2V_14B or shot_speaks(shot):
         # A spoken Shot dispatches to S2V (the camera resolves the task from the
         # locked audio, whatever engine the Shot booked): direct the speaker.
-        plan = spoken_wan_prompt_plan(
+        spoken = spoken_wan_prompt_plan(
             plan,
             speaker=speaker_name(bible, shot),
             focal_mm=shot.focal_mm,
             emotion=spoken_emotion(shot),
-        ) or plan
+        )
+        if spoken is None:
+            # Visibly, never silently: the S2V lane will run on the blocking
+            # template, and the retake director can see why.
+            plan.craft_notes = [*plan.craft_notes, "spoken performance direction did not fit the word budget; blocking template dispatched"]
+        else:
+            plan = spoken
     shot.prompt_plan = plan
     shot.prompt = render_wan_prompt(plan)
     shot.negative_prompt = render_negative_prompt(plan)
@@ -684,6 +696,31 @@ _SCENE_HEADING = re.compile(
 )
 
 
+_SLUGLINE = re.compile(
+    r"^[ \t]*(?P<slug>(?:INT|EXT|INT\./EXT|I/E)\.?[ \t]+[^\n]*?)[ \t]*$",
+    re.MULTILINE,
+)
+
+
+def _scene_spans(idea: str) -> list[tuple[int, int, int]]:
+    """(scene number, start offset, end offset) for every authored scene heading.
+
+    Explicit `Scene N` headings win; a screenplay's `INT. / EXT.` sluglines are
+    scenes too, numbered in order, so a script written the way scripts are
+    written places its lines and beats where the writer put them.
+    """
+    matches = list(_SCENE_HEADING.finditer(idea))
+    numbered = bool(matches)
+    if not matches:
+        matches = list(_SLUGLINE.finditer(idea))
+    spans: list[tuple[int, int, int]] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(idea)
+        number = int(match.group("number")) if numbered else index + 1
+        spans.append((number, match.start(), end))
+    return spans
+
+
 def _clean_narration(value: str) -> str:
     lines = [line.strip().strip('"“”') for line in value.splitlines()]
     return " ".join(line for line in lines if line).strip()
@@ -692,7 +729,7 @@ def _clean_narration(value: str) -> str:
 _SCREENPLAY_DIALOGUE = re.compile(
     r"^[ \t]*(?P<speaker>[A-Z][A-Za-z0-9.'\N{RIGHT SINGLE QUOTATION MARK}-]*"
     r"(?:[ \t]+[A-Z][A-Za-z0-9.'\N{RIGHT SINGLE QUOTATION MARK}-]*){0,3})"
-    r"(?:[ \t]*\([^\n)]*\))?[ \t]*:[ \t]*(?P<text>[^\n]+?)[ \t]*$",
+    r"(?:[ \t]*(?P<parenthetical>\([^\n)]*\)))?[ \t]*:[ \t]*(?P<text>[^\n]+?)[ \t]*$",
     re.MULTILINE,
 )
 _NON_CHARACTER_CUES = {
@@ -760,27 +797,73 @@ def _prose_quoted_speech(idea: str) -> list[tuple[str | None, str, int, int]]:
     return found
 
 
+def _scene_at(spans: list[tuple[int, int, int]], offset: int) -> int | None:
+    for number, start, end in spans:
+        if start <= offset < end:
+            return number
+    return None
+
+
+_LINE_QUOTE = re.compile(r'["“](?P<text>[^"“”\n]+)(?:["”]|$)')
+
+
+def _spoken_and_direction(raw_text: str) -> tuple[str, str]:
+    """Split a screenplay line into the words spoken and the direction around them.
+
+    `Robot: electronic quack-beep "QUACK!"` speaks `QUACK!` with the direction
+    `electronic quack-beep`; an unbalanced quote still yields the quoted words.
+    A line without quotes is spoken whole, minus a leading parenthetical.
+    """
+    text = raw_text.strip()
+    quote = _LINE_QUOTE.search(text)
+    if quote:
+        spoken = re.sub(r"\s+", " ", quote.group("text")).strip()
+        outside = (text[: quote.start()] + " " + text[quote.end() :]).strip(" ,;:—–-")
+        direction = re.sub(r"\s+", " ", outside).strip(" ()")
+        return spoken, direction
+    direction = ""
+    parenthetical = re.match(r"^\((?P<direction>[^)]*)\)\s*", text)
+    if parenthetical:
+        direction = parenthetical.group("direction").strip()
+        text = text[parenthetical.end() :]
+    return text.strip('"“”').strip(), direction
+
+
 def _script_dialogue(idea: str, *, default_speaker: str = "Character") -> list[ScriptDialogue]:
     """Preserve explicitly authored screenplay lines without inventing speech."""
     addressed: list[tuple[int, ScriptDialogue]] = []
+    spans = _scene_spans(idea)
     for match in _SCREENPLAY_DIALOGUE.finditer(idea):
         raw_speaker = re.sub(r"\s+", " ", match.group("speaker")).strip(" .-")
         cue = raw_speaker.upper()
         if cue in _NON_CHARACTER_CUES or cue.startswith("SCENE "):
             continue
-        text = re.sub(r"\s+", " ", match.group("text")).strip()
-        text = text.strip('"“”')
+        raw_text = re.sub(r"\s+", " ", match.group("text")).strip()
+        text, direction = _spoken_and_direction(raw_text)
+        parenthetical = match.group("parenthetical")
+        if parenthetical:
+            direction = " ".join(part for part in (parenthetical.strip(" ()"), direction) if part)
         if not text:
             continue
         speaker = raw_speaker.title() if raw_speaker.isupper() else raw_speaker
-        addressed.append((match.start(), ScriptDialogue(speaker=speaker, text=text)))
+        addressed.append(
+            (
+                match.start(),
+                ScriptDialogue(
+                    speaker=speaker,
+                    text=text,
+                    direction=direction,
+                    scene=_scene_at(spans, match.start()),
+                ),
+            )
+        )
     for raw_speaker, text, start, _end in _prose_quoted_speech(idea):
         speaker = str(raw_speaker or "").strip()
         if not speaker or speaker.casefold() in _GENERIC_SPEAKERS:
             speaker = default_speaker
         elif speaker.isupper():
             speaker = speaker.title()
-        addressed.append((start, ScriptDialogue(speaker=speaker, text=text)))
+        addressed.append((start, ScriptDialogue(speaker=speaker, text=text, scene=_scene_at(spans, start))))
     addressed.sort(key=lambda row: row[0])
     lines: list[ScriptDialogue] = []
     seen: set[tuple[str, str]] = set()
@@ -887,6 +970,8 @@ def _fit_dialogue_to_shots(
                 ScriptDialogue(
                     speaker=line.speaker,
                     text=" ".join(words[start:end]),
+                    direction=line.direction,
+                    scene=line.scene,
                 )
             )
             preferred_boundaries.add(min(len(tokens), line_start + end))
@@ -967,12 +1052,53 @@ def _fit_dialogue_to_shots(
                 fragments.append((line_index, speaker, [word]))
         windows.append(
             [
-                ScriptDialogue(speaker=speaker, text=" ".join(words))
-                for _, speaker, words in fragments
+                ScriptDialogue(
+                    speaker=speaker,
+                    text=" ".join(words),
+                    direction=lines[line_index].direction,
+                    scene=lines[line_index].scene,
+                )
+                for line_index, speaker, words in fragments
             ]
         )
         start = end
     return windows
+
+
+def _place_dialogue_windows(
+    windows: list[list[ScriptDialogue]],
+    eligible: list[int],
+    scene_schedule: list[ScriptScene | None],
+) -> dict[int, list[ScriptDialogue]]:
+    """Put each window on a shot of the scene its line was authored in.
+
+    A window whose scene has no free eligible shot takes the next free shot at
+    or after that scene; lines without an authored scene keep the even spread.
+    """
+    placed: dict[int, list[ScriptDialogue]] = {}
+    used: set[int] = set()
+    scene_of = {
+        index: (beat.number if beat is not None else None)
+        for index, beat in enumerate(scene_schedule)
+    }
+    for index, window in enumerate(windows):
+        target = next((line.scene for line in window if line.scene is not None), None)
+        choice: int | None = None
+        if target is not None:
+            same_scene = [i for i in eligible if scene_of.get(i) == target and i not in used]
+            if same_scene:
+                choice = same_scene[0]
+            else:
+                first = next((i for i in range(len(scene_schedule)) if scene_of.get(i) == target), None)
+                later = [i for i in eligible if i not in used and (first is None or i >= first)]
+                if later:
+                    choice = later[0]
+        if choice is None:
+            # No authored scene: the even spread over the eligible shots, as before.
+            choice = eligible[min(len(eligible) - 1, (index * len(eligible)) // max(1, len(windows)))]
+        used.add(choice)
+        placed.setdefault(choice, []).extend(window)
+    return placed
 
 
 def _character_id(name: str) -> str:
@@ -1003,10 +1129,27 @@ def _library_voice_casting(project_id: str, character: Character, cast_index: in
 def _script_scenes(idea: str) -> list[ScriptScene]:
     """Parse an explicitly authored Scene plan without asking a model to rewrite it."""
     matches = list(_SCENE_HEADING.finditer(idea))
+    numbered = bool(matches)
+    if not matches:
+        matches = list(_SLUGLINE.finditer(idea))
     scenes: list[ScriptScene] = []
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(idea)
         body = idea[match.end() : end].strip()
+        if not numbered:
+            # A slugline scene: number in order, title from the slug, weight by
+            # how much the writer wrote for it (about forty words per shot).
+            words = len(_visual_only_text(body).split())
+            scenes.append(
+                ScriptScene(
+                    number=index + 1,
+                    title=re.sub(r"\s+", " ", match.group("slug")).strip(" .-"),
+                    visual=re.sub(r"\s+", " ", body).strip(),
+                    narration="",
+                    weight=max(1, round(words / 40)),
+                )
+            )
+            continue
         narration_match = re.search(r"\bNarration\s*:\s*", body, re.IGNORECASE)
         if narration_match:
             visual = body[: narration_match.start()].strip()
@@ -1474,13 +1617,7 @@ def expand_idea(
     ]
     for character, casting in zip(characters, voice_castings):
         character.voice_casting_id = casting.id
-    dialogue_by_shot: dict[int, list[ScriptDialogue]] = {}
-    for index, window in enumerate(dialogue_windows):
-        slot = min(
-            len(dialogue_eligible) - 1,
-            (index * len(dialogue_eligible)) // len(dialogue_windows),
-        )
-        dialogue_by_shot.setdefault(dialogue_eligible[slot], []).extend(window)
+    dialogue_by_shot = _place_dialogue_windows(dialogue_windows, dialogue_eligible, scene_schedule)
     visual_idea = (
         _visual_only_text(idea)
         or "A Bible-locked performance in the authored setting."
@@ -1591,6 +1728,7 @@ def expand_idea(
                         id=f"turn-{sid}-{turn_index + 1}",
                         character_id=character_by_name[line.speaker].id,
                         text=line.text,
+                        emotion=line.direction or "neutral",
                     )
                     for turn_index, line in enumerate(spoken_lines)
                 ],

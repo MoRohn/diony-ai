@@ -295,6 +295,16 @@ def plan_soundtrack(project: Project) -> dict | None:
     """Author and persist the soundtrack edit list. Never raises; always visible."""
     allow_generation = generation_enabled(project)
     if not sound_library_present() and not allow_generation:
+        # Visibly, never silently: the program will mix dialogue (or room tone)
+        # only. Naming the two enablement paths here beats a mute master later.
+        record_activity(
+            "sound",
+            "No score or ambience planned: no licensed cue library at "
+            f"{sound_library_root()} and generated audio is not enabled "
+            f"(site DIONY_AUDIOGEN + Bible soundtrack policy {project.bible.soundtrack_policy.value}). "
+            "The program mixes dialogue only.",
+            level="warn",
+        )
         return None
     if os.environ.get("DIONY_DRY_RUN", "").strip().lower() in {"1", "true", "yes", "on"}:
         # The dry-run desktop has no brain by design; skip without a warning.

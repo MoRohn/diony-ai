@@ -854,7 +854,7 @@ if [ -x "$VPY" ] && [ -f "$MONTAGE_OVERLAY" ] && { [ -n "${DIONY_WHISPER_MODEL:-
   fi
 fi
 if [ -x "$VPY" ]; then
-  "$VPY" -c "from pathlib import Path; from diony_wan.runner import ensure_attention_fallback, ensure_negative_prompt_input, ensure_optional_engine_lazy_imports; ensure_attention_fallback(Path('/opt/wan22')); ensure_negative_prompt_input(Path('/opt/wan22')); ensure_optional_engine_lazy_imports(Path('/opt/wan22'))"
+  "$VPY" -c "from pathlib import Path; from diony_wan.runner import ensure_attention_fallback, ensure_negative_prompt_input, ensure_optional_engine_lazy_imports, ensure_s2v_tts_prompt_path; ensure_attention_fallback(Path('/opt/wan22')); ensure_negative_prompt_input(Path('/opt/wan22')); ensure_optional_engine_lazy_imports(Path('/opt/wan22')); ensure_s2v_tts_prompt_path(Path('/opt/wan22'))"
 fi
 _diony_wan_host_ready() {
   [ -f "$RUNTIME_PROBE" ] && [ -f "$RUNTIME_OVERLAY" ] && \

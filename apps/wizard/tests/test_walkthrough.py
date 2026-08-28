@@ -240,7 +240,7 @@ def test_wizard_uses_the_production_folio_layout() -> None:
     assert 'class="sheet production-folio"' in html
     assert 'class="shot-index cue-navigation"' in html
     assert 'class="well cue-workspace"' in html
-    assert 'href="/static/folio.css?v=brand16"' in html
+    assert 'href="/static/folio.css?v=brand17"' in html
     assert "--mast-height: 7rem" in css
     assert "--rail-width: clamp(15rem, 18vw, 19rem)" in css
     assert "v=brand3" in html
@@ -1004,7 +1004,7 @@ def test_compute_page_uses_balanced_readable_responsive_layout() -> None:
     js = client.get("/static/app.js").text
     css = client.get("/static/app.css").text
 
-    assert '/static/app.css?v=brand16' in html
+    assert '/static/app.css?v=brand17' in html
     assert 'class="compute-group compute-group-local"' in html
     assert 'class="compute-group compute-group-lease"' in html
     assert 'group.className = `compute-group compute-group-${label.toLowerCase()}`;' in js
@@ -1012,7 +1012,7 @@ def test_compute_page_uses_balanced_readable_responsive_layout() -> None:
     assert "--compute-card-radius: 1.5rem;" in css
     assert 'body[data-step="path"] .production-folio .cue-workspace' in css
     assert "max-width: 78rem;" in css
-    assert "grid-template-columns: minmax(0, 1.45fr) minmax(21rem, 0.85fr);" in css
+    assert "grid-template-columns: minmax(0, 1.45fr) minmax(min(21rem, 100%), 0.85fr);" in css
     assert "border-radius: var(--compute-card-radius);" in css
     assert "text-wrap: balance;" in css
     assert "overflow-wrap: normal;" in css
@@ -1337,11 +1337,11 @@ def test_compute_and_connect_share_one_adaptive_console() -> None:
     js = client.get("/static/app.js").text
     folio = client.get("/static/folio.css").text
 
-    assert 'href="/static/folio.css?v=brand16"' in html
+    assert 'href="/static/folio.css?v=brand17"' in html
     assert "Ready 37" in folio
     assert "container-name: workspace;" in folio
     assert "@container workspace (max-width: 47rem)" in folio
-    assert 'body[data-step="connect"] .production-folio .fields {' in folio
+    assert '.production-folio .do[data-line="connect"] .fields {' in folio
     assert "grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));" in folio
     assert '.production-folio .screening[data-scroll="more"]::after' in folio
     assert "@media (max-height: 720px)" in folio
@@ -1361,3 +1361,22 @@ def test_compute_and_connect_share_one_adaptive_console() -> None:
     assert 'prepEl.dataset.scroll = more ? "more" : "end";' in js
     # The dead-GPU reason reads once at the head; the status line carries the action.
     assert 'statusEl.textContent = "Paste the new SSH line, then Continue.";' in js
+
+
+def test_connect_console_is_keyed_on_the_painted_line_not_the_body_step() -> None:
+    """A state poll may move the active line while the operator looks at Compute;
+    the Connect console card must never re-grid the shared #form under the
+    Compute cards (the 2026-08-28 overlapping-cards regression)."""
+    static = Path(__file__).resolve().parents[1] / "src" / "diony_wizard" / "static"
+    folio = (static / "folio.css").read_text(encoding="utf-8")
+    app_css = (static / "app.css").read_text(encoding="utf-8")
+    app_js = (static / "app.js").read_text(encoding="utf-8")
+    assert 'body[data-step="connect"] .production-folio .fields' not in folio
+    assert '.production-folio .do[data-line="connect"] .fields' in folio
+    assert 'doSection.dataset.line = item.step_id' in app_js
+    assert 'document.body.dataset.step = item.step_id' in app_js
+    assert "railOpened" in app_js
+    # The lease column's floor can never exceed the workspace, and the compute
+    # field spans any grid a stale rule might impose on the form.
+    assert "minmax(min(21rem, 100%), 0.85fr)" in folio and "minmax(min(21rem, 100%), 0.85fr)" in app_css
+    assert ".compute-field {\n  grid-column: 1 / -1;" in folio
