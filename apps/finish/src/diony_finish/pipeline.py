@@ -814,6 +814,35 @@ def _encode_sr_stream(
         raise FinishError(message or "ffmpeg ProRes legalize/conform failed")
 
 
+def chain_color_correction(frame, reference_mean, reference_std, strength: float):
+    """Per-channel gain/offset that moves `frame`'s statistics toward a reference.
+
+    Returns (gain, offset) arrays on the 0–255 scale, already scaled by
+    `strength` (0 = untouched, 1 = full statistical match). Blueprint 24: a
+    previous-frame chain drifts in exposure and colour temperature hop by hop;
+    matching each print toward the boundary it was chained from keeps a scene
+    from visibly warming or fading across its shots.
+    """
+    import numpy as np
+
+    rgb = np.asarray(frame)[:, :, :3].astype(np.float32) / 255.0
+    current_mean = rgb.reshape(-1, 3).mean(axis=0)
+    current_std = np.maximum(rgb.reshape(-1, 3).std(axis=0), 1e-3)
+    ref_mean = np.asarray(reference_mean, dtype=np.float32)
+    ref_std = np.maximum(np.asarray(reference_std, dtype=np.float32), 1e-3)
+    amount = max(0.0, min(1.0, float(strength)))
+    gain = 1.0 + amount * (ref_std / current_std - 1.0)
+    offset = amount * (ref_mean - current_mean * (ref_std / current_std))
+    return gain.astype(np.float32), (offset * 255.0).astype(np.float32)
+
+
+def apply_chain_color(frame, gain, offset):
+    import numpy as np
+
+    corrected = np.asarray(frame).astype(np.float32) * gain + offset
+    return np.clip(corrected, 0, 255).astype(np.uint8)
+
+
 def finish_clip(
     src: Path,
     dest: Path,
@@ -821,8 +850,14 @@ def finish_clip(
     fps: float = 23.976,
     grain: str = "none",
     progress: Callable[[int, int], None] | None = None,
+    color_match: dict | None = None,
 ) -> Path:
-    """Write a 1920×1080 Rec.709 legal master. Raises FinishError."""
+    """Write a 1920×1080 Rec.709 legal master. Raises FinishError.
+
+    `color_match` = {"mean": [r,g,b], "std": [r,g,b], "strength": 0..1} (0–1
+    scale) applies a global per-channel gain/offset toward the statistics of
+    the boundary frame this print was chained from, before super-resolution.
+    """
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     src = Path(src)
@@ -842,10 +877,21 @@ def finish_clip(
     except ImportError:
         cv2 = None  # type: ignore[assignment]
     total_frames = max(1, measured_total)
+    match_gain = None
+    match_offset = None
 
     def finished_frames():
-        nonlocal prev_sr, prev_gray
+        nonlocal prev_sr, prev_gray, match_gain, match_offset
         for frame_number, frame in enumerate(frames, start=1):
+            if color_match and float(color_match.get("strength", 0) or 0) > 0:
+                if match_gain is None:
+                    match_gain, match_offset = chain_color_correction(
+                        frame,
+                        color_match.get("mean", [0.5, 0.5, 0.5]),
+                        color_match.get("std", [0.2, 0.2, 0.2]),
+                        float(color_match.get("strength", 0.5)),
+                    )
+                frame = apply_chain_color(frame, match_gain, match_offset)
             sr = _tile_sr(model, device, frame, tile=tile)
             gray = None
             if cv2 is not None:
@@ -878,8 +924,14 @@ def stitch_masters(
     clips: list[tuple[Path, int, int]],
     dest: Path,
     fps: float = 23.976,
+    *,
+    look: str = "",
 ) -> Path:
-    """Overlap-aware 1080 program master. clips are (path, handle_in, duration_frames)."""
+    """Overlap-aware 1080 program master. clips are (path, handle_in, duration_frames).
+
+    `look` is an ffmpeg filter segment (see contracts `look_filter`) applied
+    once, program-wide, after the overlap graph and before the legalizer.
+    """
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     valid = [(Path(path), int(handle), int(duration)) for path, handle, duration in clips if Path(path).is_file()]
@@ -892,7 +944,7 @@ def stitch_masters(
         if dest.stat().st_size < 32:
             dest.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 800)
         return dest
-    if not _concat_masters(valid, dest, fps):
+    if not _concat_masters(valid, dest, fps, look=look):
         raise FinishError("1080 program stitch failed")
     return dest
 
@@ -900,6 +952,8 @@ def stitch_masters(
 def _stitch_filter(
     clips: list[tuple[Path, int, int]],
     fps: float,
+    *,
+    look: str = "",
 ) -> tuple[str, str, int]:
     """Build an overlap graph; positive handles are temporal blends, never discarded frames."""
     if not clips:
@@ -940,6 +994,11 @@ def _stitch_filter(
     # xfade works through an intermediate pixel representation and can expand
     # otherwise legal 10-bit clip levels at the overlap. Re-assert the same
     # guard band used by the per-clip Finish encoder before ProRes encoding.
+    if look:
+        # One creative look for the whole program, never per clip; the
+        # limiter below re-legalizes whatever the grade did to the range.
+        filters.append(f"{current}format=yuv422p10le,{look}[looked]")
+        current = "[looked]"
     program = "[program]"
     filters.append(
         f"{current}format=yuv422p10le,"
@@ -989,11 +1048,11 @@ def _media_frame_count(path: Path) -> int:
     return 0
 
 
-def _concat_masters(clips: list[tuple[Path, int, int]], dest: Path, fps: float) -> bool:
+def _concat_masters(clips: list[tuple[Path, int, int]], dest: Path, fps: float, *, look: str = "") -> bool:
     ff = shutil.which("ffmpeg") or os.environ.get("DIONY_FFMPEG", "").strip()
     if not ff:
         return False
-    if len(clips) == 1:
+    if len(clips) == 1 and not look:
         proc = subprocess.run(
             [ff, "-y", "-i", str(clips[0][0]), "-an", "-c", "copy", str(dest)],
             capture_output=True,
@@ -1029,7 +1088,7 @@ def _concat_masters(clips: list[tuple[Path, int, int]], dest: Path, fps: float) 
     inputs: list[str] = []
     for path, _handle, _duration in clips:
         inputs.extend(["-i", str(path)])
-    graph, output, _total_frames = _stitch_filter(clips, fps)
+    graph, output, _total_frames = _stitch_filter(clips, fps, look=look)
     proc = subprocess.run(
         [
             ff,

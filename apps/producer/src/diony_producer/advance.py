@@ -14,6 +14,8 @@ from diony_producer.farm import (
     refresh_take_measurement,
     take_has_live_negative,
 )
+from diony_producer.final_review import final_review_refuses_current_master, run_final_review
+from diony_contracts.montage import ReviewStatus
 from diony_producer.finish import (
     enter_finish,
     finish_status,
@@ -189,10 +191,17 @@ def apply_mix_lock(project: Project, locked_by: str = "producer") -> None:
         return
     if live_finish() and not should_proxy() and not selected_masters_ready(project):
         raise ValueError("mix lock needs 1080 masters on every selected take")
-    if live_finish() and not should_proxy():
+    live = live_finish() and not should_proxy()
+    if live:
         blockers = mix_evidence_blockers(project, verify_program=True)
         if blockers:
             raise ValueError("mix lock refused: " + " ".join(blockers))
+    # Blueprint 24: the mixed master is measured before it is called done. A
+    # failed review refuses the lock with its evidence; revise locks on record.
+    review = run_final_review(project, live=live)
+    if review.status == ReviewStatus.FAIL:
+        persist_project(project)
+        raise ValueError("mix lock refused by final review: " + "; ".join(review.issues_found))
     _close(gate, locked_by)
     if project.mix:
         project.mix.state = MixLockState.LOCKED
@@ -223,6 +232,10 @@ def reopen_picture_for_retake(project: Project) -> None:
         project.mix.true_peak_dbtp = None
         project.mix.stem_asset_ids = []
     reset_mix()
+    # The final review and the deliverables described the master a retake
+    # just invalidated; they are measured again when the next mix locks.
+    project.final_review = None
+    project.deliverables = []
     project.status = ProjectStatus.SHOOTING
     project.production_ended_at = None
     persist_project(project)
@@ -281,6 +294,11 @@ def maybe_advance_run(project: Project) -> None:
     if mix.open and not pic.open:
         if live_finish() and not should_proxy() and mix_evidence_blockers(project, verify_program=True):
             start_mix(project)
+            return
+        if final_review_refuses_current_master(project):
+            # The mixed master already failed its final review; the verdict is
+            # on the Project and the feed. Only a retake or a re-mix (a new
+            # program hash) earns another measurement — never a 1 s retry loop.
             return
         try:
             apply_mix_lock(project, "producer")

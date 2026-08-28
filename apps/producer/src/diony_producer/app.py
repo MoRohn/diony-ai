@@ -66,6 +66,7 @@ from diony_producer.advance import (
 )
 from diony_producer.brain import expand_on_site, plan_production
 from diony_producer.soundtrack import plan_soundtrack
+from diony_producer.sizing import announce_sizing
 from diony_producer.camera import live_camera
 from diony_producer.control_plane import ControlPlane, WorkspaceAccessDenied
 from diony_producer.farm import (
@@ -991,6 +992,8 @@ def roll_dailies() -> dict:
             sibling = _generation_take(shot, attempt=2)
             _project.takes.append(sibling)
             queued.append(sibling)
+    if live_camera() and queued:
+        announce_sizing(_project, planned_takes=len(queued))
     warning = enter_farm() if live_camera() else None
     if warning and _project.shots:
         _project.notes.append(

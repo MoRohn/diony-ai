@@ -240,7 +240,7 @@ def test_wizard_uses_the_production_folio_layout() -> None:
     assert 'class="sheet production-folio"' in html
     assert 'class="shot-index cue-navigation"' in html
     assert 'class="well cue-workspace"' in html
-    assert 'href="/static/folio.css?v=brand3"' in html
+    assert 'href="/static/folio.css?v=brand16"' in html
     assert "--mast-height: 7rem" in css
     assert "--rail-width: clamp(15rem, 18vw, 19rem)" in css
     assert "v=brand3" in html
@@ -1004,7 +1004,7 @@ def test_compute_page_uses_balanced_readable_responsive_layout() -> None:
     js = client.get("/static/app.js").text
     css = client.get("/static/app.css").text
 
-    assert '/static/app.css?v=brand15' in html
+    assert '/static/app.css?v=brand16' in html
     assert 'class="compute-group compute-group-local"' in html
     assert 'class="compute-group compute-group-lease"' in html
     assert 'group.className = `compute-group compute-group-${label.toLowerCase()}`;' in js
@@ -1328,3 +1328,36 @@ def test_studio_front_end_waits_for_the_signed_gpu_before_offering_producer() ->
     assert "function paintSignedGpuNotice()" in js
     assert 'sessionStorage.setItem("diony_studio_entry", "start")' in js
     assert "did not answer. RunPod remaps the IP and -p after Stop" in js
+
+
+def test_compute_and_connect_share_one_adaptive_console() -> None:
+    """Ready 37: the sheet is laid out for the line on screen; Connect is a console card."""
+    client = TestClient(app)
+    html = client.get("/").text
+    js = client.get("/static/app.js").text
+    folio = client.get("/static/folio.css").text
+
+    assert 'href="/static/folio.css?v=brand16"' in html
+    assert "Ready 37" in folio
+    assert "container-name: workspace;" in folio
+    assert "@container workspace (max-width: 47rem)" in folio
+    assert 'body[data-step="connect"] .production-folio .fields {' in folio
+    assert "grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));" in folio
+    assert '.production-folio .screening[data-scroll="more"]::after' in folio
+    assert "@media (max-height: 720px)" in folio
+    assert "--mast-height: clamp(5rem, 9vh, 6.5rem);" in folio
+    assert "padding-right: 0;" in folio
+    assert "padding-right: 15rem;" not in folio
+
+    # body[data-step] follows the rail, not the server's active line.
+    assert "document.body.dataset.step = stepId;" in js
+    assert "const nextStep = state?.complete ? \"complete\" : viewedStep;" in js
+    # The setup agent stays on the active line; other lines opened from the rail keep their form.
+    assert "function syncProvisionForStep(stepId)" in js
+    assert "syncProvisionForStep(stepId);" in js
+    assert "viewing !== state.active_step" in js
+    # The fold reports what waits below it.
+    assert "function updateScrollState()" in js
+    assert 'prepEl.dataset.scroll = more ? "more" : "end";' in js
+    # The dead-GPU reason reads once at the head; the status line carries the action.
+    assert 'statusEl.textContent = "Paste the new SSH line, then Continue.";' in js

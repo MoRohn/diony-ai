@@ -39,6 +39,7 @@ def recalibrate_stopped_project(
     project.production_ended_at = None
     project.version += 1
     project.deliverables = []
+    project.final_review = None
     project.timeline = None
     if project.mix is not None:
         project.mix.state = MixLockState.OPEN

@@ -659,6 +659,110 @@
           "title": "Measured Frame Count",
           "type": "integer"
         },
+        "frame_quality_version": {
+          "default": "",
+          "title": "Frame Quality Version",
+          "type": "string"
+        },
+        "sharpness_min": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sharpness Min"
+        },
+        "brightness_min": {
+          "anyOf": [
+            {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brightness Min"
+        },
+        "brightness_max": {
+          "anyOf": [
+            {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brightness Max"
+        },
+        "contrast_min": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Contrast Min"
+        },
+        "black_frames": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Black Frames",
+          "type": "integer"
+        },
+        "frame_quality_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frame Quality Ok"
+        },
+        "chain_color_drift": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chain Color Drift"
+        },
+        "prompt_adherence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Adherence"
+        },
         "settled_best_of": {
           "anyOf": [
             {
@@ -907,6 +1011,44 @@
         "true_peak_ceiling_dbtp": {
           "default": -1.0,
           "title": "True Peak Ceiling Dbtp",
+          "type": "number"
+        },
+        "transcript": {
+          "default": "",
+          "title": "Transcript",
+          "type": "string"
+        },
+        "transcript_word_accuracy": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transcript Word Accuracy"
+        },
+        "transcript_last_word_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transcript Last Word Ok"
+        },
+        "transcript_min_accuracy": {
+          "default": 0.6,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Transcript Min Accuracy",
           "type": "number"
         },
         "passed": {

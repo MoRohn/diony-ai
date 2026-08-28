@@ -177,3 +177,50 @@ Stability AI Community License permits free commercial use below USD $1M
 annual revenue with registration; larger organizations require a Stability AI
 Enterprise License. Operators enabling this instrument are responsible for
 that registration/licensing. Never a hosted service.
+
+==============================================================================
+faster-whisper / CTranslate2 (MIT License) — optional Blueprint 24 lane
+==============================================================================
+
+Project: faster-whisper (SYSTRAN) and CTranslate2 (OpenNMT)
+Source: https://github.com/SYSTRAN/faster-whisper
+        https://github.com/OpenNMT/CTranslate2
+Weights: https://huggingface.co/Systran/faster-whisper-large-v3
+License: MIT License (code); the converted Whisper large-v3 weights follow
+OpenAI Whisper's MIT License (https://github.com/openai/whisper).
+
+Used only when the weights are staged on the site (`DIONY_WHISPER_MODEL`) to
+transcribe, locally, the speech Wan2.2 delivered so the authored line can be
+measured against it. Never contacted over the network by Production.
+
+==============================================================================
+CLIP ViT-B/32 (MIT License) and Hugging Face Transformers (Apache License 2.0)
+— optional Blueprint 24 lane
+==============================================================================
+
+Project: CLIP — Contrastive Language-Image Pre-training (OpenAI)
+Source: https://github.com/openai/CLIP
+Weights: https://huggingface.co/openai/clip-vit-base-patch32
+License: MIT License (code and released weights)
+
+Project: Transformers (Hugging Face)
+Source: https://github.com/huggingface/transformers
+License: Apache License 2.0
+
+Project: Pillow
+Source: https://github.com/python-pillow/Pillow
+License: MIT-CMU (HPND) License
+
+Used only when the CLIP checkpoint is staged on the site (`DIONY_CLIP_MODEL`)
+to measure, locally, how well sampled frames of a negative match its subject
+layer (`QCReport.prompt_adherence`). Loaded with `local_files_only`; never
+contacted over the network by Production.
+
+==============================================================================
+OpenMontage — studied reference, no code included
+==============================================================================
+
+Project: OpenMontage (https://github.com/calesthio/OpenMontage), AGPL-3.0.
+Diony's Blueprint 24 production-craft gates were designed after studying that
+project's published strategies. No OpenMontage source code, prompts, or assets
+are included in or linked by Diony AI; every implementation is original.

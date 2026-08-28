@@ -28,6 +28,15 @@ from diony_contracts.enums import (
     ReferenceLock,
     VoiceCastingSource,
 )
+from diony_contracts.montage import (
+    Decision,
+    DecisionCategory,
+    DecisionOption,
+    ReviewVerdict,
+    append_decision,
+    diversify_coverage,
+    review_shots,
+)
 from diony_contracts.models import (
     Asset,
     Bible,
@@ -255,6 +264,14 @@ def _program_durations(minutes: float) -> list[int]:
 
 def _coverage_recipes(kind: CustomerKind, durations: list[int]) -> list[dict]:
     """Cycle cinematic patterns. Every take books what the Wan lane delivers."""
+    recipes, _changes = coverage_recipes_with_review(kind, durations)
+    return recipes
+
+
+def coverage_recipes_with_review(kind: CustomerKind, durations: list[int]) -> tuple[list[dict], list[str]]:
+    """Cycled coverage, then diversified so no framing runs three deep and the
+    camera is not locked off on more than 60% of picture shots (Blueprint 24).
+    The change lines feed the Project decision log."""
     pool = _recipes(kind)
     out: list[dict] = []
     for i, frames in enumerate(durations):
@@ -265,7 +282,7 @@ def _coverage_recipes(kind: CustomerKind, durations: list[int]) -> list[dict]:
         rec["duration_frames"] = int(frames)
         rec["seconds"] = frames / TIMELINE_FPS
         out.append(rec)
-    return out
+    return diversify_coverage(out, pool)
 
 
 def _sample_recipes(kind: CustomerKind, seconds: int) -> list[dict]:
@@ -1357,12 +1374,13 @@ def expand_idea(
     )
     run_id = f"{seed}-{uuid.uuid4().hex}"
     pid = f"studio-{run_id}"
+    coverage_changes: list[str] = []
     if is_sample:
         recipes = _sample_recipes(brief.customer_kind, sample_seconds)
         program_durations: list[int] = []
     else:
         program_durations = _program_durations(brief.target_minutes)
-        recipes = _coverage_recipes(brief.customer_kind, program_durations)
+        recipes, coverage_changes = coverage_recipes_with_review(brief.customer_kind, program_durations)
     image_ids = [a.id for a in held if a.kind == AssetKind.IMAGE]
     video_ids = [a.id for a in held if a.kind == AssetKind.VIDEO]
     audio_ids = [a.id for a in held if a.kind == AssetKind.AUDIO]
@@ -1393,7 +1411,9 @@ def expand_idea(
             extra = windows_needed - len(dialogue_eligible)
             grown = program_durations + [WAN_LANE_FRAMES] * extra
             program_durations = grown[:MAX_QUALITY_SHOTS]
-            recipes = _coverage_recipes(brief.customer_kind, program_durations)
+            recipes, coverage_changes = coverage_recipes_with_review(
+                brief.customer_kind, program_durations
+            )
             dialogue_eligible = _dialogue_eligible(recipes)
             seconds_per_shot = _dialogue_seconds(recipes, dialogue_eligible)
             windows_needed = _dialogue_windows_needed(authored_lines, seconds_per_shot)
@@ -1668,7 +1688,60 @@ def expand_idea(
         total_frames=total,
         fps=bible.fps,
     )
+    _review_rundown_variety(draft, coverage_changes)
     return draft
+
+
+def _review_rundown_variety(project: Project, coverage_changes: list[str]) -> None:
+    """Blueprint 24: score the rundown's variety before any GPU time and log it.
+
+    The diversification already applied to cycled coverage is recorded as a
+    coverage decision with the cycled plan as the rejected option. A rundown
+    that still reviews `revise`/`fail` is not blocked (the Bible gate is
+    human), but the violations reach the conductor notes so the reviewer sees
+    them beside the rundown they describe.
+    """
+    review = review_shots(project.shots)
+    project.rundown_review = review
+    if coverage_changes:
+        append_decision(
+            project.decisions,
+            Decision(
+                id=f"d-{len(project.decisions) + 1:04d}",
+                stage="rundown",
+                category=DecisionCategory.COVERAGE,
+                subject="coverage variety",
+                options=[
+                    DecisionOption(
+                        id="cycled",
+                        label="cycled coverage pool as booked",
+                        rejected_because="framing ran three deep or the camera stayed locked off",
+                    ),
+                    DecisionOption(
+                        id="diversified",
+                        label="diversified coverage",
+                        score=round(max(0.0, 1.0 - review.score / 5.0), 3),
+                        reason="; ".join(coverage_changes)[:600],
+                    ),
+                ],
+                selected="diversified",
+                reason=f"{len(coverage_changes)} shot(s) reframed or given motion so the cut does not read as a slideshow",
+                confidence=0.7,
+            ),
+        )
+    if review.verdict in (ReviewVerdict.REVISE, ReviewVerdict.FAIL) and project.shots:
+        project.notes.append(
+            Note(
+                id="n-rundown-variety",
+                author="conductor",
+                body=(
+                    f"Rundown variety reviews {review.verdict.value} (risk {review.score:g}/5): "
+                    + "; ".join(review.violations)
+                    + (". " + " ".join(review.suggestions) if review.suggestions else "")
+                )[:900],
+                shot_id=project.shots[0].id,
+            )
+        )
 
 
 def expand_shot_prompt(shot: Shot, bible: Bible) -> str:

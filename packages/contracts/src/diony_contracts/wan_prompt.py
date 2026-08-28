@@ -156,6 +156,112 @@ _REFERENCE_BACKGROUND_NEGATIVE_TERMS = (
     "split screen",
 )
 
+# Craft lint (Blueprint 24). Mood adjectives constrain no pixels: "beautiful",
+# "epic", "cinematic" tell a diffusion model nothing a lens, a light, or a body
+# mechanic would not say better. They are stripped from idea-derived layers at
+# compile time and reported as craft notes when a refinement reintroduces them.
+_MOOD_ADJECTIVES: tuple[str, ...] = (
+    "beautiful",
+    "gorgeous",
+    "stunning",
+    "breathtaking",
+    "epic",
+    "amazing",
+    "incredible",
+    "awesome",
+    "majestic",
+    "magnificent",
+    "inspiring",
+    "cinematic",
+    "masterpiece",
+    "ultra detailed",
+    "ultra-detailed",
+    "hyper realistic",
+    "hyper-realistic",
+    "hyperrealistic",
+    "high quality",
+    "best quality",
+    "trending on artstation",
+    "8k",
+    "4k",
+)
+_MOOD_PATTERN = re.compile(
+    r"(?<![\w-])(?:" + "|".join(re.escape(word) for word in _MOOD_ADJECTIVES) + r")(?![\w-])",
+    re.IGNORECASE,
+)
+_GENERIC_PHRASES: tuple[str, ...] = (
+    "a person",
+    "someone",
+    "modern",
+    "futuristic",
+    "cutting-edge",
+    "seamless",
+    "innovative",
+)
+_OVERLAY_IN_DEPTH = re.compile(
+    r"\b(?:overlay|title|subtitle|caption|hud|watermark)s?\b[^.;]{0,40}\b(?:foreground|background|midground)\b",
+    re.IGNORECASE,
+)
+# The scene layer owns one technical use of the word: "cinematic Rec.709 color".
+_TECHNICAL_MOOD_EXCEPTIONS = ("cinematic rec.709",)
+
+
+def _fix_article(match: re.Match[str]) -> str:
+    article, word = match.group(1), match.group(2)
+    wants_an = word[0].casefold() in "aeiou"
+    fixed = "an" if wants_an else "a"
+    if article[0].isupper():
+        fixed = fixed.capitalize()
+    return f"{fixed} {word}"
+
+
+def strip_mood_adjectives(value: str) -> str:
+    """Remove adjectives that describe a feeling, not a frame; keep the sentence intact.
+
+    Orphaned connectors left behind ("A, woman", "an and majestic city") are
+    healed so the compiled subject still reads as prose, and the article is
+    re-agreed with the noun that now follows it.
+    """
+    text = _MOOD_PATTERN.sub(" ", value)
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s+([,;.!?])", r"\1", text)
+    text = re.sub(r"(?:,\s*){2,}", ", ", text)
+    text = re.sub(r"\b(and|or)\s+(?:(?:and|or)\s+)+", r"\1 ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(a|an|the)\s*,\s*", r"\1 ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(a|an|the)\s+(?:and|or)\s+", r"\1 ", text, flags=re.IGNORECASE)
+    text = re.sub(r",\s*(?:and|or)\s*,", ",", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*(?:and|or|,)\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*\b(?:and|or|at|in|on|of|with|through|,)\s*$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(a|an)\s+([A-Za-z])", lambda m: _fix_article(m)[:-1] + m.group(2), text, flags=re.IGNORECASE)
+    return text.strip(" ,;")
+
+
+def lint_wan_prompt_plan(plan: WanPromptPlan) -> list[str]:
+    """Advisory craft notes: never a dispatch blocker, always recorded."""
+    notes: list[str] = []
+    for name, layer in (
+        ("subject", plan.subject),
+        ("motion", plan.motion),
+        ("environment dynamics", plan.environment_dynamics),
+        ("scene", plan.scene),
+    ):
+        text = layer.casefold()
+        for exception in _TECHNICAL_MOOD_EXCEPTIONS:
+            text = text.replace(exception, "")
+        found = sorted({match.group(0).casefold() for match in _MOOD_PATTERN.finditer(text)})
+        if found:
+            notes.append(f"{name} leans on mood adjectives ({', '.join(found)}) that constrain no pixels")
+    subject = plan.subject.casefold()
+    generic = [phrase for phrase in _GENERIC_PHRASES if re.search(rf"\b{re.escape(phrase)}\b", subject)]
+    if generic:
+        notes.append(f"subject uses generic phrasing ({', '.join(generic)}); name defining attributes instead")
+    for name, layer in (("scene", plan.scene), ("environment dynamics", plan.environment_dynamics)):
+        if _OVERLAY_IN_DEPTH.search(layer):
+            notes.append(f"{name} places an overlay on the depth axis; overlays are not scenery")
+    if re.search(r"[\"\u201c\u201d][^\"\u201c\u201d]{3,}[\"\u201c\u201d]", plan.motion):
+        notes.append("motion quotes dialogue; the line rides the speech lane, never the picture prompt")
+    return notes
+
 
 def _clean_layer(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().strip(".;,- "))
@@ -172,7 +278,7 @@ def _idea_subject(idea: str, reference_lock: ReferenceLock, wardrobe: str) -> st
             "The exact supplied subject, preserving the same face or design, silhouette, "
             "proportions, wardrobe, and identifying details"
         )
-    normalized = _clean_layer(idea)
+    normalized = _clean_layer(strip_mood_adjectives(idea))
     match = _ACTION_VERBS.search(normalized)
     core = normalized[: match.start()].strip(" ,;:-") if match else normalized
     core = _limited_words(core, 10)
@@ -201,7 +307,7 @@ def _identity_anchors(reference_lock: ReferenceLock, wardrobe: str) -> list[str]
 
 
 def _idea_action(idea: str) -> str:
-    normalized = _clean_layer(idea)
+    normalized = _clean_layer(strip_mood_adjectives(idea))
     lowered = normalized.casefold()
     if lowered.startswith(("animate this image as ", "animate the image as ")):
         performance = normalized.split(" as ", 1)[1].split(" References:", 1)[0]
@@ -233,7 +339,7 @@ def _idea_action(idea: str) -> str:
 
 
 def _environment_from_world(world: str) -> str:
-    normalized = _clean_layer(world).split(" References:", 1)[0]
+    normalized = _clean_layer(strip_mood_adjectives(world)).split(" References:", 1)[0]
     if ":" in normalized:
         normalized = normalized.split(":", 1)[1].strip()
     camera_matches = [
@@ -630,6 +736,7 @@ def make_wan_prompt_plan(
     )
     plan.word_count = len(render_wan_prompt(plan).split())
     plan.diagnostics = validate_wan_prompt_plan(plan)
+    plan.craft_notes = lint_wan_prompt_plan(plan)
     return plan
 
 

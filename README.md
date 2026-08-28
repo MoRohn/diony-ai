@@ -54,6 +54,11 @@ North Star deliverable: **one hour of TV/movie-ready audiovisual**, 1920×1080, 
 - **Binding image references**: subject-defining stills lock the whole show to Wan **I2V** — characters and character teams hold across shots, adjacent shots condition on the prior print's last frame, boundary QC and an eight-frame temporal blend keep continuity, and I2V can never silently downgrade to T2V. ([Blueprint 20](blueprints/20-wan22-prompt-intelligence.md))
 - **Length goals**, not stopwatches: shot count scales so the stitched program lands the goal exactly, on the native Wan 81-frame quality lane — booked picture is trimmed at conform, never stretched.
 
+**Production craft, measured (Blueprint 24)**
+- Every rundown is reviewed for variety before GPU time (framing runs, locked-off monotony, lighting, hero contrast, generic subjects) and diversified deterministically; mood adjectives never reach a Wan prompt.
+- Every print carries sampled-frame evidence (sharpness, exposure, black frames, chain colour drift) beside its temporal and reference QC; every automatic choice — retake direction, settle ranking, hero selection, look, sizing — lands in an append-only decision log.
+- One program look per master (`Bible.look`, Bible LUT honoured), chain colour matching at Finish, a post-mix final review that refuses the lock on failure, dialogue subtitle sidecars, and a QC packet as deliverables. Optional local Whisper and CLIP lanes measure speech and prompt adherence when their weights are staged — never a network call. ([Blueprint 24](blueprints/24-montage-intelligence.md))
+
 **Production you can watch and stop**
 - Production is a **live monitor**: overall tally and clock, per-shot clip milestones, pipeline stages, GPU/compute activity, and a production log — not server access logs.
 - **STOP** is a governed choice: keep completed clips as a stitched incomplete result, or delete them from the run. Restart adoption resumes only currently selected work. ([Blueprint 21](blueprints/21-production-performance-assurance.md))

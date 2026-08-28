@@ -89,6 +89,29 @@ HF_PACK = [
     ),
 ]
 
+# Blueprint 24 optional measured lanes: a local Whisper for transcript QC of the
+# speech Wan delivers and a local CLIP for prompt adherence. Pulled best-effort
+# after the pack (DIONY_MONTAGE_PACK=0 skips); never part of the pack gate.
+# (repo, dest, revision, ignore_patterns, files, bytes)
+MONTAGE_PACK = [
+    (
+        "Systran/faster-whisper-large-v3",
+        "/models/audio/faster-whisper-large-v3",
+        "edaa852ec7e145841d8ffdb056a99866b5f0a478",
+        [],
+        7,
+        3091841273,
+    ),
+    (
+        "openai/clip-vit-base-patch32",
+        "/models/diony/clip-vit-base-patch32",
+        "3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268",
+        ["*.msgpack", "*.h5"],
+        10,
+        609872212,
+    ),
+]
+
 # Wan2.2 speech pack (Blueprint 22): Wan's own S2V TTS lane
 # (`generate.py --enable_tts`, `WanS2V.load_tts`) loads a CosyVoice checkout
 # and the CosyVoice2-0.5B weights from beside generate.py and would download
@@ -1105,6 +1128,7 @@ def remote_setup_script(repo: str, nas: str = "") -> str:
     else:
         token_line = "true"
     pack = repr(HF_PACK)
+    montage_pack = repr(MONTAGE_PACK)
     tts_model = repr(WAN_TTS_MODEL)
     prompt_library_dir = VOICE_PROMPT_LIBRARY_DIR
     prompt_library_lines = "\n".join(
@@ -1230,6 +1254,26 @@ with ThreadPoolExecutor(max_workers=min(pull_workers, len(PACK))) as pool:
         print(f"HF_DONE {{repo_id}}", flush=True)
 print("HF_OK", flush=True)
 PY
+echo MONTAGE_PACK_START
+if [ "${{DIONY_MONTAGE_PACK:-1}}" != "0" ]; then
+_diony_python - <<'PY' || echo MONTAGE_PACK_SKIPPED
+# Blueprint 24 optional lanes: best-effort, never a pack failure. A lane whose
+# weights did not land is simply unmeasured on this site.
+from huggingface_hub import snapshot_download
+import os
+import sys
+PACK = {montage_pack}
+for repo_id, dest, revision, ignore, _files, _bytes in PACK:
+    print(f"HF_PULL {{repo_id}} -> {{dest}}", flush=True)
+    os.makedirs(dest, exist_ok=True)
+    try:
+        snapshot_download(repo_id=repo_id, revision=revision, local_dir=dest, ignore_patterns=ignore or None, max_workers=4)
+        print(f"HF_DONE {{repo_id}}", flush=True)
+    except Exception as exc:
+        print(f"HF_OPTIONAL_FAIL {{repo_id}}: {{exc}}", file=sys.stderr, flush=True)
+print("MONTAGE_PACK_OK", flush=True)
+PY
+fi
 {dedupe}
 echo WAN_RUNTIME_START
 test -d /opt/wan22/.git || git clone --depth 1 https://github.com/Wan-Video/Wan2.2.git /opt/wan22

@@ -62,7 +62,18 @@ from diony_producer.calibration import (
     maybe_auto_calibrate,
     measured_qc_required_default,
 )
-from diony_producer.quality import MEASUREMENT_VERSION, measure_negative_quality
+from diony_producer.quality import (
+    CHAIN_DRIFT_WARN,
+    FRAME_QUALITY_VERSION,
+    MEASUREMENT_VERSION,
+    chain_color_drift,
+    frame_channel_stats,
+    measure_frame_quality,
+    measure_negative_quality,
+)
+from diony_producer.decisions import record_decision
+from diony_producer.semantic_qc import prompt_adherence
+from diony_contracts.montage import DecisionCategory, DecisionOption
 from diony_producer.vault import persist_project, record_activity, vault_root
 from diony_producer.voice import (
     VoicePipelineError,
@@ -90,6 +101,7 @@ _AUTO_RETAKE_QC_PREFIXES = (
     "Measured temporal coherence failed",
     "Measured flicker failed",
     "Voice audio failed",
+    "Black frame detected",
 )
 _INFRASTRUCTURE_QC_PREFIXES = (
     "GPU overlay has less than",
@@ -711,6 +723,28 @@ def select_hero_print(project: Project, shot) -> Take:
         previous = shot.selected_take_id
         shot.selected_take_id = best.id
         assemble_program(project)
+        if len(candidates) > 1:
+            record_decision(
+                project,
+                stage="camera",
+                category=DecisionCategory.HERO_SELECT,
+                subject=f"{shot.id} hero print",
+                options=[
+                    DecisionOption(
+                        id=item.id,
+                        label=f"attempt {item.attempt} ({item.qc.verdict.value if item.qc else 'unjudged'})",
+                        score=attempt_score(item),
+                        reason=(item.qc.notes if item.qc else "")[:200],
+                        rejected_because="" if item.id == best.id else "ranked below by verdict, identity, and temporal evidence",
+                    )
+                    for item in sorted(candidates, key=_candidate_score, reverse=True)
+                ],
+                selected=best.id,
+                reason="hero coverage rolled two seeds; AutoQC evidence ranks the print",
+                confidence=0.8,
+                shot_id=shot.id,
+                take_id=best.id,
+            )
         persist_project(project)
         record_activity(
             "qc",
@@ -890,6 +924,9 @@ _SCORE_WEIGHTS = (
     ("speech_tail", 0.15),
     ("reference", 0.35),
     ("temporal", 0.20),
+    # Optional CLIP prompt adherence (Blueprint 24): joins the mean only when a
+    # local encoder measured it; the other weights renormalise otherwise.
+    ("adherence", 0.15),
 )
 
 
@@ -920,6 +957,12 @@ def attempt_score(take: Take) -> float:
         "temporal": (
             max(0.0, 1.0 - qc.temporal_residual_p95 / 0.1)
             if qc.temporal_residual_p95 is not None
+            else None
+        ),
+        # 0.22 cosine reads as "not the prompt", 0.30 as a strong match.
+        "adherence": (
+            max(0.0, min(1.0, (qc.prompt_adherence - 0.22) / 0.08))
+            if qc.prompt_adherence is not None
             else None
         ),
     }
@@ -984,6 +1027,27 @@ def settle_exhausted_shot(project: Project, shot) -> Take | None:
     previous = shot.selected_take_id
     shot.selected_take_id = best.id
     assemble_program(project)
+    record_decision(
+        project,
+        stage="camera",
+        category=DecisionCategory.SETTLE,
+        subject=f"{shot.id} print after {len(generations)} attempts",
+        options=[
+            DecisionOption(
+                id=item.id,
+                label=f"attempt {item.attempt}",
+                score=attempt_score(item),
+                reason=(item.qc.notes if item.qc else "")[:200],
+                rejected_because="" if item.id == best.id else "lower measured attempt score",
+            )
+            for item in sorted(measured, key=lambda item: (-attempt_score(item), -item.attempt))
+        ],
+        selected=best.id,
+        reason=f"retake cap reached; highest attempt score {score:.2f} proceeds by policy as WARN",
+        confidence=min(0.9, max(0.3, score)),
+        shot_id=shot.id,
+        take_id=best.id,
+    )
     persist_project(project)
     ranked = ", ".join(
         f"{item.id} {attempt_score(item):.2f}"
@@ -1039,10 +1103,36 @@ def auto_retake_for_qc_failure(project: Project, take: Take) -> Take | None:
     # Evidence-driven direction first: DeepSeek addresses every measured symptom
     # at once. The keyword repair table remains the offline fallback. Both are
     # applied after the contract refresh, so the revision survives to dispatch.
-    if not direct_retake(project, shot, take):
+    directed = direct_retake(project, shot, take)
+    if not directed:
         repair_wan_prompt_for_qc(shot, take.qc.notes if take.qc else "")
     retry = new_generation_take(project, shot, live=True)
     project.takes.append(retry)
+    record_decision(
+        project,
+        stage="camera",
+        category=DecisionCategory.RETAKE,
+        subject=f"{shot.id} retake {retry.attempt}",
+        options=[
+            DecisionOption(
+                id="directed",
+                label="DeepSeek-directed layer rewrite with measured evidence",
+                reason="the brain addressed every measured symptom at once" if directed else "",
+                rejected_because="" if directed else "brain unreachable or declined; offline repair table applied",
+            ),
+            DecisionOption(
+                id="repaired",
+                label="keyword repair of the diagnosed layer",
+                reason="" if directed else "offline fallback keyed on the QC failure note",
+                rejected_because="directed rewrite succeeded" if directed else "",
+            ),
+        ],
+        selected="directed" if directed else "repaired",
+        reason=(take.qc.notes if take.qc else "AutoQC rejection")[:300] + f"; distant seed {retry.seed}",
+        confidence=0.75 if directed else 0.6,
+        shot_id=shot.id,
+        take_id=retry.id,
+    )
     shot.selected_take_id = retry.id
     assemble_program(project)
     project.status = ProjectStatus.SHOOTING
@@ -1179,6 +1269,21 @@ def _continuity_evidence(
     if previous_frame is None or previous_take_id is None:
         return None, None
     return previous_take_id, _ssim_at(negative, previous_frame, seconds=0.0)
+
+
+def _chain_color_evidence(project: Project, take: Take, negative: Path) -> float | None:
+    """Mean per-channel shift between this print's first frame and the previous print's last."""
+    shot = project.shot(take.shot_id)
+    if shot.continuity_mode != ContinuityMode.PREVIOUS_FRAME:
+        return None
+    previous_frame, previous_take_id = continuity_frame(project, shot)
+    if previous_frame is None or previous_take_id is None:
+        return None
+    current = frame_channel_stats(negative)
+    reference = frame_channel_stats(previous_frame)
+    if current is None or reference is None:
+        return None
+    return chain_color_drift(current, reference)
 
 
 def _quality_ssim_floor(name: str) -> float:
@@ -1786,6 +1891,31 @@ def attach_negative(
     )
     if measured_qc_required is None:
         measured_qc_required = measured_qc_required_default()
+    # Blueprint 24 sampled-frame evidence: a black frame is a hard failure on
+    # any site; sharpness, exposure, and contrast stay advisory notes.
+    frame_quality = (
+        measure_frame_quality(dest, frame_count=measured_frames or shot_frames)
+        if not err and dest.is_file()
+        else None
+    )
+    # Like the temporal gates, a black frame rejects only where measured QC is
+    # armed (calibration receipt or DIONY_MEASURED_QC_REQUIRED); the count is
+    # recorded on every site so a dark fixture never fails a dry run blindly.
+    black_ok = (
+        not (frame_quality is not None and frame_quality.measured and frame_quality.black_frames)
+        if measured_qc_required
+        else True
+    )
+    color_drift = _chain_color_evidence(project, take, dest) if not err and dest.is_file() else None
+    adherence = (
+        prompt_adherence(
+            dest,
+            shot.prompt_plan.subject if shot.prompt_plan is not None else shot.prompt,
+            frame_count=measured_frames or shot_frames,
+        )
+        if not err and dest.is_file()
+        else None
+    )
     morph_ok = bool(temporal and temporal.measured and temporal.morph_ok) if measured_qc_required else True
     flicker_ok = (
         bool(temporal and temporal.measured and temporal.flicker_ok)
@@ -1900,6 +2030,7 @@ def attach_negative(
         and audio_ready_ok
         and voice_ready_ok is not False
         and legal_ok
+        and black_ok
     )
     production_clean_ok = bool(
         dimensions_ok
@@ -1909,6 +2040,7 @@ def attach_negative(
         and morph_ok
         and flicker_ok
         and legal_ok
+        and black_ok
     )
     failure = err or voice_failure
     if not failure and dialogue_required and not voice_ready_ok:
@@ -1951,6 +2083,14 @@ def attach_negative(
         failure = f"Measured flicker failed (luma-change p95 {measured:.4f})."
     if not failure and not legal_ok:
         failure = "Measured 720p media integrity failed before the mandatory Rec.709 finish."
+    if not failure and not black_ok and frame_quality is not None:
+        failure = (
+            f"Black frame detected ({frame_quality.black_frames} of {frame_quality.frame_count} "
+            "sampled frames); the plate did not render."
+        )
+    advisory: list[str] = list(frame_quality.advisory_notes) if frame_quality is not None else []
+    if color_drift is not None and color_drift > CHAIN_DRIFT_WARN:
+        advisory.append(f"colour drifts {color_drift:.3f} from the previous print at the boundary")
     take.qc = QCReport(
         id=f"qc-{take.id}",
         take_id=take.id,
@@ -1989,10 +2129,29 @@ def attach_negative(
         ),
         flicker_luma_p95=(temporal.flicker_luma_p95 if temporal and temporal.measured else None),
         measured_frame_count=(temporal.frame_count if temporal and temporal.measured else 0),
+        frame_quality_version=(FRAME_QUALITY_VERSION if frame_quality and frame_quality.measured else ""),
+        sharpness_min=(frame_quality.sharpness_min if frame_quality and frame_quality.measured else None),
+        brightness_min=(frame_quality.brightness_min if frame_quality and frame_quality.measured else None),
+        brightness_max=(frame_quality.brightness_max if frame_quality and frame_quality.measured else None),
+        contrast_min=(frame_quality.contrast_min if frame_quality and frame_quality.measured else None),
+        black_frames=(frame_quality.black_frames if frame_quality and frame_quality.measured else 0),
+        frame_quality_ok=(
+            bool(
+                frame_quality.black_frames == 0
+                and frame_quality.sharpness_ok
+                and frame_quality.exposure_ok
+                and frame_quality.contrast_ok
+            )
+            if frame_quality and frame_quality.measured
+            else None
+        ),
+        chain_color_drift=color_drift,
+        prompt_adherence=adherence,
         notes=(
             failure
             or (
                 "Wan2.2 720p negative. Multi-frame reference and boundary checks passed. Not a 1080 master."
+                + (" Advisory: " + "; ".join(advisory) + "." if advisory else "")
                 if ok
                 else "Queued for Wan2.2 on this pair."
             )

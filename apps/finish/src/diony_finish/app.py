@@ -20,6 +20,8 @@ class FinishIn(BaseModel):
     dest: str
     fps: float = 23.976
     grain: str = "none"
+    # Optional chain colour match toward the boundary frame (Blueprint 24).
+    color_match: dict | None = None
 
 
 @app.get("/health")
@@ -40,7 +42,9 @@ def health() -> dict:
 @app.post("/v1/finish")
 def finish(body: FinishIn) -> dict:
     try:
-        dest = finish_clip(Path(body.src), Path(body.dest), fps=body.fps, grain=body.grain)
+        dest = finish_clip(
+            Path(body.src), Path(body.dest), fps=body.fps, grain=body.grain, color_match=body.color_match
+        )
     except FinishError as exc:
         raise HTTPException(500, str(exc)) from exc
     return {

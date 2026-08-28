@@ -47,7 +47,14 @@ def _project_media_paths(project: Project) -> list[Path]:
         rows.extend(root / artifact.path for artifact in take.artifacts if artifact.path)
     rows.extend(root / deliverable.path for deliverable in project.deliverables if deliverable.path)
     if project.timeline and project.timeline.preview_path:
-        rows.append(root / project.timeline.preview_path)
+        master = root / project.timeline.preview_path
+        rows.append(master)
+        # Blueprint 24 evidence beside the master: final review, QC packet, subtitles.
+        rows.extend(
+            master.parent / name
+            for name in ("final-review.json", "qc-packet.json", "master_1080.srt", "master_1080.vtt")
+        )
+    rows.append(root / "projects" / project.id / "decision-log.jsonl")
     return rows
 
 

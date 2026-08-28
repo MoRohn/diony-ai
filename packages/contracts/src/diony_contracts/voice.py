@@ -183,6 +183,13 @@ class SpeechQCReceipt(BaseModel):
     loudness_tolerance_lu: float = Field(default=1.0, ge=0, le=3)
     true_peak_dbtp: float | None = None
     true_peak_ceiling_dbtp: float = -1.0
+    # Optional local transcript of the delivered speech (faster-whisper when a
+    # model is installed on the host). Word accuracy is the fraction of the
+    # authored line's words heard back; unmeasured stays None and gates nothing.
+    transcript: str = ""
+    transcript_word_accuracy: float | None = Field(default=None, ge=0, le=1)
+    transcript_last_word_ok: bool | None = None
+    transcript_min_accuracy: float = Field(default=0.6, ge=0, le=1)
     passed: bool = False
     diagnostics: list[str] = Field(default_factory=list)
 
@@ -205,6 +212,11 @@ class SpeechQCReceipt(BaseModel):
         if self.true_peak_dbtp is None or self.true_peak_dbtp > self.true_peak_ceiling_dbtp:
             measured = "unmeasured" if self.true_peak_dbtp is None else f"{self.true_peak_dbtp:.1f} dBTP"
             failed.append(f"dialogue stem true peak {measured} exceeds {self.true_peak_ceiling_dbtp:g} dBTP")
+        if self.transcript_word_accuracy is not None and self.transcript_word_accuracy < self.transcript_min_accuracy:
+            failed.append(
+                f"the delivered speech matches only {self.transcript_word_accuracy:.0%} of the authored line "
+                f"(needs {self.transcript_min_accuracy:.0%})"
+            )
         return failed
 
     @model_validator(mode="after")

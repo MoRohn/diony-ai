@@ -327,6 +327,110 @@
       "title": "Measured Frame Count",
       "type": "integer"
     },
+    "frame_quality_version": {
+      "default": "",
+      "title": "Frame Quality Version",
+      "type": "string"
+    },
+    "sharpness_min": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sharpness Min"
+    },
+    "brightness_min": {
+      "anyOf": [
+        {
+          "maximum": 255,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Brightness Min"
+    },
+    "brightness_max": {
+      "anyOf": [
+        {
+          "maximum": 255,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Brightness Max"
+    },
+    "contrast_min": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Contrast Min"
+    },
+    "black_frames": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Black Frames",
+      "type": "integer"
+    },
+    "frame_quality_ok": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Frame Quality Ok"
+    },
+    "chain_color_drift": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Chain Color Drift"
+    },
+    "prompt_adherence": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Prompt Adherence"
+    },
     "settled_best_of": {
       "anyOf": [
         {

@@ -28,3 +28,4 @@ Numbered operational constitution for Diony AI. Read `00` first. Coding agents: 
 | 21 | [21-production-performance-assurance.md](21-production-performance-assurance.md) | Exact-quality Wan residency, streaming Finish, measured QC, durable latency evidence, canary, and rollback gates |
 | 22 | [22-voice-performance-system.md](22-voice-performance-system.md) | Immutable Character voices, performance scripts, studio audio, S2V conditioning, AV QC, cache, and backend qualification |
 | 23 | [23-optimal-clip-production-flow.md](23-optimal-clip-production-flow.md) | Receipt-addressed Idea -> Voice -> Wan -> AutoQC -> 1080 Finish flow, B200 activation, and advanced-model qualification boundary |
+| 24 | [24-montage-intelligence.md](24-montage-intelligence.md) | Rundown variety review, prompt craft lint, sampled-frame QC, decision log, program look and chain colour match, final review, subtitle sidecars, measured sizing, offline test guard |

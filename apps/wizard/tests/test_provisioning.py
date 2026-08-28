@@ -315,7 +315,7 @@ def test_connect_page_reports_waiting_working_ready_and_attention_states() -> No
     css = client.get("/static/app.css").text
     js = client.get("/static/app.js").text
 
-    assert '/static/app.js?v=brand15' in html
+    assert '/static/app.js?v=brand16' in html
     assert 'id="provision-live-status"' in html
     assert 'id="provision-live-label"' in html
     assert 'id="provision-live-detail"' in html
@@ -636,3 +636,16 @@ def test_existing_compute_connection_only_requires_ssh_and_records_discovered_va
         "ssh_port": "22122",
         "nas_ip": "/workspace",
     }
+
+
+def test_remote_setup_pulls_the_optional_montage_pack_best_effort() -> None:
+    from diony_wizard.apply import MONTAGE_PACK, remote_setup_script
+
+    script = remote_setup_script("/opt/diony-ai")
+    assert "MONTAGE_PACK_START" in script
+    assert "HF_OPTIONAL_FAIL" in script and "MONTAGE_PACK_SKIPPED" in script
+    assert "${DIONY_MONTAGE_PACK:-1}" in script
+    for repo, dest, revision, _ignore, _files, _bytes in MONTAGE_PACK:
+        assert repo in script and dest in script and revision in script
+    # The optional pack never joins the pack gate.
+    assert "faster-whisper-large-v3" not in script.split("MONTAGE_PACK_START")[0].split("HF_START")[1]

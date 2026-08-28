@@ -783,11 +783,36 @@ fi
 if [ -d /diony/vault/runtime/audio/library ]; then
   export DIONY_SOUND_LIBRARY=/diony/vault/runtime/audio/library
 fi
+# Blueprint 24 optional measured lanes: the env is exported only when the
+# staged weights are complete, so an absent pack measures nothing and gates
+# nothing. The Producer interpreter receives the overlay packages once.
+_diony_whisper_ready() {
+  [ -f /models/audio/faster-whisper-large-v3/model.bin ] || return 1
+  [ -f /models/audio/faster-whisper-large-v3/config.json ] || return 1
+  [ -f /models/audio/faster-whisper-large-v3/tokenizer.json ] || return 1
+  return 0
+}
+_diony_clip_ready() {
+  [ -f /models/diony/clip-vit-base-patch32/config.json ] || return 1
+  [ -f /models/diony/clip-vit-base-patch32/preprocessor_config.json ] || return 1
+  [ -f /models/diony/clip-vit-base-patch32/model.safetensors ] || [ -f /models/diony/clip-vit-base-patch32/pytorch_model.bin ] || return 1
+  return 0
+}
+if _diony_whisper_ready; then
+  export DIONY_WHISPER_MODEL=/models/audio/faster-whisper-large-v3
+fi
+if _diony_clip_ready; then
+  export DIONY_CLIP_MODEL=/models/diony/clip-vit-base-patch32
+fi
 if [ -f /opt/diony-ai/apps/producer/src/diony_producer/audiogen_backend.py ]; then
   export DIONY_AUDIOGEN_COMMAND="/opt/diony-ai/.venv/bin/python /opt/diony-ai/apps/producer/src/diony_producer/audiogen_backend.py"
 fi
 RUNTIME_PROBE=/opt/diony-ai/apps/wan/src/diony_wan/runtime.py
 RUNTIME_OVERLAY=/opt/diony-ai/infra/runtime/wan-host-overlay.txt
+# Wan's S2V speech lane imports (cosyvoice.llm / cosyvoice.flow) that Wan's own
+# requirements_s2v.txt does not cover (Blueprint 22); applied with the host overlay.
+TTS_OVERLAY=/opt/diony-ai/infra/runtime/wan-tts-overlay.txt
+MONTAGE_OVERLAY=/opt/diony-ai/infra/runtime/montage-overlay.txt
 RUNTIME_REPORT=/diony/vault/.cluster/wan-host-runtime.json
 VPY=/opt/diony-ai/.venv/bin/python
 PRODUCER_BIN=/opt/diony-ai/.venv/bin/diony-producer
@@ -795,6 +820,29 @@ ATTENTION_RECEIPT=/diony/vault/qualification/wan-cudnn-sdpa-validation.json
 if [ -x "$VPY" ] && [ -f "$ATTENTION_RECEIPT" ]; then
   if DIONY_ATTENTION_RECEIPT="$ATTENTION_RECEIPT" "$VPY" -c "import json, os; from pathlib import Path; from diony_wan.attention_qualification import attention_decision; pointer=json.loads(Path('/diony/vault/.cluster/current.json').read_text()); decision=attention_decision(Path(os.environ['DIONY_ATTENTION_RECEIPT']), project_id=str(pointer.get('project_id') or '')); raise SystemExit(0 if decision.enabled else 1)"; then
     export DIONY_WAN_ATTENTION_BACKEND=cudnn_sdpa
+  fi
+fi
+if [ -x "$VPY" ] && [ -f "$MONTAGE_OVERLAY" ] && { [ -n "${DIONY_WHISPER_MODEL:-}" ] || [ -n "${DIONY_CLIP_MODEL:-}" ]; }; then
+  _diony_montage_ready() {
+    if [ -n "${DIONY_WHISPER_MODEL:-}" ]; then
+      "$VPY" -c "import faster_whisper" >/dev/null 2>&1 || return 1
+    fi
+    if [ -n "${DIONY_CLIP_MODEL:-}" ]; then
+      "$VPY" -c "import transformers, PIL" >/dev/null 2>&1 || return 1
+    fi
+    return 0
+  }
+  if ! _diony_montage_ready; then
+    echo GPU_MONTAGE_OVERLAY_REPAIR
+    PIP_BREAK_SYSTEM_PACKAGES=1 PIP_ROOT_USER_ACTION=ignore \
+      "$VPY" -m pip install --disable-pip-version-check \
+        --upgrade-strategy only-if-needed -r "$MONTAGE_OVERLAY" || true
+  fi
+  if ! _diony_montage_ready; then
+    # A lane whose packages did not land measures nothing; Production keeps
+    # running without it and the receipt records the fields as unmeasured.
+    echo GPU_MONTAGE_OVERLAY_UNAVAILABLE
+    unset DIONY_WHISPER_MODEL DIONY_CLIP_MODEL
   fi
 fi
 if [ -x "$VPY" ]; then
@@ -812,7 +860,8 @@ if ! _diony_wan_host_ready; then
   echo GPU_RUNTIME_OVERLAY_REPAIR
   PIP_BREAK_SYSTEM_PACKAGES=1 PIP_ROOT_USER_ACTION=ignore \
     "$HOST_PY" -m pip install --disable-pip-version-check \
-      --upgrade-strategy only-if-needed -r "$RUNTIME_OVERLAY"
+      --upgrade-strategy only-if-needed -r "$RUNTIME_OVERLAY" \
+      $( [ -f "$TTS_OVERLAY" ] && printf -- '-r %s' "$TTS_OVERLAY" )
 fi
 if ! _diony_wan_host_ready; then
   grep -viE '^[[:space:]]*(flash_attn|numpy)|^[[:space:]]*#' /opt/wan22/requirements.txt > /tmp/diony-wan-req.txt || true
@@ -879,6 +928,12 @@ _diony_existing_producer_ready() {
   fi
   if [ -n "${DIONY_WAN_TTS_PROMPT_AUDIO:-}" ]; then
     printf '%s\n' "$active_env" | grep -Fqx "DIONY_WAN_TTS_PROMPT_AUDIO=$DIONY_WAN_TTS_PROMPT_AUDIO" || return 1
+  fi
+  if [ -n "${DIONY_WHISPER_MODEL:-}" ]; then
+    printf '%s\n' "$active_env" | grep -Fqx "DIONY_WHISPER_MODEL=$DIONY_WHISPER_MODEL" || return 1
+  fi
+  if [ -n "${DIONY_CLIP_MODEL:-}" ]; then
+    printf '%s\n' "$active_env" | grep -Fqx "DIONY_CLIP_MODEL=$DIONY_CLIP_MODEL" || return 1
   fi
 }
 _diony_production_busy() {
@@ -955,6 +1010,8 @@ nohup env -u DIONY_DRY_RUN PATH="$PATH" DIONY_VAULT=/diony/vault DIONY_BIND=0.0.
   DIONY_WAN_TTS_PROMPT_AUDIO="${DIONY_WAN_TTS_PROMPT_AUDIO:-}" \
   DIONY_WAN_TTS_PROMPT_TEXT="${DIONY_WAN_TTS_PROMPT_TEXT:-}" \
   DIONY_SOUND_LIBRARY="${DIONY_SOUND_LIBRARY:-}" \
+  DIONY_WHISPER_MODEL="${DIONY_WHISPER_MODEL:-}" \
+  DIONY_CLIP_MODEL="${DIONY_CLIP_MODEL:-}" \
   DIONY_AUDIOGEN="${DIONY_AUDIOGEN:-}" \
   DIONY_AUDIOGEN_COMMAND="${DIONY_AUDIOGEN_COMMAND:-}" \
   DIONY_AUDIOGEN_CLI_THINKSOUND="${DIONY_AUDIOGEN_CLI_THINKSOUND:-}" \

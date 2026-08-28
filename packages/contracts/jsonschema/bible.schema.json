@@ -49,6 +49,19 @@
       "title": "Grain",
       "type": "string"
     },
+    "LookProfile": {
+      "enum": [
+        "neutral",
+        "cinematic_warm",
+        "cinematic_cool",
+        "moody_dark",
+        "bright_clean",
+        "vintage_film",
+        "high_contrast"
+      ],
+      "title": "LookProfile",
+      "type": "string"
+    },
     "LoudnessTarget": {
       "enum": [
         "broadcast",
@@ -139,6 +152,22 @@
       ],
       "default": null,
       "title": "Lut Asset Id"
+    },
+    "look": {
+      "$ref": "#/$defs/LookProfile",
+      "default": "neutral"
+    },
+    "look_intensity": {
+      "default": 0.6,
+      "maximum": 1.0,
+      "minimum": 0.3,
+      "title": "Look Intensity",
+      "type": "number"
+    },
+    "chain_color_match": {
+      "default": true,
+      "title": "Chain Color Match",
+      "type": "boolean"
     },
     "locked": {
       "default": false,

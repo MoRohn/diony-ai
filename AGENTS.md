@@ -55,7 +55,7 @@ diony-finish      # :8020  (cluster FINISH; needs /models/diony/diony_sr_v1)
 diony-producer    # http://producer.diony.local (binds :8788)
 ```
 
-Tests (when present): `python -m pytest packages/contracts apps/wizard apps/wan apps/finish apps/producer apps/conductor apps/desk`.
+Tests (when present): `python -m pytest packages/contracts apps/wizard apps/wan apps/finish apps/producer apps/conductor apps/desk`. The root `conftest.py` blocks every non-loopback socket for the whole session (`DIONY_ALLOW_NETWORK=1` only for an explicitly live run).
 
 Laptop pytest does **not** download weights or mutate RoCE fabric. On a signed Dual-Spark, Studio App pulls the pack. Produce farms Wan2.2 720p negatives. Picture lock writes the 1080 program master.
 
@@ -89,6 +89,7 @@ Full text: `blueprints/10-quality-mandate.md`. Summary:
 - Cinematic grammar on every Shot: focal length, stop, lighting ratio, camera move, duration, seed, references.
 - Continuity-locked characters and wardrobe. Identity drift is a QC fail, not a note.
 - Reject-and-retake on QC fail. Do not ship morphing faces, flicker, illegal broadcast levels, or desynced lips.
+- Every rundown is reviewed for variety before GPU time, every print carries sampled-frame evidence, every automatic choice lands in the decision log, and every master passes a final review before the mix locks (`blueprints/24-montage-intelligence.md`).
 - Never cloud-by-default. No Dashscope, no hosted Qwen extend. DeepSeek on the signed site does prompt expansion. Leased Dual-Spark (`spark-2x-v1`), Leased B300 (`b300-v1`), and Leased B200 (`b200-v1`) are signed Studio Site exceptions, not hosted LLMs and not failovers. `lease-gpu-v1` is not a Studio Site.
 
 ## Key patterns

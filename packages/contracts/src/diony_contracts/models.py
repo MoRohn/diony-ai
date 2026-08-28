@@ -30,6 +30,13 @@ from diony_contracts.enums import (
     ReferenceLock,
     TakeOrigin,
 )
+from diony_contracts.montage import (
+    LOOK_INTENSITY_DEFAULT,
+    Decision,
+    FinalReview,
+    LookProfile,
+    RundownReview,
+)
 from diony_contracts.voice import (  # noqa: F401 — re-exported for schema export
     DialogueTurn,
     SpeechClipPackage,
@@ -337,6 +344,13 @@ class Bible(BaseModel):
     world: str
     characters: list[Character] = Field(default_factory=list)
     lut_asset_id: str | None = None
+    # Program-level creative look applied once at the 1080 program stitch,
+    # blended against the legalized picture at `look_intensity` (Blueprint 24).
+    look: LookProfile = LookProfile.NEUTRAL
+    look_intensity: float = Field(default=LOOK_INTENSITY_DEFAULT, ge=0.3, le=1.0)
+    # Finish matches a previous-frame print's colour statistics halfway toward
+    # the boundary it was chained from when AutoQC measured drift (Blueprint 24).
+    chain_color_match: bool = True
     locked: bool = False
     locked_at: datetime | None = None
 
@@ -382,6 +396,9 @@ class WanPromptPlan(BaseModel):
     negative_terms: list[str] = Field(default_factory=list)
     word_count: int = Field(default=0, ge=0)
     diagnostics: list[str] = Field(default_factory=list)
+    # Craft lint (mood adjectives, generic phrasing, overlays in depth): advisory,
+    # never a dispatch blocker, recorded so a retake director can see them.
+    craft_notes: list[str] = Field(default_factory=list)
 
 
 class Shot(BaseModel):
@@ -492,6 +509,23 @@ class QCReport(BaseModel):
     temporal_residual_p95: float | None = Field(default=None, ge=0)
     flicker_luma_p95: float | None = Field(default=None, ge=0)
     measured_frame_count: int = Field(default=0, ge=0)
+    # Sampled-frame evidence (Blueprint 24): sharpness as Laplacian variance on
+    # a 640x360 proxy, exposure as mean luma 0-255, contrast as luma std, and
+    # black frames counted outright. A black frame is a hard failure; exposure
+    # and sharpness are advisory until a site calibrates them.
+    frame_quality_version: str = ""
+    sharpness_min: float | None = Field(default=None, ge=0)
+    brightness_min: float | None = Field(default=None, ge=0, le=255)
+    brightness_max: float | None = Field(default=None, ge=0, le=255)
+    contrast_min: float | None = Field(default=None, ge=0)
+    black_frames: int = Field(default=0, ge=0)
+    frame_quality_ok: bool | None = None
+    # Mean absolute per-channel shift (0-1) between this print's first frame
+    # and the previous print's last frame on a previous-frame chain.
+    chain_color_drift: float | None = Field(default=None, ge=0)
+    # Optional semantic adherence (CLIP cosine between sampled frames and the
+    # subject layer) when a local encoder is installed; None when unmeasured.
+    prompt_adherence: float | None = Field(default=None, ge=0, le=1)
     # Retake-cap policy: after every bounded attempt failed measured QC, the
     # best-scoring attempt proceeds as the print. The measured verdict stays
     # in `notes`; `settled_best_of` is the attempt count it was chosen from.
@@ -893,6 +927,12 @@ class Project(BaseModel):
     production_restarts: list[ProductionRestartReceipt] = Field(default_factory=list)
     production_pause: ProductionPauseReceipt | None = None
     production_recoveries: list[ProductionInfrastructureRecovery] = Field(default_factory=list)
+    # Blueprint 24 montage intelligence: the rundown variety review written at
+    # expansion, the append-only decision log (most recent entries; the full
+    # log is projects/<id>/decision-log.jsonl), and the post-mix final review.
+    rundown_review: RundownReview | None = None
+    decisions: list[Decision] = Field(default_factory=list)
+    final_review: FinalReview | None = None
 
     def shot(self, shot_id: str) -> Shot:
         for s in self.shots:

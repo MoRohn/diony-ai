@@ -12,12 +12,15 @@ from pathlib import Path
 import httpx
 
 from diony_contracts.cluster import refuse_concurrent, site_status, write_mode_lock
-from diony_contracts.enums import ArtifactKind, QCVerdict
+from diony_contracts.enums import ArtifactKind, ContinuityMode, QCVerdict
 from diony_contracts.live import finish_base, finish_ready
 from diony_contracts.models import Artifact, Project, Take
 from diony_contracts.stitch import assemble_program, program_master_rel
 from diony_producer.farm import negative_lineage_valid, negative_rel, qc_contract_valid
 from diony_producer.performance import PerformanceJournal
+from diony_contracts.montage import DecisionCategory, DecisionOption, look_filter
+from diony_producer.decisions import record_decision
+from diony_producer.quality import CHAIN_DRIFT_MATCH, frame_channel_stats
 from diony_producer.vault import persist_project, record_activity, vault_root
 
 try:
@@ -280,7 +283,18 @@ def _finish_one(project: Project, take: Take) -> None:
     dest = vault_root() / rel
     shot = project.shot(take.shot_id)
     grain = project.bible.grain.value if project.bible.grain else "none"
-    record_activity("sr", f"{shot.id} · 1080 finish", level="live", shot_id=shot.id)
+    color_match = _chain_color_match(project, take, src)
+    record_activity(
+        "sr",
+        f"{shot.id} · 1080 finish"
+        + (
+            f" · chain colour match {color_match['strength']:.2f} toward {color_match['from_take']}"
+            if color_match
+            else ""
+        ),
+        level="live",
+        shot_id=shot.id,
+    )
     timeout = float(os.environ.get("DIONY_FINISH_TIMEOUT", "7200"))
     want_http = bool(os.environ.get("DIONY_FINISH_URL", "").strip())
 
@@ -299,15 +313,16 @@ def _finish_one(project: Project, take: Take) -> None:
                     "dest": str(dest),
                     "fps": shot.fps,
                     "grain": grain,
+                    "color_match": color_match,
                 },
                 timeout=timeout,
             )
             if res.status_code >= 400:
                 raise FinishError(str(res.json().get("detail") or res.text))
         except httpx.HTTPError:
-            finish_clip(src, dest, fps=shot.fps, grain=grain)
+            finish_clip(src, dest, fps=shot.fps, grain=grain, color_match=color_match)
     else:
-        finish_clip(src, dest, fps=shot.fps, grain=grain, progress=report_progress)
+        finish_clip(src, dest, fps=shot.fps, grain=grain, progress=report_progress, color_match=color_match)
     size = dest.stat().st_size if dest.is_file() else 0
     if size < 32:
         raise FinishError(f"1080 master missing for {take.id}")
@@ -335,6 +350,59 @@ def _finish_one(project: Project, take: Take) -> None:
     )
     persist_project(project)
     record_activity("sr", f"{shot.id} · 1080 master", shot_id=shot.id)
+
+
+CHAIN_COLOR_MATCH_STRENGTH = 0.5
+
+
+def _chain_color_match(project: Project, take: Take, negative: Path) -> dict | None:
+    """Toward the previous print's last frame, when this print measured drift.
+
+    Only previous-frame chains qualify, only when the Bible keeps chain colour
+    matching on, and only above the match floor; the strength is half the
+    statistical distance so a deliberate lighting change is never erased.
+    """
+    if not project.bible.chain_color_match:
+        return None
+    shot = project.shot(take.shot_id)
+    if shot.continuity_mode != ContinuityMode.PREVIOUS_FRAME:
+        return None
+    drift = take.qc.chain_color_drift if take.qc is not None else None
+    if drift is None or drift < CHAIN_DRIFT_MATCH:
+        return None
+    previous_id = take.qc.continuity_from_take_id if take.qc is not None else None
+    if not previous_id:
+        return None
+    try:
+        previous = project.take(previous_id)
+    except KeyError:
+        return None
+    previous_negative = vault_root() / negative_rel(project, previous)
+    stats = frame_channel_stats(previous_negative, last=True)
+    if stats is None:
+        return None
+    mean, std = stats
+    return {
+        "mean": mean,
+        "std": std,
+        "strength": CHAIN_COLOR_MATCH_STRENGTH,
+        "from_take": previous.id,
+        "measured_drift": drift,
+    }
+
+
+def _program_look(project: Project) -> str:
+    """The Bible look (and LUT asset, when one is attached) as one filter segment."""
+    lut_path: str | None = None
+    if project.bible.lut_asset_id:
+        try:
+            asset = project.asset(project.bible.lut_asset_id)
+            candidate = vault_root() / asset.path
+            if candidate.is_file():
+                lut_path = str(candidate)
+        except KeyError:
+            lut_path = None
+    return look_filter(project.bible.look, project.bible.look_intensity, lut_path=lut_path)
 
 
 def _attach_1080(
@@ -433,7 +501,28 @@ def _stitch_program(project: Project) -> None:
         source_hashes.append(art.sha256)
     rel = program_master_rel(project)
     dest = vault_root() / rel
-    stitch_masters(clips, dest, fps=project.bible.fps)
+    look = _program_look(project)
+    if look:
+        record_decision(
+            project,
+            stage="finish",
+            category=DecisionCategory.LOOK,
+            subject="program look",
+            options=[
+                DecisionOption(id="neutral", label="neutral (legalized picture only)", rejected_because="the Bible declares a look"),
+                DecisionOption(
+                    id=project.bible.look.value,
+                    label=f"{project.bible.look.value} at {project.bible.look_intensity:.2f}"
+                    + (" with Bible LUT" if project.bible.lut_asset_id else ""),
+                    reason="applied once, program-wide, before the legalizer",
+                ),
+            ],
+            selected=project.bible.look.value,
+            reason="one creative look per program; generated footage is graded at reduced intensity",
+            confidence=0.8,
+        )
+        record_activity("sr", f"Program look {project.bible.look.value} at {project.bible.look_intensity:.2f}")
+    stitch_masters(clips, dest, fps=project.bible.fps, look=look)
     if _visual_qc_required():
         verify_finished_media(dest, label="1080 program master")
     project.timeline.preview_path = rel

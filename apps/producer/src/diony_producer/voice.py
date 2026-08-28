@@ -506,6 +506,19 @@ def verify_speech_render(project: Project, take: Take, video: Path, *, vault: Pa
             integrated, true_peak = measure_loudness(stem, target_lufs=target_lufs, true_peak_dbtp=ceiling)
             receipt_fields["integrated_lufs"] = integrated
             receipt_fields["true_peak_dbtp"] = true_peak
+            # Blueprint 24: with a local Whisper model on the host, the line Wan
+            # performed is heard back and scored against the authored words.
+            from diony_producer.speech_transcript import transcribe_line
+
+            heard = transcribe_line(dialogue, package.request.tts_text)
+            if heard is not None:
+                receipt_fields["transcript"] = heard.transcript
+                receipt_fields["transcript_word_accuracy"] = heard.word_accuracy
+                receipt_fields["transcript_last_word_ok"] = heard.last_word_ok
+                diagnostics.append(
+                    f"transcript ({heard.model}) matches {heard.word_accuracy:.0%} of the line"
+                    + ("" if heard.last_word_ok else "; the last authored word was not heard")
+                )
             dialogue_asset = _append_asset(project, dialogue, role="voice_dialogue", take_id=take.id, kind=AssetKind.AUDIO, mime="audio/wav", vault=vault)
             stem_asset = _append_asset(project, stem, role="voice_mix_stem", take_id=take.id, kind=AssetKind.AUDIO, mime="audio/wav", vault=vault)
         else:

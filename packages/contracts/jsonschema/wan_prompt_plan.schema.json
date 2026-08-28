@@ -93,6 +93,13 @@
       },
       "title": "Diagnostics",
       "type": "array"
+    },
+    "craft_notes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Craft Notes",
+      "type": "array"
     }
   },
   "required": [

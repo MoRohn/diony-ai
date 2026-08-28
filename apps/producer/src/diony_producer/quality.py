@@ -185,3 +185,283 @@ def measure_negative_quality(
         for index in range(0, len(process.stdout) - frame_bytes + 1, frame_bytes)
     ]
     return measure_temporal_frames(frames, thresholds=thresholds)
+
+
+# --------------------------------------------------------------------------- sampled-frame evidence
+#
+# Blueprint 24. Five frames (first, quarter, middle, three-quarter, last) on a
+# 640x360 luma proxy. Sharpness is the variance of a 3x3 Laplacian; a black
+# frame is near-zero mean and spread; exposure and contrast are advisory
+# until a site calibrates them. Only a black frame is a hard failure.
+
+FRAME_QUALITY_VERSION = "diony-frame-quality-v1"
+FRAME_QUALITY_WIDTH = 640
+FRAME_QUALITY_HEIGHT = 360
+DEFAULT_SHARPNESS_MIN = 20.0
+DEFAULT_BRIGHTNESS_MIN = 35.0
+DEFAULT_BRIGHTNESS_MAX = 225.0
+DEFAULT_CONTRAST_MIN = 18.0
+BLACK_FRAME_MEAN_MAX = 10.0
+BLACK_FRAME_STD_MAX = 6.0
+
+
+@dataclass(frozen=True)
+class FrameQualityReceipt:
+    measured: bool
+    frame_count: int = 0
+    sharpness_min: float = 0.0
+    brightness_min: float = 0.0
+    brightness_max: float = 0.0
+    contrast_min: float = 0.0
+    black_frames: int = 0
+    sharpness_ok: bool = False
+    exposure_ok: bool = False
+    contrast_ok: bool = False
+    error: str = ""
+
+    @property
+    def advisory_notes(self) -> list[str]:
+        notes: list[str] = []
+        if not self.measured:
+            return notes
+        if not self.sharpness_ok:
+            notes.append(f"soft sampled frame (sharpness {self.sharpness_min:.1f})")
+        if not self.exposure_ok:
+            notes.append(
+                f"sampled exposure outside range (luma {self.brightness_min:.0f}–{self.brightness_max:.0f})"
+            )
+        if not self.contrast_ok:
+            notes.append(f"flat sampled contrast (std {self.contrast_min:.1f})")
+        return notes
+
+
+def _frame_threshold(name: str, default: float) -> float:
+    value = _env_threshold(name)
+    return default if value is None else value
+
+
+def sample_frame_indices(frame_count: int) -> list[int]:
+    """First, quarter, middle, three-quarter, and last decoded frame, de-duplicated."""
+    total = max(1, int(frame_count))
+    last = total - 1
+    picks = [0, last // 4, last // 2, (3 * last) // 4, last]
+    return list(dict.fromkeys(max(0, min(last, index)) for index in picks))
+
+
+# Above this many frames a whole-file `select` decode is a full decode of the
+# program; sample by seeking instead (ProRes masters are all-intra, so a seek
+# lands on the exact frame).
+SEEK_SAMPLING_FRAMES = 600
+
+
+def decode_sampled_frames(
+    path: Path,
+    indices: Iterable[int],
+    *,
+    width: int = FRAME_QUALITY_WIDTH,
+    height: int = FRAME_QUALITY_HEIGHT,
+    fps: float | None = None,
+) -> list[object]:
+    """Decode exactly the requested frame indices as RGB arrays.
+
+    One `select` pass for short negatives; with `fps` on a long program, one
+    accurate seek per index so an hour-long master costs five decodes, not
+    eighty-six thousand.
+    """
+    import numpy as np
+
+    wanted = sorted(dict.fromkeys(int(index) for index in indices))
+    if not wanted:
+        return []
+    ffmpeg = os.environ.get("DIONY_FFMPEG", "").strip() or shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("FFmpeg is unavailable")
+    frame_bytes = width * height * 3
+    if fps and fps > 0 and max(wanted) >= SEEK_SAMPLING_FRAMES:
+        frames: list[object] = []
+        for index in wanted:
+            process = subprocess.run(
+                [
+                    ffmpeg,
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-ss",
+                    f"{index / fps:.6f}",
+                    "-i",
+                    str(path),
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    f"scale={width}:{height}:flags=area",
+                    "-an",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "pipe:1",
+                ],
+                capture_output=True,
+                timeout=120,
+                check=False,
+            )
+            if process.returncode != 0 or len(process.stdout) < frame_bytes:
+                raise RuntimeError(
+                    process.stderr.decode("utf-8", errors="replace")[-300:] or f"frame {index} seek decode failed"
+                )
+            frames.append(np.frombuffer(process.stdout[:frame_bytes], dtype=np.uint8).reshape(height, width, 3))
+        return frames
+    select = "+".join(f"eq(n\\,{index})" for index in wanted)
+    process = subprocess.run(
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(path),
+            "-vf",
+            f"select='{select}',scale={width}:{height}:flags=area",
+            "-fps_mode",
+            "passthrough",
+            "-an",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "pipe:1",
+        ],
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+    if process.returncode != 0:
+        raise RuntimeError(process.stderr.decode("utf-8", errors="replace")[-300:] or "frame decode failed")
+    return [
+        np.frombuffer(process.stdout[index : index + frame_bytes], dtype=np.uint8).reshape(height, width, 3)
+        for index in range(0, len(process.stdout) - frame_bytes + 1, frame_bytes)
+    ]
+
+
+def measure_frame_quality_frames(frames: Iterable[object]) -> FrameQualityReceipt:
+    import numpy as np
+
+    sharpness: list[float] = []
+    brightness: list[float] = []
+    contrast: list[float] = []
+    black = 0
+    for frame in frames:
+        array = np.asarray(frame)
+        if array.ndim != 3 or array.shape[2] < 3:
+            return FrameQualityReceipt(False, error="QC frame is not RGB")
+        rgb = array[:, :, :3].astype(np.float32)
+        luma = 0.2126 * rgb[:, :, 0] + 0.7152 * rgb[:, :, 1] + 0.0722 * rgb[:, :, 2]
+        mean = float(np.mean(luma))
+        std = float(np.std(luma))
+        laplacian = (
+            -4.0 * luma[1:-1, 1:-1]
+            + luma[:-2, 1:-1]
+            + luma[2:, 1:-1]
+            + luma[1:-1, :-2]
+            + luma[1:-1, 2:]
+        )
+        sharpness.append(float(np.var(laplacian)))
+        brightness.append(mean)
+        contrast.append(std)
+        if mean < BLACK_FRAME_MEAN_MAX and std < BLACK_FRAME_STD_MAX:
+            black += 1
+    if not sharpness:
+        return FrameQualityReceipt(False, error="no QC frames decoded")
+    sharpness_min = _frame_threshold("DIONY_SHARPNESS_MIN", DEFAULT_SHARPNESS_MIN)
+    brightness_min = _frame_threshold("DIONY_BRIGHTNESS_MIN", DEFAULT_BRIGHTNESS_MIN)
+    brightness_max = _frame_threshold("DIONY_BRIGHTNESS_MAX", DEFAULT_BRIGHTNESS_MAX)
+    contrast_min = _frame_threshold("DIONY_CONTRAST_MIN", DEFAULT_CONTRAST_MIN)
+    lit = [value for value, mean in zip(sharpness, brightness) if mean >= BLACK_FRAME_MEAN_MAX]
+    return FrameQualityReceipt(
+        measured=True,
+        frame_count=len(sharpness),
+        sharpness_min=round(min(lit) if lit else min(sharpness), 4),
+        brightness_min=round(min(brightness), 3),
+        brightness_max=round(max(brightness), 3),
+        contrast_min=round(min(contrast), 4),
+        black_frames=black,
+        sharpness_ok=(min(lit) if lit else 0.0) >= sharpness_min,
+        exposure_ok=black == 0 and min(brightness) >= brightness_min and max(brightness) <= brightness_max,
+        contrast_ok=black == 0 and min(contrast) >= contrast_min,
+    )
+
+
+def measure_frame_quality(path: Path, *, frame_count: int, fps: float | None = None) -> FrameQualityReceipt:
+    """Sampled sharpness/exposure/black-frame evidence on a landed negative or a master."""
+    try:
+        frames = decode_sampled_frames(path, sample_frame_indices(frame_count), fps=fps)
+    except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+        return FrameQualityReceipt(False, error=str(exc)[:300])
+    if not frames:
+        return FrameQualityReceipt(False, error="no QC frames decoded")
+    return measure_frame_quality_frames(frames)
+
+
+# --------------------------------------------------------------------------- chain colour drift
+
+CHAIN_DRIFT_WARN = 0.06
+CHAIN_DRIFT_MATCH = 0.02
+
+
+def channel_stats(frame: object) -> tuple[list[float], list[float]]:
+    """Per-channel mean and standard deviation on a 0–1 scale."""
+    import numpy as np
+
+    rgb = np.asarray(frame)[:, :, :3].astype(np.float32) / 255.0
+    return (
+        [round(float(value), 6) for value in rgb.reshape(-1, 3).mean(axis=0)],
+        [round(float(value), 6) for value in rgb.reshape(-1, 3).std(axis=0)],
+    )
+
+
+def frame_channel_stats(path: Path, *, last: bool = False) -> tuple[list[float], list[float]] | None:
+    """Channel stats of a media file's first (or last) frame on the analysis proxy."""
+    import numpy as np
+
+    ffmpeg = os.environ.get("DIONY_FFMPEG", "").strip() or shutil.which("ffmpeg")
+    if not ffmpeg or not Path(path).is_file():
+        return None
+    width, height = ANALYSIS_WIDTH, ANALYSIS_HEIGHT
+    args = [ffmpeg, "-hide_banner", "-loglevel", "error"]
+    if last:
+        args += ["-sseof", "-0.1"]
+    args += [
+        "-i",
+        str(path),
+        "-vf",
+        f"scale={width}:{height}:flags=area",
+        "-frames:v",
+        "1" if not last else "8",
+        "-an",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "pipe:1",
+    ]
+    try:
+        process = subprocess.run(args, capture_output=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    frame_bytes = width * height * 3
+    if process.returncode != 0 or len(process.stdout) < frame_bytes:
+        return None
+    usable = len(process.stdout) - len(process.stdout) % frame_bytes
+    frame = np.frombuffer(process.stdout[usable - frame_bytes : usable], dtype=np.uint8).reshape(height, width, 3)
+    return channel_stats(frame)
+
+
+def chain_color_drift(
+    current: tuple[list[float], list[float]],
+    reference: tuple[list[float], list[float]],
+) -> float:
+    """Mean absolute per-channel mean shift between two frames (0–1)."""
+    return round(
+        sum(abs(a - b) for a, b in zip(current[0], reference[0])) / 3.0,
+        6,
+    )

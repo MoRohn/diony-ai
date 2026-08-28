@@ -30,6 +30,7 @@ from diony_contracts.models import (
     VoiceCasting,
     WanSpeechRequest,
 )
+from diony_contracts.montage import Decision, FinalReview, ProductionSizing, RundownReview
 from diony_contracts.launch import (
     InvitationEmailDelivery,
     AuditEvent,
@@ -107,6 +108,10 @@ def main() -> None:
         "provider_config": ProviderConfig,
         "render_version": RenderVersion,
         "stored_event": StoredEvent,
+        "decision": Decision,
+        "rundown_review": RundownReview,
+        "final_review": FinalReview,
+        "production_sizing": ProductionSizing,
     }
     for name, model in models.items():
         path = out / f"{name}.schema.json"

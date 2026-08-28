@@ -262,6 +262,96 @@
       "title": "AssetKind",
       "type": "string"
     },
+    "AudioSpotcheck": {
+      "properties": {
+        "dialogue_expected": {
+          "default": false,
+          "title": "Dialogue Expected",
+          "type": "boolean"
+        },
+        "dialogue_present": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dialogue Present"
+        },
+        "measured_lufs": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Measured Lufs"
+        },
+        "true_peak_dbtp": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "True Peak Dbtp"
+        },
+        "target_lufs": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Lufs"
+        },
+        "silent": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Silent"
+        },
+        "clipping": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Clipping"
+        },
+        "issues": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Issues",
+          "type": "array"
+        }
+      },
+      "title": "AudioSpotcheck",
+      "type": "object"
+    },
     "Bible": {
       "properties": {
         "title": {
@@ -335,6 +425,22 @@
           ],
           "default": null,
           "title": "Lut Asset Id"
+        },
+        "look": {
+          "$ref": "#/$defs/LookProfile",
+          "default": "neutral"
+        },
+        "look_intensity": {
+          "default": 0.6,
+          "maximum": 1.0,
+          "minimum": 0.3,
+          "title": "Look Intensity",
+          "type": "number"
+        },
+        "chain_color_match": {
+          "default": true,
+          "title": "Chain Color Match",
+          "type": "boolean"
         },
         "locked": {
           "default": false,
@@ -890,6 +996,145 @@
       "title": "CustomerKind",
       "type": "string"
     },
+    "Decision": {
+      "description": "One production choice with the options it was chosen from.\n\nAppend-only. Re-deciding a subject appends a new entry; the earlier entry\nis history, never rewritten. `confidence` is the recorder's own estimate\nand is never 1.0 for a heuristic choice.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "stage": {
+          "title": "Stage",
+          "type": "string"
+        },
+        "category": {
+          "$ref": "#/$defs/DecisionCategory"
+        },
+        "subject": {
+          "title": "Subject",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/DecisionOption"
+          },
+          "minItems": 1,
+          "title": "Options",
+          "type": "array"
+        },
+        "selected": {
+          "title": "Selected",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "confidence": {
+          "default": 0.7,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "shot_id": {
+          "default": "",
+          "title": "Shot Id",
+          "type": "string"
+        },
+        "take_id": {
+          "default": "",
+          "title": "Take Id",
+          "type": "string"
+        },
+        "user_visible": {
+          "default": true,
+          "title": "User Visible",
+          "type": "boolean"
+        },
+        "user_approved": {
+          "default": false,
+          "title": "User Approved",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "stage",
+        "category",
+        "subject",
+        "options",
+        "selected",
+        "reason"
+      ],
+      "title": "Decision",
+      "type": "object"
+    },
+    "DecisionCategory": {
+      "enum": [
+        "coverage",
+        "lane_selection",
+        "seed_selection",
+        "casting",
+        "retake",
+        "settle",
+        "hero_select",
+        "soundtrack",
+        "look",
+        "fallback",
+        "final_review",
+        "sizing"
+      ],
+      "title": "DecisionCategory",
+      "type": "string"
+    },
+    "DecisionOption": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Score"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        },
+        "rejected_because": {
+          "default": "",
+          "title": "Rejected Because",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "title": "DecisionOption",
+      "type": "object"
+    },
     "Deliverable": {
       "properties": {
         "id": {
@@ -934,7 +1179,8 @@
         "dnxhr_hq",
         "h265_proxy",
         "stems",
-        "qc_packet"
+        "qc_packet",
+        "subtitles"
       ],
       "title": "DeliverableKind",
       "type": "string"
@@ -1028,6 +1274,71 @@
       ],
       "title": "Engine",
       "type": "string"
+    },
+    "FinalReview": {
+      "description": "What the program master measured after mix, before it is called done.",
+      "properties": {
+        "version": {
+          "default": "diony-final-review-v1",
+          "title": "Version",
+          "type": "string"
+        },
+        "timeline_id": {
+          "default": "",
+          "title": "Timeline Id",
+          "type": "string"
+        },
+        "master_path": {
+          "default": "",
+          "title": "Master Path",
+          "type": "string"
+        },
+        "master_sha256": {
+          "default": "",
+          "pattern": "^(?:|[0-9a-f]{64})$",
+          "title": "Master Sha256",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ReviewStatus"
+        },
+        "recommended_action": {
+          "$ref": "#/$defs/RecommendedAction"
+        },
+        "technical_probe": {
+          "$ref": "#/$defs/TechnicalProbe"
+        },
+        "visual_spotcheck": {
+          "$ref": "#/$defs/VisualSpotcheck"
+        },
+        "audio_spotcheck": {
+          "$ref": "#/$defs/AudioSpotcheck"
+        },
+        "promise_preservation": {
+          "$ref": "#/$defs/PromisePreservation"
+        },
+        "subtitle_check": {
+          "$ref": "#/$defs/SubtitleCheck"
+        },
+        "issues_found": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Issues Found",
+          "type": "array"
+        },
+        "reviewed_at": {
+          "format": "date-time",
+          "title": "Reviewed At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "recommended_action"
+      ],
+      "title": "FinalReview",
+      "type": "object"
     },
     "FinishIntent": {
       "enum": [
@@ -1327,6 +1638,19 @@
         "35mm"
       ],
       "title": "Grain",
+      "type": "string"
+    },
+    "LookProfile": {
+      "enum": [
+        "neutral",
+        "cinematic_warm",
+        "cinematic_cool",
+        "moody_dark",
+        "bright_clean",
+        "vintage_film",
+        "high_contrast"
+      ],
+      "title": "LookProfile",
       "type": "string"
     },
     "LoudnessTarget": {
@@ -1700,6 +2024,111 @@
       "title": "ProjectStatus",
       "type": "string"
     },
+    "PromisePreservation": {
+      "properties": {
+        "target_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Seconds"
+        },
+        "delivered_seconds": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Delivered Seconds",
+          "type": "number"
+        },
+        "duration_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Ok"
+        },
+        "fps_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fps Ok"
+        },
+        "loudness_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Loudness Ok"
+        },
+        "motion_ratio": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Motion Ratio"
+        },
+        "motion_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Motion Ok"
+        },
+        "settled_prints": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Settled Prints",
+          "type": "integer"
+        },
+        "failed_prints": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Failed Prints",
+          "type": "integer"
+        },
+        "issues": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Issues",
+          "type": "array"
+        }
+      },
+      "title": "PromisePreservation",
+      "type": "object"
+    },
     "QCReport": {
       "properties": {
         "id": {
@@ -2018,6 +2447,110 @@
           "title": "Measured Frame Count",
           "type": "integer"
         },
+        "frame_quality_version": {
+          "default": "",
+          "title": "Frame Quality Version",
+          "type": "string"
+        },
+        "sharpness_min": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sharpness Min"
+        },
+        "brightness_min": {
+          "anyOf": [
+            {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brightness Min"
+        },
+        "brightness_max": {
+          "anyOf": [
+            {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Brightness Max"
+        },
+        "contrast_min": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Contrast Min"
+        },
+        "black_frames": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Black Frames",
+          "type": "integer"
+        },
+        "frame_quality_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Frame Quality Ok"
+        },
+        "chain_color_drift": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chain Color Drift"
+        },
+        "prompt_adherence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Adherence"
+        },
         "settled_best_of": {
           "anyOf": [
             {
@@ -2079,6 +2612,17 @@
       "title": "QCVerdict",
       "type": "string"
     },
+    "RecommendedAction": {
+      "enum": [
+        "present_to_user",
+        "re_render",
+        "retake",
+        "block",
+        "skipped"
+      ],
+      "title": "RecommendedAction",
+      "type": "string"
+    },
     "ReferenceLock": {
       "enum": [
         "none",
@@ -2087,6 +2631,109 @@
       ],
       "title": "ReferenceLock",
       "type": "string"
+    },
+    "ReviewStatus": {
+      "enum": [
+        "pass",
+        "revise",
+        "fail",
+        "skipped"
+      ],
+      "title": "ReviewStatus",
+      "type": "string"
+    },
+    "ReviewVerdict": {
+      "enum": [
+        "strong",
+        "acceptable",
+        "revise",
+        "fail"
+      ],
+      "title": "ReviewVerdict",
+      "type": "string"
+    },
+    "RundownReview": {
+      "description": "Structural variety of a rundown before any GPU time is spent.",
+      "properties": {
+        "version": {
+          "default": "diony-rundown-review-v1",
+          "title": "Version",
+          "type": "string"
+        },
+        "shot_count": {
+          "minimum": 0,
+          "title": "Shot Count",
+          "type": "integer"
+        },
+        "score": {
+          "maximum": 5,
+          "minimum": 0,
+          "title": "Score",
+          "type": "number"
+        },
+        "verdict": {
+          "$ref": "#/$defs/ReviewVerdict"
+        },
+        "violations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Violations",
+          "type": "array"
+        },
+        "suggestions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Suggestions",
+          "type": "array"
+        },
+        "waived": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Waived",
+          "type": "array"
+        },
+        "shot_sizes": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Shot Sizes",
+          "type": "object"
+        },
+        "static_ratio": {
+          "default": 0.0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Static Ratio",
+          "type": "number"
+        },
+        "lighting_keys": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Lighting Keys",
+          "type": "integer"
+        },
+        "hero_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Hero Count",
+          "type": "integer"
+        },
+        "reviewed_at": {
+          "format": "date-time",
+          "title": "Reviewed At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "shot_count",
+        "score",
+        "verdict"
+      ],
+      "title": "RundownReview",
+      "type": "object"
     },
     "Shot": {
       "properties": {
@@ -2474,6 +3121,44 @@
           "title": "True Peak Ceiling Dbtp",
           "type": "number"
         },
+        "transcript": {
+          "default": "",
+          "title": "Transcript",
+          "type": "string"
+        },
+        "transcript_word_accuracy": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transcript Word Accuracy"
+        },
+        "transcript_last_word_ok": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Transcript Last Word Ok"
+        },
+        "transcript_min_accuracy": {
+          "default": 0.6,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Transcript Min Accuracy",
+          "type": "number"
+        },
         "passed": {
           "default": false,
           "title": "Passed",
@@ -2491,6 +3176,35 @@
         "measurement_version"
       ],
       "title": "SpeechQCReceipt",
+      "type": "object"
+    },
+    "SubtitleCheck": {
+      "properties": {
+        "expected": {
+          "default": false,
+          "title": "Expected",
+          "type": "boolean"
+        },
+        "present": {
+          "default": false,
+          "title": "Present",
+          "type": "boolean"
+        },
+        "cue_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Cue Count",
+          "type": "integer"
+        },
+        "issues": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Issues",
+          "type": "array"
+        }
+      },
+      "title": "SubtitleCheck",
       "type": "object"
     },
     "Take": {
@@ -2647,6 +3361,64 @@
       "title": "TakeOrigin",
       "type": "string"
     },
+    "TechnicalProbe": {
+      "properties": {
+        "valid_container": {
+          "default": false,
+          "title": "Valid Container",
+          "type": "boolean"
+        },
+        "width": {
+          "default": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "default": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "fps": {
+          "default": 0.0,
+          "title": "Fps",
+          "type": "number"
+        },
+        "duration_seconds": {
+          "default": 0.0,
+          "title": "Duration Seconds",
+          "type": "number"
+        },
+        "frames": {
+          "default": 0,
+          "title": "Frames",
+          "type": "integer"
+        },
+        "has_audio": {
+          "default": false,
+          "title": "Has Audio",
+          "type": "boolean"
+        },
+        "codec": {
+          "default": "",
+          "title": "Codec",
+          "type": "string"
+        },
+        "pix_fmt": {
+          "default": "",
+          "title": "Pix Fmt",
+          "type": "string"
+        },
+        "issues": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Issues",
+          "type": "array"
+        }
+      },
+      "title": "TechnicalProbe",
+      "type": "object"
+    },
     "Timeline": {
       "properties": {
         "id": {
@@ -2776,6 +3548,55 @@
         "start_frame"
       ],
       "title": "TimelineEvent",
+      "type": "object"
+    },
+    "VisualSpotcheck": {
+      "properties": {
+        "frames_sampled": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Frames Sampled",
+          "type": "integer"
+        },
+        "black_frames": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Black Frames",
+          "type": "integer"
+        },
+        "low_sharpness_frames": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Low Sharpness Frames",
+          "type": "integer"
+        },
+        "exposure_issues": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Exposure Issues",
+          "type": "integer"
+        },
+        "sharpness_min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sharpness Min"
+        },
+        "issues": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Issues",
+          "type": "array"
+        }
+      },
+      "title": "VisualSpotcheck",
       "type": "object"
     },
     "VoiceCasting": {
@@ -2989,6 +3810,13 @@
             "type": "string"
           },
           "title": "Diagnostics",
+          "type": "array"
+        },
+        "craft_notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Craft Notes",
           "type": "array"
         }
       },
@@ -3294,6 +4122,35 @@
       },
       "title": "Production Recoveries",
       "type": "array"
+    },
+    "rundown_review": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RundownReview"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "decisions": {
+      "items": {
+        "$ref": "#/$defs/Decision"
+      },
+      "title": "Decisions",
+      "type": "array"
+    },
+    "final_review": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FinalReview"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [

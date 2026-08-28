@@ -6,7 +6,8 @@
         "dnxhr_hq",
         "h265_proxy",
         "stems",
-        "qc_packet"
+        "qc_packet",
+        "subtitles"
       ],
       "title": "DeliverableKind",
       "type": "string"

@@ -927,6 +927,7 @@ function paintLesson(item, answers, interactive) {
     paintNotes();
   }
   loadSideFiles(item.step_id);
+  queueScrollState();
 }
 
 async function loadSnippet(sku) {
@@ -1003,6 +1004,11 @@ async function openLine(stepId) {
   const step = state.steps.find((s) => s.id === stepId);
   if (!step || step.status === "pending") return;
   viewing = stepId;
+  if (!state.complete) {
+    const previousStep = document.body.dataset.step || "";
+    document.body.dataset.step = stepId;
+    triggerStudioTransition(previousStep, stepId);
+  }
   const res = await fetch(`/api/lessons/${stepId}`, { cache: "no-store" });
   const payload = await res.json();
   const loaded = res.ok && Array.isArray(payload.fields) ? payload : state.lesson;
@@ -1014,13 +1020,79 @@ async function openLine(stepId) {
   const interactive = lineInteractive(step);
   reviewBanner.classList.toggle("hidden", interactive);
   passBtn.disabled = !interactive;
+  syncProvisionForStep(stepId);
   paintPass();
   paintLesson(lesson, state.workbook[stepId] || state.answers || {}, interactive);
+  paintApply(state.apply); // the pull's Activity belongs to App and Ready, not the line opened from the rail
   renderRail();
   statusEl.textContent = "";
   const well = document.querySelector(".well");
   if (well) well.scrollTop = 0;
+  queueScrollState();
 }
+
+function provisionIsActive(next) {
+  if (!next) return false;
+  return (next.status === "complete" && next.mode === "existing") || !["idle", "complete"].includes(next.status);
+}
+
+let provisionStale = false;
+
+function syncProvisionForStep(stepId) {
+  // The setup agent belongs to the line the server is waiting on. Any other line opened
+  // from the rail shows its own form; coming back shows the agent again, repainted if it
+  // moved while the operator was away.
+  if (!provisionPanel) return;
+  if (provisionIsActive(provision) && stepId === state?.active_step) {
+    if (provisionStale) {
+      provisionStale = false;
+      paintProvisioning(provision);
+      return;
+    }
+    provisionPanel.hidden = false;
+    provisionPanel.classList.remove("hidden");
+    document.body.dataset.provision = "active";
+    if (formEl) {
+      formEl.hidden = true;
+      formEl.classList.add("hidden");
+    }
+    return;
+  }
+  provisionPanel.hidden = true;
+  provisionPanel.classList.add("hidden");
+  document.body.dataset.provision = "idle";
+  if (formEl) {
+    formEl.hidden = false;
+    formEl.classList.remove("hidden");
+  }
+}
+
+let scrollStateFrame = 0;
+
+function updateScrollState() {
+  scrollStateFrame = 0;
+  const well = document.querySelector(".well");
+  if (!well || !prepEl) return;
+  const more = well.scrollHeight - well.clientHeight - well.scrollTop > 6;
+  prepEl.dataset.scroll = more ? "more" : "end";
+}
+
+function queueScrollState() {
+  if (scrollStateFrame) return;
+  scrollStateFrame = window.requestAnimationFrame(updateScrollState);
+}
+
+(function watchWorkspaceScroll() {
+  const well = document.querySelector(".well");
+  if (!well) return;
+  well.addEventListener("scroll", queueScrollState, { passive: true });
+  window.addEventListener("resize", queueScrollState);
+  if ("ResizeObserver" in window) {
+    const observer = new ResizeObserver(queueScrollState);
+    observer.observe(well);
+    well.querySelectorAll(":scope > *").forEach((child) => observer.observe(child));
+  }
+})();
 
 function lockRows(report) {
   const pack = state?.model_pack || {};
@@ -1141,7 +1213,7 @@ function paintSignedGpuNotice() {
   const reason = `The signed GPU at ${line} did not answer. RunPod remaps the IP and -p after Stop — paste the new SSH line, then Continue.`;
   const why = document.getElementById("learn-why");
   if (why) why.textContent = reason;
-  statusEl.textContent = reason;
+  statusEl.textContent = "Paste the new SSH line, then Continue.";
 }
 
 function paintSite() {
@@ -1233,8 +1305,14 @@ function render() {
       sessionStorage.setItem("diony_studio_entry", "start");
     }
     syncStudioEntry();
+    // The sheet is laid out for the line on screen, not the line the server waits on:
+    // a passed line opened from the rail keeps its own layout (Compute stays the console).
+    const viewedStep =
+      viewing && (state?.steps || []).some((s) => s.id === viewing && s.status !== "pending")
+        ? viewing
+        : state?.active_step || "path";
     const previousStep = document.body.dataset.step || "";
-    const nextStep = state?.complete ? "complete" : state?.active_step || "path";
+    const nextStep = state?.complete ? "complete" : viewedStep;
     document.body.dataset.step = nextStep;
     triggerStudioTransition(previousStep, nextStep);
     paintSite();
@@ -1846,6 +1924,18 @@ function paintProvisioning(next) {
   const setupComplete = next.status === "complete" && next.mode === "existing";
   const active = next && (setupComplete || !["idle", "complete"].includes(next.status));
   if (!provisionPanel) return;
+  if (active && state && viewing && viewing !== state.active_step) {
+    // The operator opened another line from the rail. Keep its form; repaint on return.
+    provisionStale = true;
+    provisionPanel.hidden = true;
+    provisionPanel.classList.add("hidden");
+    document.body.dataset.provision = "idle";
+    if (formEl) {
+      formEl.hidden = false;
+      formEl.classList.remove("hidden");
+    }
+    return;
+  }
   provisionPanel.hidden = !active;
   provisionPanel.classList.toggle("hidden", !active);
   document.body.dataset.provision = active ? "active" : "idle";
@@ -1938,6 +2028,7 @@ function paintProvisioning(next) {
         next.checkpoint === "validating_existing" ? "Retry validation" : "Continue";
     }
   }
+  queueScrollState();
   if (next.status === "ready" && !provisionAdopting) adoptProvisionedSite();
 }
 

@@ -35,3 +35,8 @@ def producer_isolated_vault(tmp_path, monkeypatch):
     reset_farm()
     reset_finish()
     reset_mix()
+
+# Blueprint 24: no test reaches the network; loopback stays open.
+from diony_contracts.testing import network_guard_fixture  # noqa: E402
+
+_diony_network_guard = network_guard_fixture()

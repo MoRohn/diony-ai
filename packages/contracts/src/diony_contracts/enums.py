@@ -123,6 +123,7 @@ class DeliverableKind(StrEnum):
     H265_PROXY = "h265_proxy"
     STEMS = "stems"
     QC_PACKET = "qc_packet"
+    SUBTITLES = "subtitles"
 
 
 class CustomerKind(StrEnum):
