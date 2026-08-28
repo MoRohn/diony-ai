@@ -9,13 +9,20 @@ from diony_contracts.live import inference_live
 from diony_contracts.models import Gate, Project, Take
 from diony_producer.camera import live_camera
 from diony_producer.farm import (
+    auto_retake_for_qc_failure,
+    enter_farm,
     farm_status,
+    start_farm,
     qc_contract_valid,
     refresh_take_measurement,
     take_has_live_negative,
 )
 from diony_producer.final_review import final_review_refuses_current_master, run_final_review
-from diony_contracts.montage import ReviewStatus
+from diony_contracts.cluster import RETAKE_CAP
+from diony_contracts.enums import TakeOrigin
+from diony_contracts.montage import RecommendedAction, ReviewStatus
+from diony_producer.decisions import record_decision
+from diony_contracts.montage import DecisionCategory, DecisionOption
 from diony_producer.finish import (
     enter_finish,
     finish_status,
@@ -241,6 +248,84 @@ def reopen_picture_for_retake(project: Project) -> None:
     persist_project(project)
 
 
+BLACK_FRAME_MASTER_NOTE = "Black frame detected in the program master (final review sample)"
+
+
+def remediate_final_review(project: Project, *, live: bool) -> list[Take]:
+    """Retake the prints a failed final review named, within the four-Take cap.
+
+    Runs at most once per reviewed master: the review records what was done
+    (or why nothing could be), so the advance controller's next tick sees a
+    remediated review and stops. A successful remediation reopens picture;
+    the new negatives land, finish, stitch a new master, mix, and review
+    again. A print already at the retake cap is left for a human with the
+    evidence on the feed.
+    """
+    review = project.final_review
+    if review is None or review.remediation or review.status != ReviewStatus.FAIL:
+        return []
+    if review.recommended_action != RecommendedAction.RETAKE or not review.offending_shot_ids:
+        review.remediation = "no retake target: the failure is not tied to a print"
+        persist_project(project)
+        return []
+    if project.production_stop is not None or project.production_pause is not None:
+        review.remediation = "production stopped or paused; no automatic retake"
+        persist_project(project)
+        return []
+    retries: list[Take] = []
+    held: list[str] = []
+    for shot_id in review.offending_shot_ids:
+        take = _selected_take(project, shot_id)
+        if take is None or take.qc is None:
+            held.append(f"{shot_id} has no judged print")
+            continue
+        generations = [item for item in project.takes_for(shot_id) if item.origin == TakeOrigin.GENERATION]
+        if len(generations) >= RETAKE_CAP:
+            held.append(f"{shot_id} is at the retake cap ({RETAKE_CAP})")
+            continue
+        take.qc = take.qc.model_copy(
+            update={"verdict": QCVerdict.FAIL, "notes": BLACK_FRAME_MASTER_NOTE, "settled_best_of": None, "settled_score": None}
+        )
+        retry = auto_retake_for_qc_failure(project, take)
+        if retry is None:
+            held.append(f"{shot_id} could not be retaken")
+            continue
+        retries.append(retry)
+    summary = (
+        ", ".join(f"{retry.shot_id} → {retry.id}" for retry in retries) or "no print could be retaken"
+    ) + (f"; held: {'; '.join(held)}" if held else "")
+    review.remediation = summary[:600]
+    record_decision(
+        project,
+        stage="mix",
+        category=DecisionCategory.RETAKE,
+        subject="final review remediation",
+        options=[
+            DecisionOption(id="retake", label="retake the prints that sampled black", reason=summary if retries else "", rejected_because="" if retries else "no retake budget or no judged print"),
+            DecisionOption(id="hold", label="hold the master for a human", reason="" if retries else summary, rejected_because="retake budget remained" if retries else ""),
+        ],
+        selected="retake" if retries else "hold",
+        reason=summary,
+        confidence=0.8,
+    )
+    record_activity(
+        "qc",
+        f"Final review remediation: {summary}",
+        level="live",
+        shot_id=retries[0].shot_id if retries else "",
+    )
+    if retries:
+        # reopen_picture_for_retake clears the review; the remediation line
+        # above and the decision log keep the record.
+        reopen_picture_for_retake(project)
+        if live:
+            enter_farm()
+            start_farm(project, retries)
+    else:
+        persist_project(project)
+    return retries
+
+
 def maybe_advance_run(project: Project) -> None:
     """Close picture then mix when the run is ready. No-op while farm/finish is busy."""
     if project.production_stop is not None or project.production_pause is not None:
@@ -296,9 +381,11 @@ def maybe_advance_run(project: Project) -> None:
             start_mix(project)
             return
         if final_review_refuses_current_master(project):
-            # The mixed master already failed its final review; the verdict is
-            # on the Project and the feed. Only a retake or a re-mix (a new
-            # program hash) earns another measurement — never a 1 s retry loop.
+            # The mixed master already failed its final review. When the review
+            # names the prints that failed and they still have retake budget,
+            # the run retakes them itself (once per master); otherwise the
+            # verdict stays on the Project and the feed until a human acts.
+            remediate_final_review(project, live=live)
             return
         try:
             apply_mix_lock(project, "producer")

@@ -671,6 +671,10 @@ class FinalReview(BaseModel):
     promise_preservation: PromisePreservation = Field(default_factory=PromisePreservation)
     subtitle_check: SubtitleCheck = Field(default_factory=SubtitleCheck)
     issues_found: list[str] = Field(default_factory=list)
+    # Shots whose print produced a failing sampled frame, in rundown order;
+    # the remediation the run took (or why it could not), recorded once.
+    offending_shot_ids: list[str] = Field(default_factory=list)
+    remediation: str = ""
     reviewed_at: datetime = Field(default_factory=_now)
 
     @model_validator(mode="after")
@@ -684,6 +688,44 @@ def duration_tolerance_seconds(target_seconds: float) -> float:
     return max(DURATION_TOLERANCE_MIN_SECONDS, DURATION_TOLERANCE_RATIO * float(target_seconds))
 
 
+PROGRAM_SAMPLE_MIN = 5
+PROGRAM_SAMPLE_MAX = 32
+
+
+def program_sample_count(frames: int, fps: float) -> int:
+    """How many frames a program master is spot-checked on: five up to two
+    minutes, then one more per two minutes of runtime, capped at 32."""
+    if fps <= 0 or frames <= 0:
+        return PROGRAM_SAMPLE_MIN
+    minutes = frames / fps / 60.0
+    if minutes <= 2.0:
+        return PROGRAM_SAMPLE_MIN
+    return max(PROGRAM_SAMPLE_MIN, min(PROGRAM_SAMPLE_MAX, PROGRAM_SAMPLE_MIN + int(minutes // 2)))
+
+
+def shots_at_frames(project: "Project", frame_indices: Iterable[int]) -> list[str]:
+    """Rundown-ordered shot ids whose timeline event covers any of the frames."""
+    timeline = project.timeline
+    if timeline is None:
+        return []
+    events = list(timeline.events)
+    durations = {shot.id: shot.duration_frames for shot in project.shots}
+    found: list[str] = []
+    for index in sorted(set(int(value) for value in frame_indices)):
+        owner = None
+        for event in events:
+            start = event.start_frame
+            end = start + durations.get(event.shot_id, 0)
+            if start <= index < end:
+                owner = event.shot_id
+        if owner is None and events and index >= events[-1].start_frame:
+            owner = events[-1].shot_id
+        if owner and owner not in found:
+            found.append(owner)
+    order = {shot.id: position for position, shot in enumerate(project.shots)}
+    return sorted(found, key=lambda shot_id: order.get(shot_id, len(order)))
+
+
 def evaluate_final_review(
     *,
     timeline_id: str,
@@ -694,6 +736,7 @@ def evaluate_final_review(
     audio: AudioSpotcheck,
     promise: PromisePreservation,
     subtitles: SubtitleCheck,
+    offending_shot_ids: Sequence[str] = (),
 ) -> FinalReview:
     """Combine measured sections into one verdict; fail is never softened.
 
@@ -760,6 +803,7 @@ def evaluate_final_review(
         promise_preservation=promise,
         subtitle_check=subtitles,
         issues_found=issues,
+        offending_shot_ids=list(offending_shot_ids),
     )
 
 
@@ -870,6 +914,8 @@ __all__ = [
     "diversify_coverage",
     "duration_tolerance_seconds",
     "evaluate_final_review",
+    "program_sample_count",
+    "shots_at_frames",
     "format_sizing",
     "look_filter",
     "render_srt",

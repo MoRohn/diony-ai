@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
 
 # v2: 320x180 @ 12 fps analysis proxy (v1 was 160x90 @ 8 fps). Stats scale with
@@ -218,6 +218,10 @@ class FrameQualityReceipt:
     exposure_ok: bool = False
     contrast_ok: bool = False
     error: str = ""
+    # Which sampled frames (by decoded frame index) measured black, so a
+    # program review can name the print that produced them.
+    sample_indices: tuple[int, ...] = ()
+    black_indices: tuple[int, ...] = ()
 
     @property
     def advisory_notes(self) -> list[str]:
@@ -240,11 +244,16 @@ def _frame_threshold(name: str, default: float) -> float:
     return default if value is None else value
 
 
-def sample_frame_indices(frame_count: int) -> list[int]:
-    """First, quarter, middle, three-quarter, and last decoded frame, de-duplicated."""
+def sample_frame_indices(frame_count: int, samples: int = 5) -> list[int]:
+    """Evenly spaced decoded frame indices including the first and last, de-duplicated.
+
+    Five samples on an 81-frame negative are the first, quarter, middle,
+    three-quarter, and last frames; a program master asks for more.
+    """
     total = max(1, int(frame_count))
     last = total - 1
-    picks = [0, last // 4, last // 2, (3 * last) // 4, last]
+    count = max(2, int(samples)) if total > 1 else 1
+    picks = [round(last * position / (count - 1)) for position in range(count)] if count > 1 else [0]
     return list(dict.fromkeys(max(0, min(last, index)) for index in picks))
 
 
@@ -343,14 +352,17 @@ def decode_sampled_frames(
     ]
 
 
-def measure_frame_quality_frames(frames: Iterable[object]) -> FrameQualityReceipt:
+def measure_frame_quality_frames(
+    frames: Iterable[object], *, indices: Sequence[int] | None = None
+) -> FrameQualityReceipt:
     import numpy as np
 
     sharpness: list[float] = []
     brightness: list[float] = []
     contrast: list[float] = []
     black = 0
-    for frame in frames:
+    black_at: list[int] = []
+    for position, frame in enumerate(frames):
         array = np.asarray(frame)
         if array.ndim != 3 or array.shape[2] < 3:
             return FrameQualityReceipt(False, error="QC frame is not RGB")
@@ -370,6 +382,7 @@ def measure_frame_quality_frames(frames: Iterable[object]) -> FrameQualityReceip
         contrast.append(std)
         if mean < BLACK_FRAME_MEAN_MAX and std < BLACK_FRAME_STD_MAX:
             black += 1
+            black_at.append(indices[position] if indices is not None and position < len(indices) else position)
     if not sharpness:
         return FrameQualityReceipt(False, error="no QC frames decoded")
     sharpness_min = _frame_threshold("DIONY_SHARPNESS_MIN", DEFAULT_SHARPNESS_MIN)
@@ -388,18 +401,23 @@ def measure_frame_quality_frames(frames: Iterable[object]) -> FrameQualityReceip
         sharpness_ok=(min(lit) if lit else 0.0) >= sharpness_min,
         exposure_ok=black == 0 and min(brightness) >= brightness_min and max(brightness) <= brightness_max,
         contrast_ok=black == 0 and min(contrast) >= contrast_min,
+        sample_indices=tuple(int(value) for value in indices) if indices is not None else tuple(range(len(sharpness))),
+        black_indices=tuple(black_at),
     )
 
 
-def measure_frame_quality(path: Path, *, frame_count: int, fps: float | None = None) -> FrameQualityReceipt:
+def measure_frame_quality(
+    path: Path, *, frame_count: int, fps: float | None = None, samples: int = 5
+) -> FrameQualityReceipt:
     """Sampled sharpness/exposure/black-frame evidence on a landed negative or a master."""
+    indices = sample_frame_indices(frame_count, samples)
     try:
-        frames = decode_sampled_frames(path, sample_frame_indices(frame_count), fps=fps)
+        frames = decode_sampled_frames(path, indices, fps=fps)
     except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
         return FrameQualityReceipt(False, error=str(exc)[:300])
     if not frames:
         return FrameQualityReceipt(False, error="no QC frames decoded")
-    return measure_frame_quality_frames(frames)
+    return measure_frame_quality_frames(frames, indices=indices[: len(frames)])
 
 
 # --------------------------------------------------------------------------- chain colour drift

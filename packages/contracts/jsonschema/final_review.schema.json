@@ -404,6 +404,18 @@
       "title": "Issues Found",
       "type": "array"
     },
+    "offending_shot_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Offending Shot Ids",
+      "type": "array"
+    },
+    "remediation": {
+      "default": "",
+      "title": "Remediation",
+      "type": "string"
+    },
     "reviewed_at": {
       "format": "date-time",
       "title": "Reviewed At",

@@ -518,6 +518,7 @@ def verify_speech_render(project: Project, take: Take, video: Path, *, vault: Pa
                 diagnostics.append(
                     f"transcript ({heard.model}) matches {heard.word_accuracy:.0%} of the line"
                     + ("" if heard.last_word_ok else "; the last authored word was not heard")
+                    + (f"; not heard: {' '.join(heard.missed_words)}" if heard.missed_words else "")
                 )
             dialogue_asset = _append_asset(project, dialogue, role="voice_dialogue", take_id=take.id, kind=AssetKind.AUDIO, mime="audio/wav", vault=vault)
             stem_asset = _append_asset(project, stem, role="voice_mix_stem", take_id=take.id, kind=AssetKind.AUDIO, mime="audio/wav", vault=vault)

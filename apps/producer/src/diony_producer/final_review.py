@@ -29,7 +29,9 @@ from diony_contracts.montage import (
     dialogue_cues,
     duration_tolerance_seconds,
     evaluate_final_review,
+    program_sample_count,
     render_srt,
+    shots_at_frames,
     render_vtt,
     skipped_final_review,
 )
@@ -88,24 +90,34 @@ def technical_probe(master: Path, *, bible_fps: float) -> TechnicalProbe:
     )
 
 
-def visual_spotcheck(master: Path, *, frames: int, fps: float | None = None) -> VisualSpotcheck:
-    receipt = measure_frame_quality(master, frame_count=max(1, frames), fps=fps)
+def visual_spotcheck(
+    master: Path, *, frames: int, fps: float | None = None, project: Project | None = None
+) -> tuple[VisualSpotcheck, list[str]]:
+    """Spot-check the master; also name the shots whose prints sampled black."""
+    samples = program_sample_count(frames, fps or 0.0)
+    receipt = measure_frame_quality(master, frame_count=max(1, frames), fps=fps, samples=samples)
     if not receipt.measured:
-        return VisualSpotcheck(issues=[f"visual spot-check unavailable: {receipt.error}"] if receipt.error else [])
+        return VisualSpotcheck(issues=[f"visual spot-check unavailable: {receipt.error}"] if receipt.error else []), []
+    offending = shots_at_frames(project, receipt.black_indices) if project is not None and receipt.black_indices else []
     issues: list[str] = []
+    if offending:
+        issues.append("black frames sampled inside " + ", ".join(offending))
     if not receipt.sharpness_ok:
         issues.append(f"a sampled program frame is soft (sharpness {receipt.sharpness_min:.1f} < {DEFAULT_SHARPNESS_MIN:g})")
     if not receipt.exposure_ok and receipt.black_frames == 0:
         issues.append(
             f"sampled exposure outside range (luma {receipt.brightness_min:.0f}–{receipt.brightness_max:.0f})"
         )
-    return VisualSpotcheck(
-        frames_sampled=receipt.frame_count,
-        black_frames=receipt.black_frames,
-        low_sharpness_frames=0 if receipt.sharpness_ok else 1,
-        exposure_issues=0 if receipt.exposure_ok or receipt.black_frames else 1,
-        sharpness_min=receipt.sharpness_min,
-        issues=issues,
+    return (
+        VisualSpotcheck(
+            frames_sampled=receipt.frame_count,
+            black_frames=receipt.black_frames,
+            low_sharpness_frames=0 if receipt.sharpness_ok else 1,
+            exposure_issues=0 if receipt.exposure_ok or receipt.black_frames else 1,
+            sharpness_min=receipt.sharpness_min,
+            issues=issues,
+        ),
+        offending,
     )
 
 
@@ -294,10 +306,10 @@ def run_final_review(project: Project, *, live: bool) -> FinalReview:
     master = vault_root() / master_rel
     master_sha256 = current_master_sha256(project) or (_sha256_file(master) if master.is_file() else "")
     probe = technical_probe(master, bible_fps=float(project.bible.fps))
-    visual = (
-        visual_spotcheck(master, frames=probe.frames, fps=probe.fps or float(project.bible.fps))
+    visual, offending = (
+        visual_spotcheck(master, frames=probe.frames, fps=probe.fps or float(project.bible.fps), project=project)
         if probe.valid_container
-        else VisualSpotcheck()
+        else (VisualSpotcheck(), [])
     )
     audio = audio_spotcheck(project, probe)
     promise = promise_preservation(project, probe)
@@ -311,6 +323,7 @@ def run_final_review(project: Project, *, live: bool) -> FinalReview:
         audio=audio,
         promise=promise,
         subtitles=subtitles,
+        offending_shot_ids=offending,
     )
     project.final_review = review
     try:

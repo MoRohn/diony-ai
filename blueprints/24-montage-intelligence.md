@@ -219,6 +219,39 @@ the next idle boundary like every other env change.
 * JSON Schemas for `Decision`, `RundownReview`, `FinalReview`, and
   `ProductionSizing` are exported to `packages/contracts/jsonschema/`.
 
+## 11. Remediation, evidence surfaces, and density
+
+* **A failed final review remediates itself.** Every sampled black frame is
+  mapped through the timeline to the print that produced it
+  (`FinalReview.offending_shot_ids`). When the recommended action is `retake`,
+  `remediate_final_review` marks each offending print `FAIL` with
+  "Black frame detected in the program master (final review sample)", mints
+  its bounded retake through the normal `auto_retake_for_qc_failure` path
+  (DeepSeek direction, distant seed, four-Take cap), reopens picture, and
+  restarts the farm for those Takes; the run then finishes, stitches, mixes,
+  and reviews the new master. A print at the cap is held for a human with
+  the evidence on the feed. Remediation runs once per reviewed master
+  (`FinalReview.remediation`) and is a `retake` decision in the log.
+* **The Production rail knows.** `production_standard` reports a current
+  failed review as `QC HOLD` with a "Final review failed: …" blocker and
+  never claims `master_ready`; the payload carries `final_review`,
+  `rundown_review`, and `deliverables` summaries for any client. The "now"
+  line names the failure and the remediation.
+* **Sampling density scales with runtime** (`program_sample_count`): five
+  frames up to two minutes, one more per two minutes, capped at 32 — an hour
+  master is checked on 32 seeked frames.
+* **Evidence surfaces.** `GET /api/program/deliverables` lists the master,
+  stems, subtitles, and QC packet with download URLs;
+  `GET /api/deliverables/{id}/file` serves only a listed deliverable inside
+  the project's own vault namespace. `.diony.zip` inspection reports which
+  evidence files travelled (`evidence`). STOP (keep or delete) clears the
+  stale review and deliverables like a retake does.
+* **Transcript evidence names the words.** Digits are spelled out (0–999),
+  contractions expanded, and the words not heard back are listed in the
+  speech diagnostics so the retake director sees "not heard: tide".
+* **Schemas cannot drift.** `test_schema_sync` fails when a committed JSON
+  Schema differs from its model; `diony-export-schemas` regenerates them.
+
 ## Operational notes
 
 * New env: `DIONY_SHARPNESS_MIN`, `DIONY_BRIGHTNESS_MIN`, `DIONY_BRIGHTNESS_MAX`,

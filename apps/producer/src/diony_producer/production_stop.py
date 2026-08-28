@@ -66,6 +66,10 @@ def record_production_stop(
     )
     project.production_stop = receipt
     project.status = ProjectStatus.STOPPED
+    # A stopped run has no reviewed master; evidence and deliverables that
+    # described the previous mix would misdescribe the kept or deleted result.
+    project.final_review = None
+    project.deliverables = []
     project.mark_production_end()
     persist_project(project)
     return receipt

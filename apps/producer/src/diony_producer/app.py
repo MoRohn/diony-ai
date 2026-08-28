@@ -1134,6 +1134,63 @@ def program_file(download: bool = False) -> FileResponse:
     return _program_file_response(_project, download=download)
 
 
+_DELIVERABLE_MEDIA = {
+    ".mov": "video/quicktime",
+    ".mp4": "video/mp4",
+    ".wav": "audio/wav",
+    ".srt": "application/x-subrip",
+    ".vtt": "text/vtt",
+    ".json": "application/json",
+}
+
+
+def _deliverable_or_404(project: Project, deliverable_id: str) -> Path:
+    """Only a deliverable listed on this Project, inside its own vault namespace."""
+    row = next((item for item in project.deliverables if item.id == deliverable_id), None)
+    if row is None:
+        raise HTTPException(404, "deliverable not on this project")
+    root = (vault_root() / "projects" / project.id).resolve()
+    path = abs_path(row.path).resolve()
+    if root != path and root not in path.parents:
+        raise HTTPException(404, "deliverable is outside this project's vault namespace")
+    if not path.is_file():
+        raise HTTPException(404, "deliverable bytes missing")
+    return path
+
+
+@app.get("/api/program/deliverables")
+def program_deliverables() -> dict:
+    """Listed deliverables of the current program (Blueprint 24): master, stems, subtitles, QC packet."""
+    return {
+        "project_id": _project.id,
+        "final_review": (
+            {"status": _project.final_review.status.value, "issues": list(_project.final_review.issues_found)}
+            if _project.final_review is not None
+            else None
+        ),
+        "deliverables": [
+            {
+                "id": item.id,
+                "kind": item.kind.value,
+                "path": item.path,
+                "sha256": item.sha256,
+                "url": f"/api/deliverables/{item.id}/file",
+            }
+            for item in _project.deliverables
+        ],
+    }
+
+
+@app.get("/api/deliverables/{deliverable_id}/file")
+def deliverable_file(deliverable_id: str, download: bool = True) -> FileResponse:
+    path = _deliverable_or_404(_project, deliverable_id)
+    return FileResponse(
+        path,
+        filename=path.name if download else None,
+        media_type=_DELIVERABLE_MEDIA.get(path.suffix.lower(), "application/octet-stream"),
+    )
+
+
 @app.get("/api/projects/{project_id}/program/file")
 def project_program_file(project_id: str, download: bool = False) -> FileResponse:
     if project_id == _project.id:

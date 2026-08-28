@@ -57,10 +57,37 @@ from diony_contracts.launch import (
 )
 
 
-def main() -> None:
-    root = Path(__file__).resolve().parent.parent.parent
-    out = root / "jsonschema"
+def schema_root() -> Path:
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def schema_documents() -> dict[str, dict]:
+    """Every exported contract's JSON Schema, keyed by file stem."""
+    return {name: model.model_json_schema() for name, model in exported_models().items()}
+
+
+def write_schemas(out: Path) -> list[Path]:
     out.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for name, schema in schema_documents().items():
+        path = out / f"{name}.schema.json"
+        path.write_text(json.dumps(schema, indent=2) + "\n")
+        written.append(path)
+    return written
+
+
+def main() -> None:
+    root = schema_root()
+    for path in write_schemas(root / "jsonschema"):
+        print(path)
+    examples = root / "examples"
+    examples.mkdir(parents=True, exist_ok=True)
+    pilot = examples / "pilot.json"
+    pilot.write_text(json.dumps(demo_project().model_dump(mode="json"), indent=2) + "\n")
+    print(pilot)
+
+
+def exported_models() -> dict[str, type]:
     models = {
         "project": Project,
         "production_pause_receipt": ProductionPauseReceipt,
@@ -113,15 +140,7 @@ def main() -> None:
         "final_review": FinalReview,
         "production_sizing": ProductionSizing,
     }
-    for name, model in models.items():
-        path = out / f"{name}.schema.json"
-        path.write_text(json.dumps(model.model_json_schema(), indent=2) + "\n")
-        print(path)
-    examples = root / "examples"
-    examples.mkdir(parents=True, exist_ok=True)
-    pilot = examples / "pilot.json"
-    pilot.write_text(json.dumps(demo_project().model_dump(mode="json"), indent=2) + "\n")
-    print(pilot)
+    return models
 
 
 if __name__ == "__main__":

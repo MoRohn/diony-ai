@@ -823,9 +823,25 @@ def production_standard(
         and mix_receipt
     )
 
+    review = project.final_review
+    review_failed = bool(
+        review is not None
+        and review.status.value == "fail"
+        and project.timeline is not None
+        and review.timeline_id == project.timeline.id
+        and review.master_sha256
+        and review.master_sha256 in {project.timeline.program_sha256, project.timeline.picture_sha256}
+    )
+    if review_failed:
+        master_ready = False
     blockers: list[str] = []
     if project.production_stop is not None:
         blockers.append("Production was stopped before the 1080 master completed.")
+    if review_failed and review is not None:
+        blockers.append(
+            "Final review failed: " + "; ".join(review.issues_found)
+            + (f" Remediation: {review.remediation}." if review.remediation else "")
+        )
     if failed:
         blockers.append(f"{failed} selected Take{'s' if failed != 1 else ''} failed AutoQC.")
     if not project.shots:
@@ -844,7 +860,7 @@ def production_standard(
 
     if project.production_stop is not None:
         status = "INCOMPLETE"
-    elif failed:
+    elif failed or review_failed:
         status = "QC HOLD"
     elif master_ready:
         status = "MASTER READY"
@@ -908,6 +924,39 @@ def production_standard(
         "master_ready": master_ready,
         "master_path": master_path if has_program_master else "",
         "blockers": blockers,
+        "final_review": (
+            {
+                "status": review.status.value,
+                "recommended_action": review.recommended_action.value,
+                "issues": list(review.issues_found),
+                "offending_shot_ids": list(review.offending_shot_ids),
+                "remediation": review.remediation,
+                "current": bool(
+                    project.timeline is not None
+                    and review.timeline_id == project.timeline.id
+                    and (
+                        not review.master_sha256
+                        or review.master_sha256
+                        in {project.timeline.program_sha256, project.timeline.picture_sha256}
+                    )
+                ),
+            }
+            if review is not None
+            else None
+        ),
+        "rundown_review": (
+            {
+                "verdict": project.rundown_review.verdict.value,
+                "score": project.rundown_review.score,
+                "violations": list(project.rundown_review.violations),
+            }
+            if project.rundown_review is not None
+            else None
+        ),
+        "deliverables": [
+            {"id": item.id, "kind": item.kind.value, "path": item.path, "sha256": item.sha256}
+            for item in project.deliverables
+        ],
     }
 
 
@@ -1110,6 +1159,15 @@ def run_payload(
         now = f"Mixing to {target} LUFS · {_target_peak(project.bible.true_peak_dbtp)}."
         tally = f"{shown} / {shots}" if shots else "—"
         tally_note = "measuring mix"
+    elif mix_open and project.final_review is not None and project.final_review.status.value == "fail" and project.final_review.master_sha256 and project.timeline is not None and project.final_review.master_sha256 in {project.timeline.program_sha256, project.timeline.picture_sha256}:
+        phase = "mix"
+        waiting = None
+        review = project.final_review
+        now = "Final review failed: " + "; ".join(review.issues_found)[:240] + (
+            f" · {review.remediation}" if review.remediation else " · retaking the print that failed"
+        )
+        tally = f"{shown} / {shots}" if shots else "—"
+        tally_note = "final review"
     elif mix_open:
         phase = "mix"
         waiting = None

@@ -77,7 +77,9 @@ def export_project_package(
         "README.md": (
             "# Diony project package\n\n"
             "This package belongs to its creator. It includes the project contract, "
-            "generation lineage, cost/usage records, audit history, media, and SHA-256 checksums.\n\n"
+            "generation lineage, cost/usage records, audit history, media, and SHA-256 checksums.\n"
+            "Production evidence (Blueprint 24) travels beside the master: decision-log.jsonl, "
+            "final-review.json, qc-packet.json, and the dialogue subtitle sidecars.\n\n"
             "Provider secrets, session tokens, and controller keys are never included.\n"
         ).encode(),
     }
@@ -219,10 +221,17 @@ def inspect_project_package(path: Path) -> dict[str, object]:
             Project.model_validate_json(archive.read("project/project.json"))
         except Exception as exc:  # noqa: BLE001
             failures.append(f"Invalid project contract: {exc}")
+        evidence = {
+            "decision_log": any(name.endswith("decision-log.jsonl") for name in names),
+            "final_review": any(name.endswith("final-review.json") for name in names),
+            "qc_packet": any(name.endswith("qc-packet.json") for name in names),
+            "subtitles": any(name.endswith((".srt", ".vtt")) for name in names),
+        }
     return {
         "ok": not failures,
         "failures": failures,
         "project_id": manifest.get("project_id"),
         "workspace_id": manifest.get("workspace_id"),
         "files": len(manifest.get("files", [])),
+        "evidence": evidence,
     }
