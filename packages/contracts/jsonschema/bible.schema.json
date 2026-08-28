@@ -169,6 +169,11 @@
       "title": "Chain Color Match",
       "type": "boolean"
     },
+    "score_cuts_on_downbeats": {
+      "default": true,
+      "title": "Score Cuts On Downbeats",
+      "type": "boolean"
+    },
     "locked": {
       "default": false,
       "title": "Locked",

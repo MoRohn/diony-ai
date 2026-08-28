@@ -31,6 +31,8 @@ from diony_contracts.models import (
     WanSpeechRequest,
 )
 from diony_contracts.montage import Decision, FinalReview, ProductionSizing, RundownReview
+from diony_contracts.score import BeatGrid, ScoreAlignment
+from diony_contracts.edl import EditDecisionList
 from diony_contracts.launch import (
     InvitationEmailDelivery,
     AuditEvent,
@@ -139,6 +141,9 @@ def exported_models() -> dict[str, type]:
         "rundown_review": RundownReview,
         "final_review": FinalReview,
         "production_sizing": ProductionSizing,
+        "beat_grid": BeatGrid,
+        "score_alignment": ScoreAlignment,
+        "edit_decision_list": EditDecisionList,
     }
     return models
 

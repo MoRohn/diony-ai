@@ -252,6 +252,48 @@ the next idle boundary like every other env change.
 * **Schemas cannot drift.** `test_schema_sync` fails when a committed JSON
   Schema differs from its model; `diony-export-schemas` regenerates them.
 
+## 12. Beat-grid score alignment (Mix)
+
+Picture is frame-locked, so the score moves to the cuts. For every `score`
+cue the Mix (a) measures a `BeatGrid` locally (`diony_producer.beat_grid`:
+ffmpeg-decoded 22.05 kHz mono → spectral-flux onset envelope → tempo from the
+envelope's autocorrelation in 55–200 BPM → beat phase by onset energy →
+downbeats every four beats phased on the <150 Hz band → one-second RMS
+energy phases; `librosa` supplies tempo and beats when importable on the
+host; grids cache under `runtime/audio/beatgrids/` by the cue's bytes), and
+(b) decides a source in-point shift of less than one bar
+(`diony_contracts.score.align_cue_to_cuts`) that lands the most hero cuts
+inside the cue's span on downbeats (then on beats, then least error), capped
+by the source's remaining length. Hero cuts a non-integer number of bars
+apart cannot all land — the cut the music enters on is what matters; misses
+are counted on the receipt, never hidden. The mix graph applies it as
+`atrim=shift:shift+duration,asetpts=PTS-STARTPTS`.
+
+Trust boundary: a cue is `rhythmic` only when the autocorrelation peak's
+prominence reaches 1.8 (click tracks ≈5, pads ≈1.2); otherwise, or when no
+hero cut sits inside the span, or when no shift lands even one hero cut on a
+downbeat within 60 ms, the cue is `phrase_flow` and plays as planned. Ambience and
+foley never move. `Bible.score_cuts_on_downbeats` (default on) switches it
+off. Every cue's `ScoreAlignment` (mode, shift, aligned cuts with error in
+ms, reason) is on `MixLock.score_alignments`, a `soundtrack` decision, and
+the activity feed.
+
+## 13. Edit decision list
+
+`diony_contracts.edl.build_edl` derives one `EditDecision` per timeline
+event from the locked Timeline: record/source in-out frames, the transition
+family (`cut`, or `dissolve` for the eight-frame temporal blend), the role
+(establishing, identity_lock, insert, reaction, dialogue, bridge, coverage,
+hold, button — from the coverage slug and the speech contract), the
+speaker, hero flag, engine, and a one-line reason for the cut. The list
+notes whether every cut carries a reason, how many transition families are
+in use (limit 4), and whether hero shots hold the longest. The final review
+writes `master_1080.edl` (CMX3600: video events, `D` dissolves, `* DIONY
+…` comments) and `master_1080.edl.json` beside the master, lists both as
+`DeliverableKind.EDL`, and embeds the list in `qc-packet.json`. The EDL is
+evidence of the edit the run made; the Timeline remains the stitch
+authority.
+
 ## Operational notes
 
 * New env: `DIONY_SHARPNESS_MIN`, `DIONY_BRIGHTNESS_MIN`, `DIONY_BRIGHTNESS_MAX`,
@@ -262,6 +304,6 @@ the next idle boundary like every other env change.
 * Every new field on `Bible`, `WanPromptPlan`, `QCReport`, `SpeechQCReceipt`,
   `TimelineEvent`, and `Project` has a default, so persisted projects load
   unchanged; `refresh_reference_shot` and re-measurement fill evidence forward.
-* Not done here, recorded for the next pass: beat-grid alignment of the score
-  to hero cuts (librosa on the host), an edit-decision contract with per-cut
-  reasons and transition families, face-embedding identity beyond SSIM, 5.1 stems.
+* Not done here, recorded for the next pass: face-embedding identity beyond
+  SSIM, 5.1 stems, energy-aware score dips at reveals (the energy phases are
+  measured; no creative dip is applied automatically).

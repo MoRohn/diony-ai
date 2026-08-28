@@ -37,6 +37,7 @@ from diony_contracts.montage import (
     LookProfile,
     RundownReview,
 )
+from diony_contracts.score import ScoreAlignment
 from diony_contracts.voice import (  # noqa: F401 — re-exported for schema export
     DialogueTurn,
     SpeechClipPackage,
@@ -351,6 +352,9 @@ class Bible(BaseModel):
     # Finish matches a previous-frame print's colour statistics halfway toward
     # the boundary it was chained from when AutoQC measured drift (Blueprint 24).
     chain_color_match: bool = True
+    # Mix shifts each score cue's in-point (< one bar) so its downbeats land
+    # on the hero cuts it plays under (Blueprint 24 §12).
+    score_cuts_on_downbeats: bool = True
     locked: bool = False
     locked_at: datetime | None = None
 
@@ -778,6 +782,8 @@ class MixLock(BaseModel):
     # gates do not apply, and the policy is recorded here, never hidden.
     picture_only: bool = False
     policy: str = ""
+    # Blueprint 24 §12: how each score cue was placed against the hero cuts.
+    score_alignments: list[ScoreAlignment] = Field(default_factory=list)
 
 
 class Deliverable(BaseModel):

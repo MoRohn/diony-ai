@@ -1,0 +1,112 @@
+{
+  "$defs": {
+    "EnergyLevel": {
+      "enum": [
+        "void",
+        "low",
+        "medium",
+        "high"
+      ],
+      "title": "EnergyLevel",
+      "type": "string"
+    },
+    "EnergyPhase": {
+      "properties": {
+        "start_seconds": {
+          "minimum": 0,
+          "title": "Start Seconds",
+          "type": "number"
+        },
+        "end_seconds": {
+          "exclusiveMinimum": 0,
+          "title": "End Seconds",
+          "type": "number"
+        },
+        "level": {
+          "$ref": "#/$defs/EnergyLevel"
+        }
+      },
+      "required": [
+        "start_seconds",
+        "end_seconds",
+        "level"
+      ],
+      "title": "EnergyPhase",
+      "type": "object"
+    }
+  },
+  "description": "What a cue measured: tempo, beat and downbeat instants, energy phases.\n\n`rhythmic` is the trust boundary: energy phases are always usable, the\nbeat grid only when the tracker found a stable pulse. A non-rhythmic cue\nis placed as phrase flow, never hard-cut to an imposed metronome.",
+  "properties": {
+    "version": {
+      "default": "diony-beat-grid-v1",
+      "title": "Version",
+      "type": "string"
+    },
+    "duration_seconds": {
+      "default": 0.0,
+      "minimum": 0,
+      "title": "Duration Seconds",
+      "type": "number"
+    },
+    "bpm": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Bpm"
+    },
+    "rhythmic": {
+      "default": false,
+      "title": "Rhythmic",
+      "type": "boolean"
+    },
+    "confidence": {
+      "default": 0.0,
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "beats_per_bar": {
+      "default": 4,
+      "maximum": 12,
+      "minimum": 1,
+      "title": "Beats Per Bar",
+      "type": "integer"
+    },
+    "beat_seconds": {
+      "items": {
+        "type": "number"
+      },
+      "title": "Beat Seconds",
+      "type": "array"
+    },
+    "downbeat_seconds": {
+      "items": {
+        "type": "number"
+      },
+      "title": "Downbeat Seconds",
+      "type": "array"
+    },
+    "energy_phases": {
+      "items": {
+        "$ref": "#/$defs/EnergyPhase"
+      },
+      "title": "Energy Phases",
+      "type": "array"
+    },
+    "analyzer": {
+      "default": "numpy",
+      "title": "Analyzer",
+      "type": "string"
+    }
+  },
+  "title": "BeatGrid",
+  "type": "object"
+}

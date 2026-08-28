@@ -107,6 +107,8 @@ from diony_contracts.wan_prompt import (
     validate_wan_prompt_dispatch,
     validate_wan_prompt_plan,
 )
+from diony_contracts.score import BeatGrid, ScoreAlignment, align_cue_to_cuts
+from diony_contracts.edl import EditDecisionList, build_edl, render_cmx3600
 from diony_contracts.montage import (
     Decision,
     DecisionCategory,
@@ -255,6 +257,12 @@ __all__ = [
     "shot_facts",
     "shot_size_for",
     "size_production",
+    "BeatGrid",
+    "ScoreAlignment",
+    "align_cue_to_cuts",
+    "EditDecisionList",
+    "build_edl",
+    "render_cmx3600",
     "version_ladder",
     "composition_summary",
     "frame_to_milliseconds",

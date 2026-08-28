@@ -385,3 +385,94 @@ def test_deliverables_api_lists_and_serves_only_project_files(tmp_path: Path) ->
     assert served.status_code == 200 and served.text.startswith("1\n")
     assert client.get("/api/deliverables/dlv-out/file").status_code == 404
     assert client.get("/api/deliverables/missing/file").status_code == 404
+
+
+def _click_track(seconds: float = 20.0, bpm: float = 120.0, sample_rate: int = 22_050):
+    """Kick on every downbeat, hi-hat on every beat: an unambiguous pulse."""
+    rng = np.random.default_rng(3)
+    total = int(seconds * sample_rate)
+    signal = np.zeros(total, dtype=np.float32)
+    beat = 60.0 / bpm
+    index = 0
+    t = 0.0
+    while t < seconds:
+        start = int(t * sample_rate)
+        length = min(int(0.05 * sample_rate), total - start)
+        if length <= 0:
+            break
+        env = np.exp(-np.linspace(0, 8, length)).astype(np.float32)
+        if index % 4 == 0:
+            tone = np.sin(2 * np.pi * 60.0 * np.arange(length) / sample_rate).astype(np.float32)
+            signal[start : start + length] += 0.9 * env * tone
+        else:
+            signal[start : start + length] += 0.4 * env * rng.standard_normal(length).astype(np.float32)
+        t += beat
+        index += 1
+    return signal
+
+
+def test_beat_grid_measures_a_click_track_and_distrusts_a_pad() -> None:
+    from diony_producer.beat_grid import analyze_signal
+
+    grid = analyze_signal(_click_track())
+    assert grid.rhythmic and grid.bpm is not None and abs(grid.bpm - 120.0) < 2.5, grid.bpm
+    assert len(grid.downbeat_seconds) >= 8
+    gaps = np.diff(np.asarray(grid.downbeat_seconds))
+    assert np.all(np.abs(gaps - 2.0) < 0.1), gaps
+    assert grid.energy_phases and grid.duration_seconds == 20.0
+    pad = np.sin(2 * np.pi * 220.0 * np.arange(20 * 22_050) / 22_050).astype(np.float32) * 0.3
+    calm = analyze_signal(pad)
+    assert not calm.rhythmic and calm.downbeat_seconds == []
+
+
+@needs_ffmpeg
+def test_mix_aligns_a_score_cue_to_hero_cuts(tmp_path: Path) -> None:
+    import wave
+
+    from diony_producer.mix import _cue_rail_filters, align_score_cues, hero_cut_seconds
+    from diony_producer.soundtrack import PlannedCue
+
+    project = expand_idea(Brief(idea="A keeper repairs the lamp before the storm.", customer_kind=CustomerKind.SERIES, target_minutes=0.5))
+    cuts = hero_cut_seconds(project)
+    assert cuts and cuts[0] > 0
+    cue_path = tmp_path / "score.wav"
+    signal = _click_track(seconds=60.0)
+    with wave.open(str(cue_path), "wb") as stream:
+        stream.setnchannels(1)
+        stream.setsampwidth(2)
+        stream.setframerate(22_050)
+        stream.writeframes((signal * 32767).astype(np.int16).tobytes())
+    cue = PlannedCue(cue_id="score/click", path=str(cue_path), role="score", start_seconds=0.0, duration_seconds=25.0, gain_db=-12.0)
+    ambience = PlannedCue(cue_id="ambience/room", path=str(cue_path), role="ambience", start_seconds=0.0, duration_seconds=25.0, gain_db=-30.0)
+    aligned, alignments = align_score_cues(project, [cue, ambience])
+    assert len(alignments) == 1 and alignments[0].cue_id == "score/click"
+    assert alignments[0].mode.value == "beat_cut", alignments[0].reason
+    assert 0.0 <= aligned[0].source_offset_seconds < 2.0 and aligned[1].source_offset_seconds == 0.0
+    assert alignments[0].aligned_cuts and alignments[0].aligned_cuts[0].error_ms <= 60.0
+    filters, labels = _cue_rail_filters(aligned)
+    assert f"atrim={aligned[0].source_offset_seconds:.6f}:" in filters[0] and "asetpts=PTS-STARTPTS" in filters[0]
+    assert labels == ["[cue0]", "[cue1]"]
+    assert project.decisions[-1].subject == "score alignment to hero cuts"
+    project.bible.score_cuts_on_downbeats = False
+    same, none = align_score_cues(project, [cue])
+    assert none == [] and same[0].source_offset_seconds == 0.0
+
+
+@needs_ffmpeg
+def test_final_review_delivers_the_edl(tmp_path: Path) -> None:
+    from diony_contracts.models import MixLock
+    from diony_producer.final_review import run_final_review
+
+    project = expand_idea(Brief(idea='MARA: "We leave at dawn." A keeper repairs the lamp.', customer_kind=CustomerKind.SERIES, target_minutes=0.5))
+    program_dir = vault_root() / "projects" / project.id / "program" / project.timeline.id
+    program_dir.mkdir(parents=True, exist_ok=True)
+    master = _lavfi(program_dir / "master_1080.mov", "testsrc2=s=1920x1080:r=24", seconds=1.0, audio=True)
+    project.timeline.preview_path = str(master.relative_to(vault_root()))
+    project.mix = MixLock(id="mix-1", measured_lufs=-24.0, true_peak_dbtp=-2.0)
+    run_final_review(project, live=True)
+    edl = program_dir / "master_1080.edl"
+    assert edl.is_file() and edl.read_text().startswith("TITLE: ")
+    assert (program_dir / "master_1080.edl.json").is_file()
+    assert {item.kind.value for item in project.deliverables} >= {"edl", "subtitles", "qc_packet", "prores_hq"}
+    packet = json.loads((program_dir / "qc-packet.json").read_text())
+    assert packet["edl"]["decisions"]

@@ -52,7 +52,7 @@ def _project_media_paths(project: Project) -> list[Path]:
         # Blueprint 24 evidence beside the master: final review, QC packet, subtitles.
         rows.extend(
             master.parent / name
-            for name in ("final-review.json", "qc-packet.json", "master_1080.srt", "master_1080.vtt")
+            for name in ("final-review.json", "qc-packet.json", "master_1080.srt", "master_1080.vtt", "master_1080.edl", "master_1080.edl.json")
         )
     rows.append(root / "projects" / project.id / "decision-log.jsonl")
     return rows
@@ -226,6 +226,7 @@ def inspect_project_package(path: Path) -> dict[str, object]:
             "final_review": any(name.endswith("final-review.json") for name in names),
             "qc_packet": any(name.endswith("qc-packet.json") for name in names),
             "subtitles": any(name.endswith((".srt", ".vtt")) for name in names),
+            "edl": any(name.endswith(".edl") for name in names),
         }
     return {
         "ok": not failures,

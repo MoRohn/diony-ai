@@ -23,6 +23,10 @@ from diony_finish.pipeline import FinishError, finished_media_has_picture, verif
 
 from diony_producer.gallery_join import resolve_media_tool
 from diony_producer.gallery import gallery_program_preview_path
+from dataclasses import replace
+
+from diony_contracts.montage import DecisionCategory, DecisionOption
+from diony_contracts.score import AlignmentMode, ScoreAlignment, align_cue_to_cuts
 from diony_producer.soundtrack import (
     PlannedCue,
     ensure_generated_cues,
@@ -264,6 +268,87 @@ def _voice_rail_filters(sources: list[VoiceRailRow]) -> tuple[list[str], list[st
     return filters, labels
 
 
+def hero_cut_seconds(project: Project) -> list[float]:
+    """Timeline instants where a hero shot's print begins (the cuts the score serves)."""
+    timeline = project.timeline
+    if timeline is None:
+        return []
+    fps = float(timeline.fps or 23.976)
+    heroes = {shot.id for shot in project.shots if shot.hero}
+    return [round(event.start_frame / fps, 6) for event in timeline.events if event.shot_id in heroes]
+
+
+def align_score_cues(project: Project, cues: list[PlannedCue]) -> tuple[list[PlannedCue], list[ScoreAlignment]]:
+    """Shift each score cue's in-point (< one bar) so downbeats land on hero cuts.
+
+    Blueprint 24 §12. Only `score` cues move; ambience and foley are placed
+    as planned. The Bible can switch the behaviour off; a cue without a
+    stable pulse, or without a hero cut inside its span, stays phrase flow.
+    Every decision is recorded on the MixLock and in the decision log.
+    """
+    from diony_producer.beat_grid import analyze_beat_grid
+    from diony_producer.decisions import record_decision
+    from diony_producer.speech_audio import media_duration_seconds
+
+    cuts = hero_cut_seconds(project)
+    enabled = bool(project.bible.score_cuts_on_downbeats)
+    aligned: list[PlannedCue] = []
+    alignments: list[ScoreAlignment] = []
+    for cue in cues:
+        if cue.role != "score" or not enabled:
+            aligned.append(cue)
+            continue
+        grid = analyze_beat_grid(Path(cue.path))
+        if grid is None:
+            aligned.append(cue)
+            alignments.append(
+                ScoreAlignment(
+                    cue_id=cue.cue_id,
+                    mode=AlignmentMode.UNALIGNED,
+                    cue_start_seconds=cue.start_seconds,
+                    cue_duration_seconds=cue.duration_seconds,
+                    reason="the cue could not be decoded for analysis",
+                )
+            )
+            continue
+        try:
+            source_seconds: float | None = media_duration_seconds(Path(cue.path))
+        except Exception:  # noqa: BLE001 - unknown source length caps the shift at one bar
+            source_seconds = None
+        alignment = align_cue_to_cuts(
+            grid,
+            cue_id=cue.cue_id,
+            cue_start_seconds=cue.start_seconds,
+            cue_duration_seconds=cue.duration_seconds,
+            cut_seconds=cuts,
+            source_duration_seconds=source_seconds,
+        )
+        alignments.append(alignment)
+        aligned.append(replace(cue, source_offset_seconds=alignment.source_shift_seconds))
+    if alignments:
+        landed = [row for row in alignments if row.mode == AlignmentMode.BEAT_CUT]
+        summary = "; ".join(f"{row.cue_id}: {row.reason}" for row in alignments)[:600]
+        record_decision(
+            project,
+            stage="mix",
+            category=DecisionCategory.SOUNDTRACK,
+            subject="score alignment to hero cuts",
+            options=[
+                DecisionOption(id="beat_cut", label="shift the in-point so downbeats land on hero cuts", reason=summary if landed else "", rejected_because="" if landed else "no cue measured a usable pulse under a hero cut"),
+                DecisionOption(id="phrase_flow", label="place the cue as planned", reason="" if landed else summary, rejected_because="a pulse served the cuts" if landed else ""),
+            ],
+            selected="beat_cut" if landed else "phrase_flow",
+            reason=summary,
+            confidence=0.7,
+        )
+        record_activity(
+            "mix",
+            "Score alignment: " + summary,
+            level="live" if landed else "info",
+        )
+    return aligned, alignments
+
+
 def _cue_rail_filters(cues: list[PlannedCue]) -> tuple[list[str], list[str]]:
     """Per-cue filter chains: licensed library bytes, trimmed, gained, placed. Pure."""
     filters: list[str] = []
@@ -271,8 +356,9 @@ def _cue_rail_filters(cues: list[PlannedCue]) -> tuple[list[str], list[str]]:
     for index, cue in enumerate(cues):
         delay_ms = max(0, round(cue.start_seconds * 1000))
         label = f"cue{index}"
+        start = max(0.0, float(getattr(cue, "source_offset_seconds", 0.0) or 0.0))
         filters.append(
-            f"[{index}:a]atrim=0:{cue.duration_seconds:.6f},"
+            f"[{index}:a]atrim={start:.6f}:{start + cue.duration_seconds:.6f},asetpts=PTS-STARTPTS,"
             "aformat=sample_rates=48000:channel_layouts=stereo,"
             f"volume={cue.gain_db:g}dB,"
             f"adelay={delay_ms}|{delay_ms}[{label}]"
@@ -599,6 +685,8 @@ def bounce_mix(project: Project) -> None:
             revision=revision,
         )
         return
+    planned_cues, alignments = align_score_cues(project, planned_cues)
+    project.mix.score_alignments = alignments
     stems_root = f"projects/{project.id}/program/{project.timeline.id}/stems"
     rails: dict[str, Path] = {}
     rail_assets: list[Asset] = []

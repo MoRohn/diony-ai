@@ -94,6 +94,8 @@ class PlannedCue:
     duration_seconds: float
     gain_db: float
     source: str = "library"
+    # Blueprint 24 §12: in-point shift chosen so downbeats land on hero cuts.
+    source_offset_seconds: float = 0.0
 
 
 def sound_library_root() -> Path:

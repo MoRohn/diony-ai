@@ -46,6 +46,7 @@
     "look": "neutral",
     "look_intensity": 0.6,
     "chain_color_match": true,
+    "score_cuts_on_downbeats": true,
     "locked": true,
     "locked_at": null
   },
@@ -209,9 +210,9 @@
         "settled_best_of": null,
         "settled_score": null,
         "notes": "Identity drift vs still-mara-wide. Retake.",
-        "created_at": "2026-08-28T09:11:04.903799Z"
+        "created_at": "2026-08-28T10:11:20.510128Z"
       },
-      "created_at": "2026-08-28T09:11:04.903811Z",
+      "created_at": "2026-08-28T10:11:20.510140Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -239,7 +240,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-08-28T09:11:04.903650Z"
+          "created_at": "2026-08-28T10:11:20.509989Z"
         }
       ],
       "voice_package": null,
@@ -301,9 +302,9 @@
         "settled_best_of": null,
         "settled_score": null,
         "notes": "",
-        "created_at": "2026-08-28T09:11:04.903822Z"
+        "created_at": "2026-08-28T10:11:20.510151Z"
       },
-      "created_at": "2026-08-28T09:11:04.903825Z",
+      "created_at": "2026-08-28T10:11:20.510155Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -331,7 +332,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-08-28T09:11:04.903816Z"
+          "created_at": "2026-08-28T10:11:20.510145Z"
         },
         {
           "id": "art-sh-010-t2-1080",
@@ -353,7 +354,7 @@
           "height": 1080,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-08-28T09:11:04.903818Z"
+          "created_at": "2026-08-28T10:11:20.510148Z"
         }
       ],
       "voice_package": null,
@@ -415,9 +416,9 @@
         "settled_best_of": null,
         "settled_score": null,
         "notes": "Paper stock slightly modern. Usable.",
-        "created_at": "2026-08-28T09:11:04.903831Z"
+        "created_at": "2026-08-28T10:11:20.510162Z"
       },
-      "created_at": "2026-08-28T09:11:04.903834Z",
+      "created_at": "2026-08-28T10:11:20.510164Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -445,7 +446,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 72,
-          "created_at": "2026-08-28T09:11:04.903828Z"
+          "created_at": "2026-08-28T10:11:20.510158Z"
         }
       ],
       "voice_package": null,
@@ -507,9 +508,9 @@
         "settled_best_of": null,
         "settled_score": null,
         "notes": "",
-        "created_at": "2026-08-28T09:11:04.903838Z"
+        "created_at": "2026-08-28T10:11:20.510169Z"
       },
-      "created_at": "2026-08-28T09:11:04.903842Z",
+      "created_at": "2026-08-28T10:11:20.510176Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -537,7 +538,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 168,
-          "created_at": "2026-08-28T09:11:04.903836Z"
+          "created_at": "2026-08-28T10:11:20.510166Z"
         }
       ],
       "voice_package": null,
@@ -549,7 +550,7 @@
       "id": "n-human-010",
       "author": "human",
       "body": "Hold her eyes on the nick in the case. Don't blink off it.",
-      "created_at": "2026-08-28T09:11:04.903852Z",
+      "created_at": "2026-08-28T10:11:20.510186Z",
       "shot_id": "sh-010",
       "take_id": null
     }
@@ -608,7 +609,8 @@
     "stem_asset_ids": [],
     "picture_lock_timeline_id": "tl-pilot",
     "picture_only": false,
-    "policy": ""
+    "policy": "",
+    "score_alignments": []
   },
   "deliverables": [],
   "gates": [
@@ -646,8 +648,8 @@
     "exception_by": "",
     "exception_at": null
   },
-  "created_at": "2026-08-28T09:11:04.903881Z",
-  "updated_at": "2026-08-28T09:11:04.903881Z",
+  "created_at": "2026-08-28T10:11:20.510212Z",
+  "updated_at": "2026-08-28T10:11:20.510212Z",
   "deleted_at": null,
   "production_started_at": null,
   "production_ended_at": null,

@@ -35,6 +35,7 @@ from diony_contracts.montage import (
     render_vtt,
     skipped_final_review,
 )
+from diony_contracts.edl import build_edl, render_cmx3600, render_edl_json
 from diony_producer.decisions import read_decision_log, record_decision
 from diony_producer.gallery_join import probe_media
 from diony_producer.quality import (
@@ -223,6 +224,22 @@ def write_subtitles(project: Project, program_dir: Path) -> tuple[SubtitleCheck,
     return SubtitleCheck(expected=True, present=True, cue_count=len(cues)), written
 
 
+def write_edl(project: Project, program_dir: Path) -> list[Path]:
+    """The edit decision list beside the master: CMX3600 for cutting rooms, JSON for machines."""
+    edl = build_edl(project)
+    if not edl.decisions:
+        return []
+    try:
+        program_dir.mkdir(parents=True, exist_ok=True)
+        cmx = program_dir / "master_1080.edl"
+        machine = program_dir / "master_1080.edl.json"
+        cmx.write_text(render_cmx3600(edl), encoding="utf-8")
+        machine.write_text(render_edl_json(edl), encoding="utf-8")
+    except OSError:
+        return []
+    return [cmx, machine]
+
+
 def _deliverable(project: Project, kind: DeliverableKind, path: Path, suffix: str) -> Deliverable:
     rel = str(path.relative_to(vault_root())) if path.is_absolute() and str(path).startswith(str(vault_root())) else str(path)
     return Deliverable(
@@ -255,6 +272,7 @@ def write_qc_packet(project: Project, program_dir: Path, review: FinalReview) ->
             if (take := next((item for item in project.takes if item.id == shot.selected_take_id), None)) is not None
         ],
         "mix": project.mix.model_dump(mode="json") if project.mix else None,
+        "edl": build_edl(project).model_dump(mode="json"),
     }
     path = program_dir / "qc-packet.json"
     path.write_text(json.dumps(packet, indent=2, sort_keys=True), encoding="utf-8")
@@ -342,6 +360,8 @@ def run_final_review(project: Project, *, live: bool) -> FinalReview:
             deliverables.append(_deliverable(project, DeliverableKind.STEMS, stems[-1], "stems"))
     for path in subtitle_paths:
         deliverables.append(_deliverable(project, DeliverableKind.SUBTITLES, path, path.suffix.lstrip(".")))
+    for path in write_edl(project, program_dir):
+        deliverables.append(_deliverable(project, DeliverableKind.EDL, path, "edl-json" if path.suffix == ".json" else "edl"))
     if packet is not None:
         deliverables.append(_deliverable(project, DeliverableKind.QC_PACKET, packet, "qc-packet"))
     project.deliverables = deliverables

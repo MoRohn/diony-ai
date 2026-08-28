@@ -124,6 +124,7 @@ class DeliverableKind(StrEnum):
     STEMS = "stems"
     QC_PACKET = "qc_packet"
     SUBTITLES = "subtitles"
+    EDL = "edl"
 
 
 class CustomerKind(StrEnum):

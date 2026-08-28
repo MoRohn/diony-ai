@@ -1141,6 +1141,7 @@ _DELIVERABLE_MEDIA = {
     ".srt": "application/x-subrip",
     ".vtt": "text/vtt",
     ".json": "application/json",
+    ".edl": "text/plain",
 }
 
 
