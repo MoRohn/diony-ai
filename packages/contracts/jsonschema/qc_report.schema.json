@@ -147,19 +147,10 @@
       "title": "Voice Measurement Version",
       "type": "string"
     },
-    "speaker_similarity": {
-      "anyOf": [
-        {
-          "maximum": 1,
-          "minimum": -1,
-          "type": "number"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Speaker Similarity"
+    "speech_backend": {
+      "default": "",
+      "title": "Speech Backend",
+      "type": "string"
     },
     "speech_presence_score": {
       "anyOf": [
@@ -175,49 +166,7 @@
       "default": null,
       "title": "Speech Presence Score"
     },
-    "voice_project_consistency": {
-      "anyOf": [
-        {
-          "maximum": 1,
-          "minimum": -1,
-          "type": "number"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Voice Project Consistency"
-    },
-    "voice_performance_consistency": {
-      "anyOf": [
-        {
-          "maximum": 1,
-          "minimum": 0,
-          "type": "number"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Voice Performance Consistency"
-    },
-    "lip_sync_confidence": {
-      "anyOf": [
-        {
-          "maximum": 1,
-          "minimum": 0,
-          "type": "number"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Lip Sync Confidence"
-    },
-    "audiovisual_offset_ms_p95": {
+    "speech_tail_ms": {
       "anyOf": [
         {
           "minimum": 0,
@@ -228,24 +177,31 @@
         }
       ],
       "default": null,
-      "title": "Audiovisual Offset Ms P95"
+      "title": "Speech Tail Ms"
     },
-    "audiovisual_backend": {
-      "default": "",
-      "title": "Audiovisual Backend",
-      "type": "string"
-    },
-    "audiovisual_measurement_qualified": {
+    "dialogue_lufs": {
       "anyOf": [
         {
-          "type": "boolean"
+          "type": "number"
         },
         {
           "type": "null"
         }
       ],
       "default": null,
-      "title": "Audiovisual Measurement Qualified"
+      "title": "Dialogue Lufs"
+    },
+    "dialogue_true_peak_dbtp": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Dialogue True Peak Dbtp"
     },
     "reference_asset_ids": {
       "items": {
@@ -370,6 +326,33 @@
       "minimum": 0,
       "title": "Measured Frame Count",
       "type": "integer"
+    },
+    "settled_best_of": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Settled Best Of"
+    },
+    "settled_score": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Settled Score"
     },
     "notes": {
       "default": "",

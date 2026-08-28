@@ -104,6 +104,33 @@
       "title": "Attention Backend",
       "type": "string"
     },
+    "lead_frames": {
+      "default": 0,
+      "maximum": 32,
+      "minimum": 0,
+      "title": "Lead Frames",
+      "type": "integer"
+    },
+    "head_hold_frames": {
+      "default": 0,
+      "maximum": 32,
+      "minimum": 0,
+      "title": "Head Hold Frames",
+      "type": "integer"
+    },
+    "sample_guide_scale": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sample Guide Scale"
+    },
     "resident_reason": {
       "default": "",
       "title": "Resident Reason",

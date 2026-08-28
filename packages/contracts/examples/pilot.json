@@ -39,7 +39,7 @@
         ],
         "wardrobe": "Ink-stained oxford, dark wool vest, hair pinned",
         "notes": "",
-        "voice_profile_id": ""
+        "voice_casting_id": ""
       }
     ],
     "lut_asset_id": null,
@@ -57,6 +57,7 @@
       "focal_mm": 40.0,
       "t_stop": 2.8,
       "lighting_ratio": "4:1 key/fill, tungsten practical",
+      "s2v_guide_scale": null,
       "camera_move": "dolly_in",
       "prompt": "Mara Chen, 32, ink-stained oxford, stands at a California job case. Slow dolly in, 40mm, T2.8, warm practicals, shallow depth, lead type glints. Continuity locked to still-mara-wide.",
       "negative_prompt": "morphing face, extra fingers, daylight, modern screens",
@@ -91,6 +92,7 @@
       "focal_mm": 90.0,
       "t_stop": 4.0,
       "lighting_ratio": "hard top, paper white held",
+      "s2v_guide_scale": null,
       "camera_move": "static",
       "prompt": "Macro of wet newsprint. Headline already set for tomorrow. 90mm.",
       "negative_prompt": "",
@@ -121,6 +123,7 @@
       "focal_mm": 35.0,
       "t_stop": 2.0,
       "lighting_ratio": "1:8, sodium vs tungsten spill",
+      "s2v_guide_scale": null,
       "camera_move": "steadicam",
       "prompt": "Mara exits to a rain alley. Steadicam follow, 35mm, T2.0, sodium vapor vs newsroom spill. Face locked to still-mara-close.",
       "negative_prompt": "",
@@ -174,14 +177,11 @@
         "lipsync_ok": null,
         "loudness_ok": null,
         "voice_measurement_version": "",
-        "speaker_similarity": null,
+        "speech_backend": "",
         "speech_presence_score": null,
-        "voice_project_consistency": null,
-        "voice_performance_consistency": null,
-        "lip_sync_confidence": null,
-        "audiovisual_offset_ms_p95": null,
-        "audiovisual_backend": "",
-        "audiovisual_measurement_qualified": null,
+        "speech_tail_ms": null,
+        "dialogue_lufs": null,
+        "dialogue_true_peak_dbtp": null,
         "reference_asset_ids": [],
         "reference_similarity": null,
         "reference_similarities": {},
@@ -194,10 +194,12 @@
         "temporal_residual_p95": null,
         "flicker_luma_p95": null,
         "measured_frame_count": 0,
+        "settled_best_of": null,
+        "settled_score": null,
         "notes": "Identity drift vs still-mara-wide. Retake.",
-        "created_at": "2026-08-25T16:57:47.176998Z"
+        "created_at": "2026-08-28T01:15:26.364164Z"
       },
-      "created_at": "2026-08-25T16:57:47.177008Z",
+      "created_at": "2026-08-28T01:15:26.364173Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -225,7 +227,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-08-25T16:57:47.176847Z"
+          "created_at": "2026-08-28T01:15:26.364028Z"
         }
       ],
       "voice_package": null,
@@ -258,14 +260,11 @@
         "lipsync_ok": true,
         "loudness_ok": null,
         "voice_measurement_version": "",
-        "speaker_similarity": null,
+        "speech_backend": "",
         "speech_presence_score": null,
-        "voice_project_consistency": null,
-        "voice_performance_consistency": null,
-        "lip_sync_confidence": null,
-        "audiovisual_offset_ms_p95": null,
-        "audiovisual_backend": "",
-        "audiovisual_measurement_qualified": null,
+        "speech_tail_ms": null,
+        "dialogue_lufs": null,
+        "dialogue_true_peak_dbtp": null,
         "reference_asset_ids": [],
         "reference_similarity": null,
         "reference_similarities": {},
@@ -278,10 +277,12 @@
         "temporal_residual_p95": null,
         "flicker_luma_p95": null,
         "measured_frame_count": 0,
+        "settled_best_of": null,
+        "settled_score": null,
         "notes": "",
-        "created_at": "2026-08-25T16:57:47.177018Z"
+        "created_at": "2026-08-28T01:15:26.364183Z"
       },
-      "created_at": "2026-08-25T16:57:47.177022Z",
+      "created_at": "2026-08-28T01:15:26.364186Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -309,7 +310,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-08-25T16:57:47.177013Z"
+          "created_at": "2026-08-28T01:15:26.364178Z"
         },
         {
           "id": "art-sh-010-t2-1080",
@@ -331,7 +332,7 @@
           "height": 1080,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-08-25T16:57:47.177015Z"
+          "created_at": "2026-08-28T01:15:26.364180Z"
         }
       ],
       "voice_package": null,
@@ -364,14 +365,11 @@
         "lipsync_ok": null,
         "loudness_ok": null,
         "voice_measurement_version": "",
-        "speaker_similarity": null,
+        "speech_backend": "",
         "speech_presence_score": null,
-        "voice_project_consistency": null,
-        "voice_performance_consistency": null,
-        "lip_sync_confidence": null,
-        "audiovisual_offset_ms_p95": null,
-        "audiovisual_backend": "",
-        "audiovisual_measurement_qualified": null,
+        "speech_tail_ms": null,
+        "dialogue_lufs": null,
+        "dialogue_true_peak_dbtp": null,
         "reference_asset_ids": [],
         "reference_similarity": null,
         "reference_similarities": {},
@@ -384,10 +382,12 @@
         "temporal_residual_p95": null,
         "flicker_luma_p95": null,
         "measured_frame_count": 0,
+        "settled_best_of": null,
+        "settled_score": null,
         "notes": "Paper stock slightly modern. Usable.",
-        "created_at": "2026-08-25T16:57:47.177028Z"
+        "created_at": "2026-08-28T01:15:26.364195Z"
       },
-      "created_at": "2026-08-25T16:57:47.177030Z",
+      "created_at": "2026-08-28T01:15:26.364198Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -415,7 +415,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 72,
-          "created_at": "2026-08-25T16:57:47.177025Z"
+          "created_at": "2026-08-28T01:15:26.364192Z"
         }
       ],
       "voice_package": null,
@@ -448,14 +448,11 @@
         "lipsync_ok": true,
         "loudness_ok": null,
         "voice_measurement_version": "",
-        "speaker_similarity": null,
+        "speech_backend": "",
         "speech_presence_score": null,
-        "voice_project_consistency": null,
-        "voice_performance_consistency": null,
-        "lip_sync_confidence": null,
-        "audiovisual_offset_ms_p95": null,
-        "audiovisual_backend": "",
-        "audiovisual_measurement_qualified": null,
+        "speech_tail_ms": null,
+        "dialogue_lufs": null,
+        "dialogue_true_peak_dbtp": null,
         "reference_asset_ids": [],
         "reference_similarity": null,
         "reference_similarities": {},
@@ -468,10 +465,12 @@
         "temporal_residual_p95": null,
         "flicker_luma_p95": null,
         "measured_frame_count": 0,
+        "settled_best_of": null,
+        "settled_score": null,
         "notes": "",
-        "created_at": "2026-08-25T16:57:47.177035Z"
+        "created_at": "2026-08-28T01:15:26.364202Z"
       },
-      "created_at": "2026-08-25T16:57:47.177038Z",
+      "created_at": "2026-08-28T01:15:26.364207Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -499,7 +498,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 168,
-          "created_at": "2026-08-25T16:57:47.177032Z"
+          "created_at": "2026-08-28T01:15:26.364200Z"
         }
       ],
       "voice_package": null,
@@ -511,7 +510,7 @@
       "id": "n-human-010",
       "author": "human",
       "body": "Hold her eyes on the nick in the case. Don't blink off it.",
-      "created_at": "2026-08-25T16:57:47.177051Z",
+      "created_at": "2026-08-28T01:15:26.364216Z",
       "shot_id": "sh-010",
       "take_id": null
     }
@@ -519,7 +518,7 @@
   "assets": [],
   "edits": [],
   "compositions": [],
-  "voice_profiles": [],
+  "voice_castings": [],
   "timeline": {
     "id": "tl-pilot",
     "events": [
@@ -568,7 +567,9 @@
     "measured_lufs": null,
     "true_peak_dbtp": null,
     "stem_asset_ids": [],
-    "picture_lock_timeline_id": "tl-pilot"
+    "picture_lock_timeline_id": "tl-pilot",
+    "picture_only": false,
+    "policy": ""
   },
   "deliverables": [],
   "gates": [
@@ -606,8 +607,8 @@
     "exception_by": "",
     "exception_at": null
   },
-  "created_at": "2026-08-25T16:57:47.177074Z",
-  "updated_at": "2026-08-25T16:57:47.177075Z",
+  "created_at": "2026-08-28T01:15:26.364240Z",
+  "updated_at": "2026-08-28T01:15:26.364240Z",
   "deleted_at": null,
   "production_started_at": null,
   "production_ended_at": null,

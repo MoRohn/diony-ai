@@ -257,38 +257,6 @@ def test_staged_camera_task_predicts_s2v_for_a_spoken_shot_before_voice_lock() -
     assert camera.staged_camera_task(project, silent) == camera.camera_task_for(project, silent) == "t2v-A14B"
 
 
-def test_speaker_closeup_only_when_the_face_is_known(tmp_path, monkeypatch) -> None:
-    from diony_producer import camera
-
-    faces_wide = [(820.0, 110.0, 93.0, 142.0, 0.93), (516.0, 139.0, 85.0, 105.0, 0.89), (271.0, 138.0, 91.0, 142.0, 0.86)]
-    assert camera.choose_speaker_face(faces_wide, known=None, width=1280, height=720) is None
-    face, reason = camera.choose_speaker_face(faces_wide, known=(0.68, 0.25), width=1280, height=720)
-    assert face == faces_wide[0] and reason.startswith("learned")
-    face, reason = camera.choose_speaker_face(faces_wide[:1], known=None, width=1280, height=720)
-    assert face == faces_wide[0] and reason == "only face in the still"
-    # A learned position far from every face is not trusted.
-    assert camera.choose_speaker_face(faces_wide, known=(0.05, 0.95), width=1280, height=720) is None
-
-    left, top, w, h = camera.closeup_box(faces_wide[0], width=1280, height=720)
-    assert abs(w / h - 16 / 9) < 0.02
-    assert w >= 480 and left >= 0 and top >= 0 and left + w <= 1280 and top + h <= 720
-    # The face centre sits inside the crop with headroom above it.
-    cx, cy = 820 + 93 / 2, 110 + 142 / 2
-    assert left < cx < left + w and top < cy < top + h and cy - top < h / 2
-
-
-def test_learned_speaker_face_round_trips_through_the_project_references(tmp_path, monkeypatch) -> None:
-    from diony_contracts.fixture import demo_project
-    from diony_producer import camera
-
-    monkeypatch.setenv("DIONY_VAULT", str(tmp_path))
-    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path))
-    project = demo_project()
-    camera.learn_speaker_face(project, "char-marcus", (876.0, 184.0))
-    assert camera._known_speaker_face(project, "char-marcus") == (0.6844, 0.2556)
-    assert camera._known_speaker_face(project, "char-lila") is None
-
-
 def test_previous_frame_chain_only_continues_from_a_print_that_passed_qc(tmp_path, monkeypatch) -> None:
     """A selected take that merely won among rejections must not seed the next Shot."""
     from diony_contracts.enums import ContinuityMode, QCVerdict
@@ -342,7 +310,6 @@ def test_generate_clip_restarts_from_the_reference_when_the_prior_print_failed(t
     monkeypatch.setattr(camera, "generate_py", lambda: tmp_path / "generate.py")
     monkeypatch.setattr(camera, "_wan_http_up", lambda: False)
     monkeypatch.setattr(camera, "validate_wan_prompt_dispatch", lambda shot: [])
-    monkeypatch.setattr(camera, "speaker_keyframe", lambda project, shot, still: still)
     captured = {}
 
     def run_generate(**kwargs):
@@ -401,59 +368,6 @@ def test_a_print_settled_by_policy_is_a_boundary_to_continue_from(tmp_path, monk
     assert chosen is not None and chosen.id == settled.id
 
 
-def test_speaker_face_uses_exclusion_then_the_brief_cue_before_giving_up() -> None:
-    from diony_producer.camera import choose_speaker_face, staging_cue
-
-    hugo = (273.0, 141.0, 91.0, 139.0, 0.87)
-    lila = (515.0, 140.0, 87.0, 107.0, 0.89)
-    marcus = (827.0, 115.0, 94.0, 144.0, 0.93)
-    faces = [hugo, lila, marcus]
-    known_marcus = (0.683, 0.260)
-    # Learned face wins outright.
-    face, reason = choose_speaker_face(faces, known=known_marcus, width=1280, height=720)
-    assert face == marcus and "learned" in reason
-    # Three faces, nothing known: the wide framing stays.
-    assert choose_speaker_face(faces, known=None, width=1280, height=720) is None
-    # Excluding Marcus leaves two; the brief's cue decides among the remainder.
-    idea = (
-        "Marcus stands in the centre, full of chaotic energy. Lila sits on a stool at the "
-        "kitchen counter to his right, arms crossed. Hugo stands slightly apart to the left."
-    )
-    assert staging_cue(idea, "Lila") == "right"
-    assert staging_cue(idea, "Hugo") == "left"
-    assert staging_cue(idea, "Marcus") == "centre"
-    assert staging_cue(idea, "Nobody") is None
-    face, reason = choose_speaker_face(
-        faces, known=None, width=1280, height=720, exclude=(known_marcus,), cue="right"
-    )
-    assert face == lila and "staged right" in reason
-    face, reason = choose_speaker_face(
-        faces, known=None, width=1280, height=720, exclude=(known_marcus,), cue="left"
-    )
-    assert face == hugo
-    # Two known faces excluded: the last one needs no cue.
-    face, reason = choose_speaker_face(
-        faces, known=None, width=1280, height=720, exclude=(known_marcus, (0.248, 0.293))
-    )
-    assert face == lila and "not already identified" in reason
-    # No cue and two candidates: never guess.
-    assert choose_speaker_face(faces, known=None, width=1280, height=720, exclude=(known_marcus,)) is None
-
-
-def test_learned_face_never_overwrites_another_characters_known_face(tmp_path, monkeypatch) -> None:
-    from diony_contracts.fixture import demo_project
-    from diony_producer import camera
-
-    project = demo_project()
-    monkeypatch.setattr(camera, "vault_root", lambda: tmp_path)
-    camera.learn_speaker_face(project, "char-marcus", (874.0, 180.0))
-    # S2V animated Marcus's face for Lila's line: that is not Lila's face.
-    camera.learn_speaker_face(project, "char-lila", (876.0, 184.0))
-    assert camera._known_faces(project) == {"char-marcus": (0.6828, 0.25)}
-    camera.learn_speaker_face(project, "char-lila", (558.0, 193.0))
-    assert set(camera._known_faces(project)) == {"char-marcus", "char-lila"}
-
-
 def test_a_speaker_change_is_a_cut_not_a_continuation(tmp_path, monkeypatch) -> None:
     from diony_contracts.enums import ContinuityMode, QCVerdict
     from diony_contracts.fixture import demo_project
@@ -480,3 +394,71 @@ def test_a_speaker_change_is_a_cut_not_a_continuation(tmp_path, monkeypatch) -> 
     # Same speaker: the passed print is the boundary.
     second.dialogue_turns = [DialogueTurn(id="t2", character_id="char-marcus", text="And again.")]
     assert camera._previous_take(project, second) is not None
+
+
+_HUGO = (273.0, 141.0, 91.0, 139.0, 0.87)
+_LILA = (515.0, 140.0, 87.0, 107.0, 0.89)
+_MARCUS = (827.0, 115.0, 94.0, 144.0, 0.93)
+
+
+def test_conditioning_sidecar_names_the_still_and_its_source(tmp_path) -> None:
+    from diony_producer import camera
+
+    negative = tmp_path / "negative_720.mp4"
+    image = tmp_path / "still.png"
+    image.write_bytes(b"png")
+    camera.record_conditioning_image(negative, image, source="reference")
+    assert camera.conditioning_image(negative) == image
+    assert camera.conditioning_source(negative) == "reference"
+    camera.record_conditioning_image(negative, image, source="boundary")
+    assert camera.conditioning_source(negative) == "boundary"
+    assert camera.conditioning_source(tmp_path / "none.mp4") == ""
+    camera.record_conditioning_image(negative, None, source="reference")
+    assert camera.conditioning_image(negative) is None
+
+
+def test_generate_clip_hands_wan_the_line_and_the_prompt_clip(tmp_path, monkeypatch) -> None:
+    """A spoken Shot without recorded audio speaks through Wan's own TTS inputs."""
+    from diony_contracts.enums import Engine
+    from diony_contracts.fixture import demo_project
+    from diony_producer import camera
+
+    project = demo_project()
+    spoken = next(shot for shot in project.shots if shot.audio_line or shot.dialogue_turns)
+    spoken.audio_asset_ids = []
+    spoken.engine = Engine.S2V_14B
+    canonical = tmp_path / "canonical.png"
+    canonical.write_bytes(b"png")
+    clip = tmp_path / "cast-00.wav"
+    clip.write_bytes(b"wav")
+    monkeypatch.setattr(camera, "reference_frame", lambda *_args: canonical)
+    monkeypatch.setattr(camera, "generate_py", lambda: tmp_path / "generate.py")
+    monkeypatch.setattr(camera, "_wan_http_up", lambda: False)
+    monkeypatch.setattr(camera, "validate_wan_prompt_dispatch", lambda shot: [])
+    monkeypatch.setattr(camera, "record_activity", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "diony_producer.voice.wan_speech_inputs",
+        lambda _project, _shot, **_k: {"tts_text": "Stop the presses.", "tts_prompt_audio": str(clip), "tts_prompt_text": None},
+    )
+    captured = {}
+
+    def run_generate(**kwargs):
+        captured.update(kwargs)
+        kwargs["save_file"].write_bytes(b"mp4")
+        return kwargs["save_file"]
+
+    monkeypatch.setattr(camera, "run_generate", run_generate)
+    dest = tmp_path / "takes" / "sh-spoken-t1" / "negative_720.mp4"
+    camera.generate_clip(project, spoken, dest, seed=7)
+    assert captured["task"] == "s2v-14B"
+    assert captured["audio"] is None
+    assert captured["speech"] == {"tts_text": "Stop the presses.", "tts_prompt_audio": str(clip), "tts_prompt_text": None}
+    assert captured["image"] == canonical
+
+    # Preflight resolves the spoken lane without a recorded asset, and refuses a silent S2V Shot.
+    monkeypatch.setattr(camera, "_keyframe", lambda project, shot: canonical)
+    assert camera.camera_task_for(project, spoken) == "s2v-14B"
+    with pytest.raises(RuntimeError, match="recorded audio .* or an authored line"):
+        camera.resolve_camera_task("s2v-14B", canonical, audio=None, speech=False)
+
+

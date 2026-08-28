@@ -12,7 +12,6 @@ import contextlib
 import gc
 import json
 import logging
-import os
 import sys
 import time
 import traceback
@@ -109,15 +108,19 @@ def _s2v_generation_kwargs(job: dict[str, Any], cfg: Any, *, max_area: int) -> d
     negative = str(job.get("negative_prompt") or "").strip()
     default_negative = str(getattr(cfg, "sample_neg_prompt", "") or "").strip()
     n_prompt = f"{default_negative}, {negative}" if default_negative and negative else negative
+    audio_path = str(job.get("audio") or "")
+    tts_text = " ".join(str(job.get("tts_text") or "").split())
+    enable_tts = not audio_path and bool(tts_text)
     return {
         "input_prompt": str(job["prompt"]),
         "ref_image_path": str(job.get("image") or ""),
-        "audio_path": str(job.get("audio") or ""),
-        "enable_tts": False,
-        "tts_prompt_audio": None,
-        "tts_prompt_text": None,
-        "tts_text": None,
-        "num_repeat": None,
+        "audio_path": audio_path or None,
+        "enable_tts": enable_tts,
+        "tts_prompt_audio": str(job.get("tts_prompt_audio") or "") or None if enable_tts else None,
+        "tts_prompt_text": (str(job.get("tts_prompt_text") or "").strip() or None) if enable_tts else None,
+        "tts_text": tts_text if enable_tts else None,
+        # Wan's own speech lane renders one clip window; the picture is the booking.
+        "num_repeat": 1 if enable_tts else None,
         "pose_video": None,
         "max_area": max_area,
         "infer_frames": int(job.get("inference_frames_per_pass") or 0),
@@ -192,12 +195,13 @@ def _generate(cache: PipelineCache, job: dict[str, Any]) -> dict[str, Any]:
     if task == "i2v-A14B" and image is None:
         raise RuntimeError("Resident I2V requires the locked input image.")
     audio_path = str(job.get("audio") or "")
+    tts_text = " ".join(str(job.get("tts_text") or "").split())
     if task == "s2v-14B" and (
         not image_path
-        or not audio_path
+        or not (audio_path or (tts_text and str(job.get("tts_prompt_audio") or "")))
         or int(job.get("inference_frames_per_pass") or 0) != 84
     ):
-        raise RuntimeError("Resident S2V requires locked image/audio and one 84-frame window.")
+        raise RuntimeError("Resident S2V requires a locked image, recorded audio or a TTS line, and one 84-frame window.")
     negative = str(job.get("negative_prompt") or "").strip()
     n_prompt = f"{cfg.sample_neg_prompt}, {negative}" if negative else ""
     torch.cuda.reset_peak_memory_stats()
@@ -247,9 +251,10 @@ def _generate(cache: PipelineCache, job: dict[str, Any]) -> dict[str, Any]:
         value_range=(-1, 1),
     )
     if task == "s2v-14B":
+        # Wan's TTS lane writes tts.wav in its working directory (upstream WanS2V.tts).
         merge_video_audio(
             video_path=str(destination),
-            audio_path=audio_path,
+            audio_path=audio_path or str(Path.cwd() / "tts.wav"),
             video_frames=81,
             fps=cfg.sample_fps,
         )

@@ -1,4 +1,14 @@
-"""First-class voice identity, performance script, and clip-package contracts."""
+"""Voice contracts for the Wan2.2-native spoken lane.
+
+Diony no longer synthesizes dialogue itself. A spoken Shot hands Wan2.2 S2V the
+authored line and a per-character prompt clip (``--enable_tts``,
+``--tts_prompt_audio``, ``--tts_prompt_text``, ``--tts_text``); Wan performs the
+line and animates the face in one pass and muxes its own speech into the
+negative. Producer records what it asked for (:class:`WanSpeechRequest`),
+measures the audio Wan delivered (:class:`SpeechQCReceipt`), and binds both to
+the rendered negative (:class:`SpeechClipPackage`) so Mix can assemble verified
+per-clip dialogue in timeline order.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +18,17 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from diony_contracts.enums import VoiceProfileSource, VoiceRenderState
+from diony_contracts.enums import VoiceCastingSource, VoiceRenderState
+
+SPEECH_BACKEND = "wan2.2-s2v-native-tts"
+SPEECH_REQUEST_VERSION = "wan22-s2v-native-tts-v1"
+# Upstream generate.py: the prompt clip "must be greater than 16khz, and between 5s to 15s".
+PROMPT_CLIP_MIN_SECONDS = 5.0
+PROMPT_CLIP_MAX_SECONDS = 15.0
+PROMPT_CLIP_MIN_SAMPLE_RATE = 16_000
+# One Wan S2V frame at its native 16 fps. Speech that is still active inside
+# the last frame of the window was cut by the picture, not finished.
+SPEECH_TAIL_MIN_MS = 62.5
 
 
 def _now() -> datetime:
@@ -21,129 +41,9 @@ def _content_sha256(model: BaseModel, *, exclude: set[str]) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
-class VoiceReferenceSample(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    asset_id: str
-    duration_seconds: float = Field(ge=0.1, le=30.0)
-    emotion: str = "neutral"
-    transcript: str = ""
-    embedding: tuple[float, ...] = Field(min_length=2, max_length=4096)
-    embedding_model: str
-    sha256: str = Field(min_length=64, max_length=64)
-
-
-class ProsodySignature(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    pitch_floor_hz: float = Field(default=90.0, gt=20, lt=1000)
-    pitch_ceiling_hz: float = Field(default=300.0, gt=20, lt=1500)
-    speaking_rate_syllables_per_second: float = Field(default=4.0, gt=0.5, lt=12)
-    breath_interval_seconds: float = Field(default=5.0, gt=0.5, lt=30)
-    vocal_fry: float = Field(default=0.0, ge=0, le=1)
-    pause_bias: float = Field(default=0.5, ge=0, le=1)
-    breath_texture: str = "natural, controlled"
-
-    @model_validator(mode="after")
-    def pitch_range_is_ordered(self) -> ProsodySignature:
-        if self.pitch_ceiling_hz <= self.pitch_floor_hz:
-            raise ValueError("pitch ceiling must exceed pitch floor")
-        return self
-
-
-class EmotionPerformance(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    emotion: str
-    intensity_curve: tuple[float, ...] = Field(default_factory=lambda: (0.25, 0.35, 0.25))
-    rate_multiplier: float = Field(default=1.0, ge=0.5, le=1.8)
-    pitch_shift_semitones: float = Field(default=0.0, ge=-12, le=12)
-    timbre: str = "profile-locked"
-
-    @field_validator("intensity_curve")
-    @classmethod
-    def intensity_is_normalized(cls, value: tuple[float, ...]) -> tuple[float, ...]:
-        if not value or any(point < 0 or point > 1 for point in value):
-            raise ValueError("emotion intensity curve values must be between 0 and 1")
-        return value
-
-
-class VoiceProfile(BaseModel):
-    """One immutable, project-scoped voice identity revision."""
-
-    model_config = ConfigDict(frozen=True)
-
-    id: str
-    project_id: str
-    character_id: str
-    identity_lineage_id: str = ""
-    version: int = Field(default=1, ge=1)
-    parent_profile_id: str | None = None
-    source: VoiceProfileSource
-    reference_samples: tuple[VoiceReferenceSample, ...] = Field(default_factory=tuple, max_length=16)
-    speaker_embedding_model: str
-    speaker_embedding: tuple[float, ...] = Field(min_length=2, max_length=4096)
-    prosody: ProsodySignature
-    emotion_map: tuple[EmotionPerformance, ...] = Field(min_length=1, max_length=32)
-    age_descriptor: str = ""
-    gender_descriptor: str = ""
-    accent_descriptor: str = ""
-    texture_descriptor: str = ""
-    seed: int
-    style_lock: str
-    # Measured at enrollment: cosine similarity between two renders of the same
-    # synthetic voice on different text, and the identity floor derived from it.
-    # None means the profile predates calibration and uses the legacy floor.
-    enrollment_similarity: float | None = Field(default=None, ge=-1, le=1)
-    speaker_similarity_min: float | None = Field(default=None, ge=-1, le=1)
-    locked: bool = False
-    locked_at: datetime | None = None
-    content_sha256: str = ""
-    created_at: datetime = Field(default_factory=_now)
-
-    @model_validator(mode="after")
-    def validate_lock_and_identity(self) -> VoiceProfile:
-        if not self.project_id.strip() or not self.character_id.strip():
-            raise ValueError("voice profile must be project and character scoped")
-        if not self.style_lock.strip():
-            raise ValueError("voice profile requires a deterministic style lock")
-        reference_seconds = sum(sample.duration_seconds for sample in self.reference_samples)
-        if self.source in {VoiceProfileSource.ZERO_SHOT, VoiceProfileSource.FEW_SHOT}:
-            if not 5.0 <= reference_seconds <= 30.0:
-                raise ValueError("zero/few-shot voice reference must total 5 to 30 seconds")
-        elif self.reference_samples:
-            raise ValueError("synthetic voice profiles do not accept reference samples")
-        if self.locked and self.locked_at is None:
-            raise ValueError("locked voice profile requires locked_at")
-        if not self.identity_lineage_id:
-            identity_blob = json.dumps(
-                {
-                    "model": self.speaker_embedding_model,
-                    "embedding": self.speaker_embedding,
-                    "style_lock": self.style_lock.split(":")[-1],
-                },
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8")
-            object.__setattr__(
-                self,
-                "identity_lineage_id",
-                f"voice-identity-{hashlib.sha256(identity_blob).hexdigest()[:20]}",
-            )
-        exclude = {"content_sha256", "created_at"}
-        if self.enrollment_similarity is None and self.speaker_similarity_min is None:
-            # Profiles persisted before identity calibration existed hash
-            # without these fields; keep their locked hash valid.
-            exclude |= {"enrollment_similarity", "speaker_similarity_min"}
-        expected = _content_sha256(self, exclude=exclude)
-        if self.content_sha256 and self.content_sha256 != expected:
-            raise ValueError("voice profile content hash does not match its locked fields")
-        if not self.content_sha256:
-            object.__setattr__(self, "content_sha256", expected)
-        return self
-
-
 class DialogueTurn(BaseModel):
+    """One authored line for one character inside a Shot window."""
+
     id: str
     character_id: str
     text: str
@@ -172,158 +72,183 @@ class DialogueTurn(BaseModel):
         return value
 
 
-class PerformanceScriptLine(BaseModel):
-    id: str
-    shot_id: str
-    character_id: str
-    voice_profile_id: str
-    text: str
-    spoken_text: str
-    emotion: str = "neutral"
-    intensity_curve: list[float] = Field(default_factory=lambda: [0.25, 0.4, 0.3])
-    phonetic_guidance: dict[str, str] = Field(default_factory=dict)
-    breath_after_word_indices: list[int] = Field(default_factory=list)
-    stress_word_indices: list[int] = Field(default_factory=list)
-    micro_pauses_ms: list[int] = Field(default_factory=list)
-    start_ms: int = Field(default=0, ge=0)
-    target_duration_ms: int = Field(gt=0)
-    overlap_ms: int = Field(default=0, ge=0)
-    interrupts_line_id: str | None = None
-    subtext: str = ""
+class VoiceCasting(BaseModel):
+    """Which prompt clip Wan2.2 clones for one character. Project-scoped, immutable once locked."""
 
+    model_config = ConfigDict(frozen=True)
 
-class PerformanceScript(BaseModel):
     id: str
     project_id: str
-    shot_id: str
-    version: int = Field(default=1, ge=1)
-    narrative_context: str = ""
-    camera_language: str = ""
-    pacing_target_ms: int = Field(default=0, ge=0)
-    lines: list[PerformanceScriptLine] = Field(min_length=1, max_length=32)
+    character_id: str
+    source: VoiceCastingSource
+    # Library casting: slot in the site's casting library (Bible roster order).
+    cast_index: int = Field(default=0, ge=0)
+    # Reference casting: a local audio Asset on this Project and its exact transcript.
+    prompt_audio_asset_id: str = ""
+    prompt_audio_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    prompt_duration_seconds: float | None = Field(default=None, gt=0)
+    # Exact transcript of the prompt clip (zero-shot cloning). Empty means Wan
+    # falls back to cross-lingual cloning, which needs no transcript.
+    prompt_text: str = ""
+    descriptors: dict[str, str] = Field(default_factory=dict)
+    locked: bool = False
+    locked_at: datetime | None = None
     content_sha256: str = ""
     created_at: datetime = Field(default_factory=_now)
 
     @model_validator(mode="after")
-    def address_script_content(self) -> PerformanceScript:
-        if any(line.shot_id != self.shot_id for line in self.lines):
-            raise ValueError("performance script lines must belong to the same shot")
+    def validate_source_and_lock(self) -> VoiceCasting:
+        if not self.project_id.strip() or not self.character_id.strip():
+            raise ValueError("voice casting must be project and character scoped")
+        if self.source == VoiceCastingSource.REFERENCE:
+            if not self.prompt_audio_asset_id.strip() or not self.prompt_audio_sha256:
+                raise ValueError("reference casting requires a local prompt audio asset and its sha256")
+            if self.prompt_duration_seconds is None or not (
+                PROMPT_CLIP_MIN_SECONDS <= self.prompt_duration_seconds <= PROMPT_CLIP_MAX_SECONDS
+            ):
+                raise ValueError(
+                    f"Wan2.2 S2V prompt clips must run {PROMPT_CLIP_MIN_SECONDS:g}–{PROMPT_CLIP_MAX_SECONDS:g} seconds"
+                )
+        elif self.prompt_audio_asset_id:
+            raise ValueError("library casting does not carry a reference asset")
+        if self.locked and self.locked_at is None:
+            raise ValueError("locked voice casting requires locked_at")
         expected = _content_sha256(self, exclude={"content_sha256", "created_at"})
         if self.content_sha256 and self.content_sha256 != expected:
-            raise ValueError("performance script content hash does not match")
-        self.content_sha256 = expected
+            raise ValueError("voice casting content hash does not match its locked fields")
+        if not self.content_sha256:
+            object.__setattr__(self, "content_sha256", expected)
         return self
 
 
-class VoiceQCReceipt(BaseModel):
+class WanSpeechRequest(BaseModel):
+    """Exactly what Producer hands Wan2.2 S2V's native TTS lane for one Take."""
+
+    model_config = ConfigDict(frozen=True)
+
+    version: str = SPEECH_REQUEST_VERSION
+    character_id: str
+    casting_id: str
+    tts_text: str
+    # Resolved on the GPU host at dispatch; empty until then.
+    tts_prompt_audio_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    tts_prompt_text: str = ""
+    prompt_source: str = ""
+    word_count: int = Field(default=0, ge=0)
+    window_ms: int = Field(gt=0)
+    performance_direction: str = ""
+    content_sha256: str = ""
+
+    @field_validator("tts_text")
+    @classmethod
+    def line_has_words(cls, value: str) -> str:
+        clean = " ".join(value.split())
+        if not clean:
+            raise ValueError("a Wan speech request needs spoken text")
+        return clean
+
+    @model_validator(mode="after")
+    def address_request(self) -> WanSpeechRequest:
+        if not self.character_id.strip() or not self.casting_id.strip():
+            raise ValueError("a Wan speech request names its character and casting")
+        if self.word_count == 0:
+            object.__setattr__(self, "word_count", len(self.tts_text.split()))
+        expected = _content_sha256(self, exclude={"content_sha256"})
+        if self.content_sha256 and self.content_sha256 != expected:
+            raise ValueError("speech request content hash does not match")
+        if not self.content_sha256:
+            object.__setattr__(self, "content_sha256", expected)
+        return self
+
+    @property
+    def words_per_second(self) -> float:
+        return round(self.word_count / max(0.001, self.window_ms / 1000.0), 3)
+
+
+class SpeechQCReceipt(BaseModel):
+    """What the audio Wan2.2 delivered inside the negative measured."""
+
     measurement_version: str
-    speaker_similarity: float = Field(ge=-1, le=1)
-    speaker_similarity_min: float = Field(default=0.92, ge=-1, le=1)
-    project_consistency: float = Field(ge=-1, le=1)
-    project_consistency_min: float = Field(default=0.90, ge=-1, le=1)
-    snr_db: float
-    snr_db_min: float = 30.0
+    audio_present: bool = False
+    duration_ms: float = Field(default=0.0, ge=0)
+    window_ms: float = Field(default=0.0, ge=0)
     speech_presence_score: float | None = Field(default=None, ge=0, le=1)
     speech_presence_min: float = Field(default=0.20, ge=0, le=1)
-    integrated_lufs: float
-    loudness_target_lufs: float
+    # Milliseconds between the last speech-active moment and the end of the
+    # picture window. Below one S2V frame the line was cut, not finished.
+    speech_tail_ms: float | None = Field(default=None, ge=0)
+    speech_tail_min_ms: float = Field(default=SPEECH_TAIL_MIN_MS, ge=0)
+    integrated_lufs: float | None = None
+    loudness_target_lufs: float = -24.0
     loudness_tolerance_lu: float = Field(default=1.0, ge=0, le=3)
-    true_peak_dbtp: float
+    true_peak_dbtp: float | None = None
     true_peak_ceiling_dbtp: float = -1.0
-    harshness_score: float = Field(default=0.0, ge=0, le=1)
-    harshness_max: float = Field(default=0.25, ge=0, le=1)
-    sibilance_score: float = Field(default=0.0, ge=0, le=1)
-    sibilance_max: float = Field(default=0.25, ge=0, le=1)
-    lip_sync_confidence: float | None = Field(default=None, ge=0, le=1)
-    # 0.75 + 0.25 × correlation: 0.80 means correlation ≥ 0.20 (see diony_producer.av_sync).
-    lip_sync_confidence_min: float = Field(default=0.80, ge=0, le=1)
-    audiovisual_offset_ms_p95: float | None = Field(default=None, ge=0)
-    audiovisual_offset_ms_max: float = Field(default=40.0, gt=0, le=100)
-    audiovisual_backend: str = ""
-    audiovisual_measurement_qualified: bool | None = None
-    performance_consistency: float | None = Field(default=None, ge=0, le=1)
-    # Balanced agreement between speech activity and measured mouth modulation.
-    # 0.75 leaves headroom under the landmark-measured small-face calibration; see diony_producer.av_sync.
-    performance_consistency_min: float = Field(default=0.75, ge=0, le=1)
-    audio_passed: bool = False
-    animation_passed: bool = False
     passed: bool = False
     diagnostics: list[str] = Field(default_factory=list)
 
+    def failures(self) -> list[str]:
+        """Every gate this receipt misses, in the order Mix would care."""
+        failed: list[str] = []
+        if not self.audio_present:
+            failed.append("the negative carries no audio track")
+        if self.speech_presence_score is None or self.speech_presence_score < self.speech_presence_min:
+            measured = "unmeasured" if self.speech_presence_score is None else f"{self.speech_presence_score:.2f}"
+            failed.append(f"voiced-speech presence {measured} is below {self.speech_presence_min:.2f}")
+        if self.speech_tail_ms is not None and self.speech_tail_ms < self.speech_tail_min_ms:
+            failed.append(
+                f"speech is still active {self.speech_tail_ms:.0f} ms before the window ends "
+                f"(needs {self.speech_tail_min_ms:g} ms); the line was cut by the picture"
+            )
+        if self.integrated_lufs is None or abs(self.integrated_lufs - self.loudness_target_lufs) > self.loudness_tolerance_lu:
+            measured = "unmeasured" if self.integrated_lufs is None else f"{self.integrated_lufs:.1f} LUFS"
+            failed.append(f"dialogue stem loudness {measured} is outside {self.loudness_target_lufs:g} ±{self.loudness_tolerance_lu:g} LU")
+        if self.true_peak_dbtp is None or self.true_peak_dbtp > self.true_peak_ceiling_dbtp:
+            measured = "unmeasured" if self.true_peak_dbtp is None else f"{self.true_peak_dbtp:.1f} dBTP"
+            failed.append(f"dialogue stem true peak {measured} exceeds {self.true_peak_ceiling_dbtp:g} dBTP")
+        return failed
+
     @model_validator(mode="after")
-    def passing_receipt_meets_every_threshold(self) -> VoiceQCReceipt:
-        audio_checks = (
-            (self.speaker_similarity >= self.speaker_similarity_min, "speaker identity"),
-            (self.project_consistency >= self.project_consistency_min, "project consistency"),
-            (self.snr_db >= self.snr_db_min, "signal-to-noise"),
-            (
-                abs(self.integrated_lufs - self.loudness_target_lufs)
-                <= self.loudness_tolerance_lu,
-                "loudness",
-            ),
-            (self.true_peak_dbtp <= self.true_peak_ceiling_dbtp, "true peak"),
-            (self.harshness_score <= self.harshness_max, "harshness"),
-            (self.sibilance_score <= self.sibilance_max, "sibilance"),
-        )
-        if self.audio_passed:
-            if self.measurement_version == "diony-voice-qc-v2" and (
-                self.speech_presence_score is None
-                or self.speech_presence_score < self.speech_presence_min
-            ):
-                raise ValueError("audio cannot pass failed speech presence threshold")
-            failed = next((label for ok, label in audio_checks if not ok), None)
+    def passing_receipt_meets_every_gate(self) -> SpeechQCReceipt:
+        if self.passed:
+            failed = self.failures()
             if failed:
-                raise ValueError(f"audio cannot pass failed {failed} threshold")
-        if self.animation_passed:
-            if self.audiovisual_measurement_qualified is False:
-                raise ValueError("animation cannot pass unqualified audiovisual evidence")
-            if self.lip_sync_confidence is None or (
-                self.lip_sync_confidence < self.lip_sync_confidence_min
-            ):
-                raise ValueError("animation cannot pass failed lip-sync confidence threshold")
-            if self.audiovisual_offset_ms_p95 is None or (
-                self.audiovisual_offset_ms_p95 > self.audiovisual_offset_ms_max
-            ):
-                raise ValueError("animation cannot pass failed audiovisual offset threshold")
-            if self.performance_consistency is None or (
-                self.performance_consistency < self.performance_consistency_min
-            ):
-                raise ValueError(
-                    "animation cannot pass failed physical-performance consistency threshold"
-                )
-        if self.passed and not (self.audio_passed and self.animation_passed):
-            raise ValueError("voice QC pass requires both audio and animation evidence")
+                raise ValueError(f"speech QC cannot pass: {failed[0]}")
         return self
 
 
-class VoiceClipPackage(BaseModel):
+class SpeechClipPackage(BaseModel):
+    """One spoken Take's Wan2.2-native speech evidence, bound to the rendered negative."""
+
     id: str
     project_id: str
     shot_id: str
     take_id: str
-    voice_profile_ids: list[str] = Field(min_length=1)
-    generation_seeds: dict[str, int]
-    script: PerformanceScript
-    clean_dialogue_asset_id: str
-    final_mix_asset_id: str
-    performance_metadata_asset_id: str
-    cache_key: str = Field(min_length=64, max_length=64)
-    synthesis_backend: str
-    embedding_backend: str
-    alignment_backend: str
+    character_id: str
+    casting_id: str
+    request: WanSpeechRequest
+    backend: str = SPEECH_BACKEND
+    # Audio extracted from the negative exactly as Wan muxed it (48 kHz WAV).
+    dialogue_asset_id: str = ""
+    # Loudness-conformed copy of that audio for the program mix rail.
+    mix_stem_asset_id: str = ""
     video_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     state: VoiceRenderState = VoiceRenderState.PLANNED
-    qc: VoiceQCReceipt
+    qc: SpeechQCReceipt | None = None
     created_at: datetime = Field(default_factory=_now)
 
+    @property
+    def verified(self) -> bool:
+        return self.state == VoiceRenderState.VERIFIED and self.qc is not None and self.qc.passed
+
     @model_validator(mode="after")
-    def verified_package_has_passing_receipt(self) -> VoiceClipPackage:
-        if self.project_id != self.script.project_id or self.shot_id != self.script.shot_id:
-            raise ValueError("voice package script lineage does not match the clip")
-        if set(self.voice_profile_ids) != set(self.generation_seeds):
-            raise ValueError("every voice profile requires its locked generation seed")
-        if self.state == VoiceRenderState.VERIFIED and not self.qc.passed:
-            raise ValueError("verified voice package requires passing audiovisual QC")
-        if self.state == VoiceRenderState.VERIFIED and not self.video_sha256:
-            raise ValueError("verified voice package requires the exact rendered video hash")
+    def verified_package_is_complete(self) -> SpeechClipPackage:
+        if self.request.character_id != self.character_id or self.request.casting_id != self.casting_id:
+            raise ValueError("speech package request lineage does not match the clip")
+        if self.state == VoiceRenderState.VERIFIED:
+            if self.qc is None or not self.qc.passed:
+                raise ValueError("verified speech package requires a passing speech QC receipt")
+            if not self.video_sha256:
+                raise ValueError("verified speech package requires the exact rendered video hash")
+            if not self.dialogue_asset_id or not self.mix_stem_asset_id:
+                raise ValueError("verified speech package requires the dialogue and mix-stem assets")
         return self

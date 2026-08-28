@@ -23,7 +23,7 @@ from diony_producer.finish import (
 )
 from diony_producer.gpu import should_proxy, signed_gpu_site, wizard_pack_on_gpu
 from diony_producer.mix import mix_evidence_blockers, mix_status, reset_mix, start_mix
-from diony_producer.vault import persist_project
+from diony_producer.vault import persist_project, record_activity
 
 
 def _gate(project: Project, name: GateName) -> Gate:
@@ -76,6 +76,53 @@ def farm_ready_for_finish(project: Project, *, live: bool) -> bool:
         if live and not take_has_live_negative(take, project):
             return False
     return True
+
+
+def finish_ready_takes_early(project: Project, *, live: bool) -> list[str]:
+    """1080-finish every passed clip while a held Shot waits on a human.
+
+    Measured 2026-08-27: nine passed negatives sat behind one voice hold for
+    hours with "1080 finish · blocked by AutoQC". A hold is a decision the
+    rundown waits for; the masters that are ready do not have to.
+    """
+    from diony_producer.farm import farm_has_pending_work, farm_status
+    from diony_producer.finish import _take_1080, enter_finish, finish_status, start_finish
+
+    if not live or not live_finish() or should_proxy():
+        return []
+    if farm_status()["busy"] or farm_has_pending_work(project):
+        return []
+    finish = finish_status()
+    if finish["busy"] or finish.get("error"):
+        return []
+    ready: list[Take] = []
+    waiting = 0
+    for shot in project.shots:
+        take = _selected_take(project, shot.id)
+        if take is None or take.qc is None:
+            waiting += 1
+            continue
+        settled = take.qc.settled_by_policy
+        passed = take.qc.verdict == QCVerdict.PASS
+        if not (passed or settled):
+            waiting += 1
+            continue
+        if not settled and not qc_contract_valid(project, take):
+            continue
+        if not take_has_live_negative(take, project) or _take_1080(project, take) is not None:
+            continue
+        ready.append(take)
+    if not ready or not waiting:
+        return []
+    record_activity(
+        "sr",
+        f"finishing {len(ready)} passed clip{'s' if len(ready) != 1 else ''} at 1080 while "
+        f"{waiting} Shot{'s' if waiting != 1 else ''} wait{'s' if waiting == 1 else ''} for a decision",
+        level="live",
+    )
+    enter_finish()
+    start_finish(project, ready)
+    return [take.id for take in ready]
 
 
 def apply_picture_lock(project: Project, locked_by: str = "producer") -> None:
@@ -193,6 +240,7 @@ def maybe_advance_run(project: Project) -> None:
     if signed_gpu_site() and not live:
         return
     if not farm_ready_for_finish(project, live=live):
+        finish_ready_takes_early(project, live=live)
         return
     pic = _gate(project, GateName.PICTURE)
     mix = _gate(project, GateName.MIX)

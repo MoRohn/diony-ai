@@ -18,7 +18,7 @@ from pathlib import Path
 
 from diony_contracts.enums import AssetKind
 from diony_contracts.models import Asset, Project
-from diony_contracts.voice import VoiceClipPackage
+from diony_contracts.voice import SpeechClipPackage
 from diony_finish.pipeline import FinishError, finished_media_has_picture, verify_finished_media
 
 from diony_producer.gallery_join import resolve_media_tool
@@ -183,7 +183,7 @@ def _selected_take_for_shot(project: Project, shot_id: str):
 class VoiceRailRow(NamedTuple):
     audio: Path
     start_seconds: float
-    package: VoiceClipPackage
+    package: SpeechClipPackage
     clip_seconds: float
     fade_in: float
     fade_out: float
@@ -212,31 +212,26 @@ def _locked_voice_sources(project: Project) -> list[VoiceRailRow]:
         take = _selected_take_for_shot(project, shot.id)
         package = take.voice_package if take is not None else None
         if package is None:
-            raise MixError(f"Required dialogue on {shot.id} has no locked voice package")
+            raise MixError(f"Required dialogue on {shot.id} has no Wan speech package")
         settled = take is not None and take.qc is not None and take.qc.settled_by_policy
-        if package.state.value != "verified" or not package.qc.passed:
-            # A print settled by retake-cap policy failed the *visual* voice
-            # gate; its audio was locked and measured before camera rolled.
-            if not (settled and package.qc.audio_passed):
-                raise MixError(f"Required dialogue on {shot.id} has an unverified voice package")
-        if (
-            package.qc.speech_presence_score is None
-            or package.qc.speech_presence_score < package.qc.speech_presence_min
-        ):
+        qc = package.qc
+        if not package.verified:
+            # A print settled by retake-cap policy may carry speech that
+            # measured present but missed a loudness or tail gate; the stem
+            # is still Wan's performance of the authored line.
+            if not (settled and qc is not None and qc.audio_present and package.mix_stem_asset_id):
+                raise MixError(f"Required dialogue on {shot.id} has an unverified speech package")
+        if qc is None or qc.speech_presence_score is None or qc.speech_presence_score < qc.speech_presence_min:
             raise MixError(
                 f"Required dialogue on {shot.id} has no measured speech-content evidence"
             )
         try:
-            asset = project.asset(package.final_mix_asset_id)
-            metadata = project.asset(package.performance_metadata_asset_id)
+            asset = project.asset(package.mix_stem_asset_id)
         except KeyError as exc:
-            raise MixError(f"Required dialogue on {shot.id} has incomplete voice package assets") from exc
+            raise MixError(f"Required dialogue on {shot.id} has incomplete speech package assets") from exc
         audio = abs_path(asset.path)
-        timing = abs_path(metadata.path)
         if not audio.is_file() or audio.stat().st_size <= 44:
-            raise MixError(f"Required dialogue on {shot.id} has no final mixed audio bytes")
-        if not timing.is_file() or timing.stat().st_size <= 32:
-            raise MixError(f"Required dialogue on {shot.id} has no performance timing metadata")
+            raise MixError(f"Required dialogue on {shot.id} has no dialogue stem bytes")
         sources.append(
             VoiceRailRow(
                 audio=audio,
@@ -633,9 +628,12 @@ def bounce_mix(project: Project) -> None:
                     "timeline_id": project.timeline.id,
                     "script_sha256": hashlib.sha256(script.encode("utf-8")).hexdigest(),
                     "voice_package_count": len(voice_sources),
-                    "voice_pipeline": "locked_per_clip",
+                    "voice_pipeline": "wan22_native_speech_per_clip",
                     "voice_package_sha256": hashlib.sha256(
-                        "|".join(row.package.cache_key for row in voice_sources).encode("utf-8")
+                        "|".join(
+                            f"{row.package.request.content_sha256}:{row.package.video_sha256}"
+                            for row in voice_sources
+                        ).encode("utf-8")
                     ).hexdigest(),
                 },
             )

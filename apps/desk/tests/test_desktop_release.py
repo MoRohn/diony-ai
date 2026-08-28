@@ -196,14 +196,14 @@ def test_stage_product_preserves_voice_performance_system_exactly(tmp_path: Path
         Path("packages/contracts/src/diony_contracts/models.py"),
         Path("packages/contracts/src/diony_contracts/voice.py"),
         Path("packages/contracts/jsonschema/bible.schema.json"),
-        Path("packages/contracts/jsonschema/performance_script.schema.json"),
+        Path("packages/contracts/jsonschema/speech_clip_package.schema.json"),
+        Path("packages/contracts/jsonschema/speech_qc_receipt.schema.json"),
         Path("packages/contracts/jsonschema/project.schema.json"),
         Path("packages/contracts/jsonschema/qc_report.schema.json"),
         Path("packages/contracts/jsonschema/shot.schema.json"),
         Path("packages/contracts/jsonschema/take.schema.json"),
-        Path("packages/contracts/jsonschema/voice_clip_package.schema.json"),
-        Path("packages/contracts/jsonschema/voice_profile.schema.json"),
-        Path("packages/contracts/jsonschema/voice_qc_receipt.schema.json"),
+        Path("packages/contracts/jsonschema/voice_casting.schema.json"),
+        Path("packages/contracts/jsonschema/wan_speech_request.schema.json"),
         Path("blueprints/22-voice-performance-system.md"),
     )
 

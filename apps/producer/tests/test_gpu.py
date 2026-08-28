@@ -47,20 +47,22 @@ def test_gpu_producer_start_repairs_and_validates_wan_host_python() -> None:
     assert script.find("_diony_production_busy") < script.find('kill "$OLD_PRODUCER_PID"')
     assert 'if _diony_existing_producer_ready; then' in script
     assert "GPU_PRODUCER_ENV_MISMATCH" in script
-    assert "DIONY_COSYVOICE_PYTHON" in script
-    assert "diony_producer/cosyvoice_backend.py" in script
-    assert "DIONY_VOICE_BACKEND_COMMAND" in script
-    assert "DIONY_SPEAKER_EMBEDDING_MODEL" in script
-    assert "/diony/vault/models/audio/CosyVoice2-0.5B" in script
-    # A model directory Studio App is still filling is not a voice pack yet.
-    assert "_diony_cosyvoice_pack_ready" in script
+    # Wan2.2's own speech lane: the pack lives beside generate.py, never in a Diony venv.
+    assert "DIONY_COSYVOICE_PYTHON" not in script
+    assert "DIONY_VOICE_BACKEND_COMMAND" not in script
+    assert "DIONY_FACE_DETECTOR_MODEL" not in script
+    assert "/opt/wan22/CosyVoice/cosyvoice/cli/cosyvoice.py" in script
+    assert "/opt/wan22/CosyVoice2-0.5B" in script
+    # A model directory Studio App is still filling is not a speech pack yet.
+    assert "_diony_wan_speech_pack_ready" in script
     for name in ("cosyvoice2.yaml", "llm.pt", "flow.pt", "hift.pt", "speech_tokenizer_v2.onnx"):
         assert name in script
-    assert script.find("_diony_cosyvoice_pack_ready() {") < script.find("if _diony_cosyvoice_pack_ready; then")
-    # Mouth-sync QC models ride along when Studio pinned them.
-    assert "/diony/vault/runtime/voice/models/face_landmarker.task" in script
-    assert 'DIONY_FACE_DETECTOR_MODEL="${DIONY_FACE_DETECTOR_MODEL:-}"' in script
-    assert 'grep -Fqx "DIONY_FACE_LANDMARKER_MODEL=$DIONY_FACE_LANDMARKER_MODEL"' in script
+    assert script.find("_diony_wan_speech_pack_ready() {") < script.find("if _diony_wan_speech_pack_ready; then")
+    assert "DIONY_WAN_TTS_PROMPT_LIBRARY=/diony/vault/runtime/voice/prompt-library" in script
+    assert 'DIONY_WAN_TTS_PROMPT_AUDIO="${DIONY_WAN_TTS_PROMPT_AUDIO:-}"' in script
+    assert 'grep -Fqx "DIONY_WAN_TTS_PROMPT_LIBRARY=$DIONY_WAN_TTS_PROMPT_LIBRARY"' in script
+    # The sound library and generated-cue adapter no longer hide behind the voice pack.
+    assert script.find("DIONY_SOUND_LIBRARY=/diony/vault/runtime/audio/library") > 0
     assert script.find('"$RUNTIME_OVERLAY"') < script.find("/tmp/diony-wan-req.txt")
     assert script.find("_diony_wan_host_ready") < script.find("GPU_PRODUCER_OK")
 
@@ -498,3 +500,155 @@ def test_gpu_monitor_reads_the_local_activity_journal_on_the_gpu(tmp_path, monke
             "shot_id": "",
         }
     ]
+
+
+def _fake_conn() -> dict:
+    return {"ssh_port": "27168", "ssh_user": "root", "host": "198.13.252.73"}
+
+
+def test_gpu_start_treats_a_starting_producer_as_healthy_and_arms_the_grace_window(monkeypatch) -> None:
+    import diony_producer.gpu as gpu
+
+    def fake_run(command, **kwargs):
+        return type("Result", (), {"returncode": 0, "stdout": "GPU_PRODUCER_STARTING\n", "stderr": ""})()
+
+    monkeypatch.setattr(gpu.subprocess, "run", fake_run)
+    monkeypatch.setattr(gpu, "_last_producer_start_at", 0.0)
+    gpu._set_error("stale error")
+    gpu._start_gpu_producer(_fake_conn())
+    assert gpu.last_gpu_error() == ""
+    assert gpu._producer_starting() is True
+
+
+def test_gpu_start_script_never_kills_a_young_producer_on_the_current_stamp() -> None:
+    import diony_producer.gpu as gpu
+
+    script = gpu._gpu_producer_start_script("stamp-abc")
+    assert "_diony_starting_producer" in script
+    assert script.index("GPU_PRODUCER_STARTING") < script.index('kill "$OLD_PRODUCER_PID"')
+    assert 'grep -Fqx "DIONY_CODE_STAMP=$DIONY_CODE_STAMP"' in script
+    assert '"$age" -lt 300' in script
+
+
+def test_gpu_fast_path_keeps_the_tunnel_while_the_producer_starts(monkeypatch) -> None:
+    """2026-08-27: a silent :8788 during the Producer's own launch tore the tunnel down and
+    re-ran the start script, which killed the launching process — every mutation got 503."""
+    import httpx
+
+    import diony_producer.gpu as gpu
+
+    monkeypatch.setattr(gpu, "should_proxy", lambda: True)
+    monkeypatch.setattr(gpu, "sync_connect_from_wizard", lambda: None)
+    monkeypatch.setattr(gpu, "connect_from_lock", lambda *_a, **_k: _fake_conn())
+    monkeypatch.setattr(gpu, "apply_ssh_env", lambda *_a, **_k: None)
+    monkeypatch.setattr(gpu, "_port_open", lambda _port: True)
+    monkeypatch.setattr(gpu, "_tunnel_key", "")
+    monkeypatch.setattr(gpu, "_tunnel", None)
+    monkeypatch.setattr(gpu, "_last_producer_start_at", gpu.time.time() - 30)
+    monkeypatch.setattr(gpu, "_remote_producer_alive", lambda _c: True)
+
+    def unreachable(*_a, **_k):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(gpu.httpx, "get", unreachable)
+    torn_down: list[str] = []
+    monkeypatch.setattr(gpu, "_free_local_tunnel_port", lambda: torn_down.append("freed"))
+    monkeypatch.setattr(gpu, "_start_gpu_producer", lambda _c: torn_down.append("started"))
+    monkeypatch.setattr(gpu, "_probe_ssh", lambda _c: torn_down.append("probed") or True)
+
+    assert gpu.ensure_gpu_producer() is None
+    assert torn_down == [], "a starting Producer is left alone: no teardown, no second start script"
+    assert "starting" in gpu.last_gpu_error()
+
+    # Past the grace window the old recovery path is back.
+    monkeypatch.setattr(gpu, "_last_producer_start_at", gpu.time.time() - 3600)
+    monkeypatch.setattr(gpu, "_ensure_tunnel", lambda _c: False)
+    monkeypatch.setattr(gpu, "_sync_gpu_apps", lambda _c: True)
+    monkeypatch.setattr(gpu, "persist_connect", lambda _c: None)
+    assert gpu.ensure_gpu_producer() is None
+    assert torn_down == ["freed", "probed", "started"]
+
+
+def test_gpu_ensure_runs_one_start_script_at_a_time(monkeypatch) -> None:
+    import diony_producer.gpu as gpu
+
+    monkeypatch.setattr(gpu, "should_proxy", lambda: True)
+    monkeypatch.setattr(gpu, "sync_connect_from_wizard", lambda: None)
+    monkeypatch.setattr(gpu, "connect_from_lock", lambda *_a, **_k: _fake_conn())
+    monkeypatch.setattr(gpu, "apply_ssh_env", lambda *_a, **_k: None)
+    monkeypatch.setattr(gpu, "_port_open", lambda _port: False)
+    monkeypatch.setattr(gpu, "_tunnel_key", "")
+    calls: list[str] = []
+    monkeypatch.setattr(gpu, "_probe_ssh", lambda _c: calls.append("probe") or True)
+    monkeypatch.setattr(gpu, "_start_gpu_producer", lambda _c: calls.append("start"))
+    assert gpu._ensure_lock.acquire(blocking=False)
+    try:
+        assert gpu.ensure_gpu_producer() is None
+    finally:
+        gpu._ensure_lock.release()
+    assert calls == [], "a concurrent caller never starts a second start script"
+
+
+def test_gpu_grace_never_covers_a_dead_producer(monkeypatch) -> None:
+    """A killed Producer inside the grace window is relaunched, not waited on for five minutes."""
+    import httpx
+
+    import diony_producer.gpu as gpu
+
+    monkeypatch.setattr(gpu, "should_proxy", lambda: True)
+    monkeypatch.setattr(gpu, "sync_connect_from_wizard", lambda: None)
+    monkeypatch.setattr(gpu, "connect_from_lock", lambda *_a, **_k: _fake_conn())
+    monkeypatch.setattr(gpu, "apply_ssh_env", lambda *_a, **_k: None)
+    monkeypatch.setattr(gpu, "_port_open", lambda _port: True)
+    monkeypatch.setattr(gpu, "_tunnel_key", "")
+    monkeypatch.setattr(gpu, "_tunnel", None)
+    monkeypatch.setattr(gpu, "_last_producer_start_at", gpu.time.time() - 30)
+    monkeypatch.setattr(gpu, "_remote_producer_alive", lambda _c: False)
+
+    def unreachable(*_a, **_k):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(gpu.httpx, "get", unreachable)
+    steps: list[str] = []
+    monkeypatch.setattr(gpu, "_free_local_tunnel_port", lambda: steps.append("freed"))
+    monkeypatch.setattr(gpu, "_probe_ssh", lambda _c: steps.append("probed") or True)
+    monkeypatch.setattr(gpu, "persist_connect", lambda _c: None)
+    monkeypatch.setattr(gpu, "_sync_gpu_apps", lambda _c: steps.append("synced") or True)
+    monkeypatch.setattr(gpu, "_start_gpu_producer", lambda _c: steps.append("started"))
+    monkeypatch.setattr(gpu, "_ensure_tunnel", lambda _c: False)
+    assert gpu.ensure_gpu_producer() is None
+    assert steps == ["freed", "probed", "synced", "started"]
+
+
+def test_gpu_alive_probe_is_cached_and_fails_safe(monkeypatch) -> None:
+    import diony_producer.gpu as gpu
+
+    calls: list[int] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(1)
+        return type("Result", (), {"returncode": 0, "stdout": "1234\n", "stderr": ""})()
+
+    monkeypatch.setattr(gpu.subprocess, "run", fake_run)
+    monkeypatch.setattr(gpu, "_alive_probe", (0.0, False))
+    assert gpu._remote_producer_alive(_fake_conn()) is True
+    assert gpu._remote_producer_alive(_fake_conn()) is True and len(calls) == 1, "cached"
+
+    def broken(command, **kwargs):
+        raise OSError("ssh missing")
+
+    monkeypatch.setattr(gpu.subprocess, "run", broken)
+    monkeypatch.setattr(gpu, "_alive_probe", (0.0, False))
+    assert gpu._remote_producer_alive(_fake_conn()) is True, "an unreachable line is not a dead Producer"
+
+
+def test_gpu_start_script_treats_a_silent_alive_producer_as_busy() -> None:
+    """2026-08-27: a Producer loading CosyVoice missed a 2 s curl and was killed mid-run."""
+    import diony_producer.gpu as gpu
+
+    script = gpu._gpu_producer_start_script("stamp-abc")
+    body = script[script.index("_diony_production_busy()"):script.index("if _diony_existing_producer_ready")]
+    assert '2>/dev/null) || return 0' in body, "a failed status call fails closed (busy)"
+    assert '[ -n "$payload" ] || return 0' in body
+    assert '"status"[[:space:]]*:[[:space:]]*"shooting"' in body, "a shooting project is busy even between renders"
+    assert "--max-time 2 " not in body

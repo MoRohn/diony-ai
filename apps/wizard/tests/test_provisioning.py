@@ -276,12 +276,12 @@ def test_existing_compute_progress_updates_the_active_validation_event() -> None
     service.start_existing("lease")
     service.mark_existing_validating()
 
-    state = service.mark_existing_progress("Downloading CosyVoice2 voice model")
+    state = service.mark_existing_progress("Downloading Wan2.2 speech model")
 
     assert state["status"] == "working"
-    assert state["detail"] == "Downloading CosyVoice2 voice model"
+    assert state["detail"] == "Downloading Wan2.2 speech model"
     assert state["events"][-1]["status"] == "active"
-    assert state["events"][-1]["detail"] == "Downloading CosyVoice2 voice model"
+    assert state["events"][-1]["detail"] == "Downloading Wan2.2 speech model"
 
 
 def test_setup_agent_owns_action_area_until_validation_is_complete() -> None:

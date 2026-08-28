@@ -242,6 +242,24 @@ def _environment_from_world(world: str) -> str:
         for cue in cues
         if (match := re.search(rf"\b{re.escape(cue)}\b", normalized, re.IGNORECASE))
     ]
+    # A whole sentence that places the action somewhere ("In the slightly messy
+    # shared kitchen, soft morning light filters through the window.") is a
+    # setting; ten words lifted from the middle of a later sentence ("at them
+    # expectantly, already nodding. Lila doesn't uncross her arms") is other
+    # characters' blocking and reached every Shot's prompt as if it were scenery.
+    camera_spans = [match.span() for match in camera_matches]
+    for sentence_match in re.finditer(r"[^.!?]+[.!?]?", normalized):
+        sentence = sentence_match.group(0).strip()
+        words = sentence.split()
+        if len(words) < 4 or len(words) > 24:
+            continue
+        cue = _ENVIRONMENT_CUE.match(sentence)
+        if cue is None:
+            continue
+        start = sentence_match.start()
+        if any(span_start <= start < span_end for span_start, span_end in camera_spans):
+            continue
+        return _limited_words(sentence.rstrip(".!?"), 14)
     if camera_matches:
         camera = min(camera_matches, key=lambda match: match.start())
         comma = normalized.find(",", camera.end())
@@ -251,7 +269,6 @@ def _environment_from_world(world: str) -> str:
                 return visual_tail
     action = _ACTION_VERBS.search(normalized)
     search_from = action.end() if action else 0
-    camera_spans = [match.span() for match in camera_matches]
     for environment in _ENVIRONMENT_CUE.finditer(normalized, search_from):
         if any(start <= environment.start() < end for start, end in camera_spans):
             continue
@@ -385,13 +402,24 @@ def negative_terms_for(
 
 
 SPOKEN_AUDIO_STRATEGY = "native_s2v_dialogue"
-LOCKED_VOICE_AUDIO_STRATEGY = "locked_voice_s2v"  # stamped by the voice pipeline at audio lock
-SPOKEN_AUDIO_STRATEGIES = frozenset({SPOKEN_AUDIO_STRATEGY, LOCKED_VOICE_AUDIO_STRATEGY})
+WAN_NATIVE_TTS_AUDIO_STRATEGY = "wan_native_tts_s2v"  # stamped when the Wan speech request is locked
+LEGACY_LOCKED_VOICE_AUDIO_STRATEGY = "locked_voice_s2v"  # pre Wan-native projects; readable, never dispatched anew
+SPOKEN_AUDIO_STRATEGIES = frozenset(
+    {SPOKEN_AUDIO_STRATEGY, WAN_NATIVE_TTS_AUDIO_STRATEGY, LEGACY_LOCKED_VOICE_AUDIO_STRATEGY}
+)
 
 
 def is_spoken_plan(plan: WanPromptPlan | None) -> bool:
     """Does this plan carry the S2V performance direction?"""
     return plan is not None and plan.audio_strategy in SPOKEN_AUDIO_STRATEGIES and "speaks the line" in plan.motion
+
+
+_SPOKEN_COLOUR_CONTRACT = "cinematic Rec.709 color, natural contrast, consistent exposure"
+
+# Wan2.2 S2V animates the visible face from the speech it hears (its own
+# native TTS on this lane). The picture prompt therefore directs the
+# performance, never the words: the line itself rides ``--tts_text`` and must
+# not be quoted here, or Wan renders subtitles and a second reading of it.
 _SPOKEN_NEGATIVE_TERMS = (
     "frozen lips",
     "late mouth motion",
@@ -399,6 +427,9 @@ _SPOKEN_NEGATIVE_TERMS = (
     "mumbling",
     "closed mouth while speaking",
     "mouth moving in silence",
+    "another character's mouth moving",
+    "subtitles",
+    "on-screen text",
 )
 
 
@@ -411,35 +442,50 @@ def _camera_optics(camera: str) -> tuple[float, float]:
     )
 
 
+def spoken_performance_direction(speaker: str, *, emotion: str = "") -> str:
+    """The Motion layer for a Wan2.2 S2V take: one on-camera speaker performing the line.
+
+    Wan S2V drives lips, jaw, and cheeks from the audio it hears and reads the
+    rest of the performance from the prompt. The direction names the speaker,
+    that they speak to camera, the emotional colour of the delivery, mouth
+    closure through pauses and at the end of the line, and small natural
+    body language; the words themselves are never written here.
+    """
+    name = _limited_words(speaker, 4) or "The speaker"
+    colour = " ".join(str(emotion or "").split()).casefold()
+    delivery = f"with {colour} in the voice and face" if colour and colour != "neutral" else "at a steady conversational pace"
+    return (
+        f"{name} speaks the line straight toward camera {delivery}, "
+        "lips, jaw, and cheeks shaping every syllable in time with the voice, mouth closed "
+        "and still through each pause and after the last word, small natural head gestures "
+        "and blinks while the shoulders settle, no one else speaking"
+    )
+
+
 def spoken_wan_prompt_plan(
     plan: WanPromptPlan,
     *,
     speaker: str,
     focal_mm: float | None = None,
+    emotion: str = "",
     audio_strategy: str = SPOKEN_AUDIO_STRATEGY,
 ) -> WanPromptPlan | None:
-    """Direct a spoken Shot's plan at the S2V lane: a performance, not a walk.
+    """Direct a spoken Shot's plan at the Wan2.2 S2V lane: a performance, not a walk.
 
     The five-layer template writes every Shot as a blocking beat ("walks ...
     toward camera, shifting weight", "slow steady push-in") and pads the
     motion with a word-limited fragment of the idea — for a spoken Shot that
     fragment was another character's beat cut mid-sentence. Wan S2V animates
     what the prompt describes: it needs the speaker, that they are speaking
-    to camera, articulated mouth shapes on every syllable, a still mouth in
-    the pauses, and a locked-off frame that matches the close-up keyframe.
-    Subject (identity anchors) and scene (lighting) carry over unchanged.
-    Returns None when no budget-valid plan exists, so callers keep the
-    compiled plan rather than fail a load.
+    to camera, the emotional colour of the line, articulated mouth shapes on
+    every syllable, a still mouth in the pauses, and a locked-off frame that
+    matches the keyframe. Subject (identity anchors) and scene (lighting)
+    carry over unchanged. Returns None when no budget-valid plan exists, so
+    callers keep the compiled plan rather than fail a load.
     """
-    name = _limited_words(speaker, 4) or "The speaker"
     plan_focal, t_stop = _camera_optics(plan.camera)
     focal = float(focal_mm or plan_focal)
-    motion = (
-        f"{name} speaks the line straight toward camera at a steady conversational pace, "
-        "lips, jaw, and cheeks shaping every syllable in time with the voice, mouth closed "
-        "and still through each pause, small natural head gestures and blinks while the "
-        "shoulders settle"
-    )
+    motion = spoken_performance_direction(speaker, emotion=emotion)
     camera = (
         f"{_framing(focal)}, {focal:g}mm lens at T{t_stop:g}, static camera with no movement, "
         "eyes on the lens"
@@ -450,7 +496,18 @@ def spoken_wan_prompt_plan(
     )
     negative_terms = [*plan.negative_terms, *_SPOKEN_NEGATIVE_TERMS]
     scene_segments = [segment for segment in plan.scene.split("; ") if segment.strip()]
-    for scene in (plan.scene, "; ".join(scene_segments[:2]), "; ".join(scene_segments[:1])):
+    # The compiled scene layer carries the world summary — for a spoken
+    # close-up that is a word-limited fragment of the idea ("at them
+    # expectantly, already nodding. Lila doesn't uncross her arms") that
+    # describes other characters' blocking, not this speaker's frame. The
+    # spoken scene keeps the lighting statement and the colour contract only.
+    lighting = next((segment for segment in scene_segments if "lighting" in segment.casefold()), "")
+    spoken_scenes = [
+        "; ".join(segment for segment in (lighting, _SPOKEN_COLOUR_CONTRACT) if segment),
+        lighting,
+        _SPOKEN_COLOUR_CONTRACT,
+    ]
+    for scene in (*spoken_scenes, plan.scene, "; ".join(scene_segments[:2]), "; ".join(scene_segments[:1])):
         if not scene.strip():
             continue
         candidate = make_wan_prompt_plan(

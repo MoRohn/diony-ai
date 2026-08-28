@@ -30,16 +30,12 @@ from diony_contracts.enums import (
     ReferenceLock,
     TakeOrigin,
 )
-from diony_contracts.voice import (
+from diony_contracts.voice import (  # noqa: F401 — re-exported for schema export
     DialogueTurn,
-    EmotionPerformance,
-    PerformanceScript,
-    PerformanceScriptLine,
-    ProsodySignature,
-    VoiceClipPackage,
-    VoiceProfile,
-    VoiceQCReceipt,
-    VoiceReferenceSample,
+    SpeechClipPackage,
+    SpeechQCReceipt,
+    VoiceCasting,
+    WanSpeechRequest,
 )
 
 
@@ -321,7 +317,7 @@ class Character(BaseModel):
     still_asset_ids: list[str] = Field(default_factory=list)
     wardrobe: str = ""
     notes: str = ""
-    voice_profile_id: str = ""
+    voice_casting_id: str = ""
 
 
 class Bible(BaseModel):
@@ -445,11 +441,14 @@ class Shot(BaseModel):
         if self.continuity_mode == ContinuityMode.PREVIOUS_FRAME and self.overlap_frames < 1:
             raise ValueError("previous-frame continuity requires an overlap window")
         if self.engine == Engine.S2V_14B:
+            speaks = bool(self.dialogue_turns) or bool(" ".join(str(self.audio_line or "").split()))
             if (
                 not self.keyframe_asset_ids
                 and self.continuity_mode != ContinuityMode.PREVIOUS_FRAME
-            ) or not self.audio_asset_ids:
-                raise ValueError("S2V requires a reference image or prior frame, plus locked audio")
+            ) or not (self.audio_asset_ids or speaks):
+                raise ValueError(
+                    "S2V requires a reference image or prior frame, plus recorded audio or an authored line"
+                )
         if self.engine == Engine.ANIMATE_14B:
             if not self.keyframe_asset_ids or not self.motion_reference_asset_ids:
                 raise ValueError("Animate requires a character image and driving video")
@@ -474,15 +473,13 @@ class QCReport(BaseModel):
     voice_ready_ok: bool | None = None
     lipsync_ok: bool | None = None
     loudness_ok: bool | None = None
+    # Wan2.2-native speech evidence measured on the audio the negative carries.
     voice_measurement_version: str = ""
-    speaker_similarity: float | None = Field(default=None, ge=-1, le=1)
+    speech_backend: str = ""
     speech_presence_score: float | None = Field(default=None, ge=0, le=1)
-    voice_project_consistency: float | None = Field(default=None, ge=-1, le=1)
-    voice_performance_consistency: float | None = Field(default=None, ge=0, le=1)
-    lip_sync_confidence: float | None = Field(default=None, ge=0, le=1)
-    audiovisual_offset_ms_p95: float | None = Field(default=None, ge=0)
-    audiovisual_backend: str = ""
-    audiovisual_measurement_qualified: bool | None = None
+    speech_tail_ms: float | None = Field(default=None, ge=0)
+    dialogue_lufs: float | None = None
+    dialogue_true_peak_dbtp: float | None = None
     reference_asset_ids: list[str] = Field(default_factory=list)
     reference_similarity: float | None = None
     reference_similarities: dict[str, float] = Field(default_factory=dict)
@@ -638,10 +635,9 @@ class GenerationExecutionReceipt(BaseModel):
     quality_contract_sha256: str = Field(min_length=64, max_length=64)
     quality_contract_matched: bool
     attention_backend: str = "auto"
-    # S2V latency compensation: frames of silence prepended to the conditioning
-    # audio and trimmed from the head of the delivered negative.
+    # Legacy receipts (pre Wan-native speech) recorded a measured head trim or
+    # hold; the current lane renders exactly the booking and never realigns.
     lead_frames: int = Field(default=0, ge=0, le=32)
-    # Early mouth motion is aligned by holding the first frame this many frames.
     head_hold_frames: int = Field(default=0, ge=0, le=32)
     # Classifier-free guidance the lane dispatched with (None: upstream default).
     sample_guide_scale: float | None = Field(default=None, gt=0)
@@ -701,7 +697,7 @@ class Take(BaseModel):
     origin: TakeOrigin = TakeOrigin.GENERATION
     label: str = ""
     artifacts: list[Artifact] = Field(default_factory=list)
-    voice_package: VoiceClipPackage | None = None
+    voice_package: SpeechClipPackage | None = None
     generation_receipt: GenerationExecutionReceipt | None = None
 
     @model_validator(mode="after")
@@ -874,7 +870,7 @@ class Project(BaseModel):
     assets: list[Asset] = Field(default_factory=list)
     edits: list[ClipEdit] = Field(default_factory=list)
     compositions: list[ClipComposition] = Field(default_factory=list)
-    voice_profiles: list[VoiceProfile] = Field(default_factory=list)
+    voice_castings: list[VoiceCasting] = Field(default_factory=list)
     timeline: Timeline | None = None
     mix: MixLock | None = None
     deliverables: list[Deliverable] = Field(default_factory=list)
@@ -919,11 +915,11 @@ class Project(BaseModel):
                 return a
         raise KeyError(asset_id)
 
-    def voice_profile(self, profile_id: str) -> VoiceProfile:
-        for profile in self.voice_profiles:
-            if profile.id == profile_id:
-                return profile
-        raise KeyError(profile_id)
+    def voice_casting(self, casting_id: str) -> VoiceCasting:
+        for casting in self.voice_castings:
+            if casting.id == casting_id:
+                return casting
+        raise KeyError(casting_id)
 
     def mark_production_start(self) -> None:
         """First Produce/roll. Later rolls and retakes keep the same start."""

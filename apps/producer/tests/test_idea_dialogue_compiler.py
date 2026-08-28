@@ -7,7 +7,7 @@ from diony_contracts.enums import (
 )
 from diony_contracts.models import Asset, Brief, Take
 from diony_contracts.studio import expand_idea
-from diony_producer.voice import DeterministicVoiceTestBackend, VoicePerformancePipeline
+from diony_producer.voice import prepare_speech_for_take
 
 
 def _named_screenplay_project():
@@ -56,33 +56,26 @@ def test_idea_compiler_preserves_named_screenplay_cast_dialogue_and_voice_locks(
         ("Hugo", "I already opened the gate."),
     ]
 
-    profiles_by_character = {
-        profile.character_id: profile for profile in project.voice_profiles
+    castings_by_character = {
+        casting.character_id: casting for casting in project.voice_castings
     }
-    assert set(profiles_by_character) == set(characters_by_id)
-    for character_id, character in characters_by_id.items():
-        profile = profiles_by_character[character_id]
-        assert character.voice_profile_id == profile.id
-        assert profile.project_id == project.id
-        assert profile.character_id == character_id
-        assert profile.locked is True
-        assert len(profile.content_sha256) == 64
+    assert set(castings_by_character) == set(characters_by_id)
+    for index, (character_id, character) in enumerate(characters_by_id.items()):
+        casting = castings_by_character[character_id]
+        assert character.voice_casting_id == casting.id
+        assert casting.project_id == project.id
+        assert casting.character_id == character_id
+        assert casting.source.value == "library"
+        assert casting.cast_index == index  # roster order is cast order
+        assert casting.locked is True
+        assert len(casting.content_sha256) == 64
 
 
-def test_compiled_spoken_still_shots_lock_audio_before_routing_to_s2v(tmp_path) -> None:
+def test_compiled_spoken_still_shots_lock_a_wan_speech_request_before_routing_to_s2v(tmp_path) -> None:
     project, still = _named_screenplay_project()
     spoken_shots = [shot for shot in project.shots if shot.dialogue_turns]
 
     assert len(spoken_shots) == 3
-    backend = DeterministicVoiceTestBackend()
-    pipeline = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
-    )
 
     for shot in spoken_shots:
         assert shot.keyframe_asset_ids == [still.id]
@@ -96,15 +89,18 @@ def test_compiled_spoken_still_shots_lock_audio_before_routing_to_s2v(tmp_path) 
         )
         project.takes.append(take)
 
-        package = pipeline.prepare_take(project, take)
+        package = prepare_speech_for_take(project, take, vault=tmp_path)
 
-        assert package.state == VoiceRenderState.AUDIO_LOCKED
-        assert shot.audio_asset_ids == [package.clean_dialogue_asset_id]
+        assert package is not None and package.state == VoiceRenderState.PLANNED
+        assert package.request.tts_text == " ".join(turn.text for turn in shot.dialogue_turns)
+        assert package.request.character_id == shot.dialogue_turns[0].character_id
+        assert shot.audio_asset_ids == []  # the authored line rides Wan's own TTS inputs
         assert shot.engine == Engine.S2V_14B
         assert take.engine == Engine.S2V_14B
         assert shot.prompt_plan is not None
         assert shot.prompt_plan.generation_method == Engine.S2V_14B.value
-        assert shot.prompt_plan.audio_strategy == "locked_voice_s2v"
+        assert shot.prompt_plan.audio_strategy == "wan_native_tts_s2v"
+        assert package.request.tts_text.casefold() not in shot.prompt.casefold()
         # The locked line dispatches with the S2V performance direction.
         from diony_contracts.wan_prompt import is_spoken_plan, validate_wan_prompt_dispatch
 
@@ -188,8 +184,8 @@ def test_prose_speech_direction_with_curly_quote_compiles_as_authored_dialogue()
     # The authored line survives verbatim even when it spans lane-true windows.
     assert " ".join(turn.text for turn in turns) == "Welcome to the future, it’s our time now."
     assert len({turn.character_id for turn in turns}) == 1
-    assert len(project.voice_profiles) == 1
-    assert project.voice_profiles[0].character_id == turns[0].character_id
+    assert len(project.voice_castings) == 1
+    assert project.voice_castings[0].character_id == turns[0].character_id
     assert any(shot.keyframe_asset_ids == [still.id] for shot in project.shots if shot.dialogue_turns)
     picture_prompts = " ".join(shot.prompt for shot in project.shots).casefold()
     assert "welcome to the future" not in picture_prompts
@@ -268,11 +264,19 @@ def test_thirty_second_program_packs_turns_by_total_natural_speaking_time() -> N
         for word in text.split()
     ]
 
-    assert len(project.shots) == 10
-    # Dialogue rides only on bookings long enough for a natural-rate window:
-    # the 62-frame lane tail stays picture-only.
-    assert len([shot for shot in project.shots if shot.dialogue_turns]) == 9
-    assert not project.shots[-1].dialogue_turns
+    # The length goal is a target: the rundown grows so no window spans a
+    # speaker change (Wan S2V animates the visible face with every word it
+    # hears — sh-070, 2026-08-27, Lila's crop mouthing Marcus's "Hugo.").
+    assert 10 <= len(project.shots) <= 13
+    spoken = [shot for shot in project.shots if shot.dialogue_turns]
+    assert all(len({turn.character_id for turn in shot.dialogue_turns}) == 1 for shot in spoken)
+    assert len(spoken) >= 8
+    # A short lane-tail booking stays picture-only; a grown full-length tail may speak.
+    from diony_contracts.studio import DIALOGUE_MIN_SHOT_FRAMES
+
+    tail = project.shots[-1]
+    if tail.duration_frames < DIALOGUE_MIN_SHOT_FRAMES:
+        assert not tail.dialogue_turns
     assert all(
         sum(len(turn.text.split()) for turn in shot.dialogue_turns) <= 6
         for shot in project.shots

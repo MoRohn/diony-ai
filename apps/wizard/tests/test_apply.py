@@ -73,13 +73,15 @@ def test_hf_pack_includes_wan_and_sr(monkeypatch) -> None:
     assert "FunAudioLLM/CosyVoice2-0.5B" in script
     assert "/diony/vault/models/audio/CosyVoice2-0.5B" in script
     assert "FunAudioLLM/CosyVoice.git" in script
-    assert "COSY_RUNTIME=/diony/vault/runtime/cosyvoice" in script
-    assert 'COSY_ROOT="$COSY_RUNTIME/CosyVoice"' in script
-    assert 'COSY_PY="$COSY_RUNTIME/venv/bin/python"' in script
+    # Wan's own TTS lane loads both from beside generate.py; no separate Diony venv.
+    assert "WAN_TTS_RUNTIME=/diony/vault/runtime/wan-tts" in script
+    assert 'ln -sfn "$WAN_TTS_ROOT" /opt/wan22/CosyVoice' in script
+    assert "ln -sfn /diony/vault/models/audio/CosyVoice2-0.5B /opt/wan22/CosyVoice2-0.5B" in script
+    assert "COSY_RUNTIME=" not in script and 'COSY_PY=' not in script
     assert "--system-site-packages" in script
     assert "git clone --depth 1 --recursive https://github.com/FunAudioLLM/CosyVoice.git /opt/wan22/CosyVoice" not in script
     assert "requirements_s2v.txt" in script
-    assert "COSYVOICE_OK" in script
+    assert "SPEECH_PACK_OK" in script
     assert "from modelscope import snapshot_download" not in script
     assert "ThreadPoolExecutor" in script
     assert "DIONY_MODEL_PULL_WORKERS" in script
@@ -182,7 +184,7 @@ def test_remote_setup_runpod_vault_and_venv(monkeypatch) -> None:
     assert "WAN_HOST_OVERLAY_REPAIR" in producer
 
 
-def test_remote_setup_resumes_an_incomplete_cosyvoice_snapshot(monkeypatch) -> None:
+def test_remote_setup_resumes_an_incomplete_wan_speech_snapshot(monkeypatch) -> None:
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
     script = remote_setup_script("/opt/diony-ai", "/workspace")
@@ -199,10 +201,10 @@ def test_apply_progress_text_exposes_remote_setup_stages() -> None:
     assert apply_progress_text("HF_PULL Wan-AI/Wan2.2-S2V-14B -> /models/wan") == (
         "Downloading Wan2.2-S2V-14B"
     )
-    assert apply_progress_text("COSYVOICE_PULL FunAudioLLM/CosyVoice2-0.5B -> /diony/vault/models/audio") == (
-        "Downloading CosyVoice2 voice model"
+    assert apply_progress_text("SPEECH_PACK_PULL FunAudioLLM/CosyVoice2-0.5B -> /diony/vault/models/audio") == (
+        "Downloading Wan2.2 speech model"
     )
-    assert apply_progress_text("COSYVOICE_OK") == "CosyVoice2 voice model ready"
+    assert apply_progress_text("SPEECH_PACK_OK") == "Wan2.2 speech model ready"
     assert apply_progress_text("MODEL_VOLUME_MIGRATE wan") == (
         "Moving existing wan models to the attached volume"
     )
@@ -221,8 +223,8 @@ def test_site_readiness_probe_checks_the_complete_pack_before_any_pull() -> None
         "/models/diony/diony_sr_v1",
         "/diony/vault/models/audio/CosyVoice2-0.5B",
         "/opt/wan22/.git",
-        "/diony/vault/runtime/cosyvoice/CosyVoice",
-        "/diony/vault/runtime/cosyvoice/venv/bin/python",
+        "/opt/wan22/CosyVoice",
+        "/opt/wan22/CosyVoice2-0.5B",
     ):
         assert path in script
     assert "DIONY_SITE_STATE" in script
@@ -235,12 +237,12 @@ def test_site_readiness_probe_checks_the_complete_pack_before_any_pull() -> None
     assert "subprocess.PIPE" not in script
     assert '"wan_runtime"' in script
     assert '"model_volume"' in script
-    assert 'cosy_root / ".git"' in script
-    assert '"cosy_runtime"' in script
-    assert '"voice_backend"' in script
+    assert '"speech_pack"' in script
+    assert '"casting_library"' in script
+    assert "cosy_runtime" not in script and "voice_backend" not in script
     assert 'volume_root = Path("/diony/vault/models").resolve()' in script
     assert '(Path("/models") / kind).resolve() == volume_root / kind' in script
-    assert "cosy_required" in script
+    assert "tts_required" in script
     assert "llm.pt" in script
     assert "speech_tokenizer_v2.onnx" in script
     assert '"snapshot_complete"' in script
@@ -765,26 +767,28 @@ def test_reset_apply_terminates_the_streamed_session(monkeypatch) -> None:
     assert calls == ["stop"]
 
 
-def test_remote_setup_installs_cosyvoice_overlay_and_reports_import_failures(monkeypatch) -> None:
+def test_remote_setup_installs_the_wan_tts_overlay_into_the_wan_interpreter(monkeypatch) -> None:
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
     script = remote_setup_script("/opt/diony-ai", "/workspace")
 
-    assert 'COSY_OVERLAY="$_diony_repo/infra/runtime/cosyvoice-overlay.txt"' in script
-    assert "COSYVOICE_OVERLAY_MISSING" in script
-    assert '-r /opt/wan22/requirements_s2v.txt -r "$COSY_OVERLAY"' in script
-    assert "COSYVOICE_IMPORT_FAILED" in script
-    assert script.count("_diony_cosyvoice_ready") >= 3
+    assert 'WAN_TTS_OVERLAY="$_diony_repo/infra/runtime/wan-tts-overlay.txt"' in script
+    assert "SPEECH_OVERLAY_MISSING" in script
+    assert '-r /opt/wan22/requirements_s2v.txt -r "$WAN_TTS_OVERLAY"' in script
+    assert "SPEECH_IMPORT_FAILED" in script
+    assert script.count("_diony_wan_tts_ready") >= 3
+    # The interpreter that runs generate.py must import Wan's TTS stack itself.
+    assert 'PYTHONPATH="/opt/wan22:$WAN_TTS_ROOT:$WAN_TTS_ROOT/third_party/Matcha-TTS" "$DIONY_PYTHON"' in script
     assert '"transformers", "diffusers", "x_transformers"' in script
-    overlay = (repo_root() / "infra" / "runtime" / "cosyvoice-overlay.txt").read_text()
-    assert "transformers==" in overlay
-    assert "diffusers==" in overlay
+    overlay = (repo_root() / "infra" / "runtime" / "wan-tts-overlay.txt").read_text()
+    assert "transformers>=4.49.0,<=4.51.3" in overlay  # inside Wan's own pin
+    assert "diffusers>=0.31.0" in overlay  # never downgrade the camera's diffusers
     assert "x-transformers==" in overlay
     assert "torch==" not in overlay  # never clobber the host CUDA torch
 
 
-def test_apply_fail_text_summarizes_cosyvoice_import_traceback() -> None:
-    """The B200 run on 2026-08-25 after the git-lock fix: transformers missing in the CosyVoice venv."""
+def test_apply_fail_text_summarizes_wan_tts_import_traceback() -> None:
+    """The B200 run on 2026-08-25 after the git-lock fix: transformers missing for Wan's TTS stack."""
     from types import SimpleNamespace
 
     traceback = (
@@ -796,18 +800,18 @@ def test_apply_fail_text_summarizes_cosyvoice_import_traceback() -> None:
         "    from transformers import Qwen2ForCausalLM\n"
         "ModuleNotFoundError: No module named 'transformers'\n"
     )
-    stdout = "HF_OK\nCOSYVOICE_RUNTIME_INSTALL"
+    stdout = "HF_OK\nSPEECH_PACK_INSTALL"
     message = apply_fail_text(SimpleNamespace(ok=False, code=1, stdout=stdout, stderr=traceback, text=traceback))
-    assert message.startswith("Setup stopped at: Installing the CosyVoice2 runtime.")
+    assert message.startswith("Setup stopped at: Installing Wan2.2's speech requirements.")
     assert "No module named 'transformers'" in message
     assert "cosyvoice/llm/llm.py line 24" in message
     assert "Traceback" not in message
     assert len(message) < 300
 
-    marked = traceback + "COSYVOICE_IMPORT_FAILED the CosyVoice2 venv cannot import cosyvoice\n"
+    marked = traceback + "SPEECH_IMPORT_FAILED the Wan host interpreter cannot import cosyvoice\n"
     message = apply_fail_text(SimpleNamespace(ok=False, code=15, stdout=stdout, stderr=marked, text=marked))
-    assert "The CosyVoice2 venv is missing the Python package 'transformers'" in message
-    assert "cosyvoice-overlay.txt" in message
+    assert "The Wan host interpreter is missing the Python package 'transformers'" in message
+    assert "wan-tts-overlay.txt" in message
     assert len(message) < 300
 
 
@@ -831,7 +835,7 @@ def test_setup_stage_tracker_reports_weighted_percentages() -> None:
 
     plan = setup_stage_plan()
     assert [stage["id"] for stage in plan] == [
-        "site", "sync", "storage", "python", "pack", "dedupe", "wan", "cosyvoice", "voiceqc", "producer",
+        "site", "sync", "storage", "python", "pack", "dedupe", "wan", "speech", "producer",
     ]
     pack = next(stage for stage in plan if stage["id"] == "pack")
     assert {item["label"] for item in pack["items"]} >= {"Wan2.2-Animate-14B", "DeepSeek-V4-Flash-0731", "Real-ESRGAN"}
@@ -847,8 +851,8 @@ def test_setup_stage_tracker_reports_weighted_percentages() -> None:
         "detail": "Downloading Wan2.2-Animate-14B · 438/444 files",
     }
     assert apply_stage_event("WAN_HOST_PYTHON_OK") == {"stage": "wan", "status": "done", "detail": "Wan host runtime ready"}
-    assert apply_stage_event("COSYVOICE_RUNTIME_START") == {
-        "stage": "cosyvoice", "status": "active", "detail": "Preparing the CosyVoice2 runtime",
+    assert apply_stage_event("SPEECH_PACK_START") == {
+        "stage": "speech", "status": "active", "detail": "Preparing Wan2.2's speech pack",
     }
     assert apply_stage_event("Fetching 444 files: 99%|███| 439/444") is None
 
@@ -881,39 +885,41 @@ def test_remote_setup_script_emits_stage_markers(monkeypatch) -> None:
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
     script = remote_setup_script("/opt/diony-ai", "/workspace")
-    order = ["echo PY_RUNTIME_START", "echo HF_START", "echo WAN_RUNTIME_START", "echo COSYVOICE_RUNTIME_START", "echo PRODUCER_START", "echo APPLY_OK"]
+    order = ["echo PY_RUNTIME_START", "echo HF_START", "echo WAN_RUNTIME_START", "echo SPEECH_PACK_START", "echo PRODUCER_START", "echo APPLY_OK"]
     positions = [script.find(marker) for marker in order]
     assert all(pos >= 0 for pos in positions), positions
     assert positions == sorted(positions)
 
 
-def test_remote_setup_pins_the_mouth_sync_models_after_cosyvoice() -> None:
+def test_remote_setup_pins_wans_speech_pack_beside_generate_py() -> None:
     from diony_wizard.apply import (
-        MOUTH_SYNC_MODELS,
         SETUP_STAGES,
+        VOICE_PROMPT_LIBRARY,
         apply_progress_text,
         apply_stage_event,
         remote_setup_script,
     )
 
     script = remote_setup_script("/opt/diony-ai")
-    assert script.find("COSYVOICE_OK") < script.find("VOICEQC_START") < script.find("PRODUCER_START")
-    assert "infra/runtime/voice-qc-overlay.txt" in script
-    assert "libEGL.so.1" in script and "apt-get install -y -q libegl1" in script
-    assert "hasattr(cv2, 'FaceDetectorYN')" in script
-    assert "/diony/vault/runtime/voice/models" in script
-    for _url, name, sha256, size in MOUTH_SYNC_MODELS:
-        assert name in script and sha256 in script and str(size) in script
-        assert len(sha256) == 64
-    assert "VOICEQC_PIN_MISMATCH" in script
+    assert script.find("WAN_HOST_PYTHON_OK") < script.find("SPEECH_PACK_START") < script.find("PRODUCER_START")
+    # Nothing from the retired Diony-side lane: no separate venv, no mouth-sync models.
+    for retired in ("voice-qc-overlay.txt", "libEGL.so.1", "FaceDetectorYN", "/diony/vault/runtime/voice/models", "VOICEQC", "COSYVOICE_"):
+        assert retired not in script, retired
     assert "/diony/vault/runtime/voice/prompt-library/cast-00-cross_lingual_prompt.wav" in script
     assert "/diony/vault/runtime/voice/prompt-library/cast-01-zero_shot_prompt.wav" in script
     assert "/diony/vault/runtime/voice/prompt-library/cast-02-talk.wav" in script
-    assert 'echo "VOICEQC_CAST $_diony_cast_count"' in script
-    assert [stage for stage, _label, _weight in SETUP_STAGES].index("voiceqc") == (
-        [stage for stage, _label, _weight in SETUP_STAGES].index("cosyvoice") + 1
-    )
+    # The zero-shot clip carries its exact transcript so Wan clones zero-shot.
+    assert "cast-01-zero_shot_prompt.txt" in script
+    assert any(transcript for _source, _name, transcript in VOICE_PROMPT_LIBRARY)
+    assert 'echo "SPEECH_CAST $_diony_cast_count"' in script
+    # An earlier host's separate checkout is moved, never cloned twice.
+    assert "/diony/vault/runtime/cosyvoice/CosyVoice/.git" in script
+    stages = [stage for stage, _label, _weight in SETUP_STAGES]
+    assert stages.index("speech") == stages.index("wan") + 1
     assert sum(weight for _stage, _label, weight in SETUP_STAGES) == 97
-    assert apply_progress_text("VOICEQC_OK") == "Mouth-sync QC models ready"
-    event = apply_stage_event("VOICEQC_PULL face_landmarker.task")
-    assert event and event["stage"] == "voiceqc" and event["status"] == "active"
+    assert apply_progress_text("SPEECH_PACK_OK") == "Wan2.2 speech model ready"
+    assert apply_progress_text("SPEECH_CAST 3") == "Per-character casting library ready"
+    event = apply_stage_event("SPEECH_PACK_PULL FunAudioLLM/CosyVoice2-0.5B -> /diony/vault/models/audio/CosyVoice2-0.5B")
+    assert event and event["stage"] == "speech" and event["status"] == "active"
+
+

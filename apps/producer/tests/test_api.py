@@ -853,6 +853,9 @@ def test_signed_gpu_mutation_fails_closed_when_remote_control_plane_is_not_ready
     module = importlib.import_module("diony_producer.app")
     monkeypatch.setattr(module, "should_proxy", lambda: True)
     monkeypatch.setattr(module, "gpu_producer_ready_base", lambda: None)
+    # Mutations wait for a restarting GPU Producer (GPU_MUTATION_WAIT_SECONDS);
+    # this test covers what happens once that wait is exhausted.
+    monkeypatch.setattr(module, "GPU_MUTATION_WAIT_SECONDS", 0.0)
     monkeypatch.setattr(module, "_start_gpu_reconcile", lambda: None)
     client = TestClient(app)
 
@@ -864,3 +867,51 @@ def test_signed_gpu_mutation_fails_closed_when_remote_control_plane_is_not_ready
 
     assert response.status_code == 503
     assert "GPU control plane" in response.json()["detail"]
+
+
+def test_mutations_wait_for_a_restarting_gpu_producer_instead_of_failing(monkeypatch) -> None:
+    """2026-08-27: an image dropped on Idea during the GPU Producer's restart got
+    'GPU control plane did not accept the request' — the desk gave up on the first refusal."""
+    import sys
+
+    app_module = sys.modules["diony_producer.app"]
+    monkeypatch.setattr(app_module, "should_proxy", lambda: True)
+    monkeypatch.setattr(app_module, "GPU_MUTATION_WAIT_SECONDS", 30.0)
+    monkeypatch.setattr(app_module, "GPU_MUTATION_POLL_SECONDS", 0.0)
+    readiness = iter([None, None, "http://gpu"])
+    monkeypatch.setattr(app_module, "gpu_producer_ready_base", lambda: next(readiness, "http://gpu"))
+    monkeypatch.setattr(app_module, "_start_gpu_reconcile", lambda: None)
+    attempts: list[str] = []
+
+    async def forward(request, body, base):
+        attempts.append(base)
+        if len(attempts) == 1:
+            raise app_module.httpx.ConnectError("connection refused")
+        return app_module.Response(content=b'{"ok": true}', status_code=200, media_type="application/json")
+
+    monkeypatch.setattr(app_module, "_forward_to_gpu", forward)
+    client = TestClient(app)
+    res = client.post("/api/notes", json={"body": "x", "shot_id": "sh-010"})
+    assert res.status_code == 200 and res.json() == {"ok": True}
+    assert attempts == ["http://gpu", "http://gpu"], "first refusal is retried, not surfaced"
+
+
+def test_mutations_give_up_with_a_plain_explanation_after_the_wait(monkeypatch) -> None:
+    import sys
+
+    app_module = sys.modules["diony_producer.app"]
+    monkeypatch.setattr(app_module, "should_proxy", lambda: True)
+    monkeypatch.setattr(app_module, "GPU_MUTATION_WAIT_SECONDS", 0.0)
+    monkeypatch.setattr(app_module, "GPU_MUTATION_POLL_SECONDS", 0.0)
+    monkeypatch.setattr(app_module, "gpu_producer_ready_base", lambda: None)
+    monkeypatch.setattr(app_module, "_start_gpu_reconcile", lambda: None)
+    monkeypatch.setattr(app_module, "last_gpu_error", lambda: "GPU Producer is starting; the desk will connect when it answers.")
+    client = TestClient(app)
+    res = client.post("/api/notes", json={"body": "x", "shot_id": "sh-010"})
+    assert res.status_code == 503
+    detail = res.json()["detail"]
+    assert "restarting after an update" in detail and "try the same action again" in detail
+    assert "GPU Producer is starting" in detail
+    assert res.headers.get("retry-after") == "30"
+    # Reads never wait: they fall back to the local project immediately.
+    assert client.get("/api/project").status_code == 200

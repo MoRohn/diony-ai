@@ -5996,5 +5996,29 @@ button {
 
   .word {
     min-height: 2.75rem;
-  }
+  }@media (max-width: 900px) {.run-clips > .clip-row.casting {
+  border-left-color: var(--ember);
+  background: rgba(255, 196, 92, 0.05);
+}
+
+.clip-row.casting .clip-state {
+  color: var(--ember);
+}
+
+.run-signal.casting {
+  border-top-color: var(--ember);
+}
+
+.run-signal.casting::before {
+  background: var(--ember);
+}
+
+.run-signal-state.casting,
+#run-signal-state.casting {
+  color: var(--ember);
+}
+
+.run-clip-counts [data-tone="casting"] {
+  color: var(--ember);
+  border-color: var(--ember);
 }

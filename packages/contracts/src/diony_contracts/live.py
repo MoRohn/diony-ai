@@ -126,15 +126,6 @@ def finish_ready() -> bool:
 S2V_NATIVE_FPS = 16
 
 
-# Wan2.2 S2V (with --start_from_ref) sometimes lands its mouth motion late:
-# measured takes of the same shot came in at +7 frames and at 0. The lag is
-# per take, so Producer renders headroom and aligns after measuring rather
-# than guessing a lead: the measured late frames are trimmed from the head
-# and the locked audio is muxed back, inside the same lane window.
-S2V_HEADROOM_FRAMES = 8
-S2V_MAX_LEAD_FRAMES = 16
-
-
 def s2v_frame_num(duration_frames: int, fps: float = 23.976) -> int:
     """Frames Wan S2V must render, at its native 16 fps, to cover a booking.
 
@@ -148,14 +139,6 @@ def s2v_frame_num(duration_frames: int, fps: float = 23.976) -> int:
     seconds = max(1, int(duration_frames)) / rate
     want = int(math.ceil(seconds * S2V_NATIVE_FPS)) + 1
     n = max(4, int(math.ceil((want - 1) / 4)))
-    return min(81, 4 * n + 1)
-
-
-def s2v_render_frames(duration_frames: int, fps: float = 23.976) -> int:
-    """Booked S2V frames plus alignment headroom, still a 4n+1 lane count ≤ 81."""
-    booked = s2v_frame_num(duration_frames, fps)
-    want = booked + S2V_HEADROOM_FRAMES
-    n = max(4, (want + 2) // 4)
     return min(81, 4 * n + 1)
 
 

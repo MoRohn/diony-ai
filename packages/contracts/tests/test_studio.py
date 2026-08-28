@@ -235,10 +235,17 @@ def test_attached_character_language_binds_reference_continuity_and_spoken_copy(
     assert all(shot.keyframe_asset_ids == [still.id] for shot in project.shots)
     assert all(shot.reference_lock == ReferenceLock.CHARACTER for shot in project.shots)
     assert project.shots[0].continuity_mode == ContinuityMode.REFERENCE
-    assert all(
-        shot.continuity_mode == ContinuityMode.PREVIOUS_FRAME
-        for shot in project.shots[1:]
-    )
+    # A spoken Shot is a declared cut to its speaker (reference still, no
+    # overlap, close-up focal) and the next Shot cuts back the same way; the
+    # rest of the sequence chains from the previous final frame.
+    spoken_indexes = {i for i, shot in enumerate(project.shots) if shot.audio_line}
+    cut_indexes = spoken_indexes | {i + 1 for i in spoken_indexes}
+    for i, shot in enumerate(project.shots[1:], start=1):
+        if i in cut_indexes:
+            assert shot.continuity_mode == ContinuityMode.REFERENCE and shot.overlap_frames == 0
+        else:
+            assert shot.continuity_mode == ContinuityMode.PREVIOUS_FRAME
+    assert all(project.shots[i].focal_mm >= 50 for i in spoken_indexes)
     spoken = [shot.audio_line for shot in project.shots if shot.audio_line]
     assert spoken == [
         "Welcome to Diony AI. Own your Studio today, and produce at cost."
@@ -291,7 +298,13 @@ def test_exact_last_attached_illustration_drives_scripted_sequence_through_i2v()
     assert all(shot.reference_lock == "character" for shot in project.shots)
     assert all(shot.keyframe_asset_ids == [character.id] for shot in project.shots)
     assert project.shots[0].continuity_mode == "reference"
-    assert all(shot.continuity_mode == "previous_frame" for shot in project.shots[1:])
+    spoken_indexes = {i for i, shot in enumerate(project.shots) if shot.audio_line}
+    cut_indexes = spoken_indexes | {i + 1 for i in spoken_indexes}
+    assert all(
+        shot.continuity_mode == ("reference" if i in cut_indexes else "previous_frame")
+        for i, shot in enumerate(project.shots)
+        if i > 0
+    )
     assert all(shot.engine != Engine.S2V_14B for shot in project.shots)
     # The narrated opener is a spoken performance; the silent closer keeps its beat.
     assert project.shots[0].audio_line
@@ -878,3 +891,103 @@ def test_dialogue_windows_never_span_a_speaker_change_when_the_rundown_can_hold_
     packed = _fit_dialogue_to_shots(lines, shot_count=2, seconds_per_shot=5.0)
     assert len(packed) == 2
     assert " ".join(turn.text for window in packed for turn in window) == " ".join(line.text for line in lines)
+
+
+KITCHEN_IDEA = (
+    "In the slightly messy shared kitchen, soft morning light filters through the window. "
+    "The three claymation characters are framed in a TV show episode style. Marcus stands in "
+    "the centre, holding a small notebook. Lila sits on a stool to his right, arms crossed. "
+    "Hugo stands to the left, hands clasped.\n\n"
+    "Marcus: \"We are starting a daily gratitude circle. I'll go first.\"\n"
+    "Marcus looks at them expectantly, already nodding.\n\n"
+    "Lila doesn't uncross her arms.\n"
+    "Lila: \"I'm grateful this will be over in under a minute.\"\n"
+    "Hugo: \"I am grateful that neither of you can legally force me to continue this.\"\n"
+)
+
+
+def _kitchen_project():
+    still = Asset(
+        id="ast-kitchen",
+        kind=AssetKind.IMAGE,
+        filename="Scene1.jpg",
+        mime="image/jpeg",
+        bytes=12,
+        path="assets/ast-kitchen/Scene1.jpg",
+    )
+    return expand_idea(
+        Brief(
+            idea=KITCHEN_IDEA,
+            customer_kind=CustomerKind.SERIES,
+            target_minutes=0.5,
+            attachment_ids=[still.id],
+        ),
+        assets=[still],
+    )
+
+
+def test_dialogue_books_a_close_up_and_a_clean_scene_without_a_reference_lock() -> None:
+    """Measured 2026-08-27: a lock-NONE brief shot its dialogue as 'wide shot, 24mm' over a
+    close-up keyframe, and every prompt carried 'at them expectantly, already nodding. Lila
+    doesn't uncross her arms' as scenery. Speech books the close-up whatever the lock says."""
+    from diony_contracts.wan_prompt import is_spoken_plan, validate_wan_prompt_plan
+
+    project = _kitchen_project()
+    spoken = [i for i, shot in enumerate(project.shots) if shot.dialogue_turns]
+    assert spoken, "the screenplay lines must reach the rundown"
+    assert all(project.shots[i].reference_lock == ReferenceLock.NONE for i in spoken)
+    for i in spoken:
+        shot = project.shots[i]
+        assert shot.continuity_mode == ContinuityMode.REFERENCE and shot.overlap_frames == 0
+        assert shot.focal_mm >= 50
+        assert "close-up" in shot.prompt_plan.camera and f"{shot.focal_mm:g}mm" in shot.prompt_plan.camera
+        assert is_spoken_plan(shot.prompt_plan)
+        assert "lighting" in shot.prompt_plan.scene
+        assert "nodding" not in shot.prompt_plan.scene and "uncross" not in shot.prompt_plan.scene
+        assert not validate_wan_prompt_plan(shot.prompt_plan)
+        if i + 1 < len(project.shots):
+            follower = project.shots[i + 1]
+            assert follower.continuity_mode == ContinuityMode.REFERENCE and follower.overlap_frames == 0
+            assert follower.keyframe_asset_ids == shot.keyframe_asset_ids, "the cut back has a still to cut back to"
+    silent = [shot for shot in project.shots if not shot.dialogue_turns]
+    assert all("nodding" not in shot.prompt_plan.scene for shot in silent), "the world summary is a sentence, not a fragment"
+
+
+def test_refresh_reference_shot_reframes_a_persisted_wide_spoken_shot_on_lock_none() -> None:
+    """A Project persisted under the old contract (24mm, previous-frame) retakes as a close-up."""
+    from diony_contracts.studio import refresh_reference_shot
+    from diony_contracts.wan_prompt import is_spoken_plan
+
+    project = _kitchen_project()
+    shot = next(item for item in project.shots if item.dialogue_turns)
+    shot.focal_mm = 24.0
+    shot.continuity_mode = ContinuityMode.PREVIOUS_FRAME
+    shot.overlap_frames = 8
+    refresh_reference_shot(project, shot)
+    assert shot.focal_mm == 50.0
+    assert shot.continuity_mode == ContinuityMode.REFERENCE and shot.overlap_frames == 0
+    assert "medium close-up, 50mm" in shot.prompt_plan.camera
+    assert is_spoken_plan(shot.prompt_plan)
+    assert shot.prompt.startswith(shot.prompt_plan.subject.split(";")[0][:20])
+    # A second refresh with nothing changed keeps the plan (a retake directive would survive).
+    before = shot.prompt
+    refresh_reference_shot(project, shot)
+    assert shot.prompt == before
+
+
+def test_world_summary_is_a_whole_placing_sentence() -> None:
+    from diony_contracts.wan_prompt import _environment_from_world
+
+    world = "An episode cold open built from the idea: " + KITCHEN_IDEA
+    assert _environment_from_world(world) == (
+        "In the slightly messy shared kitchen, soft morning light filters through the window"
+    )
+
+
+def test_dialogue_windows_are_counted_per_speaker() -> None:
+    from diony_contracts.studio import ScriptDialogue, _dialogue_windows_needed
+
+    lines = [ScriptDialogue(speaker="Marcus", text="one two three four five six seven"), ScriptDialogue(speaker="Lila", text="eight nine")]
+    # 6 words per 3.378 s window: 7 words pooled with 2 would be 2 windows; per speaker it is 3.
+    assert _dialogue_windows_needed(lines, 3.378) == 3
+    assert _dialogue_windows_needed([], 3.378) == 0

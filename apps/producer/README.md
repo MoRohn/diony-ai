@@ -24,67 +24,40 @@ Pages: **Idea** → **Production** → **Gallery**. Idea has a **Length** goal: 
 
 ## Voice and performance
 
-Spoken Shots do not use final-mix TTS. Producer resolves an immutable
-Project-scoped Character `VoiceProfile`, compiles a profile-aware
-`PerformanceScript`, performs bounded local identity synthesis and deterministic
-studio-audio processing, then routes the locked clean dialogue into Wan2.2 S2V.
-After the negative lands, lip confidence, p95 AV offset, and physical-performance
-consistency join speaker, SNR, LUFS, peak, harshness, and sibilance evidence in
-the Take's `VoiceClipPackage` and camera `QCReport`.
+Dialogue is Wan2.2's own: a spoken Shot hands Wan S2V the authored line and a
+per-character prompt clip through Wan's native TTS inputs (`--enable_tts
+--tts_prompt_audio --tts_prompt_text --tts_text --num_clip 1`), Wan performs
+the line and animates the face in one pass, and Producer measures only the
+speech Wan delivered (`diony_producer.voice`, `diony_producer.speech_audio`;
+Blueprint `22`). Diony runs no CosyVoice process, speaker-embedding model, or
+mouth-sync model of its own.
 
-Production requires a local modular backend:
+Casting is per character. Studio compiles a `library` casting by Bible roster
+order; the GPU host resolves it to a clip in
+`DIONY_WAN_TTS_PROMPT_LIBRARY` (name order, sibling `.txt` = exact transcript)
+or to the default `DIONY_WAN_TTS_PROMPT_AUDIO` / `DIONY_WAN_TTS_PROMPT_TEXT`.
+A maker may cast a character on an attached 5–15 s reference clip instead:
 
-```bash
-export DIONY_VOICE_BACKEND_COMMAND=/diony/vault/runtime/voice/bin/diony-voice-backend
-export DIONY_SPEAKER_EMBEDDING_MODEL=cam++-local-v1
-export DIONY_VOICE_RETAKE_CAP=3
-export DIONY_VOICE_WORKERS=4
-```
+- `GET /api/voice-castings`
+- `POST /api/characters/{character_id}/voice-casting` (`source=library|reference`, `reference_asset_id`, `prompt_text`)
 
-The command actions are `synthesize`, `embed`, `embed-reference`, `align`,
-`studio-audio`, and `audiovisual-qc`; their JSON/file contracts and thresholds
-are Blueprint `22`. Missing backend or evidence blocks the spoken Shot. The
-deterministic backend is enabled only by `DIONY_DRY_RUN=1` and is not media or
-signed-site quality proof.
+On the signed GPU the Connect start script exports the `DIONY_WAN_TTS_*` keys
+only when Wan's speech pack (`/opt/wan22/CosyVoice`, `/opt/wan22/CosyVoice2-0.5B`)
+is complete. A Producer launched while Studio App is still pulling it
+re-derives the same values from the host layout (`host_speech_env`) when the
+first spoken Take needs them — never downloading, and naming exactly which
+pack files are still missing when it cannot. A TTS render also refuses to
+start (`ensure_s2v_speech_pack`) rather than let upstream `load_tts` fetch
+models mid-Production.
 
-On the signed GPU the Connect start script exports the CosyVoice2 pack
-(`DIONY_COSYVOICE_*`, `DIONY_VOICE_BACKEND_COMMAND`) when it launches the GPU
-Producer. Studio App can still be pulling the CosyVoice2-0.5B weights at that
-moment, so a Producer launched with an empty `DIONY_VOICE_BACKEND_COMMAND`
-re-derives the same values from the host layout (`host_voice_env`) when the
-first spoken Take needs them — only filling keys the launch left empty, never
-downloading, and naming exactly which pack files are still missing when it
-cannot. An explicit `DIONY_VOICE_BACKEND_COMMAND` or
-`/diony/vault/runtime/voice/bin/diony-voice-backend` always wins.
-
-Speaker identity uses a measured floor: each synthetic voice enrolls from two
-renders (its first line plus a fixed calibration sentence), the profile stores
-their centroid, the within-speaker similarity, and a floor 0.08 below it
-(bounded to 0.60–0.90). Lines must reach that floor and be distinctly closer to
-their own character than to any other calibrated cast voice. Retake seeds are
-applied after CosyVoice2 loads; the model reseeds itself to 0 while loading.
-
-Audiovisual QC is a real mouth measurement (`diony_producer.av_sync`,
-`diony-local-mouth-sync-v3`): YuNet finds every face at native resolution,
-MediaPipe FaceLandmarker measures each mouth, the speaking face is the one
-whose aperture follows the clean dialogue, and confidence / offset /
-consistency are computed over the delivered span. Studio setup pins the two
-models under `/diony/vault/runtime/voice/models` (`DIONY_FACE_DETECTOR_MODEL`,
-`DIONY_FACE_LANDMARKER_MODEL`) and installs `infra/runtime/voice-qc-overlay.txt`
-into the Producer venv; without them the check is diagnostic only and every
-spoken take says so.
-
-Registry APIs:
-
-- `GET /api/voice-profiles`
-- `POST /api/characters/{character_id}/voice-profiles/lock`
-
-Zero/few-shot locks require 5–30 seconds total of local reference audio; Producer
-measures WAV duration directly and uses local `ffprobe` for other media. Synthetic locks use a deterministic seed and style
-identity. Locked profiles are immutable; visual retakes reuse cached audio and
-must run audiovisual QC again against the exact new video SHA-256. Independent
-dialogue lines synthesize/embed/align through the bounded worker pool; the
-scene-level deterministic audio chain runs after ordered collection.
+Before camera the line is checked against its window (one speaker per window,
+at most three words per second) and locked as a `WanSpeechRequest`; both
+holds are pre-camera and spend no Take. After the render the negative's audio
+track is extracted untouched, measured (audio present, voiced-speech presence
+≥ 0.20, speech finishing ≥ 62.5 ms before the window ends, Bible loudness ±1
+LU and true peak on the conformed mix stem), and bound to the negative's
+SHA-256 as a `SpeechClipPackage`. Mix assembles those stems in timeline order
+and never synthesizes.
 
 Production also has a durable **STOP** control. Its modal offers **Keep** (save
 QC-passed completed clips as a stitched 720p incomplete result) or **Delete**

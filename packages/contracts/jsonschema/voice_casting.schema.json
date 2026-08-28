@@ -1,0 +1,109 @@
+{
+  "$defs": {
+    "VoiceCastingSource": {
+      "description": "Where a character's Wan2.2 S2V voice prompt clip comes from.",
+      "enum": [
+        "library",
+        "reference"
+      ],
+      "title": "VoiceCastingSource",
+      "type": "string"
+    }
+  },
+  "description": "Which prompt clip Wan2.2 clones for one character. Project-scoped, immutable once locked.",
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "character_id": {
+      "title": "Character Id",
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/VoiceCastingSource"
+    },
+    "cast_index": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Cast Index",
+      "type": "integer"
+    },
+    "prompt_audio_asset_id": {
+      "default": "",
+      "title": "Prompt Audio Asset Id",
+      "type": "string"
+    },
+    "prompt_audio_sha256": {
+      "default": "",
+      "pattern": "^(?:|[0-9a-f]{64})$",
+      "title": "Prompt Audio Sha256",
+      "type": "string"
+    },
+    "prompt_duration_seconds": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Prompt Duration Seconds"
+    },
+    "prompt_text": {
+      "default": "",
+      "title": "Prompt Text",
+      "type": "string"
+    },
+    "descriptors": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Descriptors",
+      "type": "object"
+    },
+    "locked": {
+      "default": false,
+      "title": "Locked",
+      "type": "boolean"
+    },
+    "locked_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Locked At"
+    },
+    "content_sha256": {
+      "default": "",
+      "title": "Content Sha256",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "project_id",
+    "character_id",
+    "source"
+  ],
+  "title": "VoiceCasting",
+  "type": "object"
+}

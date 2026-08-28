@@ -861,7 +861,7 @@ def test_generate_books_s2v_at_native_rate_and_other_tasks_at_the_lane(monkeypat
     assert runner.s2v_infer_frames(57) == 60
 
 
-def test_s2v_renders_headroom_and_head_trim_rebinds_the_receipt(tmp_path, monkeypatch) -> None:
+def test_s2v_books_the_native_rate_and_speaks_through_wans_own_tts_lane(tmp_path, monkeypatch) -> None:
     import shutil
     import subprocess
 
@@ -874,8 +874,8 @@ def test_s2v_renders_headroom_and_head_trim_rebinds_the_receipt(tmp_path, monkey
     destination = tmp_path / "negative_720.mp4"
     still = tmp_path / "still.png"
     subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=gray:s=64x36:d=1", "-frames:v", "1", str(still)], check=True)
-    audio = tmp_path / "clean-dialogue.wav"
-    subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=16000:duration=3.378", "-c:a", "pcm_s16le", str(audio)], check=True)
+    prompt_clip = tmp_path / "cast-00.wav"
+    subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=16000:duration=6", "-c:a", "pcm_s16le", str(prompt_clip)], check=True)
     checkpoint = tmp_path / "Wan2.2-S2V-14B"
     checkpoint.mkdir()
     generate = tmp_path / "generate.py"
@@ -884,8 +884,10 @@ def test_s2v_renders_headroom_and_head_trim_rebinds_the_receipt(tmp_path, monkey
     monkeypatch.setenv("WAN_CKPT_S2V", str(checkpoint))
     monkeypatch.setattr(runner, "wan_needs_offload", lambda: False)
     monkeypatch.setattr(runner, "resident_decision", lambda **_kwargs: ResidentDecision(False, "held"))
+    packs: list[str] = []
     for name in ("ensure_attention_fallback", "ensure_s2v_production_raster", "ensure_s2v_exact_publish", "ensure_negative_prompt_input"):
         monkeypatch.setattr(runner, name, lambda *a, **k: None)
+    monkeypatch.setattr(runner, "ensure_s2v_speech_pack", lambda *a, **k: packs.append("checked"))
     monkeypatch.setattr(runner, "_wan_env", lambda **_k: ({}, str(tmp_path)))
     captured = {}
 
@@ -905,32 +907,51 @@ def test_s2v_renders_headroom_and_head_trim_rebinds_the_receipt(tmp_path, monkey
     monkeypatch.setattr(runner.subprocess, "Popen", lambda cmd, **kw: FakeProc(cmd, **kw) if "--task" in cmd else real_popen(cmd, **kw))
 
     result = runner.run_generate(
-        task="s2v-14B", prompt="A line.", negative_prompt="drift", seed=1, save_file=destination,
-        duration_frames=81, fps=23.976, image=still, audio=audio,
+        task="s2v-14B", prompt="Mara speaks the line.", negative_prompt="drift", seed=1, save_file=destination,
+        duration_frames=81, fps=23.976, image=still,
+        speech={"tts_text": "The window closes at midnight.", "tts_prompt_audio": str(prompt_clip), "tts_prompt_text": "希望你以后能够做的比我还好呦。"},
     )
     assert result == destination
     cmd = captured["cmd"]
-    assert cmd[cmd.index("--frame_num") + 1] == "65", "57 booked + 8 headroom"
-    assert cmd[cmd.index("--infer_frames") + 1] == "68"
-    assert cmd[cmd.index("--audio") + 1] == str(audio), "the model hears the locked audio untouched"
+    assert cmd[cmd.index("--frame_num") + 1] == "57", "the booking at S2V's native 16 fps, no alignment headroom"
+    assert cmd[cmd.index("--infer_frames") + 1] == "60"
+    assert "--audio" not in cmd, "Wan speaks the line itself"
+    assert "--enable_tts" in cmd
+    assert cmd[cmd.index("--tts_prompt_audio") + 1] == str(prompt_clip)
+    assert cmd[cmd.index("--tts_text") + 1] == "The window closes at midnight."
+    assert cmd[cmd.index("--tts_prompt_text") + 1] == "希望你以后能够做的比我还好呦。"
+    assert cmd[cmd.index("--num_clip") + 1] == "1", "one window: the picture is the booking"
     assert cmd[cmd.index("--sample_steps") + 1] == "40", "S2V follows its upstream 40-step recipe"
+    assert packs == ["checked"], "a TTS render verifies Wan's speech pack instead of letting upstream download it"
     receipt = json.loads(destination.with_suffix(".generation.json").read_text())
-    assert receipt["frame_num"] == 65 and receipt["lead_frames"] == 0 and receipt["quality_contract_matched"] is True
+    assert receipt["frame_num"] == 57 and receipt["lead_frames"] == 0 and receipt["quality_contract_matched"] is True
     assert receipt["sample_steps"] == 40
 
-    runner.hold_head_and_remux(destination, hold_frames=5, audio=audio)
-    held = runner.rebind_generation_receipt(destination, head_hold_frames=5)
-    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=nb_frames", "-of", "csv=p=0", str(destination)], capture_output=True, text=True, check=True)
-    assert int(probe.stdout.strip()) == 65, "a hold keeps the frame count"
-    assert held["head_hold_frames"] == 5 and held["quality_contract_matched"] is True
 
-    runner.trim_head_and_remux(destination, lead_frames=7, audio=audio)
-    rebound = runner.rebind_generation_receipt(destination, lead_frames=7)
-    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=nb_frames", "-of", "csv=p=0", str(destination)], capture_output=True, text=True, check=True)
-    assert int(probe.stdout.strip()) == 58
-    assert rebound["frame_num"] == 58 and rebound["lead_frames"] == 7 and rebound["inference_frames_per_pass"] == 68
-    assert rebound["quality_contract_matched"] is True
-    assert rebound["output_bytes"] == destination.stat().st_size
+def test_spark_argv_refuses_a_spoken_shot_without_audio_or_a_line(tmp_path, monkeypatch) -> None:
+    import diony_wan.runner as runner
+
+    still = tmp_path / "still.png"
+    still.write_bytes(b"png")
+    gen = tmp_path / "generate.py"
+    gen.write_text("")
+    ckpt = tmp_path / "s2v"
+    ckpt.mkdir()
+    monkeypatch.setenv("DIONY_WAN_GENERATE", str(gen))
+    monkeypatch.setenv("WAN_CKPT_S2V", str(ckpt))
+    monkeypatch.setattr(runner, "wan_needs_offload", lambda: False)
+    with pytest.raises(runner.WanError, match="recorded WAV, MP3, or FLAC audio, or a line"):
+        runner.spark_argv(task="s2v-14B", prompt="speaks", seed=1, save_file=tmp_path / "a.mp4", frame_num=57, image=still)
+    with pytest.raises(runner.WanError, match="prompt clip"):
+        runner.spark_argv(task="s2v-14B", prompt="speaks", seed=1, save_file=tmp_path / "a.mp4", frame_num=57, image=still, speech={"tts_text": "Hello.", "tts_prompt_audio": str(tmp_path / "missing.wav")})
+    # A transcript-less clip clones cross-lingually: no --tts_prompt_text.
+    clip = tmp_path / "clip.wav"
+    clip.write_bytes(b"wav")
+    cmd = runner.spark_argv(task="s2v-14B", prompt="speaks", seed=1, save_file=tmp_path / "a.mp4", frame_num=57, image=still, speech={"tts_text": "Hello.", "tts_prompt_audio": str(clip)})
+    assert "--tts_prompt_text" not in cmd and "--enable_tts" in cmd
+    # The speech pack preflight names what is missing beside generate.py.
+    with pytest.raises(runner.WanError, match="speech pack is not ready"):
+        runner.ensure_s2v_speech_pack(tmp_path)
 
 
 def test_spark_argv_honours_a_per_shot_guide_scale_override(tmp_path, monkeypatch) -> None:

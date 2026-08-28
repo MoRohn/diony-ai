@@ -27,9 +27,9 @@ The only successful clip contract is:
 ```text
 authored Idea
   -> named cast + structured DialogueTurns
-  -> Bible, reference, wardrobe, and immutable VoiceProfile locks
+  -> Bible, reference, wardrobe, and immutable VoiceCasting locks
   -> Shot camera grammar + typed Wan prompt plan
-  -> recorded/synthesized dialogue lock when speech is authored
+  -> Wan speech request lock when speech is authored (recorded audio stays --audio)
   -> one receipt-approved Wan lane at 1280x720
   -> addressed negative + generation execution receipt
   -> measured reference / identity / temporal / voice AutoQC
@@ -48,17 +48,18 @@ authored ensemble with a generic “lead,” and it does not leave quoted dialog
 inside a picture prompt as if the camera model were the voice engine.
 
 Every speaking Character receives one deterministic, project-scoped, locked
-synthetic `VoiceProfile` unless an approved 5–30 second reference creates a new
-zero/few-shot revision. A still-based spoken Shot remains I2V while planned.
-Voice renders and clears audio QC first; only then does the same Shot and Take
-promote to S2V with the clean locked dialogue asset. Picture never precedes the
-performance it must lip-sync.
+`VoiceCasting` (a slot in the site's casting library by roster order) unless an
+attached 5–15 second reference clip casts it directly. A still-based spoken
+Shot remains I2V while planned; the speech lane locks the `WanSpeechRequest`
+before camera, and the same Shot and Take promote to S2V with Wan's own TTS
+inputs. Wan performs the line and the picture together; the speech it delivers
+is measured on the negative.
 
 Routing is explicit:
 
 | Authored material | Camera route | Required lock |
 |---|---|---|
-| dialogue + character still | I2V plan -> S2V dispatch | VoiceProfile + clean dialogue + still/prior frame |
+| dialogue + character still | I2V plan -> S2V dispatch (native TTS) | VoiceCasting + WanSpeechRequest + still/prior frame |
 | character/product still | I2V A14B | exact still or selected prior boundary |
 | driving performance video | Animate A14B | still + prepared motion root |
 | picture-only description | T2V A14B | Bible and typed prompt plan |
@@ -108,65 +109,52 @@ appear to vanish without evidence.
 
 A spoken Shot is a declared cut to its speaker: the Studio contract books it
 at medium close-up focal length with REFERENCE continuity and overlap 0 (the
-following Shot cuts back the same way), and at camera time Producer crops the
-speaker's face from the subject still into a 16:9 medium close-up keyframe —
-only when that face is known (the still's single face, or the position learned
-from an earlier qualified S2V pass); with several faces and no evidence the
-wide framing is kept and the log says so. S2V animates one prominent face; a
-~90 px speaker in a wide three-character still landed its lip motion 300–500 ms
-off the line across seeds.
+following Shot cuts back the same way), starting from the subject still. This
+framing is a property of speech, not of the reference lock: a lock-NONE brief
+books its dialogue the same way (`frame_spoken_shot` at compile and on
+refresh), so the camera layer never says "wide shot, 24mm" over a close-up
+direction. S2V animates one prominent face; the prompt plan names the speaker
+and the performance so the model animates the right one.
 
-Wan2.2 S2V sometimes lands its mouth motion late: two takes of one shot
-measured +7 frames and 0. The lag is per take, so Producer never pre-applies a
-lead. It renders eight frames of headroom, measures the take's lip lag with the
-mouth-sync QC, and — when the evidence is strong (correlation ≥ 0.6) and the
-lag is a whole number of frames inside the headroom — trims exactly those
-frames from the head and muxes the original locked audio back
-(`align_spoken_head`). Early motion is aligned the other way: the first frame
-is held for the measured frames and the same count dropped from the tail. The receipt is re-addressed
-with the delivered count, `lead_frames`/`head_hold_frames`, hash, and bytes;
-the contract judges the rendered count (delivered + trim). A take that measured
-+7 or −5 frames off thereby passes on its first attempt instead of spending a
-retake; weak evidence (correlation < 0.6) is never aligned.
-
-**Who is on camera, and why the mouth moves.** Four rules keep a spoken take
-on the right face at the right drive:
+**Wan speaks the line.** The spoken lane is Wan2.2 S2V's own speech lane
+(`--enable_tts --tts_prompt_audio --tts_prompt_text --tts_text --num_clip 1`,
+Blueprint 22): Producer locks a `WanSpeechRequest` (the authored line, the
+character's casting resolved to a prompt clip on the host, the window, the
+performance direction) before the camera rolls, Wan clones the clip, performs
+the line, animates the face from that speech, and muxes it into the negative.
+No render headroom is booked and no head trim or hold is applied afterwards —
+the take is judged as Wan delivered it. Three rules keep a spoken take honest:
 
 * A window of dialogue never spans a speaker change when the rundown can hold
   it (`_fit_dialogue_to_shots`), and windows are balanced so no two-word
   orphan turn is left at a boundary (`_balanced_windows`). S2V animates the
   visible face with every word it hears, so a two-speaker window makes one
-  character mouth the other's line.
+  character mouth the other's line; Producer re-checks and holds
+  (`Voice casting failed`) before camera. A line past three words per second
+  cannot finish inside its window and holds (`Voice timing failed`). Neither
+  hold spends a Take.
 * A spoken Shot whose speaker differs from the prior Shot's is a cut, not a
-  continuation (`_speaker_changes`): it restarts from the reference still and
-  crops its own speaker.
-* The speaker's face is chosen from evidence, never by guessing among equals
-  (`choose_speaker_face`): a face learned from a qualified take; else the
-  only face not already known as another character; else the brief's left /
-  centre / right cue applied among the remaining faces (`staging_cue`). A
-  learned face never overwrites another character's (`learn_speaker_face`).
-* A take whose mouth measured still (aperture std below 0.02) retakes with
-  one step more audio guidance, capped at 7.5 (`_raise_articulation_drive`,
-  `Shot.s2v_guide_scale`, receipt `sample_guide_scale`): the same face,
-  prompt, and audio at the same drive repeat a still mouth; a seed reroll
-  does not fix it.
-* Lines shorter than 1.5 s are identity-checked on a probe render of the line
-  plus the calibration sentence under identical conditioning
-  (`_identity_probe`); CAM++ cannot embed a half-second turn.
+  continuation (`_speaker_changes`): it restarts from the reference still.
+* After the render the speech Wan delivered is measured on the negative
+  (`verify_speech_render`): an audio stream must be present, voiced-speech
+  presence ≥ 0.20, the last speech-active moment at least one S2V frame
+  (62.5 ms) before the window ends, and the conformed mix stem within ±1 LU of
+  the Bible target under its true-peak ceiling. A miss is `Voice audio failed:
+  …` naming the gate — a bounded retake (a new seed changes Wan's pacing), never
+  a silent print.
 
 **Retake cap → best attempt by policy.** When every one of a Shot's four
 bounded attempts fails measured QC, Producer no longer holds the Shot for
 review (which froze the clock and stalled the rundown). `settle_exhausted_shot`
-scores each landed attempt (`attempt_score`: lip-sync confidence 0.30,
-audiovisual offset 0.25 — 500 ms scores zero —, performance consistency 0.20,
-reference identity 0.15, temporal residual 0.10; missing measurements drop out
-of the mean), selects the highest-scoring attempt as the print, records its
-verdict as WARN with `settled_best_of`/`settled_score` and the measured notes
-kept, and announces the ranking on the activity feed. Finish, picture lock,
-mix (the line's locked audio, which passed its own audio QC), and the
-previous-frame chain accept a settled print explicitly; a plain rejection is
-still refused everywhere. `resume_camera` settles already-exhausted Shots on
-restart.
+scores each landed attempt (`attempt_score`: voiced-speech presence 0.30,
+speech tail 0.15 — a cut line scores zero —, reference identity 0.35,
+temporal residual 0.20; missing measurements drop out of the mean), selects
+the highest-scoring attempt as the print, records its verdict as WARN with
+`settled_best_of`/`settled_score` and the measured notes kept, and announces
+the ranking on the activity feed. Finish, picture lock, mix (a settled print
+whose speech measured present still feeds its stem), and the previous-frame
+chain accept a settled print explicitly; a plain rejection is still refused
+everywhere. `resume_camera` settles already-exhausted Shots on restart.
 
 The spoken lane also follows its own upstream recipe: S2V-14B denoises in
 **40** UniPC steps (shift 3) where T2V/I2V A14B use 24 (`lane_sample_steps`).
@@ -184,15 +172,19 @@ receipt contract is task-aware. Three more spoken-lane facts are load-bearing:
   frames late and moved sparsely. The upstream first-clip path
   (`drop_first_motion`) starts clean from the reference latent and delivers
   exactly `infer_frames − 3 = frame_num`.
-* **The prompt directs a performance.** The five-layer template writes every
-  Shot as a blocking beat and pads its motion with a word-limited fragment of
-  the idea; for a spoken Shot that fragment was another character's beat cut
-  mid-sentence, under a "slow steady push-in". `spoken_wan_prompt_plan`
-  rewrites the motion, camera, and environment layers for the S2V lane — the
-  named speaker speaks the line straight to camera, lips, jaw, and cheeks on
-  every syllable, mouth still through each pause, locked-off medium close-up
-  matching the speaker keyframe — keeping the subject and lighting layers, and
-  `refresh_reference_shot` upgrades persisted S2V plans on the next dispatch.
+* **The prompt directs a performance, never the words.** The five-layer
+  template writes every Shot as a blocking beat and pads its motion with a
+  word-limited fragment of the idea; for a spoken Shot that fragment was
+  another character's beat cut mid-sentence, under a "slow steady push-in".
+  `spoken_wan_prompt_plan` rewrites the motion, camera, and environment layers
+  for the S2V lane — the named speaker speaks the line straight to camera with
+  the authored emotion in the voice and face, lips, jaw, and cheeks on every
+  syllable, mouth still through each pause and after the last word, no one
+  else speaking, locked-off medium close-up — keeping the subject and lighting
+  layers and adding `subtitles` / `on-screen text` to the negatives. The line
+  itself rides `--tts_text` only; quoted in the picture prompt it rendered
+  captions and a second reading. `refresh_reference_shot` upgrades persisted
+  S2V plans on the next dispatch.
 
 A spoken negative is booked at S2V's native 16 fps: `s2v_frame_num` takes the
 booked seconds (81 frames at 23.976 = 3.378 s), adds one conform frame, and

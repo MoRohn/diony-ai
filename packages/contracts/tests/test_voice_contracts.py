@@ -1,337 +1,153 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import pytest
 from pydantic import ValidationError
 
-from diony_contracts.enums import VoiceProfileSource, VoiceRenderState
+from diony_contracts.enums import Engine, VoiceCastingSource, VoiceRenderState
+from diony_contracts.fixture import demo_project
 from diony_contracts.models import (
-    DialogueTurn,
-    EmotionPerformance,
-    PerformanceScript,
-    PerformanceScriptLine,
-    ProsodySignature,
-    Take,
-    VoiceClipPackage,
-    VoiceProfile,
-    VoiceQCReceipt,
-    VoiceReferenceSample,
+    SpeechClipPackage,
+    SpeechQCReceipt,
+    VoiceCasting,
+    WanSpeechRequest,
 )
 
 
-def synthetic_profile() -> VoiceProfile:
-    return VoiceProfile(
-        id="voice-char-mara-v1",
+def library_casting() -> VoiceCasting:
+    return VoiceCasting(
+        id="cast-char-mara-v1",
         project_id="project-night-press",
         character_id="char-mara",
-        version=1,
-        source=VoiceProfileSource.SYNTHETIC,
-        speaker_embedding_model="cam++-diony-v1",
-        speaker_embedding=[1.0, 0.0, 0.0, 0.0],
-        prosody=ProsodySignature(
-            pitch_floor_hz=145,
-            pitch_ceiling_hz=310,
-            speaking_rate_syllables_per_second=4.1,
-            breath_interval_seconds=5.5,
-            vocal_fry=0.15,
-        ),
-        emotion_map=[
-            EmotionPerformance(
-                emotion="neutral",
-                intensity_curve=[0.2, 0.35, 0.25],
-                rate_multiplier=1.0,
-                pitch_shift_semitones=0,
-                timbre="restrained, warm chest resonance",
-            )
-        ],
-        age_descriptor="early thirties",
-        gender_descriptor="woman",
-        accent_descriptor="inland American",
-        texture_descriptor="warm, lightly textured alto",
-        seed=10401,
-        style_lock="mara-night-press-alto-v1",
+        source=VoiceCastingSource.LIBRARY,
+        cast_index=0,
         locked=True,
-        locked_at=datetime.now(timezone.utc),
+        locked_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
     )
 
 
-def passing_voice_qc() -> VoiceQCReceipt:
-    return VoiceQCReceipt(
-        measurement_version="diony-voice-qc-v1",
-        speaker_similarity=0.97,
-        speaker_similarity_min=0.92,
-        project_consistency=0.96,
-        project_consistency_min=0.90,
-        snr_db=43.0,
-        snr_db_min=30.0,
-        integrated_lufs=-16.1,
-        loudness_target_lufs=-16.0,
-        true_peak_dbtp=-1.2,
-        true_peak_ceiling_dbtp=-1.0,
-        harshness_score=0.08,
-        sibilance_score=0.10,
-        lip_sync_confidence=0.96,
-        lip_sync_confidence_min=0.90,
-        audiovisual_offset_ms_p95=18.0,
-        audiovisual_offset_ms_max=40.0,
-        audiovisual_backend="syncnet-local-v1",
-        audiovisual_measurement_qualified=True,
-        performance_consistency=0.95,
-        performance_consistency_min=0.85,
-        audio_passed=True,
-        animation_passed=True,
-        passed=True,
-    )
+def speech_request(**overrides) -> WanSpeechRequest:
+    payload = {
+        "character_id": "char-mara",
+        "casting_id": "cast-char-mara-v1",
+        "tts_text": "The press room is empty by midnight.",
+        "tts_prompt_audio_sha256": "a" * 64,
+        "tts_prompt_text": "希望你以后能够做的比我还好呦。",
+        "prompt_source": "library:cast-01-zero_shot_prompt.wav",
+        "window_ms": 5005,
+    }
+    payload.update(overrides)
+    return WanSpeechRequest(**payload)
 
 
-def test_voice_qc_records_whether_av_evidence_is_qualified_for_visual_retake() -> None:
-    receipt = passing_voice_qc()
-
-    assert receipt.audiovisual_backend == "syncnet-local-v1"
-    assert receipt.audiovisual_measurement_qualified is True
-
-
-def test_legacy_verified_voice_qc_without_qualification_field_remains_readable() -> None:
-    payload = passing_voice_qc().model_dump(mode="json")
-    payload.pop("audiovisual_backend")
-    payload.pop("audiovisual_measurement_qualified")
-
-    legacy = VoiceQCReceipt.model_validate(payload)
-
-    assert legacy.passed is True
-    assert legacy.audiovisual_measurement_qualified is None
-
-
-def test_locked_voice_profile_is_content_addressed_and_immutable() -> None:
-    profile = synthetic_profile()
-
-    assert len(profile.content_sha256) == 64
-    assert profile.identity_lineage_id.startswith("voice-identity-")
-    assert profile.project_id == "project-night-press"
-    with pytest.raises(ValidationError, match="frozen"):
-        profile.seed = 9
-    with pytest.raises(TypeError):
-        profile.speaker_embedding[0] = 0.0
+def passing_receipt(**overrides) -> SpeechQCReceipt:
+    payload = {
+        "measurement_version": "diony-speech-qc-v1",
+        "audio_present": True,
+        "duration_ms": 5005.0,
+        "window_ms": 5005.0,
+        "speech_presence_score": 0.42,
+        "speech_tail_ms": 640.0,
+        "integrated_lufs": -24.3,
+        "loudness_target_lufs": -24.0,
+        "true_peak_dbtp": -1.4,
+        "true_peak_ceiling_dbtp": -1.0,
+        "passed": True,
+    }
+    payload.update(overrides)
+    return SpeechQCReceipt(**payload)
 
 
-def test_zero_shot_profile_requires_five_to_thirty_seconds_of_reference() -> None:
-    with pytest.raises(ValidationError, match="5 to 30 seconds"):
-        VoiceProfile(
-            id="voice-char-mara-v1",
-            project_id="project-night-press",
-            character_id="char-mara",
-            source=VoiceProfileSource.ZERO_SHOT,
-            reference_samples=[
-                VoiceReferenceSample(
-                    asset_id="ast-mara-reference",
-                    duration_seconds=3.5,
-                    emotion="neutral",
-                    transcript="The presses are still running.",
-                    embedding=[1.0, 0.0, 0.0, 0.0],
-                    embedding_model="cam++-diony-v1",
-                    sha256="a" * 64,
-                )
-            ],
-            speaker_embedding_model="cam++-diony-v1",
-            speaker_embedding=[1.0, 0.0, 0.0, 0.0],
-            prosody=ProsodySignature(),
-            emotion_map=[EmotionPerformance(emotion="neutral")],
-            seed=7,
-            style_lock="mara-zero-shot-v1",
-            locked=True,
-            locked_at=datetime.now(timezone.utc),
-        )
+def test_library_casting_is_content_addressed_and_immutable() -> None:
+    casting = library_casting()
+    assert casting.content_sha256
+    assert VoiceCasting.model_validate(casting.model_dump(mode="json")).content_sha256 == casting.content_sha256
+    with pytest.raises(ValidationError):
+        casting.cast_index = 3  # type: ignore[misc]
+    tampered = casting.model_dump(mode="json") | {"cast_index": 3}
+    with pytest.raises(ValidationError):
+        VoiceCasting.model_validate(tampered)
 
 
-def test_passing_voice_qc_cannot_claim_metrics_below_locked_thresholds() -> None:
-    with pytest.raises(ValidationError, match="speaker identity"):
-        passing_voice_qc().model_copy(
-            update={"speaker_similarity": 0.70},
-        ).model_validate(
-            passing_voice_qc().model_dump() | {"speaker_similarity": 0.70}
-        )
-
-    with pytest.raises(ValidationError, match="physical-performance consistency"):
-        VoiceQCReceipt.model_validate(
-            passing_voice_qc().model_dump()
-            | {"performance_consistency": 0.70}
-        )
-
-
-def test_voice_qc_v2_cannot_claim_pass_without_measured_speech_content() -> None:
-    with pytest.raises(ValidationError, match="speech presence"):
-        VoiceQCReceipt.model_validate(
-            passing_voice_qc().model_dump()
-            | {
-                "measurement_version": "diony-voice-qc-v2",
-                "speech_presence_score": 0.05,
-            }
-        )
+def test_reference_casting_needs_a_five_to_fifteen_second_local_clip() -> None:
+    base = library_casting().model_dump(mode="json") | {
+        "source": "reference",
+        "prompt_audio_asset_id": "ast-ref-mara",
+        "prompt_audio_sha256": "b" * 64,
+        "content_sha256": "",
+    }
+    with pytest.raises(ValidationError):
+        VoiceCasting.model_validate(base | {"prompt_duration_seconds": 3.0})
+    with pytest.raises(ValidationError):
+        VoiceCasting.model_validate(base | {"prompt_duration_seconds": 22.0})
+    casting = VoiceCasting.model_validate(base | {"prompt_duration_seconds": 9.5, "prompt_text": "Reference line."})
+    assert casting.source == VoiceCastingSource.REFERENCE
+    with pytest.raises(ValidationError):
+        VoiceCasting.model_validate(library_casting().model_dump(mode="json") | {"prompt_audio_asset_id": "x", "content_sha256": ""})
 
 
-def test_clip_package_roundtrip_keeps_voice_script_performance_and_qc() -> None:
-    profile = synthetic_profile()
-    turn = DialogueTurn(
-        id="turn-mara-1",
+def test_speech_request_is_hashed_and_counts_its_words() -> None:
+    first = speech_request()
+    second = speech_request()
+    assert first.content_sha256 == second.content_sha256
+    assert first.word_count == 7
+    assert first.words_per_second == pytest.approx(7 / 5.005, rel=1e-3)
+    assert speech_request(tts_text="Different line here.").content_sha256 != first.content_sha256
+    with pytest.raises(ValidationError):
+        speech_request(tts_text="   ")
+
+
+def test_speech_qc_cannot_pass_a_missed_gate() -> None:
+    assert passing_receipt().failures() == []
+    for bad in (
+        {"audio_present": False},
+        {"speech_presence_score": 0.1},
+        {"speech_tail_ms": 20.0},
+        {"integrated_lufs": -20.0},
+        {"true_peak_dbtp": -0.2},
+    ):
+        with pytest.raises(ValidationError):
+            passing_receipt(**bad)
+        failed = passing_receipt(passed=False, **bad)
+        assert failed.failures(), bad
+
+
+def test_verified_speech_package_binds_assets_and_the_exact_negative() -> None:
+    package = SpeechClipPackage(
+        id="speech-take-1",
+        project_id="project-night-press",
+        shot_id="sh-010",
+        take_id="take-1",
         character_id="char-mara",
-        text="They're running tomorrow's obit tonight.",
-        emotion="dread",
-        intensity_curve=[0.25, 0.45, 0.72],
-        subtext="She already knows whose name is on the page.",
-        target_duration_ms=3600,
-    )
-    line = PerformanceScriptLine(
-        id=turn.id,
-        shot_id="sh-010",
-        character_id=turn.character_id,
-        voice_profile_id=profile.id,
-        text=turn.text,
-        spoken_text="They're running tomorrow's obit | tonight.",
-        emotion=turn.emotion,
-        intensity_curve=turn.intensity_curve,
-        breath_after_word_indices=[3],
-        stress_word_indices=[1, 5],
-        target_duration_ms=turn.target_duration_ms,
-        micro_pauses_ms=[120],
-        subtext=turn.subtext,
-    )
-    script = PerformanceScript(
-        id="vscript-sh-010-v1",
-        project_id=profile.project_id,
-        shot_id="sh-010",
-        version=1,
-        lines=[line],
-    )
-    package = VoiceClipPackage(
-        id="voicepkg-sh-010-t3-v1",
-        project_id=profile.project_id,
-        shot_id="sh-010",
-        take_id="sh-010-t3",
-        voice_profile_ids=[profile.id],
-        generation_seeds={profile.id: profile.seed},
-        script=script,
-        clean_dialogue_asset_id="ast-dialogue-clean",
-        final_mix_asset_id="ast-dialogue-mix",
-        performance_metadata_asset_id="ast-performance-json",
-        cache_key="b" * 64,
-        synthesis_backend="cosyvoice2-local",
-        embedding_backend="cam++-diony-v1",
-        alignment_backend="forced-align-local-v1",
+        casting_id="cast-char-mara-v1",
+        request=speech_request(),
+        dialogue_asset_id="ast-voice-dialogue-1",
+        mix_stem_asset_id="ast-voice-mix-stem-1",
         video_sha256="c" * 64,
         state=VoiceRenderState.VERIFIED,
-        qc=passing_voice_qc(),
+        qc=passing_receipt(),
     )
-    take = Take(
-        id="sh-010-t3",
-        shot_id="sh-010",
-        attempt=3,
-        engine="s2v-14B",
-        seed=10421,
-        voice_package=package,
-    )
-
-    restored = Take.model_validate(take.model_dump(mode="json"))
-
-    assert restored.voice_package is not None
-    assert restored.voice_package.script.lines[0].subtext.startswith("She already")
-    assert restored.voice_package.qc.passed is True
-    assert restored.voice_package.voice_profile_ids == [profile.id]
-    assert restored.voice_package.video_sha256 == "c" * 64
+    assert package.verified is True
+    assert package.backend == "wan2.2-s2v-native-tts"
+    payload = package.model_dump(mode="json")
+    with pytest.raises(ValidationError):
+        SpeechClipPackage.model_validate(payload | {"video_sha256": ""})
+    with pytest.raises(ValidationError):
+        SpeechClipPackage.model_validate(payload | {"mix_stem_asset_id": ""})
+    with pytest.raises(ValidationError):
+        SpeechClipPackage.model_validate(payload | {"qc": passing_receipt(passed=False, speech_presence_score=0.05).model_dump(mode="json")})
+    with pytest.raises(ValidationError):
+        SpeechClipPackage.model_validate(payload | {"character_id": "char-other"})
+    planned = SpeechClipPackage.model_validate(payload | {"state": "planned", "qc": None, "video_sha256": "", "dialogue_asset_id": "", "mix_stem_asset_id": ""})
+    assert planned.verified is False
 
 
-def test_verified_clip_package_requires_exact_video_lineage() -> None:
-    profile = synthetic_profile()
-    turn = DialogueTurn(
-        id="turn-mara",
-        character_id=profile.character_id,
-        text="Hold the presses.",
-    )
-    line = PerformanceScriptLine(
-        id=turn.id,
-        shot_id="sh-010",
-        character_id=turn.character_id,
-        voice_profile_id=profile.id,
-        text=turn.text,
-        spoken_text=turn.text,
-        target_duration_ms=1200,
-    )
-    script = PerformanceScript(
-        id="vscript-sh-010-v1",
-        project_id=profile.project_id,
-        shot_id="sh-010",
-        lines=[line],
-    )
-
-    with pytest.raises(ValidationError, match="exact rendered video hash"):
-        VoiceClipPackage(
-            id="voicepkg-sh-010-t1-v1",
-            project_id=profile.project_id,
-            shot_id="sh-010",
-            take_id="sh-010-t1",
-            voice_profile_ids=[profile.id],
-            generation_seeds={profile.id: profile.seed},
-            script=script,
-            clean_dialogue_asset_id="ast-dialogue-clean",
-            final_mix_asset_id="ast-dialogue-mix",
-            performance_metadata_asset_id="ast-performance-json",
-            cache_key="b" * 64,
-            synthesis_backend="voice-local",
-            embedding_backend="speaker-local",
-            alignment_backend="align-local",
-            state=VoiceRenderState.VERIFIED,
-            qc=passing_voice_qc(),
-        )
-
-
-def test_profiles_persisted_before_identity_calibration_still_validate() -> None:
-    """The calibration fields must not change the locked hash of older profiles."""
-    import hashlib
-    import json
-
-    from diony_contracts.fixture import demo_project
-
+def test_an_authored_line_is_enough_for_an_s2v_shot() -> None:
     project = demo_project()
-    if not project.voice_profiles:
-        from diony_contracts.enums import VoiceProfileSource
-        from diony_contracts.voice import EmotionPerformance, ProsodySignature, VoiceProfile
+    shot = next(item for item in project.shots if item.dialogue_turns or item.audio_line)
+    payload = shot.model_dump(mode="json") | {"engine": Engine.S2V_14B.value, "audio_asset_ids": []}
+    from diony_contracts.models import Shot
 
-        profile = VoiceProfile(
-            id="voice-char-a-v1",
-            project_id=project.id,
-            character_id="char-a",
-            source=VoiceProfileSource.SYNTHETIC,
-            speaker_embedding_model="diony-synthetic-speaker-space-v1",
-            speaker_embedding=(0.6, 0.8),
-            prosody=ProsodySignature(
-                pitch_floor_hz=105,
-                pitch_ceiling_hz=310,
-                speaking_rate_syllables_per_second=4.0,
-                breath_interval_seconds=5.0,
-                vocal_fry=0.08,
-                pause_bias=0.5,
-            ),
-            emotion_map=(EmotionPerformance(emotion="neutral", timbre="locked"),),
-            seed=7,
-            style_lock="style:v1",
-        )
-    else:
-        profile = project.voice_profiles[0]
-    from diony_contracts.voice import VoiceProfile
-
-    legacy = profile.model_dump(mode="json")
-    legacy.pop("enrollment_similarity", None)
-    legacy.pop("speaker_similarity_min", None)
-    hashed = {k: v for k, v in legacy.items() if k not in {"content_sha256", "created_at"}}
-    old_contract_hash = hashlib.sha256(
-        json.dumps(hashed, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    ).hexdigest()
-    assert profile.content_sha256 == old_contract_hash
-    restored = VoiceProfile.model_validate(legacy)
-    assert restored.content_sha256 == old_contract_hash
-    assert restored.speaker_similarity_min is None
-
-    calibrated = VoiceProfile.model_validate(
-        {**legacy, "content_sha256": "", "speaker_similarity_min": 0.7, "enrollment_similarity": 0.78}
-    )
-    assert calibrated.content_sha256 != old_contract_hash, "a calibrated floor is part of the lock"
+    spoken = Shot.model_validate(payload)
+    assert spoken.engine == Engine.S2V_14B
+    with pytest.raises(ValidationError):
+        Shot.model_validate(payload | {"audio_line": None, "dialogue_turns": []})

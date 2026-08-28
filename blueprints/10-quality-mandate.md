@@ -32,9 +32,9 @@ Produce **1080p, high quality, state-of-the-art** television and feature-grade m
 **Sound**
 
 - Voice identity is locked per Character and Project before synthesis. Speaker cosine similarity is at least 0.92 and prior-Project consistency at least 0.90.
-- Required dialogue is processed to a clean stem and final clip mix before picture; Wan S2V is conditioned on that locked audio. Final Mix never performs raw TTS.
+- Required dialogue is performed by Wan2.2 S2V's own speech lane in the same pass as picture (the authored line and a locked per-character prompt clip go in; the speech Wan delivered is measured and conformed to a mix stem). Final Mix never performs TTS.
 - Dialogue is intelligible with measured voiced-speech presence ≥0.20, SNR ≥30 dB, loudness within ±1 LU, true peak at or below the Bible ceiling, and harshness/sibilance scores ≤0.25. White/pink noise, room tone, and test tones never satisfy the dialogue or finished-soundtrack contract.
-- Lip-sync confidence is at least 0.90 and p95 audiovisual offset on S2V is at most 40 ms. Brow, eye, cheek, jaw, head, and upper-body energy follow the same performance metadata and must pass consistency QC.
+- Speech QC on a spoken negative is measured on the audio Wan delivered: voiced-speech presence ≥ 0.20, the line finishing at least one S2V frame (62.5 ms) before the window ends, and Bible loudness ±1 LU / true peak on the conformed stem (Blueprint 22). Lip motion is Wan S2V's own audio conditioning and is judged by the performance direction in the prompt plan, never claimed as a separate measurement.
 - Score and SFX serve picture; they do not clip dialogue.
 - Mix to bible loudness: −24 LUFS broadcast or −16 LUFS streaming, true peak −1 dBTP.
 - 1080 finish before mix. Mix is a Production step, not a click.

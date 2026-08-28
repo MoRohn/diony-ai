@@ -26,7 +26,7 @@ from diony_contracts.enums import (
     ProductionKind,
     ProjectStatus,
     ReferenceLock,
-    VoiceProfileSource,
+    VoiceCastingSource,
 )
 from diony_contracts.models import (
     Asset,
@@ -41,12 +41,7 @@ from diony_contracts.models import (
     Shot,
     Timeline,
 )
-from diony_contracts.voice import (
-    DialogueTurn,
-    EmotionPerformance,
-    ProsodySignature,
-    VoiceProfile,
-)
+from diony_contracts.voice import DialogueTurn, VoiceCasting
 from diony_contracts.stitch import stitch_events
 from diony_contracts.wan_prompt import (
     WAN22_PROMPT_STRATEGY_VERSION,
@@ -543,8 +538,6 @@ def _install_wan_prompt_plan(
         audio_strategy=(
             "native_s2v"
             if shot.engine == Engine.S2V_14B
-            else "post_mix"
-            if shot.audio_line
             else "silent_plate"
         ),
         sample_seconds=sample_seconds,
@@ -553,17 +546,30 @@ def _install_wan_prompt_plan(
         # A spoken Shot dispatches to S2V (the camera resolves the task from the
         # locked audio, whatever engine the Shot booked): direct the speaker.
         plan = spoken_wan_prompt_plan(
-            plan, speaker=speaker_name(bible, shot), focal_mm=shot.focal_mm
+            plan,
+            speaker=speaker_name(bible, shot),
+            focal_mm=shot.focal_mm,
+            emotion=spoken_emotion(shot),
         ) or plan
     shot.prompt_plan = plan
     shot.prompt = render_wan_prompt(plan)
     shot.negative_prompt = render_negative_prompt(plan)
 
 
+def spoken_emotion(shot: Shot) -> str:
+    """The authored emotion of the Shot's line, for the S2V performance direction."""
+    for turn in shot.dialogue_turns:
+        emotion = " ".join(str(turn.emotion or "").split())
+        if emotion and emotion.casefold() != "neutral":
+            return emotion
+    return ""
+
+
 def speaker_name(bible: Bible, shot: Shot) -> str:
     """The Bible name of the Shot's speaker, for the S2V performance direction."""
     by_id = {character.id: character for character in bible.characters}
-    for character_id in shot.character_ref_ids:
+    speaker_ids = [turn.character_id for turn in shot.dialogue_turns if turn.character_id]
+    for character_id in [*speaker_ids, *shot.character_ref_ids]:
         character = by_id.get(character_id)
         if character is not None and character.name.strip():
             return character.name.strip()
@@ -779,11 +785,16 @@ def _dialogue_window_words(seconds_per_shot: float) -> int:
 
 
 def _dialogue_windows_needed(lines: list[ScriptDialogue], seconds_per_shot: float) -> int:
-    """Shot windows the authored dialogue needs at the natural rate."""
-    total_words = sum(len(line.text.split()) for line in lines)
-    if not total_words:
-        return 0
-    return math.ceil(total_words / _dialogue_window_words(seconds_per_shot))
+    """Shot windows the authored dialogue needs at the natural rate, one speaker per window.
+
+    Counted per line, not over the pooled word total: Wan S2V animates the
+    visible face with every word it hears, so a window that spans a speaker
+    change makes one character mouth the other's line (sh-070, 2026-08-27:
+    Lila's crop mouthing Marcus's "Hugo."). Growing the rundown by a shot is
+    cheaper than any retake of that.
+    """
+    max_words = _dialogue_window_words(seconds_per_shot)
+    return sum(math.ceil(len(line.text.split()) / max_words) for line in lines if line.text.split())
 
 
 _CLAUSE_END = re.compile(r"[.!?,;:—…]['\"”’)]*$")
@@ -952,76 +963,21 @@ def _character_id(name: str) -> str:
     return f"char-{slug or hashlib.sha256(name.encode('utf-8')).hexdigest()[:12]}"
 
 
-def _stable_voice_embedding(*parts: str, dimensions: int = 192) -> tuple[float, ...]:
-    values: list[float] = []
-    counter = 0
-    while len(values) < dimensions:
-        block = hashlib.sha256(("\x1f".join(parts) + f":{counter}").encode("utf-8")).digest()
-        values.extend((byte - 127.5) / 127.5 for byte in block)
-        counter += 1
-    vector = values[:dimensions]
-    norm = math.sqrt(sum(value * value for value in vector)) or 1.0
-    return tuple(round(value / norm, 8) for value in vector)
+def _library_voice_casting(project_id: str, character: Character, cast_index: int) -> VoiceCasting:
+    """Cast a character on the site's local Wan2.2 voice library, by roster order.
 
-
-def _synthetic_voice_profile(project_id: str, character: Character) -> VoiceProfile:
-    """Lock a deterministic project-local identity before picture generation."""
-    descriptor = " ".join(
-        (character.name, character.notes, character.wardrobe)
-    ).strip()
-    seed_blob = "\x1f".join((character.id, character.name, "voice-v1"))
-    seed = (
-        int(hashlib.sha256(seed_blob.encode("utf-8")).hexdigest()[:12], 16)
-        % 2_000_000_000
-    )
-    return VoiceProfile(
-        id=f"voice-{character.id}-v1",
+    Wan2.2 S2V clones the voice of a prompt clip; the library slot is the
+    deterministic casting decision, resolved to a clip on the GPU host at
+    dispatch. Casting order is Bible roster order, so a two-hander never
+    shares one voice while distinct clips exist.
+    """
+    return VoiceCasting(
+        id=f"cast-{character.id}-v1",
         project_id=project_id,
         character_id=character.id,
-        source=VoiceProfileSource.SYNTHETIC,
-        speaker_embedding_model="diony-synthetic-speaker-space-v1",
-        speaker_embedding=_stable_voice_embedding(character.id, descriptor),
-        prosody=ProsodySignature(
-            pitch_floor_hz=105,
-            pitch_ceiling_hz=310,
-            speaking_rate_syllables_per_second=4.0,
-            breath_interval_seconds=5.0,
-            vocal_fry=0.08,
-            pause_bias=0.5,
-        ),
-        emotion_map=(
-            EmotionPerformance(emotion="neutral", timbre="locked natural character voice"),
-            EmotionPerformance(
-                emotion="joy",
-                intensity_curve=(0.25, 0.55, 0.4),
-                rate_multiplier=1.06,
-                pitch_shift_semitones=0.8,
-                timbre="brighter resonance without identity change",
-            ),
-            EmotionPerformance(
-                emotion="grief",
-                intensity_curve=(0.2, 0.65, 0.35),
-                rate_multiplier=0.9,
-                pitch_shift_semitones=-0.5,
-                timbre="restrained breath and stable chest resonance",
-            ),
-            EmotionPerformance(
-                emotion="tension",
-                intensity_curve=(0.35, 0.8, 0.55),
-                rate_multiplier=1.03,
-                pitch_shift_semitones=0.3,
-                timbre="compressed breath with profile-locked texture",
-            ),
-        ),
-        age_descriptor="Bible locked",
-        gender_descriptor="Bible locked",
-        accent_descriptor="project neutral until directed",
-        texture_descriptor="natural studio character voice",
-        seed=seed,
-        style_lock=(
-            f"identity:{character.id}:synthetic-v1:"
-            f"{hashlib.sha256(descriptor.encode('utf-8')).hexdigest()[:16]}"
-        ),
+        source=VoiceCastingSource.LIBRARY,
+        cast_index=cast_index,
+        descriptors={"name": character.name, "notes": character.notes, "wardrobe": character.wardrobe},
         locked=True,
         locked_at=datetime.now(timezone.utc),
     )
@@ -1158,7 +1114,7 @@ def shot_speaks(shot: Shot) -> bool:
     return bool(shot.dialogue_turns) or bool(" ".join(str(shot.audio_line or "").split()))
 
 
-def apply_spoken_framing(project: Project, shot: Shot, index: int) -> None:
+def frame_spoken_shot(shots: list[Shot], index: int) -> bool:
     """A spoken Shot is a declared cut to its speaker, and the next Shot cuts back.
 
     Wan S2V animates one prominent face; in a wide multi-character still the
@@ -1168,17 +1124,38 @@ def apply_spoken_framing(project: Project, shot: Shot, index: int) -> None:
     own reference instead of the previous take's last frame, and declare a
     hard cut (overlap 0) on both sides so the boundary-continuity gate does
     not compare a wide frame with a close one.
+
+    This framing is a property of speech, not of the reference lock: a brief
+    that never says "this character" still books its dialogue as close-ups.
+    Returns True when the Shot's camera contract changed.
     """
-    if not project.shots or index < 0 or index >= len(project.shots):
-        return
-    previous = project.shots[index - 1] if index > 0 else None
+    if not shots or index < 0 or index >= len(shots):
+        return False
+    shot = shots[index]
+    previous = shots[index - 1] if index > 0 else None
+    before = (shot.continuity_mode, shot.overlap_frames, shot.focal_mm)
     if shot_speaks(shot):
         shot.continuity_mode = ContinuityMode.REFERENCE
         shot.overlap_frames = 0
         shot.focal_mm = max(float(shot.focal_mm or 0.0), SPOKEN_FOCAL_MM)
     elif previous is not None and shot_speaks(previous):
-        shot.continuity_mode = ContinuityMode.REFERENCE
-        shot.overlap_frames = 0
+        # The cut back needs a still to cut back to. A lock-NONE rundown
+        # only keyed its spoken Shots; the follower borrows the same subject
+        # still (measured 2026-08-27: "I2V reference lock requires a readable
+        # still image" on the silent Shot after Hugo's line).
+        if not shot.keyframe_asset_ids and previous.keyframe_asset_ids:
+            shot.keyframe_asset_ids = list(previous.keyframe_asset_ids)
+        if shot.keyframe_asset_ids:
+            shot.continuity_mode = ContinuityMode.REFERENCE
+            shot.overlap_frames = 0
+    return before != (shot.continuity_mode, shot.overlap_frames, shot.focal_mm)
+
+
+def apply_spoken_framing(project: Project, shot: Shot, index: int) -> bool:
+    """Project-level wrapper over :func:`frame_spoken_shot`."""
+    if not project.shots or index < 0 or index >= len(project.shots):
+        return False
+    return frame_spoken_shot(project.shots, index)
 
 
 def _upgrade_binding_reference_contract(project: Project) -> None:
@@ -1264,12 +1241,32 @@ def refresh_reference_shot(project: Project, shot: Shot) -> Shot:
         and project.brief.production_kind == ProductionKind.SAMPLE
         else {}
     )
-    if shot.reference_lock == ReferenceLock.NONE and not sample_camera:
-        return shot
     try:
         index = next(i for i, item in enumerate(project.shots) if item.id == shot.id)
     except StopIteration:
         index = 0
+    if shot.reference_lock == ReferenceLock.NONE and not sample_camera:
+        # No binding reference contract to reapply, but a spoken Shot still
+        # owes its close-up framing and performance direction to the S2V lane.
+        apply_spoken_framing(project, shot, index)
+        if before_contract != _plan_inputs() or not spoken_plan_applied(shot):
+            _install_wan_prompt_plan(
+                shot,
+                idea=(
+                    _idea_body(project.brief, project.assets)
+                    if project.brief is not None
+                    else project.bible.logline
+                ),
+                bible=project.bible,
+                wardrobe=(
+                    project.bible.characters[0].wardrobe
+                    if project.bible.characters
+                    else "Bible-locked wardrobe"
+                ),
+                shot_index=index,
+                sample_seconds=project.brief.sample_seconds if project.brief is not None else None,
+            )
+        return shot
     if shot.reference_lock == ReferenceLock.CHARACTER_AND_BACKGROUND:
         anchor = project.shots[0] if project.shots else shot
         shot.focal_mm = anchor.focal_mm
@@ -1450,13 +1447,13 @@ def expand_idea(
         for name in character_names
     ]
     character_by_name = {character.name: character for character in characters}
-    voice_profiles = [
-        _synthetic_voice_profile(pid, character)
-        for character in characters
+    voice_castings = [
+        _library_voice_casting(pid, character, index)
+        for index, character in enumerate(characters)
         if dialogue_windows
     ]
-    for character, profile in zip(characters, voice_profiles):
-        character.voice_profile_id = profile.id
+    for character, casting in zip(characters, voice_castings):
+        character.voice_casting_id = casting.id
     dialogue_by_shot: dict[int, list[ScriptDialogue]] = {}
     for index, window in enumerate(dialogue_windows):
         slot = min(
@@ -1580,6 +1577,9 @@ def expand_idea(
                 overlap_frames=overlap_frames,
                 hero=bool(rec.get("hero")),
             )
+        # Dialogue books its own framing whatever the reference lock says:
+        # the camera layer must describe the close-up the S2V keyframe is.
+        frame_spoken_shot([*shots, planned_shot], i)
         _install_wan_prompt_plan(
             planned_shot,
             idea=(
@@ -1646,7 +1646,7 @@ def expand_idea(
         takes=[],
         notes=notes,
         assets=held,
-        voice_profiles=voice_profiles,
+        voice_castings=voice_castings,
         mix=MixLock(
             id=f"mix-{run_id}",
             loudness=book.loudness,

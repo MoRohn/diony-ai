@@ -1,0 +1,124 @@
+{
+  "description": "What the audio Wan2.2 delivered inside the negative measured.",
+  "properties": {
+    "measurement_version": {
+      "title": "Measurement Version",
+      "type": "string"
+    },
+    "audio_present": {
+      "default": false,
+      "title": "Audio Present",
+      "type": "boolean"
+    },
+    "duration_ms": {
+      "default": 0.0,
+      "minimum": 0,
+      "title": "Duration Ms",
+      "type": "number"
+    },
+    "window_ms": {
+      "default": 0.0,
+      "minimum": 0,
+      "title": "Window Ms",
+      "type": "number"
+    },
+    "speech_presence_score": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Speech Presence Score"
+    },
+    "speech_presence_min": {
+      "default": 0.2,
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Speech Presence Min",
+      "type": "number"
+    },
+    "speech_tail_ms": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Speech Tail Ms"
+    },
+    "speech_tail_min_ms": {
+      "default": 62.5,
+      "minimum": 0,
+      "title": "Speech Tail Min Ms",
+      "type": "number"
+    },
+    "integrated_lufs": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Integrated Lufs"
+    },
+    "loudness_target_lufs": {
+      "default": -24.0,
+      "title": "Loudness Target Lufs",
+      "type": "number"
+    },
+    "loudness_tolerance_lu": {
+      "default": 1.0,
+      "maximum": 3,
+      "minimum": 0,
+      "title": "Loudness Tolerance Lu",
+      "type": "number"
+    },
+    "true_peak_dbtp": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "True Peak Dbtp"
+    },
+    "true_peak_ceiling_dbtp": {
+      "default": -1.0,
+      "title": "True Peak Ceiling Dbtp",
+      "type": "number"
+    },
+    "passed": {
+      "default": false,
+      "title": "Passed",
+      "type": "boolean"
+    },
+    "diagnostics": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Diagnostics",
+      "type": "array"
+    }
+  },
+  "required": [
+    "measurement_version"
+  ],
+  "title": "SpeechQCReceipt",
+  "type": "object"
+}

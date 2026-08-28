@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import threading
+import asyncio
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -34,9 +35,8 @@ from diony_contracts.enums import (
     ProductionKind,
     ProductionStopDisposition,
     ProjectStatus,
-    QCVerdict,
     TakeOrigin,
-    VoiceProfileSource,
+    VoiceCastingSource,
 )
 from diony_contracts.fixture import demo_project
 from diony_contracts.launch import MembershipRole
@@ -111,6 +111,7 @@ from diony_producer.gpu import (
     gpu_block_copy,
     gpu_monitor,
     gpu_producer_ready_base,
+    last_gpu_error,
     should_proxy,
     signed_gpu_site,
     wizard_pack_on_gpu,
@@ -135,10 +136,8 @@ from diony_producer.vault import (
     write_stub,
 )
 from diony_producer.voice import (
+    VoiceCastingRegistry,
     VoicePipelineError,
-    VoiceProfileRegistry,
-    default_voice_backend,
-    lock_reference_voice_profile,
 )
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -260,6 +259,53 @@ _HOP = {"host", "content-length", "connection", "transfer-encoding", "content-en
 
 
 _DESK_API_FALLBACK = frozenset({"/api/gallery"})
+# Reads whose answer only means something from the GPU Producer: the desk's
+# own project has no faces to cast, so a local fallback would say "no
+# detector" while the GPU is merely restarting.
+_GPU_ONLY_READS: frozenset[str] = frozenset()
+
+
+# A signed GPU Producer restarts after every desktop update and takes two to
+# three minutes to answer again (its lifespan resumes the camera before uvicorn
+# binds :8788). A mutation that arrives in that window — a dropped image, a
+# new Idea — waits here for the line instead of failing the person's action.
+GPU_MUTATION_WAIT_SECONDS = float(os.environ.get("DIONY_GPU_MUTATION_WAIT_SECONDS", "360") or "360")
+GPU_MUTATION_POLL_SECONDS = 3.0
+
+
+def _gpu_unavailable_detail(waited: float, *, refused: bool) -> str:
+    cause = last_gpu_error().strip()
+    what = (
+        "GPU Producer did not accept the request"
+        if refused
+        else "GPU control plane is not ready"
+    )
+    minutes = int(round(waited / 60)) if waited >= 60 else 0
+    waited_copy = f"Diony waited {minutes} minute{'s' if minutes != 1 else ''}" if minutes else f"Diony waited {int(waited)} s"
+    detail = (
+        f"{what}. {waited_copy}; it is usually restarting after an update and answers within two to "
+        "three minutes. Nothing was applied to the local fallback — try the same action again."
+    )
+    if cause:
+        detail += f" Line: {cause[:240]}"
+    return detail
+
+
+async def _forward_to_gpu(request: Request, body: bytes, base: str) -> Response:
+    path = request.url.path
+    url = f"{base}{path}"
+    if request.url.query:
+        url = f"{url}?{request.url.query}"
+    headers = {key: value for key, value in request.headers.items() if key.lower() not in _HOP}
+    timeout = 30.0 if request.method == "GET" else 7200.0
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        res = await client.request(request.method, url, headers=headers, content=body)
+    out = {
+        key: value
+        for key, value in res.headers.items()
+        if key.lower() not in _HOP and key.lower() != "content-length"
+    }
+    return Response(content=res.content, status_code=res.status_code, headers=out)
 
 
 @app.middleware("http")
@@ -276,49 +322,39 @@ async def gpu_api_proxy(request: Request, call_next):
         return await call_next(request)
     if not should_proxy():
         return await call_next(request)
-    base = gpu_producer_ready_base()
-    if not base:
-        _start_gpu_reconcile()
-        if mutating:
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "detail": (
-                        "GPU control plane is not ready. Diony did not apply this mutation "
-                        "to the local fallback; retry when Compute is connected."
-                    )
-                },
-            )
-        return await call_next(request)
-    url = f"{base}{path}"
-    if request.url.query:
-        url = f"{url}?{request.url.query}"
-    headers = {key: value for key, value in request.headers.items() if key.lower() not in _HOP}
     body = await request.body()
-    timeout = 30.0 if request.method == "GET" else 7200.0
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            res = await client.request(request.method, url, headers=headers, content=body)
-    except httpx.HTTPError:
-        if mutating:
+    started = time.monotonic()
+    deadline = started + (GPU_MUTATION_WAIT_SECONDS if mutating else 0.0)
+    refused = False
+    while True:
+        base = gpu_producer_ready_base()
+        if base:
+            try:
+                res = await _forward_to_gpu(request, body, base)
+            except httpx.HTTPError:
+                refused = True
+                if not mutating:
+                    if path in _GPU_ONLY_READS:
+                        return JSONResponse(status_code=503, content={"detail": _gpu_unavailable_detail(0.0, refused=True)}, headers={"Retry-After": "5"})
+                    return await call_next(request)
+            else:
+                if res.status_code == 404 and path in _DESK_API_FALLBACK:
+                    return await call_next(request)
+                return res
+        else:
+            _start_gpu_reconcile()
+            if not mutating:
+                if path in _GPU_ONLY_READS:
+                    return JSONResponse(status_code=503, content={"detail": _gpu_unavailable_detail(0.0, refused=False)}, headers={"Retry-After": "5"})
+                return await call_next(request)
+        if time.monotonic() >= deadline:
+            waited = time.monotonic() - started
             return JSONResponse(
-                status_code=502,
-                content={
-                    "detail": (
-                        "GPU control plane did not accept the request. Diony did not apply "
-                        "this mutation to the local fallback."
-                    )
-                },
+                status_code=502 if refused else 503,
+                content={"detail": _gpu_unavailable_detail(waited, refused=refused)},
+                headers={"Retry-After": "30"},
             )
-        return await call_next(request)
-    if res.status_code == 404 and path in _DESK_API_FALLBACK:
-        return await call_next(request)
-    out = {
-        key: value
-        for key, value in res.headers.items()
-        if key.lower() not in _HOP and key.lower() != "content-length"
-    }
-    return Response(content=res.content, status_code=res.status_code, headers=out)
+        await asyncio.sleep(GPU_MUTATION_POLL_SECONDS)
 
 
 @app.middleware("http")
@@ -463,9 +499,11 @@ class ProductionInfrastructureRecoveryIn(BaseModel):
     reason: str = "gpu_service_restart"
 
 
-class VoiceProfileLockIn(BaseModel):
-    source: VoiceProfileSource = VoiceProfileSource.SYNTHETIC
-    reference_asset_ids: list[str] = []
+class VoiceCastingIn(BaseModel):
+    source: VoiceCastingSource = VoiceCastingSource.LIBRARY
+    # Reference casting: one local audio Asset (5–15 s, ≥ 16 kHz) and its exact transcript.
+    reference_asset_id: str = ""
+    prompt_text: str = ""
     descriptors: dict[str, str] = {}
 
 
@@ -541,41 +579,49 @@ def get_project() -> dict:
     return _project.model_dump(mode="json")
 
 
-@app.get("/api/voice-profiles")
-def get_voice_profiles() -> dict:
+@app.get("/api/voice-castings")
+def get_voice_castings() -> dict:
+    """Which Wan2.2 prompt clip each speaking character clones."""
     return {
         "project_id": _project.id,
-        "profiles": [profile.model_dump(mode="json") for profile in _project.voice_profiles],
+        "castings": [casting.model_dump(mode="json") for casting in _project.voice_castings],
     }
 
 
-@app.post("/api/characters/{character_id}/voice-profiles/lock")
-def lock_voice_profile(character_id: str, body: VoiceProfileLockIn) -> dict:
+@app.post("/api/characters/{character_id}/voice-casting")
+def cast_voice(character_id: str, body: VoiceCastingIn) -> dict:
+    """Cast a character on the site library (idempotent) or on an attached reference clip."""
     try:
-        registry = VoiceProfileRegistry(_project)
+        registry = VoiceCastingRegistry(_project)
         current = registry.current(character_id)
-        if current is not None:
-            if body.source == VoiceProfileSource.SYNTHETIC and current.source == body.source:
-                return current.model_dump(mode="json")
-            raise HTTPException(
-                409,
-                "This character already has a locked Project voice. Create a new Project or versioned Bible to change identity.",
-            )
-        if body.source == VoiceProfileSource.SYNTHETIC:
-            if body.reference_asset_ids:
-                raise HTTPException(400, "Synthetic voice lock does not accept reference audio")
-            profile = registry.ensure_synthetic(character_id, body.descriptors)
+        if body.source == VoiceCastingSource.LIBRARY:
+            if body.reference_asset_id:
+                raise HTTPException(400, "Library casting does not accept reference audio")
+            if current is not None:
+                if current.source == VoiceCastingSource.LIBRARY:
+                    return current.model_dump(mode="json")
+                raise HTTPException(
+                    409,
+                    "This character already has a locked reference voice. Create a new Project or versioned Bible to change identity.",
+                )
+            casting = registry.ensure_library(character_id)
         else:
-            profile = lock_reference_voice_profile(
-                _project,
+            if not body.reference_asset_id:
+                raise HTTPException(400, "Reference casting needs one attached audio asset")
+            if current is not None and current.source == VoiceCastingSource.REFERENCE:
+                raise HTTPException(
+                    409,
+                    "This character already has a locked reference voice. Create a new Project or versioned Bible to change identity.",
+                )
+            casting = registry.cast_from_reference(
                 character_id,
-                body.reference_asset_ids,
-                vault=vault_root(),
-                backend=default_voice_backend(),
+                body.reference_asset_id,
+                prompt_text=body.prompt_text,
                 descriptors=body.descriptors,
+                vault=vault_root(),
             )
         persist_project(_project)
-        return profile.model_dump(mode="json")
+        return casting.model_dump(mode="json")
     except HTTPException:
         raise
     except (KeyError, VoicePipelineError, ValueError) as exc:

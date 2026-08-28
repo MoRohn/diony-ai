@@ -14,9 +14,10 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
-from diony_contracts.live import S2V_MAX_LEAD_FRAMES, ckpt_dir, generate_py, s2v_render_frames, wan_frame_num, wan_repo
-from diony_contracts.models import accepted_sample_steps, lane_guide_scale, lane_sample_steps, wan_lane_frames_valid
+from diony_contracts.live import ckpt_dir, generate_py, s2v_frame_num, wan_frame_num, wan_repo
+from diony_contracts.models import lane_guide_scale, lane_sample_steps, wan_lane_frames_valid
 from diony_wan.resident import (
     QUALITY_CONTRACT_SHA256,
     ResidentError,
@@ -435,6 +436,47 @@ def _probed_torch_python() -> str:
     return "python3"
 
 
+WAN_TTS_CHECKOUT_FILES = ("cosyvoice/cli/cosyvoice.py", "third_party/Matcha-TTS")
+WAN_TTS_MODEL_FILES = ("cosyvoice2.yaml", "llm.pt", "flow.pt", "hift.pt", "speech_tokenizer_v2.onnx")
+
+
+def speech_request(speech: dict[str, Any] | None) -> dict[str, str | None] | None:
+    """Validate the Wan TTS inputs (text plus a readable prompt clip), or None when absent."""
+    if not speech:
+        return None
+    text = " ".join(str(speech.get("tts_text") or "").split())
+    prompt_audio = str(speech.get("tts_prompt_audio") or "").strip()
+    if not text:
+        return None
+    if not prompt_audio or not Path(prompt_audio).is_file() or Path(prompt_audio).suffix.lower() not in {".wav", ".mp3", ".flac"}:
+        raise WanError("Wan S2V TTS requires a readable WAV, MP3, or FLAC prompt clip to clone.")
+    prompt_text = " ".join(str(speech.get("tts_prompt_text") or "").split())
+    return {"tts_text": text, "tts_prompt_audio": prompt_audio, "tts_prompt_text": prompt_text or None}
+
+
+def ensure_s2v_speech_pack(repo: Path | None = None) -> None:
+    """Refuse a TTS render that would make Wan download its speech models on the spot.
+
+    Upstream ``WanS2V.load_tts`` clones CosyVoice and pulls CosyVoice2-0.5B
+    into its working directory when they are absent. Studio pins both there;
+    a render never fetches.
+    """
+    root = Path(repo) if repo is not None else wan_repo()
+    checkout = root / "CosyVoice"
+    model = root / "CosyVoice2-0.5B"
+    missing: list[str] = []
+    if not all((checkout / relative).exists() for relative in WAN_TTS_CHECKOUT_FILES):
+        missing.append(f"Wan TTS checkout {checkout}")
+    absent = [name for name in WAN_TTS_MODEL_FILES if not (model / name).is_file()]
+    if absent:
+        missing.append(f"CosyVoice2-0.5B weights {model} ({', '.join(absent)})")
+    if missing:
+        raise WanError(
+            "Wan2.2's speech pack is not ready on this host: " + "; ".join(missing)
+            + ". Studio Connect prepares it; Diony never downloads at render time."
+        )
+
+
 def spark_argv(
     *,
     task: str,
@@ -451,6 +493,7 @@ def spark_argv(
     steps: int = 24,
     checkpoint: Path | None = None,
     guide_scale: float | None = None,
+    speech: dict[str, str | None] | None = None,
 ) -> list[str]:
     if task not in TASKS:
         task = "t2v-A14B"
@@ -466,11 +509,13 @@ def spark_argv(
         raise WanError(f"Wan checkpoint missing: {ckpt}. Pull the Dual-Spark pack first.")
     if offload is None:
         offload = wan_needs_offload()
+    recorded_audio = audio is not None and audio.suffix.lower() in {".wav", ".mp3", ".flac"}
+    speech = speech_request(speech) if task == "s2v-14B" and not recorded_audio else None
     if task == "s2v-14B":
         if image is None or image.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
             raise WanError("S2V requires a reference image.")
-        if audio is None or audio.suffix.lower() not in {".wav", ".mp3", ".flac"}:
-            raise WanError("S2V requires recorded WAV, MP3, or FLAC audio.")
+        if not recorded_audio and speech is None:
+            raise WanError("S2V requires recorded WAV, MP3, or FLAC audio, or a line for Wan's own TTS.")
     if task == "animate-14B" and (animate_root is None or not animate_root.is_dir()):
         raise WanError("Animate requires an official preprocessed source root.")
     lora_ids = list(dict.fromkeys(quality_lora_ids or []))
@@ -508,8 +553,18 @@ def spark_argv(
         cmd.extend(["--convert_model_dtype", "--t5_cpu"])
     if image is not None and image.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
         cmd.extend(["--image", str(image)])
-    if audio is not None and task == "s2v-14B" and audio.suffix.lower() in {".wav", ".mp3", ".flac"}:
-        cmd.extend(["--audio", str(audio)])
+    if task == "s2v-14B" and (recorded_audio or speech is not None):
+        if recorded_audio:
+            cmd.extend(["--audio", str(audio)])
+        else:
+            # Wan2.2's own speech lane: Wan clones the prompt clip, speaks the
+            # line, animates the face from that speech, and muxes it itself.
+            # One clip window (--num_clip 1): the picture is the booking, the
+            # speech is padded or cut to it by the exact-publish overlay.
+            cmd.extend(["--enable_tts", "--tts_prompt_audio", str(speech["tts_prompt_audio"]), "--tts_text", str(speech["tts_text"])])
+            if speech.get("tts_prompt_text"):
+                cmd.extend(["--tts_prompt_text", str(speech["tts_prompt_text"])])
+            cmd.extend(["--num_clip", "1"])
         # No --start_from_ref: upstream builds that first clip's motion context
         # from 67 black frames and 6 copies of the frozen reference still, and
         # the model "continues" from a freeze — mouths started late and moved
@@ -932,94 +987,6 @@ def stop_stray_generate() -> None:
             continue
 
 
-def trim_head_and_remux(save_file: Path, *, lead_frames: int, audio: Path, fps: int = 16) -> None:
-    """Drop the rendered lead from the head and mux the original locked audio.
-
-    The rendered negative is our own H.264 stream, so the head trim is a
-    frame-exact re-encode at near-lossless quality; the 1080 finish rebuilds
-    the picture from these frames anyway.
-    """
-    ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
-    pending = save_file.with_name(f".{save_file.stem}.lead.part{save_file.suffix}")
-    pending.unlink(missing_ok=True)
-    command = [
-        ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-        "-i", str(save_file), "-i", str(audio),
-        # Picture governs the length: the locked audio is padded with digital
-        # silence to the trimmed picture, never the other way round.
-        "-filter_complex", f"[0:v]select='gte(n\\,{lead_frames})',setpts=N/{fps}/TB[v];[1:a]apad[a]",
-        "-map", "[v]", "-map", "[a]",
-        "-r", str(fps),
-        "-c:v", "libx264", "-preset", "slow", "-crf", "8", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k",
-        "-shortest",
-        str(pending),
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    if result.returncode or not pending.is_file() or pending.stat().st_size <= 32:
-        pending.unlink(missing_ok=True)
-        raise WanError(f"S2V lead trim failed: {(result.stderr or '').strip()[-300:]}")
-    pending.replace(save_file)
-
-
-def hold_head_and_remux(save_file: Path, *, hold_frames: int, audio: Path, fps: int = 16) -> None:
-    """Delay early mouth motion: hold frame 0 for ``hold_frames``, drop the same from the tail."""
-    ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
-    total = int((_probe_generated_video(save_file) or {}).get("frames") or 0)
-    if total <= hold_frames:
-        raise WanError("S2V head hold exceeds the rendered frames")
-    pending = save_file.with_name(f".{save_file.stem}.hold.part{save_file.suffix}")
-    pending.unlink(missing_ok=True)
-    command = [
-        ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-        "-i", str(save_file), "-i", str(audio),
-        "-filter_complex",
-        f"[0:v]tpad=start={hold_frames}:start_mode=clone,trim=end_frame={total},setpts=N/{fps}/TB[v];[1:a]apad[a]",
-        "-map", "[v]", "-map", "[a]",
-        "-r", str(fps),
-        "-c:v", "libx264", "-preset", "slow", "-crf", "8", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k",
-        "-shortest",
-        str(pending),
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    if result.returncode or not pending.is_file() or pending.stat().st_size <= 32:
-        pending.unlink(missing_ok=True)
-        raise WanError(f"S2V head hold failed: {(result.stderr or '').strip()[-300:]}")
-    pending.replace(save_file)
-
-
-def rebind_generation_receipt(save_file: Path, *, lead_frames: int = 0, head_hold_frames: int = 0) -> dict:
-    """Re-address an aligned negative: delivered frames, head trim/hold, hash, bytes."""
-    path = generation_receipt_path(save_file)
-    receipt = json.loads(path.read_text(encoding="utf-8"))
-    measured = _probe_generated_video(save_file)
-    delivered = int(measured.get("frames") or receipt.get("frame_num") or 0)
-    digest = hashlib.sha256()
-    with save_file.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    receipt["frame_num"] = delivered
-    receipt["lead_frames"] = int(lead_frames)
-    receipt["head_hold_frames"] = int(head_hold_frames)
-    receipt["output_sha256"] = digest.hexdigest()
-    receipt["output_bytes"] = save_file.stat().st_size
-    rendered = delivered + int(lead_frames)
-    receipt["quality_contract_matched"] = bool(
-        measured
-        and receipt.get("backend") == "native"
-        and int(measured.get("width") or 0) == 1280
-        and int(measured.get("height") or 0) == 720
-        and wan_lane_frames_valid(rendered)
-        and int(receipt.get("sample_steps") or 0) in accepted_sample_steps(str(receipt.get("task") or ""))
-        and receipt.get("negative_conditioning") is True
-    )
-    if receipt.get("task") == "s2v-14B":
-        receipt["inference_frames_per_pass"] = s2v_infer_frames(rendered)
-    path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return receipt
-
-
 def run_generate(
     *,
     task: str,
@@ -1042,21 +1009,20 @@ def run_generate(
     scheduler: str = "beta",
     attention_backend: str | None = None,
     timeout: int | None = None,
-    s2v_lead_frames: int | None = None,
     guide_scale: float | None = None,
+    speech: dict[str, Any] | None = None,
 ) -> Path:
     """Run the selected local Wan backend and write a 720p negative."""
     if steps is None:
         steps = lane_sample_steps(task)
     started_at = datetime.now(timezone.utc)
     started_monotonic = time.monotonic()
-    # S2V renders at its native 16 fps: book the seconds plus alignment
-    # headroom, not the 24 fps lane cap. Producer measures the take's lip lag
-    # afterwards and trims the late frames from the head (see align_spoken_head).
-    frames = s2v_render_frames(duration_frames, fps) if task == "s2v-14B" else wan_frame_num(duration_frames, fps)
-    del s2v_lead_frames  # alignment is measured per take, never pre-applied
+    # S2V renders at its native 16 fps: book the seconds, not the 24 fps lane
+    # cap. The speech Wan performs is padded or cut to the picture.
+    frames = s2v_frame_num(duration_frames, fps) if task == "s2v-14B" else wan_frame_num(duration_frames, fps)
     save_file.parent.mkdir(parents=True, exist_ok=True)
-    conditioning_audio = audio
+    conditioning_audio = audio if audio is not None and audio.suffix.lower() in {".wav", ".mp3", ".flac"} else None
+    tts = speech_request(speech) if task == "s2v-14B" and conditioning_audio is None else None
     if wan_backend() == "comfyui":
         from diony_wan.comfy import (
             DEFAULT_NEGATIVE_PROMPT,
@@ -1097,6 +1063,7 @@ def run_generate(
                 width=width,
                 height=height,
                 steps=steps,
+                guide_scale=guide_scale,
                 negative_conditioning=True,
                 attention_backend=attention_backend or "auto",
                 error=str(exc),
@@ -1114,6 +1081,7 @@ def run_generate(
             width=width,
             height=height,
             steps=steps,
+            guide_scale=guide_scale,
             negative_conditioning=True,
             attention_backend=attention_backend or "auto",
         )
@@ -1122,6 +1090,8 @@ def run_generate(
     if task == "s2v-14B":
         ensure_s2v_production_raster()
         ensure_s2v_exact_publish()
+        if tts is not None:
+            ensure_s2v_speech_pack()
     ensure_negative_prompt_input()
     offload = wan_needs_offload()
     from diony_wan.storage import prepare_checkpoint
@@ -1142,6 +1112,7 @@ def run_generate(
         steps=steps,
         checkpoint=checkpoint,
         guide_scale=guide_scale,
+        speech=tts,
     )
     env, py_root = _wan_env(attention_backend=attention_backend)
     limit = timeout or int(os.environ.get("DIONY_WAN_TIMEOUT", "7200"))
@@ -1160,7 +1131,7 @@ def run_generate(
         and (task == "s2v-14B" or audio is None)
         and animate_root is None
         and (task != "i2v-A14B" or image is not None)
-        and (task != "s2v-14B" or (image is not None and audio is not None))
+        and (task != "s2v-14B" or (image is not None and (conditioning_audio is not None or tts is not None)))
     )
     fallback_reason = ""
     if resident_compatible:
@@ -1175,6 +1146,7 @@ def run_generate(
             image=image,
             log_path=log_path,
             audio=conditioning_audio,
+            speech=tts,
         )
         try:
             run_resident(
@@ -1289,6 +1261,7 @@ def run_generate(
             width=width,
             height=height,
             steps=steps,
+            guide_scale=guide_scale,
             negative_conditioning=True,
             attention_backend=attention_backend or "auto",
             resident_reason=decision.reason,
@@ -1311,6 +1284,7 @@ def run_generate(
             width=width,
             height=height,
             steps=steps,
+            guide_scale=guide_scale,
             negative_conditioning=True,
             attention_backend=attention_backend or "auto",
             resident_reason=decision.reason,
@@ -1335,6 +1309,7 @@ def run_generate(
         width=width,
         height=height,
         steps=steps,
+        guide_scale=guide_scale,
         negative_conditioning=True,
         attention_backend=attention_backend or "auto",
         resident_reason=decision.reason,

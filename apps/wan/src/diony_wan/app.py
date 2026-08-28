@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import threading
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -34,6 +35,10 @@ class GenerateIn(BaseModel):
     image: str | None = None
     last_image: str | None = None
     audio: str | None = None
+    # Wan2.2 S2V native TTS: the line Wan speaks and the prompt clip it clones.
+    tts_text: str | None = None
+    tts_prompt_audio: str | None = None
+    tts_prompt_text: str | None = None
     animate_root: str | None = None
     quality_lora_ids: list[str] = Field(default_factory=list)
     negative_prompt: str = DEFAULT_NEGATIVE_PROMPT
@@ -65,6 +70,9 @@ class JobIn(BaseModel):
     image: str | None = None
     last_image: str | None = None
     audio: str | None = None
+    tts_text: str | None = None
+    tts_prompt_audio: str | None = None
+    tts_prompt_text: str | None = None
     animate_root: str | None = None
     quality_lora_ids: list[str] = Field(default_factory=list)
     negative_prompt: str = DEFAULT_NEGATIVE_PROMPT
@@ -93,6 +101,19 @@ def _job_root() -> Path:
     return vault / ".wan-jobs"
 
 
+def _speech_from(payload: dict | Any) -> dict[str, str | None] | None:
+    """The Wan TTS inputs on a request or durable job record, or None."""
+    read = payload.get if isinstance(payload, dict) else lambda key, default=None: getattr(payload, key, default)
+    text = " ".join(str(read("tts_text") or "").split())
+    if not text:
+        return None
+    return {
+        "tts_text": text,
+        "tts_prompt_audio": str(read("tts_prompt_audio") or "") or None,
+        "tts_prompt_text": str(read("tts_prompt_text") or "").strip() or None,
+    }
+
+
 def _execute_job(job: dict) -> Path:
     config = GenerationConfig(**dict(job["config"]))
     destination = Path(str(job["destination"]))
@@ -100,6 +121,7 @@ def _execute_job(job: dict) -> Path:
     last_image = Path(str(job["last_image"])) if job.get("last_image") else None
     audio = Path(str(job["audio"])) if job.get("audio") else None
     animate_root = Path(str(job["animate_root"])) if job.get("animate_root") else None
+    speech = _speech_from(job)
     if wan_backend() == "comfyui":
         if config.mode in {"s2v-14B", "animate-14B"}:
             raise ComfyError(f"{config.mode} requires Diony's official native Wan runtime")
@@ -130,6 +152,7 @@ def _execute_job(job: dict) -> Path:
         width=config.width,
         height=config.height,
         steps=config.steps,
+        speech=speech,
         cfg=config.cfg,
         sampler=config.sampler,
         scheduler=config.scheduler,
@@ -244,8 +267,8 @@ def submit_job(body: JobIn) -> dict:
         if config.mode == "flf2v-A14B" and wan_backend() != "comfyui":
             raise ComfyError("FLF2V requires the ComfyUI backend and its official FLF2V API workflow")
         if config.mode == "s2v-14B":
-            if not body.image or not body.audio:
-                raise ComfyError("S2V requires a reference image and recorded audio")
+            if not body.image or not (body.audio or _speech_from(body)):
+                raise ComfyError("S2V requires a reference image plus recorded audio or a line for Wan's own TTS")
         if config.mode == "animate-14B" and not body.animate_root:
             raise ComfyError("Animate requires an official preprocessed source root")
         job = get_job_manager().submit(
@@ -255,6 +278,7 @@ def submit_job(body: JobIn) -> dict:
             image=Path(body.image) if body.image else None,
             last_image=Path(body.last_image) if body.last_image else None,
             audio=Path(body.audio) if body.audio else None,
+            speech=_speech_from(body),
             animate_root=Path(body.animate_root) if body.animate_root else None,
         )
     except (ComfyError, OSError, ValueError) as exc:
@@ -278,6 +302,7 @@ def rerun_job(job_id: str, body: RerunIn) -> dict:
                 Path(str(original["last_image"])) if original.get("last_image") else None
             ),
             audio=Path(str(original["audio"])) if original.get("audio") else None,
+            speech=_speech_from(original),
             animate_root=(
                 Path(str(original["animate_root"])) if original.get("animate_root") else None
             ),
@@ -325,6 +350,7 @@ def generate(body: GenerateIn) -> dict:
             audio=Path(body.audio) if body.audio else None,
             animate_root=Path(body.animate_root) if body.animate_root else None,
             quality_lora_ids=body.quality_lora_ids,
+            speech=_speech_from(body),
             negative_prompt=body.negative_prompt,
             width=body.width,
             height=body.height,

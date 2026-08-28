@@ -199,7 +199,7 @@ story outcome, safety decision, human note, or supplied reference ownership.
 |---|---|---|
 | cinematic establishing / no identity lock | Wan2.2 T2V-A14B | 1280×720 quality lane |
 | character, wardrobe, or environment lock | Wan2.2 I2V-A14B | prefer locked still over hope-based T2V |
-| talking or singing | Wan2.2 S2V-14B | voice conditioning and ≤40 ms lipsync QC |
+| talking or singing | Wan2.2 S2V-14B | Wan's own speech lane (native TTS) or recorded audio; delivered-speech QC |
 | motion/identity transfer | Wan2.2 Animate-14B | preserve source identity and body geometry |
 | fast blocking | TI2V-5B | `previz` only; never master input without A14B replacement |
 | final picture | `diony_sr_v1` | temporal SR, legalize, grade, conform |
@@ -311,7 +311,7 @@ Hard fail and block finish on:
 - missing/corrupt media or wrong native size;
 - discontinuous first/last frame where a handoff is required;
 - absent parent-Take lineage or a declared overlap rendered as a hard concat;
-- lipsync offset greater than 40 ms for speech/song;
+- delivered speech absent, unvoiced, or cut by the picture window for speech/song;
 - safety or rights failure.
 
 Warn without silently accepting on:
@@ -355,16 +355,16 @@ the site kill switch.
 ### Audio parity
 
 - dialogue intelligibility precedes score impact;
-- required scripted dialogue locks an immutable Project-scoped VoiceProfile,
-  profile-aware PerformanceScript, processed clean dialogue, final clip mix,
-  timing/performance metadata, seeds, backend versions, and QC before picture;
-- voice identity, multi-emotion reference embeddings, prosody, script hash,
-  pronunciation, subtext, overlap, and interruption intent remain versioned inputs;
-- generated speaker similarity is at least 0.92, prior-Project consistency at
-  least 0.90, SNR at least 30 dB, and harshness/sibilance at most 0.25;
-- Wan S2V consumes the locked processed audio. Lip confidence is at least 0.90
-  and p95 dialogue offset is within 40 ms; facial and upper-body performance
-  must pass the same timed performance receipt;
+- required scripted dialogue locks an immutable Project-scoped VoiceCasting
+  (which prompt clip Wan2.2 clones) and a WanSpeechRequest (line, casting,
+  window, performance direction) before picture; Wan2.2 S2V performs the line
+  and animates the face in the same pass through its own speech lane;
+- casting, the authored line, the resolved prompt clip's hash and transcript,
+  and the performance direction remain versioned inputs;
+- the speech Wan delivered is measured on the negative: voiced-speech presence
+  at least 0.20, the line finishing at least one S2V frame before the window
+  ends, and the conformed dialogue stem within ±1 LU of the Bible target and
+  under its true-peak ceiling;
 - dialogue, ambience, Foley, and score are separate stems when present. The
   non-dialogue stems come from two receipted sources, in fixed priority: the
   operator-provisioned licensed sound library (`DIONY_SOUND_LIBRARY`,
@@ -379,8 +379,8 @@ the site kill switch.
   missing or tampered library cue invalidates the whole plan, and every
   generated cue carries a receipt (generator, prompt, seed, sha256, measured
   QC) and must pass duration, energy, true-peak, and a **no-speech** gate
-  (voiced-speech presence below 0.20 — CosyVoice remains the only speech
-  instrument). A generated cue that fails renders or gates is dropped with a
+  (voiced-speech presence below 0.20 — Wan2.2's speech lane remains the only
+  speech instrument). A generated cue that fails renders or gates is dropped with a
   visible warning and never blocks delivery. Cue provenance (`licensed` vs
   `generated`) is recorded in the plan and stem receipts;
 - rails mix with dialogue-priority sidechain ducking on ambience and score,
@@ -395,7 +395,7 @@ the site kill switch.
   manufactured noise presented as a soundtrack is not;
 - room tone, white noise, pink noise, test tones, and silence never satisfy
   dialogue or finished-soundtrack evidence;
-- final Mix assembles verified per-clip VoiceClipPackages and licensed library
+- final Mix assembles verified per-clip SpeechClipPackages and licensed library
   bytes and never invokes synthesis;
 - broadcast target is −24 LUFS, streaming target is −16 LUFS;
 - true peak is −1 dBTP;

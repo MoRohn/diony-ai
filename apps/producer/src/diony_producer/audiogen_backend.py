@@ -28,13 +28,21 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from diony_producer.cosyvoice_backend import (
-    BackendError,
-    _duration_seconds,
-    _ffmpeg,
-    _loudness,
-    speech_presence_score,
+from diony_producer.speech_audio import (
+    SpeechAudioError as BackendError,
+    ffmpeg as _ffmpeg,
+    media_duration_seconds as _duration_seconds,
+    measure_loudness,
+    speech_activity,
 )
+
+
+def _loudness(path: Path, target: float, peak: float) -> tuple[float, float]:
+    return measure_loudness(path, target_lufs=target, true_peak_dbtp=peak)
+
+
+def speech_presence_score(samples: Any, *, sample_rate: int) -> float:
+    return speech_activity(list(samples), sample_rate=sample_rate)[0]
 
 GENERATOR_ENV = {
     "thinksound": "DIONY_AUDIOGEN_CLI_THINKSOUND",

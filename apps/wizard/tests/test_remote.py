@@ -58,14 +58,14 @@ def test_exec_host_streams_local_output_to_the_progress_callback(monkeypatch) ->
 
     result = exec_host(
         "localhost",
-        "printf 'HF_START\\nCOSYVOICE_OK\\n'",
+        "printf 'HF_START\\nSPEECH_PACK_OK\\n'",
         timeout=5,
         on_output=lines.append,
     )
 
     assert result.ok is True
-    assert result.stdout == "HF_START\nCOSYVOICE_OK\n"
-    assert lines == ["HF_START", "COSYVOICE_OK"]
+    assert result.stdout == "HF_START\nSPEECH_PACK_OK\n"
+    assert lines == ["HF_START", "SPEECH_PACK_OK"]
 
 
 def test_ssh_args_include_port(monkeypatch) -> None:

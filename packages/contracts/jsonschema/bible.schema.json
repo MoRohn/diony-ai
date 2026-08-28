@@ -27,9 +27,9 @@
           "title": "Notes",
           "type": "string"
         },
-        "voice_profile_id": {
+        "voice_casting_id": {
           "default": "",
-          "title": "Voice Profile Id",
+          "title": "Voice Casting Id",
           "type": "string"
         }
       },

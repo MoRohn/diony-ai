@@ -496,8 +496,9 @@ def direct_retake(project: Project, shot: Shot, take: Take) -> bool:
             "temporal_delta_p95": qc.temporal_delta_p95,
             "temporal_residual_p95": qc.temporal_residual_p95,
             "flicker_luma_p95": qc.flicker_luma_p95,
-            "lip_sync_confidence": qc.lip_sync_confidence,
-            "audiovisual_offset_ms_p95": qc.audiovisual_offset_ms_p95,
+            "speech_presence_score": qc.speech_presence_score,
+            "speech_tail_ms": qc.speech_tail_ms,
+            "dialogue_lufs": qc.dialogue_lufs,
         },
         "prior_attempt_notes": prior_notes[-3:],
     }

@@ -1,8 +1,0 @@
-# Diony-owned additions to Wan2.2's requirements_s2v.txt for the CosyVoice2 venv.
-# Wan's s2v list covers HyperPyYAML/onnxruntime/modelscope/librosa but not the
-# packages cosyvoice.llm / cosyvoice.flow import. Pins follow upstream CosyVoice.
-transformers==4.51.3
-diffusers==0.29.0
-x-transformers==2.11.24
-soundfile==0.12.1
-onnx==1.16.0

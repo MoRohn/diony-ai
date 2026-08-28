@@ -72,6 +72,16 @@
       ],
       "default": null,
       "title": "Picture Lock Timeline Id"
+    },
+    "picture_only": {
+      "default": false,
+      "title": "Picture Only",
+      "type": "boolean"
+    },
+    "policy": {
+      "default": "",
+      "title": "Policy",
+      "type": "string"
     }
   },
   "required": [

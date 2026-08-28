@@ -1,5 +1,0 @@
-# Mouth-sync QC runtime for the Diony Producer venv on the GPU host (Blueprint 22).
-# MediaPipe FaceLandmarker (Tasks API) and OpenCV's YuNet face detector. Both are
-# Apache-2.0. mediapipe 1.0 accepts numpy 2 and needs libEGL on Linux (apt libegl1),
-# which the Studio setup installs before this overlay.
-mediapipe==1.0.1

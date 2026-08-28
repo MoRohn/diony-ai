@@ -687,8 +687,10 @@ def test_adopted_b200_canary_rebinds_its_accelerated_lane_to_the_retake(
             flicker_ok=True,
             duration_ok=True,
             legal_ok=True,
-            audiovisual_measurement_qualified=True,
-            notes="Voice performance failed: qualified audiovisual QC rejected this take.",
+            voice_ready_ok=False,
+            speech_backend="wan2.2-s2v-native-tts",
+            speech_presence_score=0.11,
+            notes="Voice audio failed: voiced-speech presence 0.11 is below 0.20.",
         )
 
     monkeypatch.setattr(farm_module, "list_generate_jobs", lambda: [job])
@@ -715,31 +717,6 @@ def test_adopted_b200_canary_rebinds_its_accelerated_lane_to_the_retake(
 
     assert rebound == [(take.id, f"{shot.id}-t2")]
     assert queued[0][0] == f"{shot.id}-t2"
-
-
-def test_unqualified_av_diagnostic_never_spends_another_full_camera_take() -> None:
-    from diony_producer.farm import _auto_retake_quality_failure
-
-    project = demo_project()
-    take = project.takes[0]
-    take.qc = QCReport(
-        id=f"qc-{take.id}",
-        take_id=take.id,
-        shot_id=take.shot_id,
-        verdict=QCVerdict.FAIL,
-        identity_ok=True,
-        morph_ok=True,
-        flicker_ok=True,
-        duration_ok=True,
-        legal_ok=True,
-        audiovisual_measurement_qualified=False,
-        notes=(
-            "Voice performance failed: lip-sync confidence 0.8013 is below 0.90; "
-            "audiovisual offset p95 83.333 ms exceeds 40 ms."
-        ),
-    )
-
-    assert _auto_retake_quality_failure(take) is False
 
 
 def test_adoption_never_resurrects_an_unselected_missing_take(monkeypatch) -> None:
@@ -916,12 +893,14 @@ def test_b200_attention_canary_auto_retakes_voice_qc_without_losing_rundown(
             ),
             identity_ok=True,
             morph_ok=True,
-                flicker_ok=True,
-                duration_ok=True,
-                legal_ok=True,
-                audiovisual_measurement_qualified=True,
-                notes=(
-                    "Voice performance failed: lip-sync confidence 0.7956 is below 0.90."
+            flicker_ok=True,
+            duration_ok=True,
+            legal_ok=True,
+            voice_ready_ok=(False if take.shot_id == first_shot_id and take.attempt == 1 else None),
+            speech_backend="wan2.2-s2v-native-tts",
+            speech_presence_score=0.12,
+            notes=(
+                "Voice audio failed: voiced-speech presence 0.12 is below 0.20."
                 if take.shot_id == first_shot_id and take.attempt == 1
                 else "AutoQC passed."
             ),
@@ -1445,8 +1424,8 @@ def test_measured_qc_hold_is_per_shot_not_a_production_stop() -> None:
 
     take.qc = report(
         QCVerdict.FAIL,
-        "Voice performance failed: qualified mouth-sync evidence is unavailable; "
-        "diony-local-av-motion-sync-v2 is diagnostic only, so Diony preserved this Take.",
+        "Voice audio failed: speech is still active 12 ms before the window ends (needs 62.5 ms); "
+        "the line was cut by the picture.",
     )
     assert _measured_qc_hold(take) is True
 
@@ -1483,18 +1462,18 @@ def _farm_run(monkeypatch, run_one, tmp_path):
     return project, first_take, status, activity
 
 
-def test_bounded_voice_identity_verdict_holds_the_shot_without_a_camera_render(tmp_path, monkeypatch) -> None:
+def test_bounded_voice_timing_verdict_holds_the_shot_without_a_camera_render(tmp_path, monkeypatch) -> None:
     from diony_producer.voice import VoicePipelineError
 
     def refuse(_project, _take, **_kwargs) -> None:
-        raise VoicePipelineError("Voice identity failed for turn-sh-010-1 after 3 bounded attempts")
+        raise VoicePipelineError("Voice timing failed: 19 words cannot finish inside sh-010's 3.4 s window")
 
     project, take, status, activity = _farm_run(monkeypatch, refuse, tmp_path)
 
     assert status["error"] == ""
     assert status["queued"] == 0
     assert take.qc is not None and take.qc.verdict == QCVerdict.FAIL
-    assert take.qc.notes.startswith("Voice identity failed")
+    assert take.qc.notes.startswith("Voice timing failed")
     assert take.qc.voice_ready_ok is False
     assert any("held for review; Production continues" in line for line in activity)
     assert project.production_ended_at is not None
@@ -1504,7 +1483,7 @@ def test_missing_voice_backend_still_stops_production(tmp_path, monkeypatch) -> 
     from diony_producer.voice import VoicePipelineError
 
     def missing(_project, _take, **_kwargs) -> None:
-        raise VoicePipelineError("Voice is required, but no local studio voice backend is configured.")
+        raise VoicePipelineError("Voice is required, but the Wan2.2 speech pack is not ready on this host.")
 
     _project, take, status, activity = _farm_run(monkeypatch, missing, tmp_path)
 
@@ -1544,59 +1523,6 @@ def test_stale_unmatched_receipt_is_rejudged_by_the_contract(tmp_path) -> None:
     assert any("Wan execution receipt".startswith(p) or p.startswith("Wan execution receipt") for p in _INFRASTRUCTURE_QC_PREFIXES)
 
 
-def test_resume_rejudges_an_unqualified_voice_hold_with_the_current_backend(tmp_path, monkeypatch) -> None:
-    from diony_contracts.fixture import demo_project
-    from diony_contracts.models import QCReport
-    from diony_producer import farm as farm_module
-    from diony_producer.farm import _rejudge_unqualified_voice_hold, negative_rel
-
-    monkeypatch.setenv("DIONY_VAULT", str(tmp_path))
-    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path))
-    project = demo_project()
-    spoken = next(shot for shot in project.shots if shot.audio_line or shot.dialogue_turns)
-    take = project.take(spoken.selected_take_id)
-    negative = tmp_path / negative_rel(project, take)
-    negative.parent.mkdir(parents=True, exist_ok=True)
-    negative.write_bytes(b"negative" * 16)
-    take.qc = QCReport(
-        id=f"qc-{take.id}", take_id=take.id, shot_id=take.shot_id, verdict=QCVerdict.FAIL,
-        identity_ok=True, morph_ok=True, flicker_ok=True, duration_ok=True, legal_ok=True,
-        audiovisual_measurement_qualified=False, audiovisual_backend="diony-local-mouth-sync-v3",
-        notes="Voice performance failed: qualified mouth-sync evidence is unavailable; preserved this Take.",
-    )
-
-    class Q:
-        def __init__(self, passed, qualified, offset):
-            self.passed = passed; self.animation_passed = passed; self.audio_passed = True
-            self.audiovisual_measurement_qualified = qualified; self.lip_sync_confidence = 0.97
-            self.audiovisual_offset_ms_p95 = offset; self.performance_consistency = 0.9
-            self.audiovisual_backend = "diony-local-mouth-sync-v3"
-            self.lip_sync_confidence_min = 0.9; self.audiovisual_offset_ms_max = 40.0
-            self.performance_consistency_min = 0.85; self.speaker_similarity = 1.0
-            self.speaker_similarity_min = 0.7
-
-    class Pkg:
-        def __init__(self, qc): self.qc = qc
-
-    take.voice_package = Pkg(Q(False, False, 0.0))  # placeholder package on the held take
-    monkeypatch.setattr(farm_module, "verify_voice_animation", lambda _p, _t, _v: Pkg(Q(False, True, 375.0)))
-    monkeypatch.setattr(farm_module, "persist_project", lambda _p: None)
-    monkeypatch.setattr(farm_module, "record_activity", lambda *_a, **_k: None)
-
-    _rejudge_unqualified_voice_hold(project, take)
-
-    assert take.qc.verdict == QCVerdict.FAIL
-    assert take.qc.audiovisual_measurement_qualified is True
-    assert "375.000 ms exceeds 40 ms" in take.qc.notes
-    assert farm_module._auto_retake_quality_failure(take) is True, "a qualified failure re-enters retakes"
-
-    monkeypatch.setattr(farm_module, "verify_voice_animation", lambda _p, _t, _v: Pkg(Q(True, True, 16.0)))
-    take.qc = take.qc.model_copy(update={"audiovisual_measurement_qualified": False, "notes": "Voice performance failed: qualified mouth-sync evidence is unavailable"})
-    _rejudge_unqualified_voice_hold(project, take)
-    assert take.qc.verdict == QCVerdict.PASS
-    assert take.qc.voice_ready_ok is True and take.qc.lipsync_ok is True
-
-
 def test_native_rate_s2v_negative_covers_the_booking_without_retiming() -> None:
     """57 frames at 16 fps is 3.56 s: it covers an 81-frame 23.976 booking."""
     import math
@@ -1611,90 +1537,6 @@ def test_native_rate_s2v_negative_covers_the_booking_without_retiming() -> None:
     assert math.floor(77 / 24.0 * fps) < booked
 
 
-def test_speaker_face_is_learned_only_from_a_qualified_wide_pass() -> None:
-    from diony_producer.farm import _speaker_face_from
-
-    class Q:
-        def __init__(self, passed, qualified, diagnostics):
-            self.passed = passed; self.audiovisual_measurement_qualified = qualified; self.diagnostics = diagnostics
-
-    class Pkg:
-        def __init__(self, qc): self.qc = qc
-
-    wide = ["faces tracked=3", "speaker face at (876,184) covered 100% of frames; aperture std=0.09"]
-    assert _speaker_face_from(Pkg(Q(True, True, wide))) == (876.0, 184.0)
-    assert _speaker_face_from(Pkg(Q(False, True, wide))) is None
-    assert _speaker_face_from(Pkg(Q(True, False, wide))) is None
-    closeup = ["faces tracked=1", "speaker face at (640,300) covered 100% of frames; aperture std=0.2"]
-    assert _speaker_face_from(Pkg(Q(True, True, closeup))) is None
-
-
-def test_align_spoken_head_trims_only_a_measured_whole_frame_lag(tmp_path, monkeypatch) -> None:
-    from diony_contracts.fixture import demo_project
-    from diony_producer import farm as farm_module
-    from diony_producer.farm import _measured_lag, align_spoken_head
-
-    assert _measured_lag(["best_lag_frames=7 refined_lag_frames=6.803", "mouth-audio correlation=0.8132 (raw 0.7)"]) == (6.803, 0.8132)
-    assert _measured_lag(["nothing"]) is None
-
-    monkeypatch.setenv("DIONY_VAULT", str(tmp_path))
-    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path))
-    project = demo_project()
-    spoken = next(shot for shot in project.shots if shot.audio_line or shot.dialogue_turns)
-    take = project.take(spoken.selected_take_id)
-    take.engine = "s2v-14B"
-    spoken.duration_frames = 81  # 3.378 s at 23.976: 57 native S2V frames booked
-    negative = tmp_path / "negative_720.mp4"
-    negative.write_bytes(b"negative" * 8)
-
-    class Measured:
-        def __init__(self, lag, corr, qualified=True):
-            self.qualified_for_visual_retake = qualified
-            self.diagnostics = [f"best_lag_frames={round(lag)} refined_lag_frames={lag:.3f}", f"mouth-audio correlation={corr:.4f} (raw 0.5)"]
-
-    class QC:
-        def __init__(self, m): self.m = m
-        def verify_audiovisual(self, *_a): return self.m
-
-    class Pipe:
-        def __init__(self, m): self.audiovisual_qc = QC(m)
-        def _asset_path(self, asset): return tmp_path / "x.wav"
-
-    from diony_contracts.enums import AssetKind
-    from diony_contracts.models import Asset
-
-    project.assets.append(Asset(id="ast-clean", kind=AssetKind.AUDIO, filename="clean.wav", mime="audio/wav", bytes=12, path="clean.wav"))
-    project.assets.append(Asset(id="ast-perf", kind=AssetKind.DOCUMENT, filename="performance.json", mime="application/json", bytes=12, path="performance.json"))
-
-    class Pkg:
-        clean_dialogue_asset_id = "ast-clean"
-        performance_metadata_asset_id = "ast-perf"
-
-    take.voice_package = Pkg()
-    trims = []
-    monkeypatch.setattr("diony_producer.camera._audio_reference", lambda _p, _s: tmp_path / "clean.wav")
-    monkeypatch.setattr("diony_wan.runner.trim_head_and_remux", lambda path, *, lead_frames, audio: trims.append(lead_frames))
-    monkeypatch.setattr("diony_wan.runner.rebind_generation_receipt", lambda path, *, lead_frames=0, head_hold_frames=0: {"lead_frames": lead_frames, "head_hold_frames": head_hold_frames})
-    monkeypatch.setattr(farm_module, "record_activity", lambda *_a, **_k: None)
-
-    monkeypatch.setattr(farm_module, "probe_media", lambda _p, **_kw: {"frames": 65, "fps": 16.0})
-    monkeypatch.setattr("diony_producer.voice.default_voice_pipeline", lambda: Pipe(Measured(6.803, 0.81)))
-    assert align_spoken_head(project, take, negative) == 7 and trims == [7]
-    monkeypatch.setattr(farm_module, "probe_media", lambda _p, **_kw: {"frames": 57, "fps": 16.0})
-    assert align_spoken_head(project, take, negative) == 0, "no headroom: never trim below the booking"
-    monkeypatch.setattr(farm_module, "probe_media", lambda _p, **_kw: {"frames": 65, "fps": 16.0})
-    monkeypatch.setattr("diony_producer.voice.default_voice_pipeline", lambda: Pipe(Measured(-0.355, 0.80)))
-    assert align_spoken_head(project, take, negative) == 0
-    holds = []
-    monkeypatch.setattr("diony_wan.runner.hold_head_and_remux", lambda path, *, hold_frames, audio: holds.append(hold_frames))
-    monkeypatch.setattr("diony_producer.voice.default_voice_pipeline", lambda: Pipe(Measured(-5.208, 0.75)))
-    assert align_spoken_head(project, take, negative) == -5 and holds == [5], "early motion holds the head"
-    monkeypatch.setattr("diony_producer.voice.default_voice_pipeline", lambda: Pipe(Measured(7.0, 0.45)))
-    assert align_spoken_head(project, take, negative) == 0, "weak correlation never trims"
-    monkeypatch.setattr("diony_producer.voice.default_voice_pipeline", lambda: Pipe(Measured(11.0, 0.9)))
-    assert align_spoken_head(project, take, negative) == 0, "beyond headroom is a real retake"
-
-
 def test_retake_cap_settles_on_the_highest_scoring_attempt() -> None:
     """The four measured sh-020 attempts: the near-sync take wins, not the last one."""
     from diony_producer.farm import attempt_score, settle_exhausted_shot, settled_print
@@ -1703,13 +1545,14 @@ def test_retake_cap_settles_on_the_highest_scoring_attempt() -> None:
     shot = project.shots[0]
     base = project.takes_for(shot.id)[0]
     project.takes = [take for take in project.takes if take.shot_id != shot.id]
+    # (voiced-speech presence, speech tail ms, reference SSIM, temporal residual)
     measured = [
-        (0.8806, 325.5, 0.5261, 0.5734, 0.0477),
-        (0.7500, 67.2, 0.5675, 0.5736, 0.0457),
-        (0.8718, 506.3, 0.4935, 0.5738, 0.0656),
-        (0.8816, 510.4, 0.4513, 0.5757, 0.0550),
+        (0.22, 30.0, 0.5734, 0.0477),
+        (0.46, 240.0, 0.5736, 0.0457),
+        (0.30, 10.0, 0.5738, 0.0656),
+        (0.25, 60.0, 0.5757, 0.0550),
     ]
-    for attempt, (lip, offset, consistency, reference, residual) in enumerate(measured, start=1):
+    for attempt, (presence, tail, reference, residual) in enumerate(measured, start=1):
         take = base.model_copy(update={"id": f"{shot.id}-t{attempt}", "attempt": attempt})
         take.qc = QCReport(
             id=f"qc-{take.id}",
@@ -1721,12 +1564,13 @@ def test_retake_cap_settles_on_the_highest_scoring_attempt() -> None:
             flicker_ok=True,
             duration_ok=True,
             legal_ok=True,
-            lip_sync_confidence=lip,
-            audiovisual_offset_ms_p95=offset,
-            voice_performance_consistency=consistency,
+            voice_ready_ok=False,
+            speech_backend="wan2.2-s2v-native-tts",
+            speech_presence_score=presence,
+            speech_tail_ms=tail,
             reference_similarity=reference,
             temporal_residual_p95=residual,
-            notes=f"Voice performance failed: lip-sync confidence {lip} is below 0.90",
+            notes=f"Voice audio failed: speech is still active {tail:.0f} ms before the window ends (needs 62.5 ms).",
         )
         project.takes.append(take)
     shot.selected_take_id = f"{shot.id}-t4"
@@ -1901,33 +1745,137 @@ def test_re_measuring_a_settled_print_keeps_the_policy_decision(tmp_path, monkey
     assert "required 0.75" in take.qc.notes
 
 
-def test_a_still_mouth_raises_the_articulation_drive_for_the_retake(monkeypatch) -> None:
+def test_a_rejudged_canary_is_promoted_on_resume_and_never_stops_the_run(tmp_path, monkeypatch) -> None:
     from diony_producer import farm as farm_module
-    from diony_producer.farm import _measured_aperture_std, _raise_articulation_drive
 
-    class Q:
-        def __init__(self, diagnostics):
-            self.diagnostics = diagnostics
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path))
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path))
+    project = demo_project()
+    take = project.takes[0]
+    take.qc = QCReport(
+        id="qc-c", take_id=take.id, shot_id=take.shot_id, verdict=QCVerdict.PASS,
+        identity_ok=True, morph_ok=True, flicker_ok=True, duration_ok=True, legal_ok=True,
+        notes="Wan2.2 720p negative. Re-judged mouth-sync evidence passed.",
+    )
+    receipt_dir = tmp_path / "qualification"
+    receipt_dir.mkdir()
+    path = receipt_dir / farm_module._ATTENTION_RECEIPT_NAME
+    path.write_text(json.dumps({"scope_project_id": project.id, "quality_canary_take_id": take.id, "stage": "operator_passed_quality_canary_required"}))
+    monkeypatch.setattr("diony_wan.attention_qualification.attention_decision", lambda _p, project_id: type("D", (), {"enabled": False})())
+    promoted: list[str] = []
+    monkeypatch.setattr(farm_module, "_complete_attention_canary", lambda _p, t, _path: promoted.append(t.id))
+    monkeypatch.setattr(farm_module, "record_activity", lambda *_a, **_k: None)
+    assert farm_module._promote_rejudged_canary(project, take) is True and promoted == [take.id]
 
-    class Pkg:
-        def __init__(self, qc):
-            self.qc = qc
+    # Bound to another take, or still failing: nothing to promote.
+    other = project.takes[1]
+    assert farm_module._promote_rejudged_canary(project, other) is False
+    take.qc = take.qc.model_copy(update={"verdict": QCVerdict.FAIL})
+    assert farm_module._promote_rejudged_canary(project, take) is False
+
+    # A promotion failure is logged and leaves the run alone.
+    take.qc = take.qc.model_copy(update={"verdict": QCVerdict.PASS})
+
+    def explode(_p, _t, _path):
+        raise RuntimeError("no 1080 finish on this desk")
+
+    monkeypatch.setattr(farm_module, "_complete_attention_canary", explode)
+    assert farm_module._promote_rejudged_canary(project, take) is False
+
+
+def test_a_resume_retake_inherits_the_canary_binding(tmp_path, monkeypatch) -> None:
+    from diony_producer import farm as farm_module
+
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path))
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path))
+    project = demo_project()
+    failed, retry = project.takes[0], project.takes[1]
+    (tmp_path / "qualification").mkdir()
+    path = tmp_path / "qualification" / farm_module._ATTENTION_RECEIPT_NAME
+    path.write_text(json.dumps({"scope_project_id": project.id, "quality_canary_take_id": failed.id}))
+    rebound: list[tuple[str, str]] = []
+    monkeypatch.setattr(farm_module, "_rebind_attention_canary", lambda _p, f, r, _path: rebound.append((f.id, r.id)))
+    assert farm_module._rebind_canary_after_resume(project, failed, retry) is True
+    assert rebound == [(failed.id, retry.id)]
+    assert farm_module._rebind_canary_after_resume(project, retry, failed) is False, "not bound to that take"
+
+
+def test_a_voice_hold_judged_under_older_gates_rerolls_once(tmp_path, monkeypatch) -> None:
+    """sh-060, 2026-08-27: the harshness gate was fixed, the hold stayed."""
+    from diony_producer import farm as farm_module
 
     project = demo_project()
-    shot = project.shots[0]
-    take = project.takes_for(shot.id)[0]
-    notes: list[str] = []
-    monkeypatch.setattr(farm_module, "record_activity", lambda _src, text, **_kw: notes.append(text))
-    take.voice_package = Pkg(Q(["faces tracked=2", "speaker face at (622,295) covered 100% of frames; aperture std=0.0065"]))
-    assert _measured_aperture_std(take) == 0.0065
-    assert shot.s2v_guide_scale is None
-    assert _raise_articulation_drive(project, shot, take) == 6.5
-    assert shot.s2v_guide_scale == 6.5
-    assert any("raising the line's articulation drive from 5.5 to 6.5" in n for n in notes)
-    assert _raise_articulation_drive(project, shot, take) == 7.5
-    assert _raise_articulation_drive(project, shot, take) is None  # capped
-    # A moving mouth never changes the drive.
-    take.voice_package = Pkg(Q(["speaker face at (622,295) covered 100% of frames; aperture std=0.0551"]))
-    shot.s2v_guide_scale = None
-    assert _raise_articulation_drive(project, shot, take) is None
-    assert shot.s2v_guide_scale is None
+    take = project.takes[0]
+    old = QCReport(
+        id="qc-o", take_id=take.id, shot_id=take.shot_id, verdict=QCVerdict.FAIL,
+        identity_ok=False, morph_ok=True, flicker_ok=True, duration_ok=True, legal_ok=True,
+        voice_ready_ok=False, notes="Voice audio failed locked identity or studio-audio QC",
+    )
+    take.qc = old
+    assert farm_module._stale_voice_gate_hold(take) is True
+    take.qc = farm_module._pre_camera_hold_report(take, "Voice audio failed locked identity or studio-audio QC")
+    assert farm_module.VOICE_GATE_VERSION in take.qc.notes
+    assert farm_module._stale_voice_gate_hold(take) is False, "judged under today's gates: a real hold"
+    assert farm_module._voice_hold_message(take.qc.notes)
+    take.qc = old.model_copy(update={"notes": "Voice audio failed: voiced-speech presence 0.10 is below 0.20.", "speech_backend": "wan2.2-s2v-native-tts", "speech_presence_score": 0.1})
+    assert farm_module._stale_voice_gate_hold(take) is False, "a measured negative is not a pre-camera hold"
+
+
+def test_passed_clips_finish_at_1080_while_a_shot_waits_for_a_decision(tmp_path, monkeypatch) -> None:
+    from diony_producer import advance as advance_module
+    from diony_producer import farm as farm_module
+
+    project = demo_project()
+    shots = project.shots[:3]
+    project.shots = shots
+    takes = {shot.id: project.takes_for(shot.id)[0] for shot in shots}
+    for i, shot in enumerate(shots):
+        take = takes[shot.id]
+        shot.selected_take_id = take.id
+        take.qc = QCReport(
+            id=f"qc-{i}", take_id=take.id, shot_id=shot.id,
+            verdict=QCVerdict.PASS if i < 2 else QCVerdict.FAIL,
+            identity_ok=i < 2, morph_ok=True, flicker_ok=True, duration_ok=True, legal_ok=True,
+            voice_ready_ok=None if i < 2 else False,
+            notes="ok" if i < 2 else f"Voice audio failed locked identity or studio-audio QC {farm_module._VOICE_GATE_TAG}",
+        )
+    monkeypatch.setattr(advance_module, "live_finish", lambda: True)
+    monkeypatch.setattr(advance_module, "should_proxy", lambda: False)
+    monkeypatch.setattr(farm_module, "farm_status", lambda: {"busy": False})
+    monkeypatch.setattr(farm_module, "_selected_missing_takes", lambda _p, **_k: [takes[shots[2].id]])
+    monkeypatch.setattr(advance_module, "qc_contract_valid", lambda _p, _t: True)
+    monkeypatch.setattr(advance_module, "take_has_live_negative", lambda _t, _p: True)
+    import diony_producer.finish as finish_module
+
+    monkeypatch.setattr(finish_module, "_take_1080", lambda _p, _t: None)
+    monkeypatch.setattr(finish_module, "finish_status", lambda: {"busy": False, "error": ""})
+    monkeypatch.setattr(finish_module, "enter_finish", lambda: None)
+    started: list[list[str]] = []
+    monkeypatch.setattr(finish_module, "start_finish", lambda _p, ts: started.append([t.id for t in ts]))
+    lines: list[str] = []
+    monkeypatch.setattr(advance_module, "record_activity", lambda _s, text, **_k: lines.append(text))
+
+    assert advance_module.finish_ready_takes_early(project, live=True) == [takes[shots[0].id].id, takes[shots[1].id].id]
+    assert started and len(started[0]) == 2
+    assert any("2 passed clips at 1080 while 1 Shot waits" in line for line in lines)
+    # A stale-gate hold is farm work: nothing finishes early until it has re-rolled.
+    takes[shots[2].id].qc = takes[shots[2].id].qc.model_copy(update={"notes": "Voice audio failed locked identity or studio-audio QC"})
+    assert advance_module.finish_ready_takes_early(project, live=True) == []
+
+
+def test_pre_camera_voice_holds_never_spend_the_render_cap() -> None:
+    from diony_producer import farm as farm_module
+
+    project = demo_project()
+    take = project.takes[0]
+    take.qc = farm_module._pre_camera_hold_report(take, "Voice audio failed harshness 0.356 exceeds 0.250")
+    assert farm_module._pre_camera_voice_hold(take) is True
+    assert farm_module._auto_retake_quality_failure(take) is False, "no negative was rendered: no camera attempt"
+    assert farm_module._measured_qc_hold(take) is True, "still a per-Shot hold, the rundown keeps moving"
+    measured = take.qc.model_copy(update={
+        "notes": "Voice audio failed: voiced-speech presence 0.10 is below 0.20.",
+        "speech_backend": "wan2.2-s2v-native-tts", "speech_presence_score": 0.1, "voice_ready_ok": False,
+    })
+    take.qc = measured
+    assert farm_module._pre_camera_voice_hold(take) is False
+    assert farm_module._auto_retake_quality_failure(take) is True, "a measured render still retakes"

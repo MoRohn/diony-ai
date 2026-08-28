@@ -1,0 +1,12 @@
+# Diony-owned additions to Wan2.2's requirements_s2v.txt so the Wan host
+# interpreter can run Wan's own S2V speech lane (`generate.py --enable_tts`,
+# which loads the CosyVoice checkout beside generate.py). Wan's s2v list covers
+# HyperPyYAML/onnxruntime/modelscope/librosa but not the packages
+# cosyvoice.llm / cosyvoice.flow import. Bounds stay inside Wan's own pins
+# (transformers<=4.51.3, diffusers>=0.31.0) so the shared interpreter is never
+# downgraded underneath the camera.
+transformers>=4.49.0,<=4.51.3
+diffusers>=0.31.0
+x-transformers==2.11.24
+soundfile>=0.12.1
+onnx>=1.16.0

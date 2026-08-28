@@ -182,10 +182,11 @@ class GalleryCompositionStatus(StrEnum):
     SUPERSEDED = "superseded"
 
 
-class VoiceProfileSource(StrEnum):
-    ZERO_SHOT = "zero_shot"
-    FEW_SHOT = "few_shot"
-    SYNTHETIC = "synthetic"
+class VoiceCastingSource(StrEnum):
+    """Where a character's Wan2.2 S2V voice prompt clip comes from."""
+
+    LIBRARY = "library"  # a clip from the site's local casting library, keyed by cast order
+    REFERENCE = "reference"  # a local audio Asset attached to the Project (5–15 s, ≥ 16 kHz)
 
 
 class VoiceRenderState(StrEnum):

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import os
 import subprocess
 import time
@@ -65,6 +64,7 @@ def resolve_camera_task(
     *,
     audio: Path | None = None,
     animate_root: Path | None = None,
+    speech: bool = False,
 ) -> str:
     """Resolve the requested engine without silently changing creative semantics."""
     if engine == "i2v-A14B" and image is not None and image.suffix.lower() in STILLS:
@@ -76,8 +76,11 @@ def resolve_camera_task(
     if engine == "s2v-14B":
         if image is None or image.suffix.lower() not in STILLS:
             raise RuntimeError("S2V requires a readable reference still image")
-        if audio is None or audio.suffix.lower() not in {".wav", ".mp3", ".flac"}:
-            raise RuntimeError("S2V requires recorded audio in WAV, MP3, or FLAC format")
+        recorded = audio is not None and audio.suffix.lower() in {".wav", ".mp3", ".flac"}
+        if not recorded and not speech:
+            raise RuntimeError(
+                "S2V requires recorded audio in WAV, MP3, or FLAC format, or an authored line for Wan2.2's own speech"
+            )
         return "s2v-14B"
     if engine == "animate-14B":
         if image is None or image.suffix.lower() not in STILLS:
@@ -113,14 +116,15 @@ def camera_task_for(project: Project, shot: Shot) -> str:
         image,
         audio=_audio_reference(project, shot),
         animate_root=_animate_reference_root(project, shot),
+        speech=shot_speaks_here(shot),
     )
 
 
 def staged_camera_task(project: Project, shot: Shot) -> str:
-    """Family to stage into the hot tier before this shot's voice is locked.
+    """Family to stage into the hot tier before this shot's speech request is locked.
 
     ``camera_task_for`` answers for the shot as it is now. A spoken shot is
-    conditioned to S2V by the voice pipeline moments before camera, so staging
+    conditioned to S2V by the speech lane moments before camera, so staging
     its current engine would copy the wrong 100+ GB family and then load S2V
     cold. Predict the conditioned family instead; preflight still resolves the
     real inputs when the take rolls.
@@ -320,9 +324,8 @@ def boundary_fallback_reason(project: Project, shot: Shot) -> str | None:
 def _speaker_changes(project: Project, previous_shot: Shot, shot: Shot) -> bool:
     """A spoken Shot whose speaker differs from the prior Shot's is a cut, not a continuation.
 
-    The prior print frames the prior speaker (a close-up, or a wide frame the
-    model animated for them); continuing from it would put this line on that
-    face. The Shot restarts from the reference still and crops its own speaker.
+    The prior print frames the prior speaker; continuing from it would put
+    this line on that face. The Shot restarts from the reference still.
     """
     if not shot_speaks_here(shot):
         return False
@@ -495,97 +498,15 @@ def _generate_http_job(payload: dict, destination: Path, *, timeout: float) -> P
     raise RuntimeError(f"Wan job {job_id} timed out after {int(timeout)} seconds")
 
 
-SPEAKER_FACES_FILE = "speaker-faces.json"
-CLOSEUP_WIDTH_FACTOR = 3.2  # crop width as a multiple of the face width: a medium close-up
-CLOSEUP_MIN_WIDTH = 480.0
-CLOSEUP_FACE_HEADROOM = 0.42  # the face centre sits at 42 % of the crop height
-
-
-def speaker_faces_path(project: Project) -> Path:
-    return vault_root() / "projects" / project.id / "references" / SPEAKER_FACES_FILE
-
-
-def learn_speaker_face(project: Project, character_id: str, center: tuple[float, float], *, width: int = 1280, height: int = 720) -> None:
-    """Remember where a character's face sits in the wide frame after a qualified S2V pass."""
-    path = speaker_faces_path(project)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        known = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-    except (OSError, json.JSONDecodeError):
-        known = {}
-    if not isinstance(known, dict):
-        known = {}
-    point = (center[0] / width, center[1] / height)
-    for other, row in known.items():
-        if other == character_id or not (isinstance(row, list) and len(row) == 2):
-            continue
-        if abs(float(row[0]) - point[0]) + abs(float(row[1]) - point[1]) <= KNOWN_FACE_TOLERANCE:
-            # S2V animated a face that already belongs to another character:
-            # that is the model's choice, not this character's identity.
-            return
-    known[character_id] = [round(point[0], 4), round(point[1], 4)]
-    path.write_text(json.dumps(known, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-KNOWN_FACE_TOLERANCE = 0.12  # normalised L1 distance between two face centres
-
-
-def _known_faces(project: Project) -> dict[str, tuple[float, float]]:
-    path = speaker_faces_path(project)
-    try:
-        known = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(known, dict):
-        return {}
-    faces: dict[str, tuple[float, float]] = {}
-    for character_id, row in known.items():
-        if isinstance(row, list) and len(row) == 2:
-            faces[str(character_id)] = (float(row[0]), float(row[1]))
-    return faces
-
-
-_STAGING_CUES = (
-    ("left", re.compile(r"\b(left|stage left|screen left)\b", re.IGNORECASE)),
-    ("right", re.compile(r"\b(right|stage right|screen right)\b", re.IGNORECASE)),
-    ("centre", re.compile(r"\b(cent(?:re|er)|middle|between)\b", re.IGNORECASE)),
-)
-
-
-def staging_cue(idea: str, name: str) -> str | None:
-    """The brief's left / centre / right placement of a named character, if stated.
-
-    Only the sentence that names the character counts, and only its first
-    placement word: "Lila sits on a stool to his right" → "right". The cue is
-    weak evidence — authors and stills disagree — so callers apply it only
-    among faces not already known to be someone else.
-    """
-    clean_name = (name or "").strip()
-    if not clean_name or not idea:
-        return None
-    for sentence in re.split(r"(?<=[.!?])\s+|\n+", idea):
-        if not re.search(rf"\b{re.escape(clean_name)}\b", sentence, re.IGNORECASE):
-            continue
-        hits = [
-            (match.start(), cue)
-            for cue, pattern in _STAGING_CUES
-            if (match := pattern.search(sentence))
-        ]
-        if hits:
-            return min(hits)[1]
-    return None
-
-
-def _known_speaker_face(project: Project, character_id: str) -> tuple[float, float] | None:
-    path = speaker_faces_path(project)
-    try:
-        known = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-    except (OSError, json.JSONDecodeError):
-        return None
-    row = known.get(character_id) if isinstance(known, dict) else None
-    if isinstance(row, list) and len(row) == 2:
-        return float(row[0]), float(row[1])
-    return None
+def _primary_character_id(project: Project, shot: Shot) -> str:
+    """The Shot's lead character (same roster rule as the speech lane; never raises here)."""
+    known = {character.id for character in project.bible.characters}
+    for character_id in shot.character_ref_ids:
+        if character_id in known:
+            return character_id
+    if project.bible.characters:
+        return project.bible.characters[0].id
+    return "char-lead"
 
 
 def _speaker_character_id(project: Project, shot: Shot) -> str:
@@ -593,136 +514,6 @@ def _speaker_character_id(project: Project, shot: Shot) -> str:
         if turn.character_id:
             return turn.character_id
     return _primary_character_id(project, shot)
-
-
-def choose_speaker_face(
-    faces: list[tuple[float, float, float, float, float]],
-    *,
-    known: tuple[float, float] | None,
-    width: int,
-    height: int,
-    exclude: tuple[tuple[float, float], ...] = (),
-    cue: str | None = None,
-) -> tuple[tuple[float, float, float, float, float], str] | None:
-    """Pick the speaker's face from evidence, never by guessing among equals.
-
-    Evidence, strongest first: a face learned from a qualified take of this
-    character; the only face left once other characters' known faces are
-    excluded; the brief's left / centre / right cue applied among the
-    remaining faces. With several unassigned faces and no cue, the wide
-    framing stays.
-    """
-    if not faces:
-        return None
-
-    def distance(face, point) -> float:
-        return abs(face[0] + face[2] / 2 - point[0] * width) + abs(face[1] + face[3] / 2 - point[1] * height)
-
-    if known is not None:
-        nearest = min(faces, key=lambda f: distance(f, known))
-        if distance(nearest, known) <= KNOWN_FACE_TOLERANCE * (width + height):
-            return nearest, "learned from a qualified take"
-    if len(faces) == 1:
-        return faces[0], "only face in the still"
-    candidates = [
-        face
-        for face in faces
-        if not any(distance(face, point) <= KNOWN_FACE_TOLERANCE * (width + height) for point in exclude)
-    ]
-    if len(candidates) == 1:
-        return candidates[0], "only face not already identified as another character"
-    if cue and len(candidates) >= 2:
-        ordered = sorted(candidates, key=lambda f: f[0] + f[2] / 2)
-        if cue == "left":
-            return ordered[0], "staged left in the brief"
-        if cue == "right":
-            return ordered[-1], "staged right in the brief"
-        if cue == "centre":
-            return ordered[len(ordered) // 2], "staged centre in the brief"
-    return None
-
-
-def closeup_box(face: tuple[float, float, float, float, float], *, width: int, height: int) -> tuple[int, int, int, int]:
-    """A 16:9 medium close-up around a face box, clamped to the still."""
-    x, y, w, h, _score = face
-    crop_w = max(CLOSEUP_MIN_WIDTH, CLOSEUP_WIDTH_FACTOR * w)
-    crop_w = min(crop_w, float(width))
-    crop_h = min(float(height), crop_w * 9.0 / 16.0)
-    crop_w = crop_h * 16.0 / 9.0
-    cx = x + w / 2.0
-    cy = y + h / 2.0
-    left = min(max(0.0, cx - crop_w / 2.0), width - crop_w)
-    top = min(max(0.0, cy - crop_h * CLOSEUP_FACE_HEADROOM), height - crop_h)
-    return int(round(left)), int(round(top)), int(round(crop_w)), int(round(crop_h))
-
-
-def speaker_keyframe(project: Project, shot: Shot, still: Path | None) -> Path | None:
-    """Crop the speaking character from the wide still for S2V, when that face is known."""
-    if still is None or not shot_speaks_here(shot):
-        return still
-    detector_model = os.environ.get("DIONY_FACE_DETECTOR_MODEL", "").strip()
-    if not detector_model or not Path(detector_model).is_file():
-        return still
-    character_id = _speaker_character_id(project, shot)
-    try:
-        from diony_producer.av_sync import detect_faces
-
-        faces = detect_faces(still, detector_model=Path(detector_model))
-    except Exception as exc:  # noqa: BLE001 — a framing aid never blocks camera
-        record_activity("wan", f"{shot.id} · wide framing kept · face detection failed: {str(exc)[:120]}", level="warn", shot_id=shot.id)
-        return still
-    width, height = 1280, 720
-    known_faces = _known_faces(project)
-    names = {character.id: character.name for character in project.bible.characters}
-    cue = staging_cue(project.brief.idea if project.brief is not None else "", names.get(character_id, ""))
-    choice = choose_speaker_face(
-        faces,
-        known=known_faces.get(character_id),
-        width=width,
-        height=height,
-        exclude=tuple(point for other, point in known_faces.items() if other != character_id),
-        cue=cue,
-    )
-    if choice is None:
-        record_activity(
-            "wan",
-            f"{shot.id} · wide framing kept · {len(faces)} faces in the still and {character_id} is not yet identified",
-            level="info",
-            shot_id=shot.id,
-        )
-        return still
-    face, reason = choice
-    left, top, crop_w, crop_h = closeup_box(face, width=width, height=height)
-    fingerprint = f"{still.stat().st_size}-{left}-{top}-{crop_w}-{crop_h}"
-    destination = still.with_name(f"{shot.id}-{character_id}-closeup-{fingerprint}.png")
-    if destination.is_file() and destination.stat().st_size > 32:
-        return destination
-    ffmpeg = resolve_media_tool("ffmpeg")
-    if not ffmpeg:
-        return still
-    pending = destination.with_name(f".{destination.stem}.part.png")
-    pending.unlink(missing_ok=True)
-    command = [
-        ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(still),
-        "-vf", f"crop={crop_w}:{crop_h}:{left}:{top},scale=1280:720:flags=lanczos",
-        "-frames:v", "1", str(pending),
-    ]
-    try:
-        subprocess.run(command, capture_output=True, check=True, timeout=90)
-        if not pending.is_file() or pending.stat().st_size <= 32:
-            raise RuntimeError("FFmpeg produced no close-up keyframe")
-        pending.replace(destination)
-    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
-        pending.unlink(missing_ok=True)
-        record_activity("wan", f"{shot.id} · wide framing kept · close-up crop failed: {str(exc)[:120]}", level="warn", shot_id=shot.id)
-        return still
-    record_activity(
-        "wan",
-        f"{shot.id} · medium close-up keyframe on {character_id} ({reason}; crop {crop_w}×{crop_h} at {left},{top})",
-        level="live",
-        shot_id=shot.id,
-    )
-    return destination
 
 
 def conditioning_sidecar(negative: Path) -> Path:
@@ -733,8 +524,8 @@ def record_conditioning_image(negative: Path, image: Path | None, *, source: str
     """Write which still actually conditioned this negative, next to it.
 
     AutoQC's reference lock must compare the print with the image the camera
-    started from — the speaker close-up crop or the previous print's last
-    frame — not with the wide subject still those were derived from.
+    started from — the reference still or the previous print's last frame —
+    so the sidecar names it and its hash.
     """
     sidecar = conditioning_sidecar(negative)
     if image is None or not image.is_file():
@@ -742,10 +533,19 @@ def record_conditioning_image(negative: Path, image: Path | None, *, source: str
         return
     digest = hashlib.sha256(image.read_bytes()).hexdigest()
     sidecar.parent.mkdir(parents=True, exist_ok=True)
-    sidecar.write_text(
-        json.dumps({"image": str(image), "sha256": digest, "source": source}, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    payload: dict = {"image": str(image), "sha256": digest, "source": source}
+    sidecar.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def conditioning_source(negative: Path) -> str:
+    """'boundary', 'reference', or '' — what the camera started this negative from."""
+    sidecar = conditioning_sidecar(negative)
+    if not sidecar.is_file():
+        return ""
+    try:
+        return str(json.loads(sidecar.read_text(encoding="utf-8")).get("source") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
 
 
 def conditioning_image(negative: Path) -> Path | None:
@@ -793,19 +593,22 @@ def generate_clip(
         _announce_boundary_fallback(shot, reason)
     image = boundary or canonical
     source = "boundary" if boundary is not None else "reference"
-    if str(getattr(shot.engine, "value", shot.engine) or "") == "s2v-14B":
-        framed = speaker_keyframe(project, shot, image)
-        if framed is not None and framed != image:
-            source = "closeup"
-        image = framed
     record_conditioning_image(dest, image, source=source)
     audio = _audio_reference(project, shot)
     animate_root = _animate_reference_root(project, shot)
+    # Recorded audio on the Shot is the performance; otherwise the authored
+    # line rides Wan2.2's own TTS lane (--enable_tts) and Wan speaks it.
+    speech = None
+    if audio is None and shot_speaks_here(shot):
+        from diony_producer.voice import wan_speech_inputs
+
+        speech = wan_speech_inputs(project, shot)
     task = resolve_camera_task(
         shot.engine.value,
         image,
         audio=audio,
         animate_root=animate_root,
+        speech=speech is not None,
     )
     quality_lora_ids = qualified_quality_loras(shot, task)
     prompt_diagnostics = validate_wan_prompt_dispatch(shot)
@@ -828,6 +631,9 @@ def generate_clip(
             "animate_root": str(animate_root) if animate_root else None,
             "quality_lora_ids": quality_lora_ids,
             "guide_scale": shot.s2v_guide_scale,
+            "tts_text": speech["tts_text"] if speech else None,
+            "tts_prompt_audio": speech["tts_prompt_audio"] if speech else None,
+            "tts_prompt_text": speech["tts_prompt_text"] if speech else None,
         }
         return _generate_http_job(payload, dest, timeout=timeout)
     run_generate(
@@ -844,5 +650,6 @@ def generate_clip(
         quality_lora_ids=quality_lora_ids,
         attention_backend=attention_backend,
         guide_scale=shot.s2v_guide_scale,
+        speech=speech,
     )
     return dest

@@ -162,8 +162,10 @@ class WanJobManager:
         last_image: Path | None = None,
         audio: Path | None = None,
         animate_root: Path | None = None,
+        speech: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         destination = destination.resolve()
+        tts = dict(speech or {})
         job_id = f"wan-{uuid.uuid4().hex}"
         with self._guard:
             self._claim_destination(job_id, destination)
@@ -177,6 +179,9 @@ class WanJobManager:
                 "image": str(image.resolve()) if image else None,
                 "last_image": str(last_image.resolve()) if last_image else None,
                 "audio": str(audio.resolve()) if audio else None,
+                "tts_text": str(tts.get("tts_text") or "") or None,
+                "tts_prompt_audio": str(tts.get("tts_prompt_audio") or "") or None,
+                "tts_prompt_text": str(tts.get("tts_prompt_text") or "") or None,
                 "animate_root": str(animate_root.resolve()) if animate_root else None,
                 "submitted_at": _now(),
                 "submitted_monotonic": time.monotonic(),

@@ -135,11 +135,12 @@ grammar, and motion direction; stitch then color-matches and smooths the bounded
 segments.
 
 Narration, dialogue, singing, or lipsynced intent creates a mandatory
-VoiceProfile/PerformanceScript job before camera. It routes to S2V only after the
-Shot owns a verified processed clean-dialogue Asset, a reference image or selected
-prior frame, and the signed site has the qualified S2V runtime. The native request
-passes the image/frame anchor and locked audio; it never substitutes T2V. Final
-Mix assembles the verified clip mix and never generates narration after picture.
+VoiceCasting / WanSpeechRequest lock before camera. It routes to S2V only when
+the Shot owns a reference image or selected prior frame and the signed site has
+the qualified S2V runtime and speech pack. The native request passes the
+image/frame anchor plus Wan's own TTS inputs (or recorded audio); it never
+substitutes T2V. Final Mix assembles the verified clip stems and never
+generates narration after picture.
 Score and non-speech sound remain versioned Mix stems. Animate likewise requires
 an exact character still plus the official preprocessed motion source root; an
 unprepared video may not be mislabeled as Animate conditioning.
@@ -289,7 +290,7 @@ described as an applied LoRA.
   on retake upgrade.
 - A reference-led sequence uses I2V for every Shot and prior-final-frame
   continuity after Shot one.
-- Narration text schedules the mandatory VoiceProfile/performance/audio job and then S2V when an image or prior-frame anchor exists.
+- Narration text schedules the mandatory VoiceCasting / WanSpeechRequest lock and then S2V through Wan's own TTS inputs when an image or prior-frame anchor exists; the spoken plan directs the performance and never carries the words.
 - Recorded on-camera speech or singing plus a still schedules S2V and carries
   both media inputs through the durable job record.
 - A sequence longer than eight seconds is assembled from bounded segments; after

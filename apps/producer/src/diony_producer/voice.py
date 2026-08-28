@@ -1,62 +1,77 @@
-"""Voice identity, performance scripting, studio audio, and animation coupling.
+"""The Wan2.2-native spoken lane.
 
-The production path fails closed unless local synthesis, embedding, alignment,
-and audiovisual-QC backends are configured. ``DIONY_DRY_RUN`` selects the
-deterministic test backend; its tones and metrics are never a deliverable path.
+Diony does not synthesize dialogue. A spoken Shot is cast on a prompt clip
+(the site's local casting library by roster order, or a reference clip the
+maker attached), Producer hands Wan2.2 S2V the authored line and that clip
+through Wan's own TTS inputs (``--enable_tts --tts_prompt_audio
+--tts_prompt_text --tts_text``), and Wan performs the line, animates the face
+from the speech it hears, and muxes its speech into the negative. After the
+render Producer measures only what Wan delivered — voiced speech present, the
+line finished inside the window, the dialogue stem on the Bible loudness
+target — and binds that evidence to the negative for the program mix.
+
+The lane fails closed: without the Wan speech pack on the host (Wan's
+CosyVoice checkout and CosyVoice2-0.5B weights beside ``generate.py``, a
+casting library or default prompt clip) a spoken Take is a pre-camera hold
+with an actionable message, never a silent picture with a line owed later.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import os
-import shlex
-import shutil
-import struct
-import subprocess
-import sys
-import wave
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
 
-from diony_contracts.enums import AssetKind, Engine, LoudnessTarget, VoiceProfileSource, VoiceRenderState
-from diony_contracts.models import Asset, Character, Project, Shot, Take
-from diony_contracts.studio import speaker_name
+from diony_contracts.enums import AssetKind, Engine, LoudnessTarget, VoiceCastingSource, VoiceRenderState
+from diony_contracts.models import Asset, Project, Shot, Take
+from diony_contracts.studio import speaker_name, spoken_emotion
+from diony_contracts.voice import (
+    PROMPT_CLIP_MAX_SECONDS,
+    PROMPT_CLIP_MIN_SAMPLE_RATE,
+    PROMPT_CLIP_MIN_SECONDS,
+    SPEECH_BACKEND,
+    SpeechClipPackage,
+    SpeechQCReceipt,
+    VoiceCasting,
+    WanSpeechRequest,
+)
 from diony_contracts.wan_prompt import (
-    LOCKED_VOICE_AUDIO_STRATEGY,
+    WAN_NATIVE_TTS_AUDIO_STRATEGY,
     render_negative_prompt,
     render_wan_prompt,
     spoken_wan_prompt_plan,
 )
-from diony_contracts.voice import (
-    DialogueTurn,
-    EmotionPerformance,
-    PerformanceScript,
-    PerformanceScriptLine,
-    ProsodySignature,
-    VoiceClipPackage,
-    VoiceProfile,
-    VoiceQCReceipt,
-    VoiceReferenceSample,
+
+VOICE_LANE_VERSION = "diony-wan-native-speech-v1"
+SPEECH_QC_VERSION = "diony-speech-qc-v1"
+# Studio allocates authored dialogue at two words per second of Shot time;
+# Wan's TTS speaks English at roughly 2.3–2.8. Past three the line cannot
+# finish inside the window and the render would only prove it.
+MAX_WORDS_PER_SECOND = 3.0
+
+# Wan2.2's `WanS2V.load_tts()` looks for these beside generate.py (its cwd)
+# and would try to download them at render time when absent. Studio pins them.
+WAN_TTS_CHECKOUT = "CosyVoice"
+WAN_TTS_MODEL_DIR = "CosyVoice2-0.5B"
+WAN_TTS_MODEL_FILES = ("cosyvoice2.yaml", "llm.pt", "flow.pt", "hift.pt", "speech_tokenizer_v2.onnx")
+WAN_TTS_CHECKOUT_FILES = ("cosyvoice/cli/cosyvoice.py", "third_party/Matcha-TTS")
+HOST_SPEECH_ENV_KEYS = (
+    "DIONY_WAN_TTS_PROMPT_LIBRARY",
+    "DIONY_WAN_TTS_PROMPT_AUDIO",
+    "DIONY_WAN_TTS_PROMPT_TEXT",
 )
-
-
-VOICE_QC_VERSION = "diony-voice-qc-v2"
-# v4: per-character prompt casting + cast-distinct QC; cached v3 audio predates
-# distinct casting and must not be reused.
-VOICE_PIPELINE_VERSION = "diony-voice-performance-v4"
+PROMPT_CLIP_SUFFIXES = (".wav", ".mp3", ".flac")
 
 
 class VoicePipelineError(RuntimeError):
-    """A mandatory voice or performance gate could not produce evidence."""
+    """A spoken Take cannot roll (or cannot pass) for a stated, actionable reason."""
 
 
-def _sha256_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
+def _enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _sha256_file(path: Path) -> str:
@@ -67,172 +82,207 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _media_duration_seconds(path: Path) -> float:
-    """Measure a local reference clip without trusting caller-supplied duration."""
-    try:
-        with wave.open(str(path), "rb") as source:
-            rate = source.getframerate()
-            if rate > 0:
-                return source.getnframes() / rate
-    except (EOFError, OSError, wave.Error):
-        pass
-
-    ffprobe = os.environ.get("DIONY_FFPROBE", "").strip() or shutil.which("ffprobe")
-    if not ffprobe:
-        return 0.0
-    result = subprocess.run(
-        [
-            ffprobe,
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            str(path),
-        ],
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    if result.returncode != 0:
-        return 0.0
-    try:
-        return float(result.stdout.strip())
-    except ValueError:
-        return 0.0
+def _wan_repo() -> Path:
+    return Path(os.environ.get("DIONY_WAN_REPO", "").strip() or "/opt/wan22")
 
 
-def _stable_seed(*parts: str) -> int:
-    digest = hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
-    return int(digest[:12], 16) % 2_000_000_000
+def _vault() -> Path:
+    from diony_producer.vault import vault_root
+
+    return vault_root()
 
 
-def _stable_embedding(*parts: str, dimensions: int = 192) -> list[float]:
-    values: list[float] = []
-    counter = 0
-    while len(values) < dimensions:
-        block = hashlib.sha256(("\x1f".join(parts) + f":{counter}").encode("utf-8")).digest()
-        values.extend((byte - 127.5) / 127.5 for byte in block)
-        counter += 1
-    vector = values[:dimensions]
-    norm = math.sqrt(sum(value * value for value in vector)) or 1.0
-    return [round(value / norm, 8) for value in vector]
+def _asset_path(project: Project, asset_id: str, *, vault: Path | None = None) -> Path:
+    asset = project.asset(asset_id)
+    path = Path(asset.path)
+    return path if path.is_absolute() else (vault or _vault()) / path
 
 
-# Synthetic identity calibration. A synthetic voice enrolls from its own
-# render, so a single-utterance embedding compared with itself is tautological
-# (1.0) while the same voice on different text lands far lower (CAM++ measured
-# 0.78 on a CosyVoice2 zero-shot voice). The floor is therefore *measured*: two
-# renders on different text give the within-speaker similarity, the profile
-# embedding becomes their centroid, and the floor sits a margin below the
-# measurement, bounded so a lucky pair cannot demand near-identity and an
-# unlucky one cannot accept anyone.
-SYNTHETIC_ENROLLMENT_V1 = ":synthetic-enrollment-v1"
-SYNTHETIC_ENROLLMENT_V2 = ":synthetic-enrollment-v2"
-CALIBRATION_TEXT = (
-    "The kettle has started to sing, and the morning light is warm across the kitchen table."
-)
-IDENTITY_FLOOR_MARGIN = 0.08
-# CAM++ speaker embeddings are unreliable below ~1.5 s of speech: a two-word
-# turn ("you two.") renders in 0.5 s and scores far under a floor that was
-# calibrated on calibration-length speech. Short lines are judged on a probe
-# render of the line followed by the calibration sentence, under the line's
-# exact conditioning (seed, prompt, references); the delivered audio is the
-# plain line.
-IDENTITY_PROBE_MIN_SECONDS = 1.5
-IDENTITY_FLOOR_MIN = 0.60
-IDENTITY_FLOOR_MAX = 0.90
-LEGACY_IDENTITY_FLOOR = 0.92
-CAST_IDENTITY_MARGIN = 0.05
+@dataclass(frozen=True)
+class PromptClip:
+    """The clip Wan2.2 clones for one character, resolved on this host."""
+
+    path: Path
+    text: str
+    source: str
+    sha256: str
 
 
-def identity_floor_from(within_similarity: float) -> float:
-    return round(min(IDENTITY_FLOOR_MAX, max(IDENTITY_FLOOR_MIN, within_similarity - IDENTITY_FLOOR_MARGIN)), 4)
+# --------------------------------------------------------------------------- casting
 
 
-def profile_identity_floor(profile: VoiceProfile) -> float:
-    return LEGACY_IDENTITY_FLOOR if profile.speaker_similarity_min is None else float(profile.speaker_similarity_min)
+def _roster_index(project: Project, character_id: str) -> int:
+    for index, character in enumerate(project.bible.characters):
+        if character.id == character_id:
+            return index
+    return len(project.bible.characters)
 
 
-def _unit(vector: list[float]) -> list[float]:
-    norm = math.sqrt(sum(value * value for value in vector)) or 1.0
-    return [value / norm for value in vector]
-
-
-def _centroid(left: list[float], right: list[float]) -> list[float]:
-    left_unit = _unit(left)
-    right_unit = _unit(right)
-    return _unit([0.5 * (a + b) for a, b in zip(left_unit, right_unit, strict=True)])
-
-
-def _cosine(left: list[float], right: list[float]) -> float:
-    if len(left) != len(right) or not left:
-        return -1.0
-    numerator = sum(a * b for a, b in zip(left, right, strict=True))
-    left_norm = math.sqrt(sum(value * value for value in left))
-    right_norm = math.sqrt(sum(value * value for value in right))
-    if not left_norm or not right_norm:
-        return -1.0
-    return max(-1.0, min(1.0, numerator / (left_norm * right_norm)))
-
-
-def _closest_rival(
-    observed: list[float],
-    profile: VoiceProfile,
-    cast: list[VoiceProfile],
-) -> tuple[str, float] | None:
-    """The other calibrated cast voice this render resembles most, if any."""
-    best: tuple[str, float] | None = None
-    for other in cast:
-        if other.character_id == profile.character_id or other.speaker_similarity_min is None:
-            continue
-        if len(other.speaker_embedding) != len(observed):
-            continue
-        score = _cosine(list(other.speaker_embedding), observed)
-        if best is None or score > best[1]:
-            best = (other.character_id, score)
-    return best
-
-
-def _deliverable_frames(shot: Shot) -> int:
-    """Frames the camera will actually deliver for this booking.
-
-    Voice timing must target camera truth: a legacy over-booked Shot renders at
-    the 81-frame lane cap, and audio sized to the fictional booking would fail
-    AV duration consistency after one wasted render.
-    """
-    from diony_contracts.live import wan_frame_num
-
-    booked = max(1, int(shot.duration_frames))
-    return min(booked, wan_frame_num(booked, shot.fps or 23.976))
-
-
-def _project_cast_rank(project: Project, profiles: list) -> dict[str, int]:
-    """Stable per-character cast order from the project roster.
-
-    The prompt-library clip a character is cast from must not depend on which
-    other characters happen to speak in a given shot: index by first appearance
-    in the project's voice-profile roster, so a two-hander's second lead keeps
-    the same voice in a later solo shot.
-    """
-    roster: dict[str, int] = {}
-    for profile in project.voice_profiles:
-        roster.setdefault(profile.character_id, len(roster))
-    for profile in profiles:
-        roster.setdefault(profile.character_id, len(roster))
-    return {profile.id: roster[profile.character_id] for profile in profiles}
-
-
-def _enabled(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _character(project: Project, character_id: str) -> Character:
+def _character(project: Project, character_id: str):
     for character in project.bible.characters:
         if character.id == character_id:
             return character
-    raise VoicePipelineError(f"Dialogue names unknown character {character_id}")
+    raise VoicePipelineError(f"{character_id} is not a Bible character on this Project")
+
+
+class VoiceCastingRegistry:
+    """Project-scoped casting decisions: which prompt clip each character clones."""
+
+    def __init__(self, project: Project) -> None:
+        self.project = project
+
+    def current(self, character_id: str) -> VoiceCasting | None:
+        character = next((item for item in self.project.bible.characters if item.id == character_id), None)
+        if character is not None and character.voice_casting_id:
+            for casting in self.project.voice_castings:
+                if casting.id == character.voice_casting_id:
+                    return casting
+        for casting in reversed(self.project.voice_castings):
+            if casting.character_id == character_id:
+                return casting
+        return None
+
+    def ensure_library(self, character_id: str) -> VoiceCasting:
+        """Cast the character on the site's library by roster order (idempotent)."""
+        existing = self.current(character_id)
+        if existing is not None:
+            return existing
+        character = _character(self.project, character_id)
+        casting = VoiceCasting(
+            id=f"cast-{character.id}-v1",
+            project_id=self.project.id,
+            character_id=character.id,
+            source=VoiceCastingSource.LIBRARY,
+            cast_index=_roster_index(self.project, character.id),
+            descriptors={"name": character.name, "notes": character.notes, "wardrobe": character.wardrobe},
+            locked=True,
+            locked_at=datetime.now(timezone.utc),
+        )
+        self.project.voice_castings.append(casting)
+        character.voice_casting_id = casting.id
+        return casting
+
+    def cast_from_reference(
+        self,
+        character_id: str,
+        asset_id: str,
+        *,
+        prompt_text: str = "",
+        descriptors: dict[str, str] | None = None,
+        vault: Path | None = None,
+    ) -> VoiceCasting:
+        """Cast the character on a local reference clip the maker attached.
+
+        Wan2.2's TTS clones a 5–15 s clip above 16 kHz; the transcript, when
+        given, must match the clip exactly (zero-shot cloning), otherwise Wan
+        clones cross-lingually from the audio alone. A reference casting is a
+        Bible-lock decision: it replaces a library casting and is itself
+        immutable — recasting needs a new Project or versioned Bible.
+        """
+        from diony_producer.speech_audio import SpeechAudioError, media_duration_seconds, prompt_clip_sample_rate
+
+        character = _character(self.project, character_id)
+        existing = self.current(character_id)
+        if existing is not None and existing.source == VoiceCastingSource.REFERENCE:
+            raise VoicePipelineError(
+                "This character already has a locked reference voice. Create a new Project or versioned Bible to change identity."
+            )
+        try:
+            asset = self.project.asset(asset_id)
+        except KeyError as exc:
+            raise VoicePipelineError(f"Voice reference asset {asset_id} is not on this Project") from exc
+        if asset.kind != AssetKind.AUDIO:
+            raise VoicePipelineError(f"Voice reference asset {asset_id} is not audio")
+        path = _asset_path(self.project, asset_id, vault=vault)
+        if not path.is_file() or path.stat().st_size <= 44:
+            raise VoicePipelineError(f"Voice reference bytes are missing: {asset_id}")
+        duration = media_duration_seconds(path)
+        if not PROMPT_CLIP_MIN_SECONDS <= duration <= PROMPT_CLIP_MAX_SECONDS:
+            raise VoicePipelineError(
+                f"Wan2.2 clones a {PROMPT_CLIP_MIN_SECONDS:g}–{PROMPT_CLIP_MAX_SECONDS:g} second prompt clip; "
+                f"{asset.filename} runs {duration:.1f} s"
+            )
+        try:
+            rate = prompt_clip_sample_rate(path)
+        except SpeechAudioError:
+            rate = 0
+        if rate and rate < PROMPT_CLIP_MIN_SAMPLE_RATE:
+            raise VoicePipelineError(
+                f"Wan2.2 clones prompt clips at {PROMPT_CLIP_MIN_SAMPLE_RATE // 1000} kHz or better; {asset.filename} is {rate} Hz"
+            )
+        version = 1 + sum(1 for item in self.project.voice_castings if item.character_id == character_id)
+        casting = VoiceCasting(
+            id=f"cast-{character.id}-v{version}",
+            project_id=self.project.id,
+            character_id=character.id,
+            source=VoiceCastingSource.REFERENCE,
+            cast_index=_roster_index(self.project, character.id),
+            prompt_audio_asset_id=asset.id,
+            prompt_audio_sha256=asset.sha256 or _sha256_file(path),
+            prompt_duration_seconds=round(duration, 3),
+            prompt_text=" ".join(str(prompt_text or asset.metadata.get("transcript") or "").split()),
+            descriptors=dict(descriptors or {}),
+            locked=True,
+            locked_at=datetime.now(timezone.utc),
+        )
+        self.project.voice_castings.append(casting)
+        character.voice_casting_id = casting.id
+        return casting
+
+
+def _library_clips(library: Path) -> list[Path]:
+    if not library.is_dir():
+        return []
+    return sorted(
+        path for path in library.iterdir() if path.is_file() and path.suffix.lower() in PROMPT_CLIP_SUFFIXES
+    )
+
+
+def _sidecar_transcript(clip: Path) -> str:
+    for candidate in (clip.with_suffix(".txt"), clip.with_name(clip.name + ".txt")):
+        if candidate.is_file():
+            try:
+                return " ".join(candidate.read_text(encoding="utf-8").split())
+            except OSError:
+                continue
+    return ""
+
+
+def resolve_prompt_clip(project: Project, casting: VoiceCasting, *, vault: Path | None = None) -> PromptClip:
+    """The clip Wan2.2 clones for this casting, on this host.
+
+    Reference castings resolve to the attached Asset. Library castings resolve
+    to the site's casting library (``DIONY_WAN_TTS_PROMPT_LIBRARY``, clips in
+    name order, slot = cast index modulo the library size, transcript from a
+    sibling ``.txt``), then to the single default clip
+    (``DIONY_WAN_TTS_PROMPT_AUDIO`` / ``DIONY_WAN_TTS_PROMPT_TEXT``).
+    """
+    if casting.source == VoiceCastingSource.REFERENCE:
+        path = _asset_path(project, casting.prompt_audio_asset_id, vault=vault)
+        if not path.is_file() or path.stat().st_size <= 44:
+            raise VoicePipelineError(f"Voice reference bytes are missing for {casting.character_id}")
+        return PromptClip(path=path, text=casting.prompt_text, source="reference", sha256=casting.prompt_audio_sha256 or _sha256_file(path))
+    library_dir = os.environ.get("DIONY_WAN_TTS_PROMPT_LIBRARY", "").strip()
+    clips = _library_clips(Path(library_dir)) if library_dir else []
+    if clips:
+        clip = clips[casting.cast_index % len(clips)]
+        return PromptClip(path=clip, text=_sidecar_transcript(clip), source=f"library:{clip.name}", sha256=_sha256_file(clip))
+    default = os.environ.get("DIONY_WAN_TTS_PROMPT_AUDIO", "").strip()
+    if default and Path(default).is_file():
+        text = " ".join(os.environ.get("DIONY_WAN_TTS_PROMPT_TEXT", "").split()) or _sidecar_transcript(Path(default))
+        return PromptClip(path=Path(default), text=text, source="default", sha256=_sha256_file(Path(default)))
+    raise VoicePipelineError(
+        "Voice casting failed: no Wan2.2 prompt clip is available on this host "
+        "(DIONY_WAN_TTS_PROMPT_LIBRARY / DIONY_WAN_TTS_PROMPT_AUDIO). Studio Connect seeds the casting library "
+        "with the Wan2.2 speech pack; attach a 5–15 s reference clip to cast this character directly."
+    )
+
+
+# --------------------------------------------------------------------------- the line
+
+
+def shot_speaks(shot: Shot) -> bool:
+    return bool(shot.dialogue_turns) or bool(" ".join(str(shot.audio_line or "").split()))
 
 
 def _primary_character_id(project: Project, shot: Shot) -> str:
@@ -242,1634 +292,334 @@ def _primary_character_id(project: Project, shot: Shot) -> str:
             return character_id
     if project.bible.characters:
         return project.bible.characters[0].id
-    raise VoicePipelineError(f"{shot.id} has dialogue but no Bible character")
+    raise VoicePipelineError(f"{shot.id} speaks but the Bible has no character to cast")
 
 
-class VoiceProfileRegistry:
-    """Project-scoped immutable profile revisions stored on the Project contract."""
-
-    def __init__(self, project: Project) -> None:
-        self.project = project
-
-    def current(self, character_id: str) -> VoiceProfile | None:
-        character = _character(self.project, character_id)
-        if character.voice_profile_id:
-            try:
-                return self.project.voice_profile(character.voice_profile_id)
-            except KeyError:
-                pass
-        versions = [
-            profile
-            for profile in self.project.voice_profiles
-            if profile.character_id == character_id and profile.locked
-        ]
-        return max(versions, key=lambda profile: profile.version) if versions else None
-
-    def ensure_synthetic(
-        self,
-        character_id: str,
-        descriptors: dict[str, str] | None = None,
-        *,
-        speaker_embedding: list[float] | None = None,
-        speaker_embedding_model: str | None = None,
-    ) -> VoiceProfile:
-        current = self.current(character_id)
-        if current is not None:
-            return current
-        character = _character(self.project, character_id)
-        details = descriptors or {}
-        seed = _stable_seed(character.id, character.name, "voice-v1")
-        descriptor = " ".join(
-            (
-                character.name,
-                character.notes,
-                character.wardrobe,
-                details.get("age", ""),
-                details.get("gender", ""),
-                details.get("accent", ""),
-                details.get("texture", ""),
+def spoken_line(project: Project, shot: Shot) -> tuple[str, str]:
+    """(character id, text) for the Shot's line: one on-camera speaker per window."""
+    turns = [turn for turn in shot.dialogue_turns if " ".join(turn.text.split())]
+    if turns:
+        speakers = list(dict.fromkeys(turn.character_id or _primary_character_id(project, shot) for turn in turns))
+        if len(speakers) > 1:
+            raise VoicePipelineError(
+                f"Voice casting failed: {shot.id} carries lines for {', '.join(speakers)}; "
+                "Wan2.2 S2V performs one speaker per window, split the Shot."
             )
-        ).strip()
-        profile = VoiceProfile(
-            id=f"voice-{character.id}-v1",
-            project_id=self.project.id,
-            character_id=character.id,
-            version=1,
-            source=VoiceProfileSource.SYNTHETIC,
-            speaker_embedding_model=(
-                speaker_embedding_model or "diony-synthetic-speaker-space-v1"
-            ),
-            speaker_embedding=(
-                list(speaker_embedding)
-                if speaker_embedding is not None
-                else _stable_embedding(character.id, descriptor)
-            ),
-            prosody=ProsodySignature(
-                pitch_floor_hz=105,
-                pitch_ceiling_hz=310,
-                speaking_rate_syllables_per_second=4.0,
-                breath_interval_seconds=5.0,
-                vocal_fry=0.08,
-                pause_bias=0.5,
-            ),
-            emotion_map=[
-                EmotionPerformance(emotion="neutral", timbre="locked natural character voice"),
-                EmotionPerformance(
-                    emotion="joy",
-                    intensity_curve=[0.25, 0.55, 0.4],
-                    rate_multiplier=1.06,
-                    pitch_shift_semitones=0.8,
-                    timbre="brighter resonance without identity change",
-                ),
-                EmotionPerformance(
-                    emotion="grief",
-                    intensity_curve=[0.2, 0.65, 0.35],
-                    rate_multiplier=0.9,
-                    pitch_shift_semitones=-0.5,
-                    timbre="restrained breath and stable chest resonance",
-                ),
-                EmotionPerformance(
-                    emotion="tension",
-                    intensity_curve=[0.35, 0.8, 0.55],
-                    rate_multiplier=1.03,
-                    pitch_shift_semitones=0.3,
-                    timbre="compressed breath with profile-locked texture",
-                ),
-            ],
-            age_descriptor=details.get("age", "Bible locked"),
-            gender_descriptor=details.get("gender", "Bible locked"),
-            accent_descriptor=details.get("accent", "project neutral until directed"),
-            texture_descriptor=details.get("texture", "natural studio character voice"),
-            seed=seed,
-            style_lock=(
-                f"identity:{character.id}:synthetic-v1:"
-                f"{hashlib.sha256(descriptor.encode('utf-8')).hexdigest()[:16]}"
-            ),
-            locked=True,
-            locked_at=datetime.now(timezone.utc),
-        )
-        self.project.voice_profiles.append(profile)
-        character.voice_profile_id = profile.id
-        return profile
-
-    def lock_from_references(
-        self,
-        character_id: str,
-        samples: list[VoiceReferenceSample],
-        *,
-        speaker_embedding: list[float],
-        speaker_embedding_model: str,
-        descriptors: dict[str, str] | None = None,
-    ) -> VoiceProfile:
-        """Lock a zero/few-shot revision without mutating any earlier profile."""
-        character = _character(self.project, character_id)
-        prior = self.current(character_id)
-        version = (prior.version + 1) if prior else 1
-        details = descriptors or {}
-        profile = VoiceProfile(
-            id=f"voice-{character.id}-v{version}",
-            project_id=self.project.id,
-            character_id=character.id,
-            version=version,
-            parent_profile_id=prior.id if prior else None,
-            source=(VoiceProfileSource.ZERO_SHOT if len(samples) == 1 else VoiceProfileSource.FEW_SHOT),
-            reference_samples=samples,
-            speaker_embedding_model=speaker_embedding_model,
-            speaker_embedding=speaker_embedding,
-            prosody=ProsodySignature(),
-            emotion_map=[
-                EmotionPerformance(emotion=emotion)
-                for emotion in dict.fromkeys(sample.emotion for sample in samples)
-            ],
-            age_descriptor=details.get("age", "Bible locked"),
-            gender_descriptor=details.get("gender", "Bible locked"),
-            accent_descriptor=details.get("accent", "reference locked"),
-            texture_descriptor=details.get("texture", "reference locked"),
-            seed=_stable_seed(
-                character.id,
-                speaker_embedding_model,
-                _sha256_bytes(json.dumps(speaker_embedding).encode("utf-8")),
-                f"voice-v{version}",
-            ),
-            style_lock=(
-                f"identity:{character.id}:reference:"
-                f"{_sha256_bytes(json.dumps(speaker_embedding).encode('utf-8'))[:16]}"
-            ),
-            locked=True,
-            locked_at=datetime.now(timezone.utc),
-        )
-        self.project.voice_profiles.append(profile)
-        character.voice_profile_id = profile.id
-        return profile
-
-    def enroll_synthetic_render(
-        self,
-        profile: VoiceProfile,
-        *,
-        speaker_embedding: list[float],
-        speaker_embedding_model: str,
-        speaker_similarity_min: float | None = None,
-        enrollment_similarity: float | None = None,
-    ) -> VoiceProfile:
-        """Finalize an unreferenced synthetic identity from its measured renders."""
-        current = self.current(profile.character_id)
-        if current is None or current.id != profile.id:
-            raise VoicePipelineError("synthetic voice enrollment profile is no longer current")
-        if profile.source != VoiceProfileSource.SYNTHETIC or profile.reference_samples:
-            raise VoicePipelineError("only an unreferenced synthetic profile can be enrolled")
-        if len(speaker_embedding) != len(profile.speaker_embedding):
-            raise VoicePipelineError("synthetic enrollment embedding dimensions do not match")
-        payload = profile.model_dump(mode="python")
-        payload.update(
-            {
-                "identity_lineage_id": "",
-                "speaker_embedding_model": speaker_embedding_model,
-                "speaker_embedding": speaker_embedding,
-                "speaker_similarity_min": speaker_similarity_min,
-                "enrollment_similarity": enrollment_similarity,
-                "content_sha256": "",
-                "locked_at": datetime.now(timezone.utc),
-            }
-        )
-        enrolled = VoiceProfile.model_validate(payload)
-        for index, candidate in enumerate(self.project.voice_profiles):
-            if candidate.id == profile.id:
-                self.project.voice_profiles[index] = enrolled
-                break
-        return enrolled
+        ordered = sorted(turns, key=lambda turn: turn.start_ms)
+        return speakers[0], " ".join(" ".join(turn.text.split()) for turn in ordered)
+    text = " ".join(str(shot.audio_line or "").split())
+    if not text:
+        raise VoicePipelineError(f"{shot.id} has no dialogue")
+    return _primary_character_id(project, shot), text
 
 
-def _calibration_line(line: PerformanceScriptLine) -> PerformanceScriptLine:
-    """The same voice on fixed, different text: the second enrollment witness."""
-    return line.model_copy(
-        update={
-            "id": f"{line.id}-calibration",
-            "text": CALIBRATION_TEXT,
-            "spoken_text": CALIBRATION_TEXT,
-            "emotion": "neutral",
-            "intensity_curve": [0.25, 0.4, 0.3],
-            "phonetic_guidance": {},
-            "breath_after_word_indices": [],
-            "stress_word_indices": [],
-            "micro_pauses_ms": [],
-            "start_ms": 0,
-            "target_duration_ms": 8000,
-            "overlap_ms": 0,
-            "interrupts_line_id": None,
-            "subtext": "",
-        }
+def window_ms(shot: Shot) -> int:
+    rate = shot.fps if shot.fps and shot.fps > 1 else 23.976
+    return max(1, round(shot.duration_frames / rate * 1000))
+
+
+def speech_request_for(project: Project, shot: Shot, casting: VoiceCasting, *, prompt: PromptClip | None) -> WanSpeechRequest:
+    character_id, text = spoken_line(project, shot)
+    if casting.character_id != character_id:
+        raise VoicePipelineError(f"{shot.id} is cast for {casting.character_id} but {character_id} speaks the line")
+    return WanSpeechRequest(
+        character_id=character_id,
+        casting_id=casting.id,
+        tts_text=text,
+        tts_prompt_audio_sha256=prompt.sha256 if prompt is not None else "",
+        tts_prompt_text=prompt.text if prompt is not None else casting.prompt_text,
+        prompt_source=prompt.source if prompt is not None else "",
+        window_ms=window_ms(shot),
+        performance_direction=(shot.prompt_plan.motion if shot.prompt_plan is not None else ""),
     )
 
 
-def _dialogue_turns(project: Project, shot: Shot) -> list[DialogueTurn]:
-    if shot.dialogue_turns:
-        return list(shot.dialogue_turns)
-    line = " ".join(str(shot.audio_line or "").split()).strip()
-    if not line:
-        return []
-    return [
-        DialogueTurn(
-            id=f"turn-{shot.id}-1",
-            character_id=_primary_character_id(project, shot),
-            text=line,
-            emotion="neutral",
-            intensity_curve=[0.25, 0.45, 0.3],
+def _check_word_budget(shot: Shot, request: WanSpeechRequest) -> None:
+    seconds = request.window_ms / 1000.0
+    if request.word_count > math.ceil(seconds * MAX_WORDS_PER_SECOND):
+        raise VoicePipelineError(
+            f"Voice timing failed: {request.word_count} words cannot finish inside {shot.id}'s "
+            f"{seconds:.1f} s window (Wan2.2 speaks about {MAX_WORDS_PER_SECOND:g} words per second at most); "
+            "split the line across more Shots."
         )
-    ]
 
 
-def _emotion_curve(profile: VoiceProfile, emotion: str) -> list[float]:
-    for mapping in profile.emotion_map:
-        if mapping.emotion.casefold() == emotion.casefold():
-            return list(mapping.intensity_curve)
-    return [0.25, 0.45, 0.3]
-
-
-def optimize_voice_script(
-    project: Project,
-    shot: Shot,
-    profiles: list[VoiceProfile],
-) -> PerformanceScript:
-    """Compile dialogue into deterministic breath, stress, emotion, and timing decisions."""
-    turns = _dialogue_turns(project, shot)
-    if not turns:
-        raise VoicePipelineError(f"{shot.id} has no dialogue to optimize")
-    by_character = {profile.character_id: profile for profile in profiles}
-    clip_ms = max(1, round(_deliverable_frames(shot) / shot.fps * 1000))
-    default_line_ms = max(250, clip_ms // len(turns))
-    lines: list[PerformanceScriptLine] = []
-    cursor = 0
-    for index, turn in enumerate(turns):
-        profile = by_character.get(turn.character_id)
-        if profile is None:
-            raise VoicePipelineError(f"No locked voice profile for {turn.character_id}")
-        words = turn.text.split()
-        interval_words = max(
-            2,
-            round(
-                profile.prosody.breath_interval_seconds
-                * profile.prosody.speaking_rate_syllables_per_second
-                / 1.45
-            ),
+def _condition_shot(project: Project, shot: Shot, take: Take) -> None:
+    """Route the Shot to S2V with the spoken performance direction; the line rides the TTS inputs."""
+    shot.engine = Engine.S2V_14B
+    take.engine = Engine.S2V_14B
+    # The authored line is the performance: any earlier recorded/locked audio
+    # asset on the Shot would make the camera condition on it instead.
+    shot.audio_asset_ids = []
+    if shot.prompt_plan is not None:
+        shot.prompt_plan.generation_method = Engine.S2V_14B.value
+        shot.prompt_plan.audio_strategy = WAN_NATIVE_TTS_AUDIO_STRATEGY
+        directed = spoken_wan_prompt_plan(
+            shot.prompt_plan,
+            speaker=speaker_name(project.bible, shot),
+            focal_mm=shot.focal_mm,
+            emotion=spoken_emotion(shot),
+            audio_strategy=WAN_NATIVE_TTS_AUDIO_STRATEGY,
         )
-        breaths = [position for position in range(interval_words - 1, len(words) - 1, interval_words)]
-        if not breaths and len(words) > 3:
-            breaths = [max(1, len(words) // 2 - 1)]
-        stress = sorted(
-            range(len(words)),
-            key=lambda position: (len(words[position].strip(".,!?;:")), -position),
-            reverse=True,
-        )[: min(3, len(words))]
-        spoken_words = list(words)
-        for position in reversed(breaths):
-            spoken_words[position] = spoken_words[position].rstrip(",;:") + " |"
-        target_ms = turn.target_duration_ms or default_line_ms
-        start_ms = turn.start_ms if turn.start_ms else max(0, cursor - turn.overlap_ms)
-        target_ms = min(target_ms, max(1, clip_ms - min(start_ms, clip_ms - 1)))
-        intensity = list(turn.intensity_curve or _emotion_curve(profile, turn.emotion))
-        lines.append(
-            PerformanceScriptLine(
-                id=turn.id or f"turn-{shot.id}-{index + 1}",
-                shot_id=shot.id,
-                character_id=turn.character_id,
-                voice_profile_id=profile.id,
-                text=turn.text,
-                spoken_text=" ".join(spoken_words),
-                emotion=turn.emotion,
-                intensity_curve=intensity,
-                phonetic_guidance=dict(turn.pronunciation),
-                breath_after_word_indices=breaths,
-                stress_word_indices=sorted(stress),
-                micro_pauses_ms=[120 + round(profile.prosody.pause_bias * 80) for _ in breaths],
-                start_ms=start_ms,
-                target_duration_ms=target_ms,
-                overlap_ms=turn.overlap_ms,
-                interrupts_line_id=turn.interrupts_turn_id,
-                subtext=turn.subtext,
-            )
-        )
-        cursor = max(cursor, start_ms + target_ms)
-    identity = _sha256_bytes(
-        json.dumps(
-            {
-                "project": project.id,
-                "shot": shot.id,
-                "profiles": [profile.content_sha256 for profile in profiles],
-                "turns": [turn.model_dump(mode="json") for turn in turns],
-                "version": VOICE_PIPELINE_VERSION,
-            },
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-    )
-    return PerformanceScript(
-        id=f"vscript-{shot.id}-{identity[:12]}",
+        if directed is not None:
+            shot.prompt_plan = directed
+            shot.prompt = render_wan_prompt(directed)
+            shot.negative_prompt = render_negative_prompt(directed)
+
+
+def prepare_speech_for_take(project: Project, take: Take, *, vault: Path | None = None) -> SpeechClipPackage | None:
+    """Lock what Wan2.2 will be asked to say for this Take, before the camera rolls.
+
+    Returns None for a Shot that does not speak. Raises :class:`VoicePipelineError`
+    (a pre-camera hold; no Take is spent) when the line cannot be cast on this
+    host or cannot fit its window.
+    """
+    shot = project.shot(take.shot_id)
+    if not shot_speaks(shot):
+        return None
+    character_id, _text = spoken_line(project, shot)
+    registry = VoiceCastingRegistry(project)
+    casting = registry.current(character_id) or registry.ensure_library(character_id)
+    prompt: PromptClip | None
+    try:
+        prompt = resolve_prompt_clip(project, casting, vault=vault)
+    except VoicePipelineError:
+        if not _enabled("DIONY_DRY_RUN"):
+            raise
+        prompt = None
+    request = speech_request_for(project, shot, casting, prompt=prompt)
+    _check_word_budget(shot, request)
+    current = take.voice_package
+    if current is not None and current.request.content_sha256 == request.content_sha256 and current.qc is not None:
+        # The same request already rendered and was measured; keep the evidence.
+        _condition_shot(project, shot, take)
+        return current
+    package = SpeechClipPackage(
+        id=f"speech-{take.id}-{request.content_sha256[:12]}",
         project_id=project.id,
         shot_id=shot.id,
-        version=1,
-        narrative_context=(
-            project.brief.idea.strip()
-            if project.brief is not None and project.brief.idea.strip()
-            else project.bible.logline
-        ),
-        camera_language=(
-            f"{shot.camera_move.value}; {shot.focal_mm:g}mm at T{shot.t_stop:g}; "
-            f"{shot.lighting_ratio}; {shot.duration_frames} frames at {shot.fps:g} fps"
-        ),
-        pacing_target_ms=clip_ms,
-        lines=lines,
+        take_id=take.id,
+        character_id=character_id,
+        casting_id=casting.id,
+        request=request,
+        backend=SPEECH_BACKEND,
+        state=VoiceRenderState.PLANNED,
     )
+    take.voice_package = package
+    _condition_shot(project, shot, take)
+    return package
 
 
-@dataclass(frozen=True)
-class AudioMeasurements:
-    snr_db: float
-    integrated_lufs: float
-    true_peak_dbtp: float
-    harshness_score: float
-    sibilance_score: float
-    speech_presence_score: float = 1.0
-
-
-@dataclass(frozen=True)
-class AnimationMeasurements:
-    lip_sync_confidence: float
-    audiovisual_offset_ms_p95: float
-    performance_consistency: float
-    audiovisual_backend: str = ""
-    qualified_for_visual_retake: bool = False
-    diagnostics: tuple[str, ...] = ()
-
-
-class Synthesizer(Protocol):
-    name: str
-
-    def synthesize(
-        self,
-        line: PerformanceScriptLine,
-        profile: VoiceProfile,
-        output: Path,
-        *,
-        seed: int,
-        reference_paths: list[Path],
-        cast_index: int = 0,
-    ) -> None: ...
-
-
-class SpeakerEmbedder(Protocol):
-    name: str
-
-    def speaker_embedding(self, audio: Path, profile: VoiceProfile) -> list[float]: ...
-
-
-class PerformanceAligner(Protocol):
-    name: str
-
-    def align(self, audio: Path, line: PerformanceScriptLine) -> dict[str, Any]: ...
-
-
-class StudioAudioProcessor(Protocol):
-    def process_audio(
-        self,
-        lines: list[tuple[Path, PerformanceScriptLine]],
-        clean_output: Path,
-        final_output: Path,
-        *,
-        duration_ms: int,
-        target_lufs: float,
-        true_peak_dbtp: float,
-        seed: int,
-    ) -> AudioMeasurements: ...
-
-
-class AudiovisualQC(Protocol):
-    def verify_audiovisual(
-        self,
-        video: Path,
-        audio: Path,
-        performance_metadata: Path,
-    ) -> AnimationMeasurements: ...
-
-
-class DeterministicVoiceTestBackend:
-    """Deterministic non-production double selected only by explicit dry-run state."""
-
-    name = "diony-deterministic-test-voice-v1"
-
-    def __init__(self) -> None:
-        self.synthesis_calls = 0
-
-    @staticmethod
-    def _tone(path: Path, *, duration_ms: int, seed: int, frequency: float = 180.0) -> None:
-        sample_rate = 48_000
-        frames = max(1, round(duration_ms / 1000 * sample_rate))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        phase = (seed % 360) * math.pi / 180
-        with wave.open(str(path), "wb") as output:
-            output.setnchannels(1)
-            output.setsampwidth(2)
-            output.setframerate(sample_rate)
-            for index in range(frames):
-                envelope = min(1.0, index / 480) * min(1.0, (frames - index) / 480)
-                value = int(6000 * envelope * math.sin(2 * math.pi * frequency * index / sample_rate + phase))
-                output.writeframesraw(struct.pack("<h", value))
-
-    def synthesize(
-        self,
-        line: PerformanceScriptLine,
-        profile: VoiceProfile,
-        output: Path,
-        *,
-        seed: int,
-        reference_paths: list[Path],
-        cast_index: int = 0,
-    ) -> None:
-        del reference_paths, cast_index
-        self.synthesis_calls += 1
-        frequency = 135 + (sum(ord(char) for char in profile.character_id) % 110)
-        self._tone(output, duration_ms=line.target_duration_ms, seed=seed, frequency=frequency)
-
-    def speaker_embedding(self, audio: Path, profile: VoiceProfile) -> list[float]:
-        if not audio.is_file():
-            raise VoicePipelineError("test voice audio is missing")
-        return list(profile.speaker_embedding)
-
-    def reference_embedding(self, audio: Path, model: str) -> list[float]:
-        if not audio.is_file():
-            raise VoicePipelineError("test voice reference is missing")
-        return _stable_embedding(model, _sha256_file(audio))
-
-    def align(self, audio: Path, line: PerformanceScriptLine) -> dict[str, Any]:
-        del audio
-        words = line.text.split()
-        step = line.target_duration_ms / max(1, len(words))
-        cues = []
-        for index, word in enumerate(words):
-            start = round(line.start_ms + index * step, 3)
-            end = round(line.start_ms + (index + 1) * step, 3)
-            cues.append(
-                {
-                    "word": word,
-                    "phoneme": " ".join(char.casefold() for char in word if char.isalpha()),
-                    "viseme": "open" if any(char in "aeiouAEIOU" for char in word) else "closed",
-                    "start_ms": start,
-                    "end_ms": end,
-                    "jaw": round(0.35 + 0.4 * line.intensity_curve[min(index, len(line.intensity_curve) - 1)], 3),
-                    "brow": round(0.15 + 0.5 * max(line.intensity_curve), 3),
-                    "head_energy": round(0.2 + 0.55 * max(line.intensity_curve), 3),
-                }
-            )
-        return {"line_id": line.id, "cues": cues, "source": self.name}
-
-    def process_audio(
-        self,
-        lines: list[tuple[Path, PerformanceScriptLine]],
-        clean_output: Path,
-        final_output: Path,
-        *,
-        duration_ms: int,
-        target_lufs: float,
-        true_peak_dbtp: float,
-        seed: int,
-    ) -> AudioMeasurements:
-        del lines
-        self._tone(clean_output, duration_ms=duration_ms, seed=seed, frequency=195)
-        self._tone(final_output, duration_ms=duration_ms, seed=seed, frequency=195)
-        return AudioMeasurements(
-            snr_db=48.0,
-            integrated_lufs=target_lufs,
-            true_peak_dbtp=true_peak_dbtp - 0.2,
-            harshness_score=0.04,
-            sibilance_score=0.05,
-            speech_presence_score=1.0,
-        )
-
-    def verify_audiovisual(
-        self,
-        video: Path,
-        audio: Path,
-        performance_metadata: Path,
-    ) -> AnimationMeasurements:
-        if not video.is_file() or not audio.is_file() or not performance_metadata.is_file():
-            raise VoicePipelineError("deterministic audiovisual evidence is missing")
-        return AnimationMeasurements(
-            lip_sync_confidence=0.98,
-            audiovisual_offset_ms_p95=8.0,
-            performance_consistency=0.97,
-            audiovisual_backend=self.name,
-            qualified_for_visual_retake=True,
-        )
-
-
-class LocalVoiceCommandBackend:
-    """Swappable local model adapter for synthesis, embeddings, alignment, and AV QC.
-
-    The configured executable receives ``<action> --request JSON`` and writes
-    the response path named by the request. This keeps model-specific Python
-    environments outside Producer's packaged runtime.
-    """
-
-    name = "diony-local-voice-command-v1"
-
-    def __init__(self, command: str) -> None:
-        self.command = shlex.split(command)
-        if not self.command:
-            raise VoicePipelineError("DIONY_VOICE_BACKEND_COMMAND is empty")
-
-    def _invoke(self, action: str, request: dict[str, Any], response_path: Path) -> dict[str, Any]:
-        response_path.parent.mkdir(parents=True, exist_ok=True)
-        request_path = response_path.with_suffix(response_path.suffix + f".{action}.request.json")
-        request_path.write_text(json.dumps(request, indent=2, sort_keys=True) + "\n")
-        command = [*self.command, action, "--request", str(request_path), "--response", str(response_path)]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=1800, check=False)
-        if result.returncode:
-            detail = (result.stderr or result.stdout or "").strip().splitlines()
-            raise VoicePipelineError(
-                f"local voice {action} failed: {(detail[-1] if detail else result.returncode)}"
-            )
-        if not response_path.is_file():
-            raise VoicePipelineError(f"local voice {action} returned no response")
-        if response_path.suffix.lower() == ".json":
-            try:
-                return json.loads(response_path.read_text())
-            except (OSError, json.JSONDecodeError) as exc:
-                raise VoicePipelineError(f"local voice {action} returned unreadable JSON") from exc
-        return {}
-
-    def synthesize(
-        self,
-        line: PerformanceScriptLine,
-        profile: VoiceProfile,
-        output: Path,
-        *,
-        seed: int,
-        reference_paths: list[Path],
-        cast_index: int = 0,
-    ) -> None:
-        self._invoke(
-            "synthesize",
-            {
-                "line": line.model_dump(mode="json"),
-                "profile": profile.model_dump(mode="json"),
-                "seed": seed,
-                "reference_paths": [str(path) for path in reference_paths],
-                "cast_index": cast_index,
-                "output": str(output),
-            },
-            output,
-        )
-        if output.stat().st_size <= 44:
-            raise VoicePipelineError("local voice synthesis returned empty audio")
-
-    def enroll_synthetic(
-        self,
-        line: PerformanceScriptLine,
-        profile: VoiceProfile,
-        output: Path,
-        *,
-        cast_index: int = 0,
-    ) -> list[float]:
-        response = output.with_suffix(".enrollment.json")
-        payload = self._invoke(
-            "enroll-synthetic",
-            {
-                "line": line.model_dump(mode="json"),
-                "profile": profile.model_dump(mode="json"),
-                "seed": profile.seed,
-                "cast_index": cast_index,
-                "output": str(output),
-            },
-            response,
-        )
-        embedding = payload.get("embedding")
-        if not isinstance(embedding, list) or len(embedding) != len(profile.speaker_embedding):
-            raise VoicePipelineError("synthetic enrollment embedding dimensions do not match")
-        return [float(value) for value in embedding]
-
-    def speaker_embedding(self, audio: Path, profile: VoiceProfile) -> list[float]:
-        response = audio.with_suffix(".embedding.json")
-        payload = self._invoke(
-            "embed",
-            {"audio": str(audio), "model": profile.speaker_embedding_model},
-            response,
-        )
-        embedding = payload.get("embedding")
-        if not isinstance(embedding, list) or len(embedding) != len(profile.speaker_embedding):
-            raise VoicePipelineError("speaker embedding dimensions do not match the locked profile")
-        return [float(value) for value in embedding]
-
-    def reference_embedding(self, audio: Path, model: str) -> list[float]:
-        response = audio.with_suffix(".reference-embedding.json")
-        payload = self._invoke(
-            "embed-reference",
-            {"audio": str(audio), "model": model},
-            response,
-        )
-        embedding = payload.get("embedding")
-        if not isinstance(embedding, list) or len(embedding) < 2:
-            raise VoicePipelineError("reference embedding backend returned no speaker vector")
-        return [float(value) for value in embedding]
-
-    def align(self, audio: Path, line: PerformanceScriptLine) -> dict[str, Any]:
-        response = audio.with_suffix(".alignment.json")
-        return self._invoke(
-            "align",
-            {"audio": str(audio), "line": line.model_dump(mode="json")},
-            response,
-        )
-
-    def process_audio(
-        self,
-        lines: list[tuple[Path, PerformanceScriptLine]],
-        clean_output: Path,
-        final_output: Path,
-        *,
-        duration_ms: int,
-        target_lufs: float,
-        true_peak_dbtp: float,
-        seed: int,
-    ) -> AudioMeasurements:
-        response = final_output.with_suffix(".audio-qc.json")
-        payload = self._invoke(
-            "studio-audio",
-            {
-                "lines": [
-                    {"audio": str(audio), "line": line.model_dump(mode="json")}
-                    for audio, line in lines
-                ],
-                "clean_output": str(clean_output),
-                "final_output": str(final_output),
-                "duration_ms": duration_ms,
-                "target_lufs": target_lufs,
-                "true_peak_dbtp": true_peak_dbtp,
-                "seed": seed,
-                "chain": [
-                    "noise_gate",
-                    "de_ess",
-                    "breath_control",
-                    "mouth_noise_reduction",
-                    "character_eq",
-                    "gentle_compression",
-                    "harmonic_enhancement",
-                    "room_match",
-                    "loudness_normalization",
-                    "dialogue_priority_ducking",
-                ],
-            },
-            response,
-        )
-        if not clean_output.is_file() or not final_output.is_file():
-            raise VoicePipelineError("studio audio backend did not write both required stems")
-        return AudioMeasurements(
-            snr_db=float(payload["snr_db"]),
-            integrated_lufs=float(payload["integrated_lufs"]),
-            true_peak_dbtp=float(payload["true_peak_dbtp"]),
-            harshness_score=float(payload["harshness_score"]),
-            sibilance_score=float(payload["sibilance_score"]),
-            speech_presence_score=float(payload["speech_presence_score"]),
-        )
-
-    def verify_audiovisual(
-        self,
-        video: Path,
-        audio: Path,
-        performance_metadata: Path,
-    ) -> AnimationMeasurements:
-        response = video.with_suffix(".voice-av-qc.json")
-        payload = self._invoke(
-            "audiovisual-qc",
-            {
-                "video": str(video),
-                "audio": str(audio),
-                "performance_metadata": str(performance_metadata),
-                "max_offset_ms": 40,
-            },
-            response,
-        )
-        return AnimationMeasurements(
-            lip_sync_confidence=float(payload["lip_sync_confidence"]),
-            audiovisual_offset_ms_p95=float(payload["audiovisual_offset_ms_p95"]),
-            performance_consistency=float(payload["performance_consistency"]),
-            audiovisual_backend=str(payload.get("backend") or self.name),
-            qualified_for_visual_retake=(
-                payload.get("qualified_for_visual_retake") is True
-            ),
-            diagnostics=tuple(str(item) for item in payload.get("diagnostics", [])),
-        )
-
-
-class VoicePerformancePipeline:
-    def __init__(
-        self,
-        *,
-        vault: Path,
-        synthesizer: Synthesizer,
-        embedder: SpeakerEmbedder,
-        aligner: PerformanceAligner,
-        audio_processor: StudioAudioProcessor,
-        audiovisual_qc: AudiovisualQC,
-    ) -> None:
-        self.vault = vault
-        self.synthesizer = synthesizer
-        self.embedder = embedder
-        self.aligner = aligner
-        self.audio_processor = audio_processor
-        self.audiovisual_qc = audiovisual_qc
-
-    def _asset_path(self, asset: Asset) -> Path:
-        path = Path(asset.path)
-        return path if path.is_absolute() else self.vault / path
-
-    def _reference_paths(self, project: Project, profile: VoiceProfile) -> list[Path]:
-        paths: list[Path] = []
-        for sample in profile.reference_samples:
-            try:
-                asset = project.asset(sample.asset_id)
-            except KeyError as exc:
-                raise VoicePipelineError(f"Voice reference asset {sample.asset_id} is missing") from exc
-            path = self._asset_path(asset)
-            if not path.is_file():
-                raise VoicePipelineError(f"Voice reference bytes are missing: {sample.asset_id}")
-            paths.append(path)
-        return paths
-
-    def _profiles(self, project: Project, shot: Shot) -> list[VoiceProfile]:
-        registry = VoiceProfileRegistry(project)
-        ordered: list[VoiceProfile] = []
-        for turn in _dialogue_turns(project, shot):
-            profile = registry.current(turn.character_id)
-            if profile is None:
-                prompt_path = Path(os.environ.get("DIONY_COSYVOICE_PROMPT_AUDIO", ""))
-                measured_embedding: list[float] | None = None
-                measured_model: str | None = None
-                reference_embedding = getattr(self.embedder, "reference_embedding", None)
-                rendered_enrollment = getattr(self.synthesizer, "enroll_synthetic", None)
-                if (
-                    not callable(rendered_enrollment)
-                    and prompt_path.is_file()
-                    and callable(reference_embedding)
-                ):
-                    measured_model = os.environ.get(
-                        "DIONY_SPEAKER_EMBEDDING_MODEL",
-                        "cosyvoice-campplus-v1",
-                    ).strip()
-                    measured_embedding = list(reference_embedding(prompt_path, measured_model))
-                profile = registry.ensure_synthetic(
-                    turn.character_id,
-                    speaker_embedding=measured_embedding,
-                    speaker_embedding_model=measured_model,
-                )
-            if profile.id not in {item.id for item in ordered}:
-                ordered.append(profile)
-        return ordered
-
-    def _enroll_synthetic_profiles(
-        self,
-        project: Project,
-        script: PerformanceScript,
-        profiles: list[VoiceProfile],
-    ) -> list[VoiceProfile]:
-        enroll = getattr(self.synthesizer, "enroll_synthetic", None)
-        if not callable(enroll):
-            return profiles
-        registry = VoiceProfileRegistry(project)
-        enrolled_profiles: list[VoiceProfile] = []
-        enrollment_rank = _project_cast_rank(project, profiles)
-        model = os.environ.get("DIONY_SPEAKER_EMBEDDING_MODEL", "cosyvoice-campplus-v1").strip()
-        for profile in profiles:
-            cast_index = enrollment_rank.get(profile.id, 0)
-            if profile.source != VoiceProfileSource.SYNTHETIC or profile.speaker_embedding_model.endswith(
-                SYNTHETIC_ENROLLMENT_V2
-            ):
-                enrolled_profiles.append(profile)
-                continue
-            line = next(
-                (item for item in script.lines if item.voice_profile_id == profile.id),
-                None,
-            )
-            if line is None:
-                raise VoicePipelineError(f"synthetic voice {profile.id} has no enrollment line")
-            profile_dir = self.vault / "projects" / project.id / "voice" / "profiles" / profile.id
-            profile_dir.mkdir(parents=True, exist_ok=True)
-            # A v1 profile was a single render under one-voice casting; it is
-            # re-enrolled from scratch rather than blended into a centroid.
-            anchor_output = profile_dir / "synthetic-enrollment.wav"
-            anchor = [float(value) for value in enroll(line, profile, anchor_output, cast_index=cast_index)]
-            if not anchor_output.is_file() or anchor_output.stat().st_size <= 44:
-                raise VoicePipelineError("synthetic voice enrollment returned no audio evidence")
-            calibration_output = profile_dir / "synthetic-calibration.wav"
-            calibration = [
-                float(value)
-                for value in enroll(
-                    _calibration_line(line), profile, calibration_output, cast_index=cast_index
-                )
-            ]
-            if not calibration_output.is_file() or calibration_output.stat().st_size <= 44:
-                raise VoicePipelineError("synthetic voice calibration returned no audio evidence")
-            if len(calibration) != len(anchor):
-                raise VoicePipelineError("synthetic calibration embedding dimensions do not match")
-            within = _cosine(anchor, calibration)
-            enrolled_profiles.append(
-                registry.enroll_synthetic_render(
-                    profile,
-                    speaker_embedding=_centroid(anchor, calibration),
-                    speaker_embedding_model=f"{model}{SYNTHETIC_ENROLLMENT_V2}",
-                    speaker_similarity_min=identity_floor_from(within),
-                    enrollment_similarity=round(within, 6),
-                )
-            )
-        return enrolled_profiles
-
-    @staticmethod
-    def _verify_cast_distinct(profiles: list[VoiceProfile]) -> None:
-        """Fail a collapsed cast: two characters must never measure as one voice.
-
-        Synthetic profiles enroll from their own first render, so self-similarity
-        is tautological; distinctness across the cast is the check that actually
-        proves casting worked.
-        """
-        # Calibrated on CAM++ over CosyVoice2 zero-shot voices: the same voice on
-        # different text measures 0.73-0.78, distinct prompt voices at most 0.39.
-        try:
-            ceiling = float(os.environ.get("DIONY_VOICE_CAST_DISTINCT_MAX", "0.60"))
-        except ValueError:
-            ceiling = 0.60
-        ceiling = min(0.999, max(0.5, ceiling))
-        speakers: dict[str, VoiceProfile] = {}
-        for profile in profiles:
-            speakers.setdefault(profile.character_id, profile)
-        distinct = list(speakers.values())
-        for index, left in enumerate(distinct):
-            for right in distinct[index + 1 :]:
-                if len(left.speaker_embedding) != len(right.speaker_embedding):
-                    continue
-                similarity = _cosine(left.speaker_embedding, right.speaker_embedding)
-                if similarity > ceiling:
-                    raise VoicePipelineError(
-                        "Voice audio failed cast-distinct QC: "
-                        f"{left.character_id} and {right.character_id} measure speaker "
-                        f"similarity {similarity:.4f} above the {ceiling:.2f} ceiling. "
-                        "Attach per-character reference samples or point "
-                        "DIONY_COSYVOICE_PROMPT_LIBRARY at distinct prompt clips."
-                    )
-
-    @staticmethod
-    def _cache_key(script: PerformanceScript, profiles: list[VoiceProfile]) -> str:
-        return _sha256_bytes(
-            json.dumps(
-                {
-                    "pipeline": VOICE_PIPELINE_VERSION,
-                    "script": script.content_sha256,
-                    "profiles": [profile.content_sha256 for profile in profiles],
-                },
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8")
-        )
-
-    def _package_assets_valid(self, project: Project, package: VoiceClipPackage) -> bool:
-        for asset_id in (
-            package.clean_dialogue_asset_id,
-            package.final_mix_asset_id,
-            package.performance_metadata_asset_id,
-        ):
-            try:
-                asset = project.asset(asset_id)
-            except KeyError:
-                return False
-            path = self._asset_path(asset)
-            if not path.is_file() or path.stat().st_size <= 32 or _sha256_file(path) != asset.sha256:
-                return False
-        return True
-
-    def _cached_package_valid(self, project: Project, take: Take, cache_key: str) -> bool:
-        package = take.voice_package
-        if package is None or package.cache_key != cache_key:
-            return False
-        return self._package_assets_valid(project, package)
-
-    def _identity_probe(
-        self,
-        line: PerformanceScriptLine,
-        profile: VoiceProfile,
-        candidate: Path,
-        *,
-        seed: int,
-        reference_paths: list[Path],
-        cast_index: int,
-    ) -> tuple[Path, str]:
-        """The audio speaker identity is measured on: the line, or a longer probe.
-
-        A line shorter than IDENTITY_PROBE_MIN_SECONDS is re-rendered once as
-        the line plus the calibration sentence with identical conditioning,
-        so identity is judged on calibration-length speech — the same length
-        the profile floor was measured at. Any probe failure falls back to the
-        line itself rather than blocking the take.
-        """
-        seconds = _media_duration_seconds(candidate)
-        if seconds >= IDENTITY_PROBE_MIN_SECONDS:
-            return candidate, ""
-        probe = candidate.with_name(f"{candidate.stem}.identity-probe.wav")
-        try:
-            extended = line.model_copy(update={"text": f"{line.text.strip()} {CALIBRATION_TEXT}"})
-            self.synthesizer.synthesize(
-                extended,
-                profile,
-                probe,
-                seed=seed,
-                reference_paths=reference_paths,
-                cast_index=cast_index,
-            )
-        except Exception:  # noqa: BLE001 — a probe never blocks the line
-            return candidate, ""
-        if not probe.is_file() or probe.stat().st_size <= 44:
-            return candidate, ""
-        return probe, (
-            f"identity measured on a {_media_duration_seconds(probe):.1f} s probe render; "
-            f"the {seconds:.1f} s line is too short to embed"
-        )
-
-    @staticmethod
-    def _condition_shot(
-        shot: Shot, take: Take, package: VoiceClipPackage, *, speaker: str = "The speaker"
-    ) -> None:
-        shot.audio_asset_ids = [package.clean_dialogue_asset_id]
-        shot.engine = Engine.S2V_14B
-        take.engine = Engine.S2V_14B
-        if shot.prompt_plan is not None:
-            shot.prompt_plan.generation_method = Engine.S2V_14B.value
-            shot.prompt_plan.audio_strategy = LOCKED_VOICE_AUDIO_STRATEGY
-            # The locked line dispatches to S2V: the prompt directs the speaker's
-            # performance (articulated mouth, still in pauses, locked-off
-            # close-up), not the five-layer blocking beat. Deterministic, so
-            # every take of the line carries the same direction.
-            directed = spoken_wan_prompt_plan(
-                shot.prompt_plan,
-                speaker=speaker,
-                focal_mm=shot.focal_mm,
-                audio_strategy=LOCKED_VOICE_AUDIO_STRATEGY,
-            )
-            if directed is not None:
-                shot.prompt_plan = directed
-                shot.prompt = render_wan_prompt(directed)
-                shot.negative_prompt = render_negative_prompt(directed)
-
-    def _reuse_project_cache(
-        self,
-        project: Project,
-        take: Take,
-        shot: Shot,
-        cache_key: str,
-    ) -> VoiceClipPackage | None:
-        for prior in reversed(project.takes):
-            package = prior.voice_package
-            if (
-                prior.id == take.id
-                or package is None
-                or package.cache_key != cache_key
-                or not package.qc.audio_passed
-                or not self._package_assets_valid(project, package)
-            ):
-                continue
-            qc_payload = package.qc.model_dump(mode="json") | {
-                "lip_sync_confidence": None,
-                "audiovisual_offset_ms_p95": None,
-                "animation_passed": False,
-                "passed": False,
-                "diagnostics": [
-                    *package.qc.diagnostics,
-                    f"reused audio cache from {prior.id}; animation QC must run again",
-                ],
-            }
-            reused = VoiceClipPackage.model_validate(
-                package.model_dump(mode="json")
-                | {
-                    "id": f"voicepkg-{take.id}-{cache_key[:12]}",
-                    "take_id": take.id,
-                    "video_sha256": "",
-                    "state": VoiceRenderState.AUDIO_LOCKED.value,
-                    "qc": qc_payload,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-            take.voice_package = reused
-            self._condition_shot(shot, take, reused, speaker=speaker_name(project.bible, shot))
-            return reused
+def wan_speech_inputs(project: Project, shot: Shot, *, vault: Path | None = None) -> dict[str, str | None] | None:
+    """What the camera passes to Wan's TTS lane for this Shot, or None for a silent Shot."""
+    if not shot_speaks(shot):
         return None
-
-    def _append_asset(
-        self,
-        project: Project,
-        path: Path,
-        *,
-        role: str,
-        cache_key: str,
-        kind: AssetKind,
-        mime: str,
-    ) -> Asset:
-        digest = _sha256_file(path)
-        relative = str(path.relative_to(self.vault)) if path.is_relative_to(self.vault) else str(path)
-        asset = Asset(
-            id=f"ast-{role.replace('_', '-')}-{digest[:16]}",
-            kind=kind,
-            filename=path.name,
-            mime=mime,
-            bytes=path.stat().st_size,
-            path=relative,
-            sha256=digest,
-            role=role,
-            metadata={
-                "voice_pipeline_version": VOICE_PIPELINE_VERSION,
-                "cache_key": cache_key,
-            },
-        )
-        existing = next((item for item in project.assets if item.id == asset.id), None)
-        if existing is None:
-            project.assets.append(asset)
-            return asset
-        return existing
-
-    def prepare_take(self, project: Project, take: Take) -> VoiceClipPackage:
-        shot = project.shot(take.shot_id)
-        turns = _dialogue_turns(project, shot)
-        if not turns:
-            raise VoicePipelineError(f"{shot.id} has no dialogue")
-        profiles = self._profiles(project, shot)
-        script = optimize_voice_script(project, shot, profiles)
-        profiles = self._enroll_synthetic_profiles(project, script, profiles)
-        self._verify_cast_distinct(profiles)
-        script = optimize_voice_script(project, shot, profiles)
-        cache_key = self._cache_key(script, profiles)
-        if self._cached_package_valid(project, take, cache_key):
-            return take.voice_package  # type: ignore[return-value]
-        reused = self._reuse_project_cache(project, take, shot, cache_key)
-        if reused is not None:
-            return reused
-
-        cache_root = self.vault / "projects" / project.id / "voice" / "cache" / cache_key
-        cache_root.mkdir(parents=True, exist_ok=True)
-        profile_by_id = {profile.id: profile for profile in profiles}
-        cast_rank = _project_cast_rank(project, profiles)
-        line_audio: list[tuple[Path, PerformanceScriptLine]] = []
-        alignments: list[dict[str, Any]] = []
-        speaker_scores: list[float] = []
-        generation_seeds: dict[str, int] = {profile.id: profile.seed for profile in profiles}
-        audio_attempts: list[dict[str, Any]] = []
-        try:
-            retake_cap = min(5, max(1, int(os.environ.get("DIONY_VOICE_RETAKE_CAP", "3"))))
-        except ValueError:
-            retake_cap = 3
-
-        def synthesize_line(
-            indexed_line: tuple[int, PerformanceScriptLine],
-        ) -> tuple[
-            int,
-            Path,
-            PerformanceScriptLine,
-            float,
-            int,
-            list[dict[str, Any]],
-            dict[str, Any],
-        ]:
-            index, line = indexed_line
-            profile = profile_by_id[line.voice_profile_id]
-            raw: Path | None = None
-            selected_score = -1.0
-            selected_seed = profile.seed
-            attempts: list[dict[str, Any]] = []
-            reference_paths = self._reference_paths(project, profile)
-            selected_alignment: dict[str, Any] | None = None
-            last_failure = "identity"
-            for attempt in range(1, retake_cap + 1):
-                candidate = cache_root / f"line-{index + 1:02d}-{line.id}-a{attempt}.wav"
-                seed = profile.seed + (attempt - 1) * 1009
-                self.synthesizer.synthesize(
-                    line,
-                    profile,
-                    candidate,
-                    seed=seed,
-                    reference_paths=reference_paths,
-                    cast_index=cast_rank.get(profile.id, 0),
-                )
-                if not candidate.is_file() or candidate.stat().st_size <= 44:
-                    attempts.append(
-                        {
-                            "line_id": line.id,
-                            "attempt": attempt,
-                            "seed": seed,
-                            "diagnostic": "synthesis returned no audio bytes",
-                        }
-                    )
-                    continue
-                probe, probe_note = self._identity_probe(
-                    line,
-                    profile,
-                    candidate,
-                    seed=seed,
-                    reference_paths=reference_paths,
-                    cast_index=cast_rank.get(profile.id, 0),
-                )
-                observed = self.embedder.speaker_embedding(probe, profile)
-                selected_score = _cosine(profile.speaker_embedding, observed)
-                floor = profile_identity_floor(profile)
-                rival = _closest_rival(observed, profile, profiles)
-                if selected_score < floor:
-                    attempts.append(
-                        {
-                            "line_id": line.id,
-                            "attempt": attempt,
-                            "seed": seed,
-                            "speaker_similarity": round(selected_score, 6),
-                            "speaker_similarity_min": floor,
-                            "diagnostic": (
-                                f"speaker identity drift: similarity {selected_score:.4f} is below the "
-                                f"profile's measured floor {floor:.2f}; regenerate with a new seed"
-                                + (f" ({probe_note})" if probe_note else "")
-                            ),
-                        }
-                    )
-                    last_failure = "identity"
-                    continue
-                if rival is not None and selected_score < rival[1] + CAST_IDENTITY_MARGIN:
-                    attempts.append(
-                        {
-                            "line_id": line.id,
-                            "attempt": attempt,
-                            "seed": seed,
-                            "speaker_similarity": round(selected_score, 6),
-                            "rival_character_id": rival[0],
-                            "rival_similarity": round(rival[1], 6),
-                            "diagnostic": (
-                                f"speaker identity is not distinct: {rival[0]} measures {rival[1]:.4f} "
-                                f"against this render, within {CAST_IDENTITY_MARGIN:.2f} of "
-                                f"{profile.character_id}'s {selected_score:.4f}"
-                            ),
-                        }
-                    )
-                    last_failure = "identity"
-                    continue
-                alignment = self.aligner.align(candidate, line)
-                measured_duration_ms = float(
-                    alignment.get("measured_duration_ms")
-                    or round(_media_duration_seconds(candidate) * 1000)
-                )
-                timing_tolerance_ms = max(250, round(line.target_duration_ms * 0.10))
-                timing_limit_ms = line.target_duration_ms + timing_tolerance_ms
-                if measured_duration_ms > timing_limit_ms:
-                    attempts.append(
-                        {
-                            "line_id": line.id,
-                            "attempt": attempt,
-                            "seed": seed,
-                            "speaker_similarity": round(selected_score, 6),
-                            "measured_duration_ms": round(measured_duration_ms),
-                            "target_duration_ms": line.target_duration_ms,
-                            "timing_limit_ms": timing_limit_ms,
-                            "diagnostic": (
-                                "voice timing overflow; synthesized speech exceeds its authored "
-                                "shot window and may not be trimmed"
-                            ),
-                        }
-                    )
-                    last_failure = "timing"
-                    continue
-                raw = candidate
-                selected_seed = seed
-                selected_alignment = alignment
-                attempts.append(
-                    {
-                        "line_id": line.id,
-                        "attempt": attempt,
-                        "seed": seed,
-                        "speaker_similarity": round(selected_score, 6),
-                        "diagnostic": "speaker identity passed",
-                    }
-                )
-                break
-            if raw is None:
-                raise VoicePipelineError(
-                    f"Voice {last_failure} failed for {line.id} after "
-                    f"{retake_cap} bounded attempts"
-                )
-            if selected_alignment is None:
-                raise VoicePipelineError(f"Voice timing evidence is missing for {line.id}")
-            return index, raw, line, selected_score, selected_seed, attempts, selected_alignment
-
-        try:
-            worker_cap = min(8, max(1, int(os.environ.get("DIONY_VOICE_WORKERS", "4"))))
-        except ValueError:
-            worker_cap = 4
-        worker_count = min(worker_cap, len(script.lines))
-        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="diony-voice") as pool:
-            line_results = list(pool.map(synthesize_line, enumerate(script.lines)))
-        for _, raw, line, selected_score, selected_seed, attempts, alignment in line_results:
-            generation_seeds[line.voice_profile_id] = selected_seed
-            audio_attempts.extend(attempts)
-            speaker_scores.append(selected_score)
-            alignments.append(alignment)
-            line_audio.append((raw, line))
-
-        clean_path = cache_root / "clean-dialogue.wav"
-        final_path = cache_root / "final-clip-mix.wav"
-        performance_path = cache_root / "performance.json"
-        clip_ms = max(1, round(_deliverable_frames(shot) / shot.fps * 1000))
-        target_lufs = -24.0 if project.bible.loudness == LoudnessTarget.BROADCAST else -16.0
-        measurements: AudioMeasurements | None = None
-        for attempt in range(1, retake_cap + 1):
-            post_seed = _stable_seed(cache_key, "studio-audio", str(attempt))
-            candidate = self.audio_processor.process_audio(
-                line_audio,
-                clean_path,
-                final_path,
-                duration_ms=clip_ms,
-                target_lufs=target_lufs,
-                true_peak_dbtp=project.bible.true_peak_dbtp,
-                seed=post_seed,
-            )
-            post_passed = all(
-                (
-                    candidate.snr_db >= 30,
-                    candidate.speech_presence_score >= 0.20,
-                    abs(candidate.integrated_lufs - target_lufs) <= 1.0,
-                    candidate.true_peak_dbtp <= project.bible.true_peak_dbtp,
-                    candidate.harshness_score <= 0.25,
-                    candidate.sibilance_score <= 0.25,
-                )
-            )
-            audio_attempts.append(
-                {
-                    "stage": "studio_audio",
-                    "attempt": attempt,
-                    "seed": post_seed,
-                    "snr_db": candidate.snr_db,
-                    "speech_presence_score": candidate.speech_presence_score,
-                    "integrated_lufs": candidate.integrated_lufs,
-                    "true_peak_dbtp": candidate.true_peak_dbtp,
-                    "harshness_score": candidate.harshness_score,
-                    "sibilance_score": candidate.sibilance_score,
-                    "diagnostic": (
-                        "studio audio QC passed"
-                        if post_passed
-                        else "studio audio QC failed; rerun gate, de-ess, dynamics, room match, and loudness chain"
-                    ),
-                }
-            )
-            measurements = candidate
-            if post_passed:
-                break
-        if measurements is None:
-            raise VoicePipelineError("Studio audio processor returned no measurements")
-        performance_payload = {
-            "schema_version": 1,
-            "pipeline_version": VOICE_PIPELINE_VERSION,
-            "project_id": project.id,
-            "shot_id": shot.id,
-            "take_id": take.id,
-            "voice_profile_ids": [profile.id for profile in profiles],
-            "voice_profile_sha256s": {
-                profile.id: profile.content_sha256 for profile in profiles
-            },
-            "generation_seeds": generation_seeds,
-            "audio_attempts": audio_attempts,
-            "script": script.model_dump(mode="json"),
-            "alignment": alignments,
-            "drives": {
-                "lips": "phoneme + viseme + co-articulation",
-                "face": "brow + eye + cheek micro-expression",
-                "body": "head + upper-body prosody energy",
-                "visual_conditioning": "Wan2.2 S2V final locked audio",
-            },
-        }
-        performance_path.write_text(json.dumps(performance_payload, indent=2, sort_keys=True) + "\n")
-
-        clean_asset = self._append_asset(
-            project,
-            clean_path,
-            role="voice_clean_dialogue",
-            cache_key=cache_key,
-            kind=AssetKind.AUDIO,
-            mime="audio/wav",
-        )
-        final_asset = self._append_asset(
-            project,
-            final_path,
-            role="voice_final_mix",
-            cache_key=cache_key,
-            kind=AssetKind.AUDIO,
-            mime="audio/wav",
-        )
-        performance_asset = self._append_asset(
-            project,
-            performance_path,
-            role="voice_performance_metadata",
-            cache_key=cache_key,
-            kind=AssetKind.DOCUMENT,
-            mime="application/json",
-        )
-        speaker_similarity = min(speaker_scores) if speaker_scores else -1.0
-        historical = [
-            item.voice_package.qc.speaker_similarity
-            for item in project.takes
-            if item.id != take.id
-            and item.voice_package is not None
-            and set(item.voice_package.voice_profile_ids) & {profile.id for profile in profiles}
-        ]
-        project_consistency = min([speaker_similarity, *historical]) if historical else speaker_similarity
-        identity_floor = min(profile_identity_floor(profile) for profile in profiles)
-        audio_passed = all(
-            (
-                speaker_similarity >= identity_floor,
-                project_consistency >= identity_floor,
-                measurements.snr_db >= 30,
-                measurements.speech_presence_score >= 0.20,
-                abs(measurements.integrated_lufs - target_lufs) <= 1.0,
-                measurements.true_peak_dbtp <= project.bible.true_peak_dbtp,
-                measurements.harshness_score <= 0.25,
-                measurements.sibilance_score <= 0.25,
-            )
-        )
-        qc = VoiceQCReceipt(
-            measurement_version=VOICE_QC_VERSION,
-            speaker_similarity=speaker_similarity,
-            speaker_similarity_min=identity_floor,
-            project_consistency=project_consistency,
-            project_consistency_min=identity_floor,
-            snr_db=measurements.snr_db,
-            speech_presence_score=measurements.speech_presence_score,
-            integrated_lufs=measurements.integrated_lufs,
-            loudness_target_lufs=target_lufs,
-            true_peak_dbtp=measurements.true_peak_dbtp,
-            true_peak_ceiling_dbtp=project.bible.true_peak_dbtp,
-            harshness_score=measurements.harshness_score,
-            sibilance_score=measurements.sibilance_score,
-            audio_passed=audio_passed,
-            animation_passed=False,
-            passed=False,
-            diagnostics=[] if audio_passed else ["voice audio failed one or more locked QC thresholds"],
-        )
-        package = VoiceClipPackage(
-            id=f"voicepkg-{take.id}-{cache_key[:12]}",
-            project_id=project.id,
-            shot_id=shot.id,
-            take_id=take.id,
-            voice_profile_ids=[profile.id for profile in profiles],
-            generation_seeds=generation_seeds,
-            script=script,
-            clean_dialogue_asset_id=clean_asset.id,
-            final_mix_asset_id=final_asset.id,
-            performance_metadata_asset_id=performance_asset.id,
-            cache_key=cache_key,
-            synthesis_backend=self.synthesizer.name,
-            embedding_backend=self.embedder.name,
-            alignment_backend=self.aligner.name,
-            state=VoiceRenderState.AUDIO_LOCKED if audio_passed else VoiceRenderState.FAILED,
-            qc=qc,
-        )
-        take.voice_package = package
-        if not audio_passed:
-            raise VoicePipelineError("Voice audio failed locked identity or studio-audio QC")
-        self._condition_shot(shot, take, package, speaker=speaker_name(project.bible, shot))
-        return package
-
-    def verify_animation(self, project: Project, take: Take, video: Path) -> VoiceClipPackage:
-        package = take.voice_package
-        if package is None:
-            raise VoicePipelineError(f"{take.id} has no audio-locked voice package")
-        clean_asset = project.asset(package.clean_dialogue_asset_id)
-        metadata_asset = project.asset(package.performance_metadata_asset_id)
-        measurements = self.audiovisual_qc.verify_audiovisual(
-            video,
-            self._asset_path(clean_asset),
-            self._asset_path(metadata_asset),
-        )
-        animation_passed = (
-            measurements.qualified_for_visual_retake
-            and measurements.lip_sync_confidence >= package.qc.lip_sync_confidence_min
-            and measurements.audiovisual_offset_ms_p95 <= package.qc.audiovisual_offset_ms_max
-            and measurements.performance_consistency
-            >= package.qc.performance_consistency_min
-        )
-        qc_payload = package.qc.model_dump(mode="json") | {
-            "lip_sync_confidence": measurements.lip_sync_confidence,
-            "audiovisual_offset_ms_p95": measurements.audiovisual_offset_ms_p95,
-            "performance_consistency": measurements.performance_consistency,
-            "audiovisual_backend": measurements.audiovisual_backend,
-            "audiovisual_measurement_qualified": measurements.qualified_for_visual_retake,
-            "animation_passed": animation_passed,
-            "passed": bool(package.qc.audio_passed and animation_passed),
-            "diagnostics": list(package.qc.diagnostics) + list(measurements.diagnostics),
-        }
-        qc = VoiceQCReceipt.model_validate(qc_payload)
-        updated = VoiceClipPackage.model_validate(
-            package.model_dump(mode="json")
-            | {
-                "state": (
-                    VoiceRenderState.VERIFIED.value if qc.passed else VoiceRenderState.FAILED.value
-                ),
-                "video_sha256": _sha256_file(video),
-                "qc": qc.model_dump(mode="json"),
-            }
-        )
-        take.voice_package = updated
-        return updated
+    character_id, text = spoken_line(project, shot)
+    casting = VoiceCastingRegistry(project).current(character_id)
+    if casting is None:
+        raise VoicePipelineError(f"Voice casting failed: {character_id} has no voice casting on this Project")
+    prompt = resolve_prompt_clip(project, casting, vault=vault)
+    return {
+        "tts_text": text,
+        "tts_prompt_audio": str(prompt.path),
+        "tts_prompt_text": prompt.text or None,
+    }
 
 
-def default_voice_pipeline() -> VoicePerformancePipeline:
-    from diony_producer.vault import vault_root
+# --------------------------------------------------------------------------- after the render
 
-    backend = default_voice_backend()
-    return VoicePerformancePipeline(
-        vault=vault_root(),
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
+
+def _append_asset(project: Project, path: Path, *, role: str, take_id: str, kind: AssetKind, mime: str, vault: Path) -> Asset:
+    digest = _sha256_file(path)
+    relative = str(path.relative_to(vault)) if path.is_relative_to(vault) else str(path)
+    asset = Asset(
+        id=f"ast-{role.replace('_', '-')}-{digest[:16]}",
+        kind=kind,
+        filename=path.name,
+        mime=mime,
+        bytes=path.stat().st_size,
+        path=relative,
+        sha256=digest,
+        role=role,
+        metadata={"voice_lane_version": VOICE_LANE_VERSION, "take_id": take_id},
+    )
+    existing = next((item for item in project.assets if item.id == asset.id), None)
+    if existing is None:
+        project.assets.append(asset)
+        return asset
+    return existing
+
+
+def verify_speech_render(project: Project, take: Take, video: Path, *, vault: Path | None = None) -> SpeechClipPackage:
+    """Measure the speech Wan2.2 delivered in this negative and bind it to the Take."""
+    from diony_producer.speech_audio import (
+        SpeechAudioError,
+        audio_streams,
+        conform_mix_stem,
+        decode_pcm,
+        extract_dialogue,
+        media_duration_seconds,
+        measure_loudness,
+        speech_activity,
     )
 
+    package = take.voice_package
+    if package is None:
+        raise VoicePipelineError(f"{take.id} has no Wan speech request; the line was never locked before camera")
+    if not video.is_file() or video.stat().st_size <= 32:
+        raise VoicePipelineError(f"{take.id} has no rendered negative to measure")
+    vault = vault or _vault()
+    shot = project.shot(take.shot_id)
+    window = float(window_ms(shot))
+    target_lufs = -24.0 if project.bible.loudness == LoudnessTarget.BROADCAST else -16.0
+    ceiling = float(project.bible.true_peak_dbtp)
+    root = vault / "projects" / project.id / "voice" / "takes" / take.id
+    root.mkdir(parents=True, exist_ok=True)
+    diagnostics: list[str] = [f"backend={SPEECH_BACKEND}", f"request={package.request.content_sha256[:12]}"]
+    receipt_fields: dict[str, object] = {
+        "measurement_version": SPEECH_QC_VERSION,
+        "window_ms": window,
+        "loudness_target_lufs": target_lufs,
+        "true_peak_ceiling_dbtp": ceiling,
+    }
+    dialogue_asset: Asset | None = None
+    stem_asset: Asset | None = None
+    try:
+        present = bool(audio_streams(video))
+        receipt_fields["audio_present"] = present
+        if present:
+            dialogue = extract_dialogue(video, root / "dialogue.wav")
+            duration_ms = round(media_duration_seconds(dialogue) * 1000.0, 1)
+            presence, last_active_ms = speech_activity(decode_pcm(dialogue, sample_rate=16_000), sample_rate=16_000)
+            receipt_fields["duration_ms"] = duration_ms
+            receipt_fields["speech_presence_score"] = presence
+            if last_active_ms is not None:
+                receipt_fields["speech_tail_ms"] = max(0.0, round(window - last_active_ms, 1))
+                diagnostics.append(f"speech ends at {last_active_ms:.0f} ms of {window:.0f}")
+            stem = conform_mix_stem(
+                dialogue,
+                root / "mix-stem.wav",
+                duration_seconds=window / 1000.0,
+                target_lufs=target_lufs,
+                true_peak_dbtp=ceiling,
+            )
+            integrated, true_peak = measure_loudness(stem, target_lufs=target_lufs, true_peak_dbtp=ceiling)
+            receipt_fields["integrated_lufs"] = integrated
+            receipt_fields["true_peak_dbtp"] = true_peak
+            dialogue_asset = _append_asset(project, dialogue, role="voice_dialogue", take_id=take.id, kind=AssetKind.AUDIO, mime="audio/wav", vault=vault)
+            stem_asset = _append_asset(project, stem, role="voice_mix_stem", take_id=take.id, kind=AssetKind.AUDIO, mime="audio/wav", vault=vault)
+        else:
+            diagnostics.append("the negative has no audio stream; Wan's TTS lane did not mux its speech")
+    except SpeechAudioError as exc:
+        diagnostics.append(f"measurement failed: {exc}")
+    receipt = SpeechQCReceipt(**receipt_fields, passed=False, diagnostics=diagnostics)
+    failures = receipt.failures()
+    passed = not failures
+    receipt = receipt.model_copy(update={"passed": passed, "diagnostics": diagnostics + [f"gate: {item}" for item in failures]})
+    updated = package.model_copy(
+        update={
+            "dialogue_asset_id": dialogue_asset.id if dialogue_asset is not None else "",
+            "mix_stem_asset_id": stem_asset.id if stem_asset is not None else "",
+            "video_sha256": _sha256_file(video),
+            "state": VoiceRenderState.VERIFIED if passed else VoiceRenderState.FAILED,
+            "qc": receipt,
+        }
+    )
+    updated = SpeechClipPackage.model_validate(updated.model_dump(mode="json"))
+    take.voice_package = updated
+    return updated
 
-COSYVOICE_MODEL_FILES = ("cosyvoice2.yaml", "llm.pt", "flow.pt", "hift.pt", "speech_tokenizer_v2.onnx")
-HOST_VOICE_ENV_KEYS = (
-    "DIONY_VOICE_BACKEND_COMMAND",
-    "DIONY_SPEAKER_EMBEDDING_MODEL",
-    "DIONY_COSYVOICE_PYTHON",
-    "DIONY_COSYVOICE_ROOT",
-    "DIONY_COSYVOICE_MODEL",
-    "DIONY_COSYVOICE_PROMPT_AUDIO",
-    "DIONY_COSYVOICE_PROMPT_LIBRARY",
-    "DIONY_FACE_DETECTOR_MODEL",
-    "DIONY_FACE_LANDMARKER_MODEL",
-)
-MOUTH_SYNC_MODEL_FILES = ("face_detection_yunet_2023mar.onnx", "face_landmarker.task")
+
+def speech_failure_message(package: SpeechClipPackage | None) -> str:
+    """Name the measured speech gate that failed instead of hiding it."""
+    if package is None or package.qc is None:
+        return "Voice audio failed: the speech Wan2.2 delivered was never measured."
+    failures = package.qc.failures()
+    detail = "; ".join(failures) if failures else "the delivered speech did not pass"
+    return f"Voice audio failed: {detail}."
 
 
-def host_voice_env(*, vault: Path | None = None, wan_repo: Path | None = None) -> tuple[dict[str, str], list[str]]:
-    """Late-bind the Studio-prepared voice pack from the GPU host layout.
+# --------------------------------------------------------------------------- host pack
 
-    The GPU Producer inherits its voice environment when the Connect line
-    launches it, but Studio App can still be pulling CosyVoice2 at that moment
-    (the model pull is the slowest setup stage). Rather than farm spoken Shots
-    with a stale empty ``DIONY_VOICE_BACKEND_COMMAND``, Production re-derives
-    the same values the Connect start script exports, from the same host
-    layout, when the first spoken Take needs them. Nothing is downloaded here.
 
-    Returns ``(env, missing)``: ``env`` is complete or empty; ``missing`` names
-    what an incomplete pack still lacks so the failure is actionable.
-    """
-    from diony_producer.vault import vault_root
-
-    vault = vault or vault_root()
-    wan_repo = wan_repo or Path(os.environ.get("DIONY_WAN_REPO", "").strip() or "/opt/wan22")
-    explicit = vault / "runtime" / "voice" / "bin" / "diony-voice-backend"
-    if explicit.is_file() and os.access(explicit, os.X_OK):
-        return {"DIONY_VOICE_BACKEND_COMMAND": str(explicit)}, []
+def speech_pack_missing(wan_repo: Path | None = None) -> list[str]:
+    """What Wan2.2's own TTS lane still lacks beside generate.py on this host."""
+    repo = wan_repo or _wan_repo()
     missing: list[str] = []
-    cosy_python = vault / "runtime" / "cosyvoice" / "venv" / "bin" / "python"
-    if not (cosy_python.is_file() and os.access(cosy_python, os.X_OK)):
-        missing.append(f"CosyVoice2 venv {cosy_python}")
-    cosy_root = vault / "runtime" / "cosyvoice" / "CosyVoice"
-    if not cosy_root.is_dir():
-        missing.append(f"CosyVoice2 checkout {cosy_root}")
-    model = vault / "models" / "audio" / "CosyVoice2-0.5B"
-    absent = [name for name in COSYVOICE_MODEL_FILES if not (model / name).is_file()]
+    checkout = repo / WAN_TTS_CHECKOUT
+    if not all((checkout / relative).exists() for relative in WAN_TTS_CHECKOUT_FILES):
+        missing.append(f"Wan TTS checkout {checkout}")
+    model = repo / WAN_TTS_MODEL_DIR
+    absent = [name for name in WAN_TTS_MODEL_FILES if not (model / name).is_file()]
     if absent:
         missing.append(f"CosyVoice2-0.5B weights {model} ({', '.join(absent)})")
-    backend = Path(__file__).with_name("cosyvoice_backend.py")
-    worker = Path(__file__).with_name("cosyvoice_worker.py")
-    if not (backend.is_file() and worker.is_file()):
-        missing.append(f"voice adapter {backend}")
-    prompt_audio = wan_repo / "examples" / "zero_shot_prompt.wav"
-    if not prompt_audio.is_file():
-        prompt_audio = cosy_root / "asset" / "zero_shot_prompt.wav"
-    if not prompt_audio.is_file():
-        missing.append("shared zero-shot prompt clip")
+    return missing
+
+
+def host_speech_env(*, vault: Path | None = None, wan_repo: Path | None = None) -> tuple[dict[str, str], list[str]]:
+    """Late-bind the Studio-prepared Wan speech pack from the GPU host layout.
+
+    The GPU Producer inherits its environment when the Connect line launches
+    it, but Studio App can still be pulling the pack at that moment. Rather
+    than hold spoken Shots on a stale empty environment, Production re-derives
+    the same values from the host layout when the first spoken Take needs
+    them. Nothing is downloaded here. Returns ``(env, missing)``.
+    """
+    vault = vault or _vault()
+    repo = wan_repo or _wan_repo()
+    missing = speech_pack_missing(repo)
+    env: dict[str, str] = {}
+    library = vault / "runtime" / "voice" / "prompt-library"
+    if _library_clips(library):
+        env["DIONY_WAN_TTS_PROMPT_LIBRARY"] = str(library)
+    default = repo / "examples" / "zero_shot_prompt.wav"
+    if not default.is_file():
+        default = repo / WAN_TTS_CHECKOUT / "asset" / "zero_shot_prompt.wav"
+    if default.is_file():
+        env["DIONY_WAN_TTS_PROMPT_AUDIO"] = str(default)
+        env["DIONY_WAN_TTS_PROMPT_TEXT"] = DEFAULT_PROMPT_TEXT
+    elif "DIONY_WAN_TTS_PROMPT_LIBRARY" not in env:
+        missing.append("casting library or default prompt clip")
     if missing:
         return {}, missing
-    env = {
-        "DIONY_VOICE_BACKEND_COMMAND": shlex.join([sys.executable, str(backend)]),
-        "DIONY_SPEAKER_EMBEDDING_MODEL": "cosyvoice-campplus-v1",
-        "DIONY_COSYVOICE_PYTHON": str(cosy_python),
-        "DIONY_COSYVOICE_ROOT": str(cosy_root),
-        "DIONY_COSYVOICE_MODEL": str(model),
-        "DIONY_COSYVOICE_PROMPT_AUDIO": str(prompt_audio),
-    }
-    library = vault / "runtime" / "voice" / "prompt-library"
-    if library.is_dir():
-        env["DIONY_COSYVOICE_PROMPT_LIBRARY"] = str(library)
-    models = vault / "runtime" / "voice" / "models"
-    detector = models / MOUTH_SYNC_MODEL_FILES[0]
-    landmarker = models / MOUTH_SYNC_MODEL_FILES[1]
-    if detector.is_file() and landmarker.is_file():
-        # Without both, audiovisual QC stays diagnostic and says so per take.
-        env["DIONY_FACE_DETECTOR_MODEL"] = str(detector)
-        env["DIONY_FACE_LANDMARKER_MODEL"] = str(landmarker)
     return env, []
 
 
-def default_voice_backend() -> DeterministicVoiceTestBackend | LocalVoiceCommandBackend:
-    if _enabled("DIONY_DRY_RUN"):
-        return DeterministicVoiceTestBackend()
-    command = os.environ.get("DIONY_VOICE_BACKEND_COMMAND", "").strip()
-    if not command:
-        discovered, missing = host_voice_env()
-        if discovered:
-            # Fill only what the launch left empty: an operator's explicit
-            # backend or prompt library always wins over host discovery. The
-            # adapter subprocess and the embedding readers share this process
-            # environment, so the late-bound pack is visible to all of them.
-            for key, value in discovered.items():
-                if not os.environ.get(key, "").strip():
-                    os.environ[key] = value
-            command = os.environ["DIONY_VOICE_BACKEND_COMMAND"]
-            from diony_producer.vault import record_activity
-
-            record_activity(
-                "voice",
-                "Voice backend bound after Producer launch: CosyVoice2 pack found on this host.",
-                level="info",
-            )
-        else:
-            detail = "; ".join(missing) if missing else "no host voice pack"
-            raise VoicePipelineError(
-                "Voice is required, but no local studio voice backend is configured. "
-                "Set DIONY_VOICE_BACKEND_COMMAND; raw or post-picture TTS is forbidden. "
-                f"Studio Connect has not finished the voice pack on this host (missing: {detail})."
-            )
-    return LocalVoiceCommandBackend(command)
+# Transcript of Wan2.2's bundled examples/zero_shot_prompt.wav (the upstream S2V TTS example).
+DEFAULT_PROMPT_TEXT = "希望你以后能够做的比我还好呦。"
 
 
-def lock_reference_voice_profile(
-    project: Project,
-    character_id: str,
-    reference_asset_ids: list[str],
-    *,
-    vault: Path,
-    backend: Any,
-    descriptors: dict[str, str] | None = None,
-) -> VoiceProfile:
-    """Extract and lock 5–30 seconds of local multi-sample speaker evidence."""
-    if not reference_asset_ids:
-        raise VoicePipelineError("Voice cloning requires one or more reference audio assets")
-    model = os.environ.get("DIONY_SPEAKER_EMBEDDING_MODEL", "cam++-local-v1").strip()
-    samples: list[VoiceReferenceSample] = []
-    vectors: list[list[float]] = []
-    for asset_id in reference_asset_ids:
-        try:
-            asset = project.asset(asset_id)
-        except KeyError as exc:
-            raise VoicePipelineError(f"Voice reference asset {asset_id} is not on this Project") from exc
-        if asset.kind != AssetKind.AUDIO:
-            raise VoicePipelineError(f"Voice reference asset {asset_id} is not audio")
-        path = Path(asset.path)
-        path = path if path.is_absolute() else vault / path
-        if not path.is_file() or path.stat().st_size <= 44:
-            raise VoicePipelineError(f"Voice reference bytes are missing: {asset_id}")
-        try:
-            duration = float(asset.metadata.get("duration_seconds") or 0)
-        except (TypeError, ValueError):
-            duration = 0
-        if duration <= 0:
-            duration = _media_duration_seconds(path)
-        if duration <= 0:
-            raise VoicePipelineError(f"Voice reference duration could not be measured: {asset_id}")
-        vector = [float(value) for value in backend.reference_embedding(path, model)]
-        if vectors and len(vector) != len(vectors[0]):
-            raise VoicePipelineError("Voice reference embedding dimensions do not match")
-        vectors.append(vector)
-        samples.append(
-            VoiceReferenceSample(
-                asset_id=asset.id,
-                duration_seconds=duration,
-                emotion=str(asset.metadata.get("emotion") or "neutral"),
-                transcript=str(asset.metadata.get("transcript") or asset.extracted_text or ""),
-                embedding=vector,
-                embedding_model=model,
-                sha256=asset.sha256 or _sha256_file(path),
-            )
+def bind_host_speech_env() -> None:
+    """Fill the speech-pack environment the launch left empty from the host layout."""
+    if all(os.environ.get(key, "").strip() for key in HOST_SPEECH_ENV_KEYS[:2]):
+        return
+    discovered, missing = host_speech_env()
+    if not discovered:
+        raise VoicePipelineError(
+            "Voice is required, but the Wan2.2 speech pack is not ready on this host "
+            f"(missing: {'; '.join(missing) or 'no speech pack'}). Studio Connect prepares it; "
+            "raw or post-picture TTS is forbidden."
         )
-    combined = [
-        sum(vector[index] for vector in vectors) / len(vectors)
-        for index in range(len(vectors[0]))
-    ]
-    norm = math.sqrt(sum(value * value for value in combined)) or 1.0
-    combined = [round(value / norm, 8) for value in combined]
-    return VoiceProfileRegistry(project).lock_from_references(
-        character_id,
-        samples,
-        speaker_embedding=combined,
-        speaker_embedding_model=model,
-        descriptors=descriptors,
-    )
+    for key, value in discovered.items():
+        if not os.environ.get(key, "").strip():
+            os.environ[key] = value
+    from diony_producer.vault import record_activity
+
+    record_activity("voice", "Wan2.2 speech pack bound after Producer launch: casting library found on this host.", level="info")
 
 
-def prepare_voice_for_take(project: Project, take: Take) -> VoiceClipPackage | None:
+def prepare_voice_for_take(project: Project, take: Take) -> SpeechClipPackage | None:
+    """Farm entry: lock the Wan speech request for a spoken Take (None for a silent one)."""
     shot = project.shot(take.shot_id)
-    if not shot.audio_line and not shot.dialogue_turns:
+    if not shot_speaks(shot):
         return None
-    return default_voice_pipeline().prepare_take(project, take)
+    if not _enabled("DIONY_DRY_RUN"):
+        bind_host_speech_env()
+    return prepare_speech_for_take(project, take)
 
 
-def verify_voice_animation(project: Project, take: Take, video: Path) -> VoiceClipPackage | None:
+def verify_voice_animation(project: Project, take: Take, video: Path) -> SpeechClipPackage | None:
+    """Farm entry: measure the delivered speech on a rendered spoken negative."""
     if take.voice_package is None:
         return None
-    return default_voice_pipeline().verify_animation(project, take, video)
+    return verify_speech_render(project, take, video)

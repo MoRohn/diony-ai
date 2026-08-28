@@ -354,20 +354,19 @@ def _clip_rows(project: Project, farm: dict, finish: dict | None = None) -> list
                 "attempt_label": (
                     f"attempt {take.attempt} of {RETAKE_CAP}" if take is not None else ""
                 ),
-                "av_diagnostic_only": bool(
+                "speech_evidence_label": (
+                    "Wan2.2 speech measured"
+                    if take and take.qc and take.qc.speech_backend
+                    else ""
+                ),
+                # A stated voice verdict (pre-camera hold or measured speech
+                # gate) preserves the Take for review; it is not a stopped Wan.
+                "voice_hold": bool(
                     take
                     and take.qc
-                    and take.qc.audiovisual_backend
-                    and not take.qc.audiovisual_measurement_qualified
-                ),
-                "av_evidence_label": (
-                    "Qualified AV"
-                    if take
-                    and take.qc
-                    and take.qc.audiovisual_measurement_qualified
-                    else "Diagnostic AV only"
-                    if take and take.qc and take.qc.audiovisual_backend
-                    else ""
+                    and take.qc.verdict == QCVerdict.FAIL
+                    and take.qc.notes.startswith("Voice")
+                    and "failed" in take.qc.notes
                 ),
                 "engine": shot.engine.value if shot.engine else "",
                 "state": state,
@@ -678,8 +677,8 @@ def _monitoring_summary(
             detail = str(current["note"])
             eyebrow = "CAMERA · STAGING"
         elif str(current.get("note") or "").startswith("Locking the voice"):
-            title = f"Locking the voice for {current['shot_id']}"
-            detail = "CosyVoice2 is performing the line and locking studio audio before Wan rolls."
+            title = f"Casting the voice for {current['shot_id']}"
+            detail = "The line is cast and locked as a Wan2.2 speech request; Wan performs it and animates the face in one pass."
             eyebrow = "VOICE · LIVE"
         elif str(current.get("status") or "").startswith("Retake "):
             title = f"{current['status']} · {current['shot_id']} at 720p"
@@ -1069,7 +1068,7 @@ def run_payload(
         tally_note = (
             "QC hold · Take preserved"
             if any(
-                clip.get("state") == "failed" and clip.get("av_diagnostic_only")
+                clip.get("state") == "failed" and clip.get("voice_hold")
                 for clip in clips
             )
             else "Wan failed"

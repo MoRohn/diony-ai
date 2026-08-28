@@ -26,6 +26,7 @@
       "type": "string"
     },
     "DialogueTurn": {
+      "description": "One authored line for one character inside a Shot window.",
       "properties": {
         "id": {
           "title": "Id",
@@ -277,6 +278,20 @@
     "lighting_ratio": {
       "title": "Lighting Ratio",
       "type": "string"
+    },
+    "s2v_guide_scale": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "maximum": 10,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "S2V Guide Scale"
     },
     "camera_move": {
       "$ref": "#/$defs/CameraMove"

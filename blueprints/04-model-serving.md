@@ -135,7 +135,7 @@ Worker: `diony-wan` (`apps/wan`) selects `native` (default) or `comfyui` explici
 
 On the signed pair after Studio App: clone Wan2.2 to `/opt/wan22`, `pip install -r /opt/wan22/requirements.txt`, `PYTHONPATH=/opt/wan22`. `DIONY_PYTHON` is the **host** interpreter that can `import torch` (RunPod image: `/usr/bin/python3`). It is not `$DIONY_REPO/.venv/bin/python` — that venv is FastAPI only. Studio writes `diony-system-torch.pth` so in-process finish can see the same torch. Produce then writes `takes/{id}/negative_720.mp4`.
 
-Host dependencies are tiered. T2V/I2V are the strict Production core: upstream base requirements plus `infra/runtime/wan-host-overlay.txt`, validated by `diony_wan.runtime` under the exact CUDA interpreter used for `generate.py`. S2V and Animate are purpose-built capability sets: spoken intent makes S2V mandatory after VoiceProfile, studio-audio, and performance metadata lock; Animate remains required only for authored motion-transfer intent. Their missing packages are reported without breaking picture-only camera startup, but a spoken Shot cannot fall back to T2V. Diony patches Wan's package exports to lazy-load those engines. Never compile an optional SAM2 extension against a CUDA/PyTorch mismatch just to make T2V import.
+Host dependencies are tiered. T2V/I2V are the strict Production core: upstream base requirements plus `infra/runtime/wan-host-overlay.txt`, validated by `diony_wan.runtime` under the exact CUDA interpreter used for `generate.py`. S2V and Animate are purpose-built capability sets: spoken intent makes S2V (with Wan's own speech pack) mandatory after the VoiceCasting and WanSpeechRequest lock; Animate remains required only for authored motion-transfer intent. Their missing packages are reported without breaking picture-only camera startup, but a spoken Shot cannot fall back to T2V. Diony patches Wan's package exports to lazy-load those engines. Never compile an optional SAM2 extension against a CUDA/PyTorch mismatch just to make T2V import.
 
 LightX2V / Cache-dit / FastVideo are **Week 2+ accelerators**. Day 1 quality path is official Wan. Speed path must not silently drop the quality mandate.
 
@@ -145,19 +145,20 @@ Not an upstream model. Pipeline in Blueprint `06`. Worker: `diony-finish` (`apps
 
 ## Audio
 
-- Dialogue is the modular local Blueprint `22` backend: synthesis (CosyVoice or
-  qualified replacement), ECAPA-TDNN/CAM++-class embeddings, forced alignment,
-  deterministic studio processing, and audiovisual QC behind
-  `DIONY_VOICE_BACKEND_COMMAND`. Studio prepares the complete pinned backend pack;
+- Dialogue is Wan2.2 S2V's own speech lane (Blueprint `22`): Wan clones a
+  per-character prompt clip and performs the authored line in the same pass as
+  picture (`generate.py --enable_tts`). Wan's TTS loads a CosyVoice checkout and
+  CosyVoice2-0.5B from beside `generate.py`; Studio pins both there so
   Production never downloads dependencies on demand. Because the GPU Producer
   can launch while Studio is still pulling that pack, Production late-binds the
   finished pack from the host layout on the first spoken Take instead of
-  farming with a stale empty backend variable.
-- Spoken intent must lock a VoiceProfile, PerformanceScript, clean dialogue,
-  final clip mix, timing/performance metadata, seeds, and audio QC before camera.
-  Missing preparation blocks the Shot; room tone and post-picture TTS are forbidden.
-- Wan S2V consumes the locked processed audio plus a still or selected prior
-  frame. Final Mix only assembles verified per-clip packages.
+  farming with a stale empty environment.
+- Spoken intent must lock a VoiceCasting and a WanSpeechRequest (line, casting,
+  window, performance direction) before camera. Missing preparation holds the
+  Shot; room tone and post-picture TTS are forbidden.
+- Producer measures the speech Wan delivered inside the negative (presence,
+  tail, loudness) and conforms a mix stem. Final Mix only assembles verified
+  per-clip packages.
 - Score: pin **ACE-Step** as the Day 1 Blueprint choice (local, replaceable). Bake-off is Week 2+.
 - Mix: ffmpeg + loudness (pyloudnorm or ffmpeg `loudnorm`) to LUFS targets in `00`
 

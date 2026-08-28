@@ -49,7 +49,7 @@ Scratch on NVMe is wipeable. Never the only copy of selects.
 
 ## Audio hour
 
-- Dialogue: locked Character VoiceProfile → performance-ready script → processed clip audio → S2V → audiovisual QC. Final Mix only assembles verified clip packages (Blueprint 22).
+- Dialogue: locked Character VoiceCasting → WanSpeechRequest → Wan2.2 S2V native TTS (picture and speech in one pass) → delivered-speech QC. Final Mix only assembles verified clip packages (Blueprint 22).
 - Score: ACE-Step (Blueprint pin) to picture duration + handles
 - SFX: library on vault + generated fills
 - Mix: −24 LUFS broadcast or −16 LUFS streaming; TP −1 dBTP; stem bounce

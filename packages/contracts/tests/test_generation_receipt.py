@@ -113,15 +113,6 @@ def test_s2v_lead_is_part_of_the_rendered_contract() -> None:
         _receipt(task="s2v-14B", frame_num=58, lead_frames=7, inference_frames_per_pass=60, sample_steps=40, effective_denoise_steps=40)
 
 
-def test_s2v_render_frames_adds_headroom_inside_the_lane() -> None:
-    from diony_contracts.live import s2v_frame_num, s2v_render_frames
-
-    assert s2v_frame_num(81, 23.976) == 57
-    assert s2v_render_frames(81, 23.976) == 65
-    assert s2v_render_frames(17, 23.976) == 25
-    assert s2v_render_frames(120, 24.0) == 81
-
-
 def test_s2v_lane_denoises_in_forty_steps_and_the_receipt_knows() -> None:
     from diony_contracts.models import lane_sample_steps
 

@@ -232,9 +232,11 @@ def resident_job_payload(
     image: Path | None,
     log_path: Path,
     audio: Path | None = None,
+    speech: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the worker request without exposing an alternate quality knob."""
     kernel_mode = configured_kernel_mode()
+    tts = dict(speech or {})
     return {
         "protocol": 1,
         "operation": "generate",
@@ -250,6 +252,9 @@ def resident_job_payload(
         "save_file": str(save_file),
         "image": str(image) if image is not None else "",
         "audio": str(audio) if audio is not None else "",
+        "tts_text": str(tts.get("tts_text") or ""),
+        "tts_prompt_audio": str(tts.get("tts_prompt_audio") or ""),
+        "tts_prompt_text": str(tts.get("tts_prompt_text") or ""),
         "inference_frames_per_pass": 84 if task == "s2v-14B" else int(frame_num),
         "log_path": str(log_path),
         "offload_model": False,

@@ -608,12 +608,10 @@ def test_qc_hold_tally_never_counts_a_rejected_negative_as_completed(monkeypatch
         flicker_ok=True,
         duration_ok=True,
         legal_ok=True,
-        audiovisual_backend="diony-local-av-motion-sync-v1",
-        audiovisual_measurement_qualified=False,
-        notes=(
-            "Voice performance failed: qualified mouth-sync evidence is unavailable; "
-            "diagnostic only, so Diony preserved this Take."
-        ),
+        voice_ready_ok=False,
+        speech_backend="wan2.2-s2v-native-tts",
+        speech_presence_score=0.08,
+        notes="Voice audio failed: voiced-speech presence 0.08 is below 0.20.",
     )
     monkeypatch.setattr(run_module, "take_has_live_negative", lambda current, _project: current is take)
     monkeypatch.setattr(run_module, "gpu_monitor", lambda: {"heartbeat": "", "journal": [], "log": ""})
@@ -631,7 +629,8 @@ def test_qc_hold_tally_never_counts_a_rejected_negative_as_completed(monkeypatch
     assert board["tally"] == f"0 passed · 1 failed / {len(project.shots)}"
     assert board["tally_note"] == "QC hold · Take preserved"
     assert board["clips"][0]["attempt_label"] == "attempt 1 of 4"
-    assert board["clips"][0]["av_evidence_label"] == "Diagnostic AV only"
+    assert board["clips"][0]["speech_evidence_label"] == "Wan2.2 speech measured"
+    assert board["clips"][0]["voice_hold"] is True
 
 
 def test_run_payload_exposes_mix_busy_as_protected_work(monkeypatch) -> None:
@@ -710,9 +709,9 @@ def test_monitoring_summary_names_staging_and_voice_lock_instead_of_a_fake_camer
     assert "60 / 126 GB" in staging["detail"] and "about 6 min left" in staging["detail"]
 
     voice = summary("Locking the voice performance before camera · sh-010")
-    assert voice["title"] == "Locking the voice for sh-010"
+    assert voice["title"] == "Casting the voice for sh-010"
     assert voice["eyebrow"] == "VOICE · LIVE"
-    assert "CosyVoice2" in voice["detail"]
+    assert "Wan2.2 speech request" in voice["detail"]
 
     rolling = summary("Generating 720p · i2v-A14B · sh-010")
     assert rolling["title"] == "Building sh-010 at 720p"

@@ -87,17 +87,49 @@ def test_required_dialogue_never_falls_back_to_room_tone(tmp_path, monkeypatch) 
     monkeypatch.setattr("diony_producer.mix._tool", lambda name: name)
     monkeypatch.setattr("diony_producer.mix._duration_seconds", lambda *_args: 20.0)
 
-    with pytest.raises(MixError, match="Required dialogue.*voice package"):
+    with pytest.raises(MixError, match="Required dialogue.*speech package"):
         bounce_mix(project)
 
     assert project.mix.stem_asset_ids == []
 
 
-def test_mix_assembles_verified_per_clip_voice_packages_in_timeline_order(
+def _verified_speech_package(project, take, *, vault):
+    from diony_contracts.enums import AssetKind, VoiceRenderState
+    from diony_contracts.models import Asset
+    from diony_contracts.voice import SpeechClipPackage, SpeechQCReceipt, WanSpeechRequest
+
+    root = vault / "projects" / project.id / "voice" / "takes" / take.id
+    root.mkdir(parents=True, exist_ok=True)
+    assets = {}
+    for role, name in (("voice_dialogue", "dialogue.wav"), ("voice_mix_stem", "mix-stem.wav")):
+        path = root / name
+        path.write_bytes(b"RIFF" + b"wan-speech" * 16)
+        asset = Asset(
+            id=f"ast-{role.replace('_', '-')}-{take.id}", kind=AssetKind.AUDIO, filename=name, mime="audio/wav",
+            bytes=path.stat().st_size, path=str(path.relative_to(vault)), role=role,
+        )
+        project.assets.append(asset)
+        assets[role] = asset
+    request = WanSpeechRequest(
+        character_id="char-mara", casting_id="cast-char-mara-v1", tts_text="Stop the presses.",
+        tts_prompt_audio_sha256="a" * 64, prompt_source="library:cast-00.wav", window_ms=5005,
+    )
+    return SpeechClipPackage(
+        id=f"speech-{take.id}", project_id=project.id, shot_id=take.shot_id, take_id=take.id,
+        character_id="char-mara", casting_id="cast-char-mara-v1", request=request,
+        dialogue_asset_id=assets["voice_dialogue"].id, mix_stem_asset_id=assets["voice_mix_stem"].id,
+        video_sha256="b" * 64, state=VoiceRenderState.VERIFIED,
+        qc=SpeechQCReceipt(
+            measurement_version="diony-speech-qc-v1", audio_present=True, duration_ms=5005.0, window_ms=5005.0,
+            speech_presence_score=0.41, speech_tail_ms=420.0, integrated_lufs=-24.2, loudness_target_lufs=-24.0,
+            true_peak_dbtp=-1.5, true_peak_ceiling_dbtp=-1.0, passed=True,
+        ),
+    )
+
+
+def test_mix_assembles_verified_per_clip_speech_packages_in_timeline_order(
     tmp_path, monkeypatch
 ) -> None:
-    from diony_producer.voice import DeterministicVoiceTestBackend, VoicePerformancePipeline
-
     monkeypatch.setenv("DIONY_VAULT", str(tmp_path))
     monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path))
     project = demo_project()
@@ -105,20 +137,7 @@ def test_mix_assembles_verified_per_clip_voice_packages_in_timeline_order(
         shot.audio_line = None
     shot = project.shots[0]
     take = project.take(shot.selected_take_id)
-    take.voice_package = None
-    backend = DeterministicVoiceTestBackend()
-    pipeline = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
-    )
-    pipeline.prepare_take(project, take)
-    negative = tmp_path / "voice-negative.mp4"
-    negative.write_bytes(b"video evidence" * 8)
-    pipeline.verify_animation(project, take, negative)
+    take.voice_package = _verified_speech_package(project, take, vault=tmp_path)
     project.timeline.preview_path = (
         f"projects/{project.id}/program/{project.timeline.id}/master_1080.mov"
     )
@@ -155,10 +174,16 @@ def test_mix_assembles_verified_per_clip_voice_packages_in_timeline_order(
     stem = project.asset(project.mix.stem_asset_ids[0])
     assert stem.role == "dialogue_stem"
     assert stem.metadata["voice_package_count"] == 1
-    assert stem.metadata["voice_pipeline"] == "locked_per_clip"
+    assert stem.metadata["voice_pipeline"] == "wan22_native_speech_per_clip"
     program = project.asset(project.mix.stem_asset_ids[-1])
     assert program.role == "program_mix_stem"
     assert program.metadata["rails"] == "dialogue"
+
+    # An unverified package (Wan's speech never measured) blocks Mix.
+    take.voice_package = take.voice_package.model_copy(update={"state": "planned", "qc": None, "video_sha256": ""})
+    project.mix.stem_asset_ids = []
+    with pytest.raises(MixError, match="unverified speech package"):
+        bounce_mix(project)
 
 
 def test_multi_turn_dialogue_counts_as_required_dialogue() -> None:

@@ -64,7 +64,12 @@ from diony_producer.calibration import (
 )
 from diony_producer.quality import MEASUREMENT_VERSION, measure_negative_quality
 from diony_producer.vault import persist_project, record_activity, vault_root
-from diony_producer.voice import VoicePipelineError, prepare_voice_for_take, verify_voice_animation
+from diony_producer.voice import (
+    VoicePipelineError,
+    prepare_voice_for_take,
+    speech_failure_message,
+    verify_voice_animation,
+)
 
 _lock = threading.Lock()
 _busy = False
@@ -84,8 +89,6 @@ _AUTO_RETAKE_QC_PREFIXES = (
     "Measured motion failed",
     "Measured temporal coherence failed",
     "Measured flicker failed",
-    "Voice identity failed",
-    "Voice performance failed",
     "Voice audio failed",
 )
 _INFRASTRUCTURE_QC_PREFIXES = (
@@ -282,10 +285,8 @@ def qc_contract_valid(project: Project, take: Take) -> bool:
     dialogue_required = bool(shot.audio_line or shot.dialogue_turns)
     if dialogue_required and (
         take.voice_package is None
-        or not take.voice_package.qc.passed
-        or take.voice_package.state.value != "verified"
+        or not take.voice_package.verified
         or qc.voice_ready_ok is not True
-        or qc.lipsync_ok is not True
         or qc.loudness_ok is not True
     ):
         return False
@@ -514,9 +515,10 @@ def resume_camera(project: Project) -> Project:
                         selected = select_hero_print(project, shot)
                     except RuntimeError:
                         pass
-                _rejudge_unqualified_voice_hold(project, selected)
+                _promote_rejudged_canary(project, selected)
                 retry = auto_retake_for_qc_failure(project, selected)
                 if retry is not None:
+                    _rebind_canary_after_resume(project, selected, retry)
                     queued = [retry]
                     queued.extend(
                         _selected_missing_takes(
@@ -532,6 +534,15 @@ def resume_camera(project: Project) -> Project:
                 for take in queued:
                     note = take.qc.notes.strip() if take.qc else ""
                     if any(note.startswith(prefix) for prefix in _INFRASTRUCTURE_QC_PREFIXES):
+                        _clear_fail_for_reroll(take)
+                    elif _stale_voice_gate_hold(take):
+                        record_activity(
+                            "qc",
+                            f"{take.shot_id} · voice hold was judged under older gates ({note[:80]}); "
+                            f"re-rolling once under {VOICE_GATE_VERSION}",
+                            level="live",
+                            shot_id=take.shot_id,
+                        )
                         _clear_fail_for_reroll(take)
                 recoverable = bool(
                     project.production_started_at is not None
@@ -771,16 +782,23 @@ def refresh_take_measurement(project: Project, take: Take) -> bool:
 
 
 _VOICE_HOLD_PREFIXES = (
-    "Voice identity failed",
+    "Voice casting failed",
     "Voice timing failed",
     "Voice audio failed",
-    "Voice performance failed",
 )
 
 
 def _voice_hold_message(message: str) -> bool:
-    """A bounded, measured voice verdict on one line; not a missing backend."""
+    """A bounded, stated voice verdict on one line; not a missing speech pack."""
     return any(message.startswith(prefix) for prefix in _VOICE_HOLD_PREFIXES)
+
+
+# Bump when a voice gate changes. A hold made under an older gate is re-rolled
+# once on resume instead of waiting for a human retake. v5: the Wan2.2-native
+# speech lane replaced Diony-side synthesis; every earlier hold (identity,
+# harshness, casting) no longer applies and rolls again.
+VOICE_GATE_VERSION = "voice-gates-v5-wan-native"
+_VOICE_GATE_TAG = f"[gates:{VOICE_GATE_VERSION}]"
 
 
 def _pre_camera_hold_report(take: Take, message: str) -> QCReport:
@@ -796,8 +814,36 @@ def _pre_camera_hold_report(take: Take, message: str) -> QCReport:
         duration_ok=True,
         legal_ok=True,
         voice_ready_ok=False,
-        notes=message,
+        notes=f"{message} {_VOICE_GATE_TAG}",
     )
+
+
+def farm_has_pending_work(project: Project) -> bool:
+    """Queued takes, or selected takes without a negative that the farm would still roll on its own."""
+    with _lock:
+        if _busy or _pending:
+            return True
+    for take in _selected_missing_takes(project, exclude_ids=set()):
+        qc = take.qc
+        if qc is None or qc.verdict != QCVerdict.FAIL:
+            return True
+        note = qc.notes.strip()
+        if any(note.startswith(prefix) for prefix in _INFRASTRUCTURE_QC_PREFIXES) or _stale_voice_gate_hold(take):
+            return True
+    return False
+
+
+def _stale_voice_gate_hold(take: Take) -> bool:
+    """A pre-camera voice hold judged under an older gate version (no negative was ever rendered)."""
+    qc = take.qc
+    if qc is None or qc.verdict != QCVerdict.FAIL or qc.voice_ready_ok is not False:
+        return False
+    note = qc.notes.strip()
+    if not (note.startswith("Voice") and "failed" in note):
+        return False
+    if qc.speech_backend or qc.speech_presence_score is not None:
+        return False  # a measured negative, not a pre-camera hold
+    return _VOICE_GATE_TAG not in note
 
 
 def _measured_qc_hold(take: Take) -> bool:
@@ -814,36 +860,48 @@ def _measured_qc_hold(take: Take) -> bool:
     return any(note.startswith(prefix) for prefix in _AUTO_RETAKE_QC_PREFIXES)
 
 
+def _pre_camera_voice_hold(take: Take) -> bool:
+    """A voice-stage verdict recorded before any render: no negative, no delivered speech measured."""
+    qc = take.qc
+    if qc is None or qc.verdict != QCVerdict.FAIL or qc.voice_ready_ok is not False:
+        return False
+    if qc.speech_backend or qc.speech_presence_score is not None:
+        return False
+    note = qc.notes.strip()
+    return any(note.startswith(prefix) for prefix in _VOICE_HOLD_PREFIXES)
+
+
 def _auto_retake_quality_failure(take: Take) -> bool:
     qc = take.qc
     if qc is None or qc.verdict != QCVerdict.FAIL:
         return False
     note = qc.notes.strip()
-    if (
-        note.startswith("Voice performance failed")
-        and qc.audiovisual_measurement_qualified is not True
-    ):
+    if _pre_camera_voice_hold(take):
+        # Nothing was rendered: the voice pipeline already spent its own
+        # bounded attempts. Minting camera attempts here burned the four-Take
+        # cap on synthesis holds (sh-060, 2026-08-27: "attempt 4 of 4" on
+        # the first render). Such a hold re-rolls in place on resume.
         return False
     return any(note.startswith(prefix) for prefix in _AUTO_RETAKE_QC_PREFIXES)
 
 
 _SCORE_WEIGHTS = (
-    ("lip_sync", 0.30),
-    ("sync_offset", 0.25),
-    ("performance", 0.20),
-    ("reference", 0.15),
-    ("temporal", 0.10),
+    ("speech", 0.30),
+    ("speech_tail", 0.15),
+    ("reference", 0.35),
+    ("temporal", 0.20),
 )
 
 
 def attempt_score(take: Take) -> float:
     """Measured quality of one attempt on a 0–1 scale, for best-of selection.
 
-    A weighted mean of whatever this attempt measured: lip-sync confidence,
-    audiovisual offset (500 ms scores zero), physical performance consistency,
-    reference identity similarity, and temporal residual (0.1 scores zero).
-    Missing measurements drop out of the mean instead of counting as zero, so
-    a silent shot is scored on identity and temporal evidence alone.
+    A weighted mean of whatever this attempt measured: voiced-speech presence
+    in the delivered audio, how much of the window the line left free after
+    its last word (a cut line scores zero), reference identity similarity, and
+    temporal residual (0.1 scores zero). Missing measurements drop out of the
+    mean instead of counting as zero, so a silent shot is scored on identity
+    and temporal evidence alone.
     """
     qc = take.qc
     if qc is None:
@@ -852,13 +910,12 @@ def attempt_score(take: Take) -> float:
     if reference is None and qc.reference_similarities:
         reference = min(qc.reference_similarities.values())
     parts: dict[str, float | None] = {
-        "lip_sync": qc.lip_sync_confidence,
-        "sync_offset": (
-            max(0.0, 1.0 - qc.audiovisual_offset_ms_p95 / 500.0)
-            if qc.audiovisual_offset_ms_p95 is not None
-            else None
+        "speech": (
+            min(1.0, qc.speech_presence_score / 0.5) if qc.speech_presence_score is not None else None
         ),
-        "performance": qc.voice_performance_consistency,
+        "speech_tail": (
+            min(1.0, qc.speech_tail_ms / 250.0) if qc.speech_tail_ms is not None else None
+        ),
         "reference": reference,
         "temporal": (
             max(0.0, 1.0 - qc.temporal_residual_p95 / 0.1)
@@ -957,55 +1014,6 @@ def settle_exhausted_shots(project: Project) -> list[Take]:
     return settled
 
 
-_APERTURE_STD = re.compile(r"speaker face at .*?aperture std=([0-9.]+)")
-STILL_MOUTH_APERTURE_STD = 0.02  # av_sync.MIN_APERTURE_STD: below this the mouth did not perform
-ARTICULATION_DRIVE_STEP = 1.0
-ARTICULATION_DRIVE_MAX = 7.5
-
-
-def _measured_aperture_std(take: Take) -> float | None:
-    package = take.voice_package
-    if package is None:
-        return None
-    for line in package.qc.diagnostics:
-        found = _APERTURE_STD.search(line)
-        if found:
-            try:
-                return float(found.group(1))
-            except ValueError:
-                return None
-    return None
-
-
-def _raise_articulation_drive(project: Project, shot, take: Take) -> float | None:
-    """A take whose mouth measured still retakes with more audio guidance.
-
-    S2V's guidance scale is the strength of the line's drive on the visible
-    face (its unconditional branch drops the audio). A still mouth is not a
-    seed accident to reroll: the same face, prompt, and audio at the same
-    drive tend to repeat it. Each still-mouth rejection raises the Shot's
-    drive by one step, capped, and the receipt records the value used.
-    """
-    from diony_contracts.models import lane_guide_scale
-
-    measured = _measured_aperture_std(take)
-    if measured is None or measured >= STILL_MOUTH_APERTURE_STD:
-        return None
-    current = shot.s2v_guide_scale or lane_guide_scale("s2v-14B") or 4.5
-    raised = min(ARTICULATION_DRIVE_MAX, round(current + ARTICULATION_DRIVE_STEP, 2))
-    if raised <= current:
-        return None
-    shot.s2v_guide_scale = raised
-    record_activity(
-        "qc",
-        f"{shot.id} · mouth measured still on {take.id} (aperture std {measured:.4f}); "
-        f"raising the line's articulation drive from {current:g} to {raised:g} for the retake",
-        level="live",
-        shot_id=shot.id,
-    )
-    return raised
-
-
 def auto_retake_for_qc_failure(project: Project, take: Take) -> Take | None:
     """Replace a rejected selected print until the four-generation Take cap.
 
@@ -1033,7 +1041,6 @@ def auto_retake_for_qc_failure(project: Project, take: Take) -> Take | None:
     # applied after the contract refresh, so the revision survives to dispatch.
     if not direct_retake(project, shot, take):
         repair_wan_prompt_for_qc(shot, take.qc.notes if take.qc else "")
-    _raise_articulation_drive(project, shot, take)
     retry = new_generation_take(project, shot, live=True)
     project.takes.append(retry)
     shot.selected_take_id = retry.id
@@ -1664,215 +1671,63 @@ def _clear_fail_for_reroll(take: Take) -> None:
         take.qc.notes = "Queued for Wan2.2 on this pair. 720p negative, not a 1080 master."
 
 
-def _rejudge_unqualified_voice_hold(project: Project, take: Take) -> None:
-    """Re-measure a Take held on unqualified mouth-sync evidence with the current backend.
+def _rebind_canary_after_resume(project: Project, failed: Take, retry: Take) -> bool:
+    """A retake minted on resume inherits the B200 canary bound to the take it replaces.
 
-    A hold is a one-take pause, not a verdict: after a restart the measurement
-    may have improved (wider lag search, pinned models). A pass lands the
-    negative; a qualified failure re-enters the bounded retake path.
+    Without this the receipt stays bound to the failed take, every later take
+    dispatches on the plain lane, and cuDNN is never qualified (sh-010-t2/t3,
+    2026-08-27: 1233 s renders after an 818 s canary).
     """
-    qc = take.qc
-    if (
-        qc is None
-        or qc.verdict != QCVerdict.FAIL
-        or not qc.notes.startswith("Voice performance failed")
-        or qc.audiovisual_measurement_qualified is True
-        or take.voice_package is None
-    ):
-        return
-    negative = vault_root() / negative_rel(project, take)
-    if not negative.is_file() or negative.stat().st_size <= 32:
-        return
+    path = vault_root() / "qualification" / _ATTENTION_RECEIPT_NAME
     try:
-        package = verify_voice_animation(project, take, negative)
-    except Exception as exc:  # noqa: BLE001 — a re-judge must never block resume
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return False
+    if receipt.get("scope_project_id") != project.id or receipt.get("quality_canary_take_id") != failed.id:
+        return False
+    try:
+        _rebind_attention_canary(project, failed, retry, path)
+    except Exception as exc:  # noqa: BLE001 — the plain lane is the safe fallback
         record_activity(
-            "qc", f"{take.shot_id} · re-judge skipped · {str(exc)[:200]}", level="warn", shot_id=take.shot_id
+            "gpu",
+            f"{retry.shot_id} · B200 attention canary could not follow the resume retake · {str(exc)[:160]}",
+            level="warn",
+            shot_id=retry.shot_id,
         )
-        return
-    if package is None:
-        return
-    take.voice_package = package
-    measured = package.qc
-    passed = bool(measured.passed)
-    update = {
-        "voice_ready_ok": passed,
-        "lipsync_ok": bool(measured.animation_passed),
-        "loudness_ok": bool(measured.audio_passed),
-        "audiovisual_measurement_qualified": measured.audiovisual_measurement_qualified,
-        "lip_sync_confidence": measured.lip_sync_confidence,
-        "audiovisual_offset_ms_p95": measured.audiovisual_offset_ms_p95,
-        "voice_performance_consistency": measured.performance_consistency,
-        "audiovisual_backend": measured.audiovisual_backend,
-        "verdict": QCVerdict.PASS if passed else QCVerdict.FAIL,
-        "notes": (
-            "Wan2.2 720p negative. Re-judged mouth-sync evidence passed. Not a 1080 master."
-            if passed
-            else _voice_performance_failure(package)
-        ),
-    }
-    take.qc = qc.model_copy(update=update)
-    persist_project(project)
-    record_activity(
-        "qc",
-        f"{take.shot_id} · re-judged with {measured.audiovisual_backend}: {take.qc.notes[:160]}",
-        level="live" if passed else "fail",
-        shot_id=take.shot_id,
-    )
+        return False
+    return True
 
 
-_SPEAKER_FACE = re.compile(r"speaker face at \((\d+),(\d+)\)")
-_REFINED_LAG = re.compile(r"refined_lag_frames=(-?[\d.]+)")
-_CORRELATION = re.compile(r"mouth-audio correlation=([\d.]+)")
+def _promote_rejudged_canary(project: Project, take: Take) -> bool:
+    """A held B200 canary that passed its re-judge still owes the 1080 qualification."""
+    qc = take.qc
+    if qc is None or qc.verdict != QCVerdict.PASS:
+        return False
+    path = vault_root() / "qualification" / _ATTENTION_RECEIPT_NAME
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return False
+    if receipt.get("scope_project_id") != project.id or receipt.get("quality_canary_take_id") != take.id:
+        return False
+    try:
+        from diony_wan.attention_qualification import attention_decision
 
-
-def _measured_lag(diagnostics) -> tuple[float, float] | None:
-    """(refined lag frames, correlation) from mouth-sync diagnostics."""
-    lag = None
-    corr = None
-    for line in diagnostics:
-        m = _REFINED_LAG.search(line)
-        if m:
-            lag = float(m.group(1))
-        c = _CORRELATION.search(line)
-        if c:
-            corr = float(c.group(1))
-    return (lag, corr) if lag is not None and corr is not None else None
-
-
-def align_spoken_head(project: Project, take: Take, negative: Path) -> int:
-    """Trim a measured late lip lag from the head of a spoken negative.
-
-    S2V renders headroom; when the mouth trails the locked audio by a whole
-    number of frames (strong correlation, qualified evidence), those frames
-    are dropped from the head and the locked audio muxed back, so the take
-    lands on the line at t=0 instead of spending a retake. Returns the trim.
-    """
-    from diony_contracts.live import S2V_HEADROOM_FRAMES
-    from diony_producer.camera import _audio_reference
-    from diony_producer.voice import default_voice_pipeline
-    from diony_wan.runner import rebind_generation_receipt, trim_head_and_remux
-
-    shot = project.shot(take.shot_id)
-    if str(getattr(take.engine, "value", take.engine) or "") != "s2v-14B":
-        return 0
-    package = take.voice_package
-    if package is None or not negative.is_file():
-        return 0
-    audio = _audio_reference(project, shot)
-    if audio is None:
-        return 0
-    pipeline = default_voice_pipeline()
-    clean = project.asset(package.clean_dialogue_asset_id)
-    metadata = project.asset(package.performance_metadata_asset_id)
-    measured = pipeline.audiovisual_qc.verify_audiovisual(
-        negative, pipeline._asset_path(clean), pipeline._asset_path(metadata)
-    )
-    if not measured.qualified_for_visual_retake:
-        return 0
-    found = _measured_lag(measured.diagnostics)
-    if found is None:
-        return 0
-    lag, correlation = found
-    shift = int(round(lag))
-    if correlation < 0.6 or shift == 0 or abs(shift) > S2V_HEADROOM_FRAMES:
-        return 0
-    from diony_contracts.live import s2v_frame_num
-    from diony_wan.runner import hold_head_and_remux
-
-    delivered = int(
-        (
-            probe_media(
-                negative,
-                fallback_fps=shot.fps,
-                fallback_frames=shot.duration_frames,
-                fallback_width=0,
-                fallback_height=0,
-            )
-            or {}
-        ).get("frames")
-        or 0
-    )
-    if shift > 0:
-        if delivered and delivered - shift < s2v_frame_num(shot.duration_frames, shot.fps):
-            # No headroom to spend (an older render): leave it to the retake path.
-            return 0
-        trim_head_and_remux(negative, lead_frames=shift, audio=audio)
-        rebind_generation_receipt(negative, lead_frames=shift)
+        if attention_decision(path, project_id=project.id).enabled:
+            return False
+    except (ImportError, ValueError):
+        return False
+    try:
+        _complete_attention_canary(project, take, path)
+    except Exception as exc:  # noqa: BLE001 — a failed promotion leaves the plain lane in place
         record_activity(
-            "qc",
-            f"{shot.id} · lip motion measured {lag:+.2f} frames late (correlation {correlation:.2f}); "
-            f"trimmed {shift} head frames onto the locked line",
-            level="live",
-            shot_id=shot.id,
+            "gpu",
+            f"{take.shot_id} · B200 attention canary not promoted after re-judge · {str(exc)[:200]}",
+            level="warn",
+            shot_id=take.shot_id,
         )
-        return shift
-    hold = -shift
-    if delivered and delivered - hold < s2v_frame_num(shot.duration_frames, shot.fps):
-        return 0
-    hold_head_and_remux(negative, hold_frames=hold, audio=audio)
-    rebind_generation_receipt(negative, head_hold_frames=hold)
-    record_activity(
-        "qc",
-        f"{shot.id} · lip motion measured {lag:+.2f} frames early (correlation {correlation:.2f}); "
-        f"held the first frame {hold} frames onto the locked line",
-        level="live",
-        shot_id=shot.id,
-    )
-    return -hold
-_FACES_TRACKED = re.compile(r"faces tracked=(\d+)")
-
-
-def _speaker_face_from(voice_package) -> tuple[float, float] | None:
-    """The measured speaker face centre from a qualified, passing, multi-face take."""
-    if voice_package is None or not voice_package.qc.passed:
-        return None
-    if voice_package.qc.audiovisual_measurement_qualified is not True:
-        return None
-    faces = 0
-    center: tuple[float, float] | None = None
-    for line in voice_package.qc.diagnostics:
-        tracked = _FACES_TRACKED.search(line)
-        if tracked:
-            faces = int(tracked.group(1))
-        seen = _SPEAKER_FACE.search(line)
-        if seen:
-            center = (float(seen.group(1)), float(seen.group(2)))
-    # A close-up crop holds one face; only a wide take teaches where the
-    # speaker sits in the subject still.
-    return center if faces >= 2 and center is not None else None
-
-
-def _voice_performance_failure(voice_package) -> str:
-    """Describe the measured voice gate that failed instead of hiding it."""
-    if voice_package is None:
-        return "Voice performance failed: audiovisual timing evidence is missing."
-    qc = voice_package.qc
-    if qc.audiovisual_measurement_qualified is not True:
-        backend = qc.audiovisual_backend or "configured AV checker"
-        return (
-            "Voice performance failed: qualified mouth-sync evidence is unavailable; "
-            f"{backend} is diagnostic only, so Diony preserved this Take instead of "
-            "spending another full camera render."
-        )
-    failures: list[str] = []
-    if qc.lip_sync_confidence < qc.lip_sync_confidence_min:
-        failures.append(
-            f"lip-sync confidence {qc.lip_sync_confidence:.4f} is below "
-            f"{qc.lip_sync_confidence_min:.2f}"
-        )
-    if qc.audiovisual_offset_ms_p95 > qc.audiovisual_offset_ms_max:
-        failures.append(
-            f"audiovisual offset p95 {qc.audiovisual_offset_ms_p95:.3f} ms exceeds "
-            f"{qc.audiovisual_offset_ms_max:g} ms"
-        )
-    if qc.performance_consistency < qc.performance_consistency_min:
-        failures.append(
-            f"performance consistency {qc.performance_consistency:.4f} is below "
-            f"{qc.performance_consistency_min:.2f}"
-        )
-    detail = "; ".join(failures) or "audiovisual timing evidence did not pass"
-    return f"Voice performance failed: {detail}."
+        return False
+    return True
 
 
 def attach_negative(
@@ -1947,25 +1802,24 @@ def attach_negative(
     dialogue_required = bool(shot.audio_line or shot.dialogue_turns)
     voice_failure = ""
     voice_package = take.voice_package
-    speaker_seen: tuple[float, float] | None = None
     if dialogue_required and not err and dest.is_file():
         try:
+            # Wan2.2 performed the line and animated the face in the negative;
+            # measure the speech it delivered and bind it to this print.
             voice_package = verify_voice_animation(project, take, dest)
-            speaker_seen = _speaker_face_from(voice_package)
-        except Exception as exc:  # noqa: BLE001 — missing AV evidence is a hard clip gate
-            voice_failure = f"Voice performance failed: {exc}"
-    voice_ready_ok = (
-        bool(voice_package and voice_package.qc.passed)
-        if dialogue_required
-        else None
-    )
+        except Exception as exc:  # noqa: BLE001 — unmeasured speech is a hard clip gate
+            voice_failure = f"Voice audio failed: {exc}"
+    speech_qc = voice_package.qc if voice_package is not None else None
+    voice_ready_ok = bool(voice_package and voice_package.verified) if dialogue_required else None
     audio_ready_ok = (
-        bool(shot.audio_asset_ids and voice_package and voice_package.qc.audio_passed)
+        bool(speech_qc and speech_qc.audio_present)
         if dialogue_required
         else shot.engine != Engine.S2V_14B or bool(shot.audio_asset_ids)
     )
-    lipsync_ok = bool(voice_package and voice_package.qc.animation_passed) if dialogue_required else None
-    loudness_ok = bool(voice_package and voice_package.qc.audio_passed) if dialogue_required else None
+    # Lip motion is Wan S2V's own audio conditioning on this lane; it is not
+    # measured separately, so it never claims a pass or a fail here.
+    lipsync_ok = None
+    loudness_ok = bool(speech_qc and speech_qc.passed) if dialogue_required else None
     # Camera negatives are legalized by Finish. At this boundary `legal_ok`
     # means the native media contract was measured and is structurally valid;
     # final Rec.709 tags/range are verified after the mandatory 1080 pass.
@@ -2058,16 +1912,7 @@ def attach_negative(
     )
     failure = err or voice_failure
     if not failure and dialogue_required and not voice_ready_ok:
-        if voice_package and voice_package.qc.speaker_similarity < voice_package.qc.speaker_similarity_min:
-            failure = (
-                "Voice identity failed: speaker similarity "
-                f"{voice_package.qc.speaker_similarity:.4f} is below "
-                f"{voice_package.qc.speaker_similarity_min:.2f}."
-            )
-        elif voice_package and not voice_package.qc.audio_passed:
-            failure = "Voice audio failed locked studio-audio QC."
-        else:
-            failure = _voice_performance_failure(voice_package)
+        failure = speech_failure_message(voice_package)
     if not failure and size > 32 and not dimensions_ok:
         width = int(media.get("width") or 0)
         height = int(media.get("height") or 0)
@@ -2106,20 +1951,6 @@ def attach_negative(
         failure = f"Measured flicker failed (luma-change p95 {measured:.4f})."
     if not failure and not legal_ok:
         failure = "Measured 720p media integrity failed before the mandatory Rec.709 finish."
-    if ok and speaker_seen is not None and dialogue_required:
-        try:
-            from diony_producer.camera import learn_speaker_face
-
-            speaker = next((turn.character_id for turn in shot.dialogue_turns if turn.character_id), "")
-            if speaker:
-                learn_speaker_face(project, speaker, speaker_seen)
-                record_activity(
-                    "qc",
-                    f"{shot.id} · {speaker}'s face learned at ({speaker_seen[0]:.0f},{speaker_seen[1]:.0f}) for close-up framing",
-                    shot_id=shot.id,
-                )
-        except Exception:  # noqa: BLE001 — a framing aid never blocks a passing take
-            pass
     take.qc = QCReport(
         id=f"qc-{take.id}",
         take_id=take.id,
@@ -2138,21 +1969,12 @@ def attach_negative(
         voice_ready_ok=voice_ready_ok,
         lipsync_ok=lipsync_ok,
         loudness_ok=loudness_ok,
-        voice_measurement_version=(voice_package.qc.measurement_version if voice_package else ""),
-        speaker_similarity=(voice_package.qc.speaker_similarity if voice_package else None),
-        speech_presence_score=(voice_package.qc.speech_presence_score if voice_package else None),
-        voice_project_consistency=(voice_package.qc.project_consistency if voice_package else None),
-        voice_performance_consistency=(
-            voice_package.qc.performance_consistency if voice_package else None
-        ),
-        lip_sync_confidence=(voice_package.qc.lip_sync_confidence if voice_package else None),
-        audiovisual_offset_ms_p95=(
-            voice_package.qc.audiovisual_offset_ms_p95 if voice_package else None
-        ),
-        audiovisual_backend=(voice_package.qc.audiovisual_backend if voice_package else ""),
-        audiovisual_measurement_qualified=(
-            voice_package.qc.audiovisual_measurement_qualified if voice_package else False
-        ),
+        voice_measurement_version=(speech_qc.measurement_version if speech_qc else ""),
+        speech_backend=(voice_package.backend if voice_package and speech_qc else ""),
+        speech_presence_score=(speech_qc.speech_presence_score if speech_qc else None),
+        speech_tail_ms=(speech_qc.speech_tail_ms if speech_qc else None),
+        dialogue_lufs=(speech_qc.integrated_lufs if speech_qc else None),
+        dialogue_true_peak_dbtp=(speech_qc.true_peak_dbtp if speech_qc else None),
         reference_asset_ids=reference_ids,
         reference_similarity=similarity,
         reference_similarities=similarities,
@@ -2263,8 +2085,8 @@ def run_one(
     _shot_id = shot.id
     refresh_reference_shot(project, shot)
     if shot.audio_line or shot.dialogue_turns:
-        # CosyVoice2 cold-loads on the first spoken clip; say so instead of
-        # leaving the last staging line on screen for a minute or more.
+        # The line is cast and locked as a Wan speech request before the
+        # camera rolls; Wan2.2 performs it and animates the face in one pass.
         _detail = f"Locking the voice performance before camera · {shot.id}"
     prepare_voice_for_take(project, take)
     persist_project(project)
@@ -2298,12 +2120,6 @@ def run_one(
         if farm_cancelled(token):
             return
         if dest.is_file():
-            try:
-                align_spoken_head(project, take, dest)
-            except Exception as exc:  # noqa: BLE001 — alignment is an aid; QC still judges the take
-                record_activity(
-                    "qc", f"{shot.id} · head alignment skipped · {str(exc)[:160]}", level="warn", shot_id=shot.id
-                )
             _load_generation_receipt(take, dest)
         attach_negative(
             project,
@@ -2642,6 +2458,25 @@ def start_farm(project: Project, takes: list[Take]) -> None:
                 if farm_cancelled():
                     break
                 integrity_error = _take_integrity_error(take)
+                if attention_canary and _measured_qc_hold(take) and not _auto_retake_quality_failure(take):
+                    # Unqualified evidence on the canary (an owed head alignment,
+                    # a missing face model) is a one-take hold, not a verdict on
+                    # cuDNN. Hold the Shot like any other, keep the rundown
+                    # rolling on the plain lane, and promote the canary when the
+                    # re-judge on resume passes (`_promote_rejudged_canary`).
+                    held_shots.add(take.shot_id)
+                    with _lock:
+                        _done += 1
+                        _error = ""
+                        _detail = f"QC hold · {take.shot_id} · canary waits for a re-judge; continuing with the next clip"
+                    record_activity(
+                        "qc",
+                        f"{take.shot_id} · B200 attention canary held on unqualified evidence; "
+                        f"Production continues without cuDNN until it is re-judged · {(take.qc.notes if take.qc else '')[:160]}",
+                        level="warn",
+                        shot_id=take.shot_id,
+                    )
+                    continue
                 if attention_canary:
                     if integrity_error:
                         retry = auto_retake_for_qc_failure(project, take)

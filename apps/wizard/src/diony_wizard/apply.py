@@ -89,41 +89,34 @@ HF_PACK = [
     ),
 ]
 
-# Mouth-sync QC (Blueprint 22 audiovisual evidence): OpenCV YuNet face detector
-# and MediaPipe FaceLandmarker, both Apache-2.0, pinned by SHA-256 and served
-# from the vault so Production never downloads on demand.
-MOUTH_SYNC_MODELS: tuple[tuple[str, str, str, int], ...] = (
-    (
-        "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
-        "face_detection_yunet_2023mar.onnx",
-        "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
-        232589,
-    ),
-    (
-        "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-        "face_landmarker.task",
-        "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
-        3758596,
-    ),
-)
-MOUTH_SYNC_MODEL_DIR = "/diony/vault/runtime/voice/models"
-# Per-character casting prompts (Blueprint 22): three distinct open-licensed
-# speech clips already on the host (CosyVoice and Wan2.2 example assets),
-# measured on CAM++ at <=0.39 pairwise similarity. Library order is cast order.
-VOICE_PROMPT_LIBRARY_DIR = "/diony/vault/runtime/voice/prompt-library"
-VOICE_PROMPT_LIBRARY: tuple[tuple[str, str], ...] = (
-    ("$COSY_ROOT/asset/cross_lingual_prompt.wav", "cast-00-cross_lingual_prompt.wav"),
-    ("$COSY_ROOT/asset/zero_shot_prompt.wav", "cast-01-zero_shot_prompt.wav"),
-    ("/opt/wan22/examples/talk.wav", "cast-02-talk.wav"),
-)
-
-COSYVOICE_MODEL = (
+# Wan2.2 speech pack (Blueprint 22): Wan's own S2V TTS lane
+# (`generate.py --enable_tts`, `WanS2V.load_tts`) loads a CosyVoice checkout
+# and the CosyVoice2-0.5B weights from beside generate.py and would download
+# both at render time when absent. Studio pins them on the vault and links
+# them where Wan looks, so Production never fetches.
+WAN_TTS_RUNTIME_DIR = "/diony/vault/runtime/wan-tts"
+WAN_TTS_CHECKOUT_LINK = "/opt/wan22/CosyVoice"
+WAN_TTS_MODEL_LINK = "/opt/wan22/CosyVoice2-0.5B"
+WAN_TTS_MODEL = (
     "FunAudioLLM/CosyVoice2-0.5B",
     "/diony/vault/models/audio/CosyVoice2-0.5B",
     "eec1ae6c79877dbd9379285cf8789c9e0879293d",
     19,
     4856505002,
 )
+# Per-character casting library (Blueprint 22): distinct open-licensed speech
+# clips already on the host (Wan2.2 and CosyVoice example assets). Library
+# order is cast order; a sibling .txt is the clip's exact transcript so Wan
+# clones zero-shot, otherwise it clones cross-lingually from the audio alone.
+VOICE_PROMPT_LIBRARY_DIR = "/diony/vault/runtime/voice/prompt-library"
+VOICE_PROMPT_LIBRARY: tuple[tuple[str, str, str], ...] = (
+    ("$WAN_TTS_ROOT/asset/cross_lingual_prompt.wav", "cast-00-cross_lingual_prompt.wav", ""),
+    ("$WAN_TTS_ROOT/asset/zero_shot_prompt.wav", "cast-01-zero_shot_prompt.wav", "希望你以后能够做的比我还好呦。"),
+    ("/opt/wan22/examples/talk.wav", "cast-02-talk.wav", ""),
+)
+# Kept for one release so a Connect on a host prepared before the Wan-native
+# lane can move its earlier checkout instead of cloning again.
+LEGACY_COSYVOICE_CHECKOUT = "/diony/vault/runtime/cosyvoice/CosyVoice"
 
 _lock = threading.RLock()
 _apply_epoch = 0
@@ -152,8 +145,7 @@ SETUP_STAGES: list[tuple[str, str, int]] = [
     ("pack", "Pinned model pack", 55),
     ("dedupe", "Shared model assets", 3),
     ("wan", "Wan2.2 runtime", 12),
-    ("cosyvoice", "CosyVoice2 runtime", 10),
-    ("voiceqc", "Mouth-sync QC models", 2),
+    ("speech", "Wan2.2 speech pack", 12),
     ("producer", "Producer", 4),
 ]
 
@@ -238,15 +230,11 @@ _STAGE_MARKERS: dict[str, tuple[str, str, str]] = {
     "WAN_HOST_OVERLAY_REPAIR": ("wan", "active", "Repairing the Wan host runtime"),
     "WAN_GIT_LOCK_CLEARED": ("wan", "active", "Clearing a stale git lock"),
     "WAN_HOST_PYTHON_OK": ("wan", "done", "Wan host runtime ready"),
-    "COSYVOICE_RUNTIME_START": ("cosyvoice", "active", "Preparing the CosyVoice2 runtime"),
-    "COSYVOICE_RUNTIME_INSTALL": ("cosyvoice", "active", "Installing CosyVoice2 requirements"),
-    "COSYVOICE_PULL": ("cosyvoice", "active", "Downloading the CosyVoice2 voice model"),
-    "COSYVOICE_OK": ("cosyvoice", "done", "CosyVoice2 voice model ready"),
-    "VOICEQC_START": ("voiceqc", "active", "Preparing the mouth-sync QC models"),
-    "VOICEQC_INSTALL": ("voiceqc", "active", "Installing the face landmark runtime"),
-    "VOICEQC_PULL": ("voiceqc", "active", "Downloading the pinned face models"),
-    "VOICEQC_OK": ("voiceqc", "done", "Mouth-sync QC models ready"),
-    "VOICEQC_CAST": ("voiceqc", "done", "Per-character casting prompts ready"),
+    "SPEECH_PACK_START": ("speech", "active", "Preparing Wan2.2's speech pack"),
+    "SPEECH_PACK_INSTALL": ("speech", "active", "Installing Wan2.2's speech requirements"),
+    "SPEECH_PACK_PULL": ("speech", "active", "Downloading the Wan2.2 speech model"),
+    "SPEECH_PACK_OK": ("speech", "done", "Wan2.2 speech model ready"),
+    "SPEECH_CAST": ("speech", "done", "Per-character casting library ready"),
     "PRODUCER_START": ("producer", "active", "Starting Producer"),
     "APPLY_OK": ("producer", "done", "Producer is running"),
 }
@@ -491,7 +479,7 @@ def site_readiness_script(repo: str) -> str:
         dest: (revision, files, payload_bytes)
         for _repo, dest, _filename, revision, files, payload_bytes in HF_PACK
     }
-    expected_snapshots[COSYVOICE_MODEL[1]] = COSYVOICE_MODEL[2:]
+    expected_snapshots[WAN_TTS_MODEL[1]] = WAN_TTS_MODEL[2:]
     quoted_snapshots = repr(expected_snapshots)
     return f"""
 python3 - <<'PY'
@@ -558,19 +546,15 @@ snapshot_states = {{
 snapshot_complete = all(row["complete"] for row in snapshot_states.values())
 snapshot_pinned = all(row["pinned"] for row in snapshot_states.values())
 sr = Path("/models/diony/diony_sr_v1")
-cosy_model = Path("/diony/vault/models/audio/CosyVoice2-0.5B")
-cosy_required = (
+tts_model = Path("/diony/vault/models/audio/CosyVoice2-0.5B")
+tts_required = (
     "cosyvoice2.yaml",
     "llm.pt",
     "flow.pt",
     "hift.pt",
     "speech_tokenizer_v2.onnx",
 )
-cosy_ready = all((cosy_model / name).is_file() for name in cosy_required)
-voiceqc_dir = Path("/diony/vault/runtime/voice/models")
-voiceqc_ready = all(
-    (voiceqc_dir / name).is_file() for name in ("face_detection_yunet_2023mar.onnx", "face_landmarker.task")
-)
+tts_model_ready = all((tts_model / name).is_file() for name in tts_required)
 volume_root = Path("/diony/vault/models").resolve()
 model_volume = all(
     (Path("/models") / kind).resolve() == volume_root / kind
@@ -578,18 +562,17 @@ model_volume = all(
 )
 pack = snapshot_complete and snapshot_pinned and (
     (sr / "RealESRGAN_x2.pth").is_file() or bool(list(sr.glob("*.pth")))
-) and cosy_ready
+) and tts_model_ready
 wan_repo = Path("/opt/wan22/.git").is_dir()
-cosy_root = Path("/diony/vault/runtime/cosyvoice/CosyVoice")
-cosy_python = Path("/diony/vault/runtime/cosyvoice/venv/bin/python")
-cosy_repo = (cosy_root / ".git").is_dir()
-cosy_runtime = all((cosy_root / relative).exists() for relative in (
+# Wan's own TTS lane loads both from beside generate.py (WanS2V.load_tts).
+tts_checkout = Path("/opt/wan22/CosyVoice")
+tts_checkout_ready = all((tts_checkout / relative).exists() for relative in (
     "cosyvoice/cli/cosyvoice.py",
     "third_party/Matcha-TTS",
-)) and cosy_repo and cosy_python.is_file()
-voice_backend = (
-    repo / "apps" / "producer" / "src" / "diony_producer" / "cosyvoice_backend.py"
-).is_file()
+))
+tts_link = Path("/opt/wan22/CosyVoice2-0.5B")
+speech_pack = tts_checkout_ready and all((tts_link / name).is_file() for name in tts_required)
+casting_library = any(Path("/diony/vault/runtime/voice/prompt-library").glob("*.wav")) if Path("/diony/vault/runtime/voice/prompt-library").is_dir() else False
 runtime_receipt_path = Path("/diony/vault/.cluster/wan-host-runtime.json")
 try:
     runtime_report = json.loads(runtime_receipt_path.read_text(encoding="utf-8"))
@@ -619,7 +602,7 @@ producer_running = subprocess.run(
     stderr=subprocess.DEVNULL,
     check=False,
 ).returncode == 0
-prepared = pack and model_volume and wan_repo and cosy_runtime and voice_backend
+prepared = pack and model_volume and wan_repo and speech_pack
 print("DIONY_SITE_STATE " + json.dumps({{
     "prepared": prepared,
     "ready": prepared and wan_runtime and producer_installed and producer_running,
@@ -629,9 +612,8 @@ print("DIONY_SITE_STATE " + json.dumps({{
     "optional_engines": optional_engines,
     "model_volume": model_volume,
     "wan_repo": wan_repo,
-    "cosy_repo": cosy_repo,
-    "cosy_runtime": cosy_runtime,
-    "voice_backend": voice_backend,
+    "speech_pack": speech_pack,
+    "casting_library": casting_library,
     "wan_runtime": wan_runtime,
     "producer_installed": producer_installed,
     "producer_running": producer_running,
@@ -1037,20 +1019,20 @@ def apply_fail_text(result) -> str:
             "Pack pull stopped at pip. huggingface_hub is already on this GPU. "
             "Retry Pull pack. Studio now skips that pip step and starts Hugging Face."
         )
-    if "COSYVOICE_OVERLAY_MISSING" in blob:
+    if "SPEECH_OVERLAY_MISSING" in blob:
         return (
-            f"{prefix}The repo sync to this host is incomplete: infra/runtime/cosyvoice-overlay.txt "
+            f"{prefix}The repo sync to this host is incomplete: infra/runtime/wan-tts-overlay.txt "
             "is missing. Retry validation to re-sync the Diony repo."
         )
     idx = blob.rfind("Traceback (most recent call last):")
     if idx >= 0:
         summary = summarize_traceback(blob[idx:])
         missing = re.search(r"ModuleNotFoundError: No module named '([^']+)'", summary)
-        if missing and "COSYVOICE_IMPORT_FAILED" in blob:
+        if missing and "SPEECH_IMPORT_FAILED" in blob:
             return (
-                f"{prefix}The CosyVoice2 venv is missing the Python package "
-                f"'{missing.group(1)}'. Retry validation: Diony now installs "
-                "cosyvoice-overlay.txt (transformers, diffusers, x-transformers) "
+                f"{prefix}The Wan host interpreter is missing the Python package "
+                f"'{missing.group(1)}' for Wan2.2's speech lane. Retry validation: Diony installs "
+                "wan-tts-overlay.txt (transformers, diffusers, x-transformers) "
                 "alongside Wan's requirements_s2v.txt."
             )
         if missing:
@@ -1088,7 +1070,7 @@ def apply_progress_text(line: str) -> str:
     stages = {
         "PY_RUNTIME_START": "Preparing the Python runtime",
         "WAN_RUNTIME_START": "Installing the Wan2.2 runtime and Diony apps",
-        "COSYVOICE_RUNTIME_START": "Preparing the CosyVoice2 runtime",
+        "SPEECH_PACK_START": "Preparing Wan2.2's speech pack",
         "PRODUCER_START": "Starting Producer",
         "HF_START": "Checking the pinned model pack",
         "HF_OK": "Pinned model pack ready",
@@ -1096,19 +1078,17 @@ def apply_progress_text(line: str) -> str:
         "MODEL_VOLUME_OK": "Attached-volume model storage ready",
         "PACK_DEDUPE_START": "Consolidating shared model assets",
         "PACK_DEDUPE_OK": "Shared model assets ready",
-        "COSYVOICE_RUNTIME_INSTALL": "Installing the CosyVoice2 runtime",
-        "COSYVOICE_OK": "CosyVoice2 voice model ready",
-        "VOICEQC_START": "Preparing the mouth-sync QC models",
-        "VOICEQC_INSTALL": "Installing the face landmark runtime",
-        "VOICEQC_PULL": "Downloading the pinned face models",
-        "VOICEQC_OK": "Mouth-sync QC models ready",
-        "VOICEQC_CAST": "Per-character casting prompts ready",
+        "SPEECH_PACK_INSTALL": "Installing Wan2.2's speech requirements",
+        "SPEECH_PACK_OK": "Wan2.2 speech model ready",
+        "SPEECH_CAST": "Per-character casting library ready",
         "WAN_HOST_OVERLAY_REPAIR": "Repairing the Wan host runtime",
         "WAN_HOST_PYTHON_OK": "Wan host runtime ready",
         "APPLY_OK": "Compute setup complete",
     }
-    if clean.startswith("COSYVOICE_PULL "):
-        return "Downloading CosyVoice2 voice model"
+    if clean.startswith("SPEECH_PACK_PULL "):
+        return "Downloading Wan2.2 speech model"
+    if clean.startswith("SPEECH_CAST "):
+        return "Per-character casting library ready"
     if clean.startswith("MODEL_VOLUME_MIGRATE "):
         kind = clean.removeprefix("MODEL_VOLUME_MIGRATE ").strip()
         return f"Moving existing {kind} models to the attached volume"
@@ -1125,14 +1105,17 @@ def remote_setup_script(repo: str, nas: str = "") -> str:
     else:
         token_line = "true"
     pack = repr(HF_PACK)
-    cosy_model = repr(COSYVOICE_MODEL)
-    mouth_sync_models = repr(MOUTH_SYNC_MODELS)
-    mouth_sync_dir = MOUTH_SYNC_MODEL_DIR
-    mouth_sync_dir_repr = repr(MOUTH_SYNC_MODEL_DIR)
+    tts_model = repr(WAN_TTS_MODEL)
     prompt_library_dir = VOICE_PROMPT_LIBRARY_DIR
     prompt_library_lines = "\n".join(
-        f'if [ -f "{source}" ]; then [ -f "{VOICE_PROMPT_LIBRARY_DIR}/{name}" ] || cp "{source}" "{VOICE_PROMPT_LIBRARY_DIR}/{name}"; _diony_cast_count=$((_diony_cast_count+1)); fi'
-        for source, name in VOICE_PROMPT_LIBRARY
+        f'if [ -f "{source}" ]; then [ -f "{VOICE_PROMPT_LIBRARY_DIR}/{name}" ] || cp "{source}" "{VOICE_PROMPT_LIBRARY_DIR}/{name}"; '
+        + (
+            f"printf '%s\\n' {shlex.quote(transcript)} > \"{VOICE_PROMPT_LIBRARY_DIR}/{Path(name).stem}.txt\"; "
+            if transcript
+            else ""
+        )
+        + "_diony_cast_count=$((_diony_cast_count+1)); fi"
+        for source, name, transcript in VOICE_PROMPT_LIBRARY
     )
     quoted_repo = shlex.quote(repo)
     mount = "\n".join(vault_mount_lines(nas))
@@ -1253,115 +1236,73 @@ test -d /opt/wan22/.git || git clone --depth 1 https://github.com/Wan-Video/Wan2
 _diony_pip install -e "$DIONY_REPO/packages/contracts" -e "$DIONY_REPO/apps/wan" -e "$DIONY_REPO/apps/finish" -e "$DIONY_REPO/apps/producer" -e "$DIONY_REPO/apps/wizard"
 _diony_python -c "from pathlib import Path; from diony_wan.runner import ensure_attention_fallback, ensure_optional_engine_lazy_imports; ensure_attention_fallback(Path('/opt/wan22')); ensure_optional_engine_lazy_imports(Path('/opt/wan22'))"
 _diony_host_wan_pip
-echo COSYVOICE_RUNTIME_START
-COSY_RUNTIME=/diony/vault/runtime/cosyvoice
-COSY_ROOT="$COSY_RUNTIME/CosyVoice"
-COSY_PY="$COSY_RUNTIME/venv/bin/python"
-mkdir -p "$COSY_RUNTIME"
-if [ ! -d "$COSY_ROOT/.git" ]; then
-  if [ -d /opt/wan22/CosyVoice/.git ] && [ ! -L /opt/wan22/CosyVoice ]; then
-    rsync -a -- /opt/wan22/CosyVoice/ "$COSY_ROOT/"
+echo SPEECH_PACK_START
+# Wan2.2's own S2V speech lane (generate.py --enable_tts): WanS2V.load_tts loads
+# ./CosyVoice and ./CosyVoice2-0.5B relative to generate.py and downloads both
+# when absent. Pin them on the vault and link them where Wan looks.
+WAN_TTS_RUNTIME={WAN_TTS_RUNTIME_DIR}
+WAN_TTS_ROOT="$WAN_TTS_RUNTIME/CosyVoice"
+mkdir -p "$WAN_TTS_RUNTIME"
+if [ ! -d "$WAN_TTS_ROOT/.git" ]; then
+  if [ -d {LEGACY_COSYVOICE_CHECKOUT}/.git ]; then
+    rsync -a -- {LEGACY_COSYVOICE_CHECKOUT}/ "$WAN_TTS_ROOT/"
+  elif [ -d {WAN_TTS_CHECKOUT_LINK}/.git ] && [ ! -L {WAN_TTS_CHECKOUT_LINK} ]; then
+    rsync -a -- {WAN_TTS_CHECKOUT_LINK}/ "$WAN_TTS_ROOT/"
   else
-    git clone --depth 1 --recursive https://github.com/FunAudioLLM/CosyVoice.git "$COSY_ROOT"
+    git clone --depth 1 --recursive https://github.com/FunAudioLLM/CosyVoice.git "$WAN_TTS_ROOT"
   fi
 fi
-test -d "$COSY_ROOT/.git"
-if [ -d /opt/wan22/CosyVoice ] && [ ! -L /opt/wan22/CosyVoice ]; then
-  rm -rf -- /opt/wan22/CosyVoice
+test -d "$WAN_TTS_ROOT/.git"
+if [ -d {WAN_TTS_CHECKOUT_LINK} ] && [ ! -L {WAN_TTS_CHECKOUT_LINK} ]; then
+  rm -rf -- {WAN_TTS_CHECKOUT_LINK}
 fi
-ln -sfn "$COSY_ROOT" /opt/wan22/CosyVoice
-if [ ! -x "$COSY_PY" ]; then
-  "$_DIONY_HOST_PYTHON" -m venv --system-site-packages "$COSY_RUNTIME/venv"
-fi
-COSY_OVERLAY="$_diony_repo/infra/runtime/cosyvoice-overlay.txt"
-[ -f "$COSY_OVERLAY" ] || {{ echo "COSYVOICE_OVERLAY_MISSING $COSY_OVERLAY" >&2; exit 14; }}
-_diony_cosyvoice_ready() {{
-  PYTHONPATH="$COSY_ROOT:$COSY_ROOT/third_party/Matcha-TTS" "$COSY_PY" - <<'PY' 2>&1
+ln -sfn "$WAN_TTS_ROOT" {WAN_TTS_CHECKOUT_LINK}
+WAN_TTS_OVERLAY="$_diony_repo/infra/runtime/wan-tts-overlay.txt"
+[ -f "$WAN_TTS_OVERLAY" ] || {{ echo "SPEECH_OVERLAY_MISSING $WAN_TTS_OVERLAY" >&2; exit 14; }}
+_diony_wan_tts_ready() {{
+  # The interpreter that runs generate.py must import Wan's TTS stack itself.
+  PYTHONPATH="/opt/wan22:$WAN_TTS_ROOT:$WAN_TTS_ROOT/third_party/Matcha-TTS" "$DIONY_PYTHON" - <<'PY' 2>&1
 import importlib.util
 import sys
 missing = [name for name in ("transformers", "diffusers", "x_transformers", "hyperpyyaml", "onnxruntime", "modelscope", "librosa", "soundfile") if importlib.util.find_spec(name) is None]
 if missing:
-    print("COSYVOICE_MISSING " + " ".join(missing))
+    print("SPEECH_MISSING " + " ".join(missing))
     sys.exit(1)
 from cosyvoice.cli.cosyvoice import CosyVoice2  # noqa: F401
-import modelscope  # noqa: F401
 PY
 }}
-if ! _diony_cosyvoice_ready >/dev/null 2>&1; then
-  echo COSYVOICE_RUNTIME_INSTALL
+if ! _diony_wan_tts_ready >/dev/null 2>&1; then
+  echo SPEECH_PACK_INSTALL
   PIP_BREAK_SYSTEM_PACKAGES=1 PIP_ROOT_USER_ACTION=ignore \
-    "$COSY_PY" -m pip install --disable-pip-version-check \
-      --upgrade-strategy only-if-needed -r /opt/wan22/requirements_s2v.txt -r "$COSY_OVERLAY"
+    "$DIONY_PYTHON" -m pip install --disable-pip-version-check \
+      --upgrade-strategy only-if-needed -r /opt/wan22/requirements_s2v.txt -r "$WAN_TTS_OVERLAY"
 fi
-if ! _diony_cosyvoice_ready; then
-  echo "COSYVOICE_IMPORT_FAILED the CosyVoice2 venv cannot import cosyvoice after installing requirements_s2v.txt + cosyvoice-overlay.txt" >&2
+if ! _diony_wan_tts_ready; then
+  echo "SPEECH_IMPORT_FAILED the Wan host interpreter cannot import cosyvoice after installing requirements_s2v.txt + wan-tts-overlay.txt" >&2
   exit 15
 fi
-export DIONY_COSYVOICE_PYTHON="$COSY_PY"
-export DIONY_COSYVOICE_ROOT="$COSY_ROOT"
-export DIONY_COSYVOICE_MODEL=/diony/vault/models/audio/CosyVoice2-0.5B
-export DIONY_COSYVOICE_PROMPT_AUDIO=/opt/wan22/examples/zero_shot_prompt.wav
-export DIONY_VOICE_BACKEND_COMMAND="$_diony_venv/bin/python $_diony_repo/apps/producer/src/diony_producer/cosyvoice_backend.py"
-export DIONY_SPEAKER_EMBEDDING_MODEL=cosyvoice-campplus-v1
 _diony_python - <<'PY'
 import os
 from huggingface_hub import snapshot_download
-repo_id, dest, revision, _expected_files, _expected_bytes = {cosy_model}
+repo_id, dest, revision, _expected_files, _expected_bytes = {tts_model}
 os.makedirs(dest, exist_ok=True)
 required = ("cosyvoice2.yaml", "llm.pt", "flow.pt", "hift.pt", "speech_tokenizer_v2.onnx")
 if not all(os.path.isfile(os.path.join(dest, name)) for name in required):
-    print(f"COSYVOICE_PULL {{repo_id}} -> {{dest}}", flush=True)
+    print(f"SPEECH_PACK_PULL {{repo_id}} -> {{dest}}", flush=True)
     snapshot_download(repo_id=repo_id, revision=revision, local_dir=dest, max_workers=4)
 missing = [name for name in required if not os.path.isfile(os.path.join(dest, name))]
 if missing:
-    raise RuntimeError(f"CosyVoice snapshot incomplete: {{', '.join(missing)}}")
-print("COSYVOICE_OK", flush=True)
+    raise RuntimeError(f"Wan speech model snapshot incomplete: {{', '.join(missing)}}")
+print("SPEECH_PACK_OK", flush=True)
 PY
-echo VOICEQC_START
-VOICEQC_OVERLAY="$_diony_repo/infra/runtime/voice-qc-overlay.txt"
-[ -f "$VOICEQC_OVERLAY" ] || {{ echo "VOICEQC_OVERLAY_MISSING $VOICEQC_OVERLAY" >&2; exit 16; }}
-if ! ldconfig -p 2>/dev/null | grep -q "libEGL.so.1"; then
-  echo VOICEQC_INSTALL
-  export DEBIAN_FRONTEND=noninteractive
-  if ! apt-get install -y -q libegl1 libgles2 >/dev/null 2>&1; then
-    apt-get update -q >/dev/null 2>&1 || true
-    apt-get install -y -q libegl1 libgles2 >/dev/null 2>&1 || {{ echo "VOICEQC_EGL_MISSING libEGL.so.1 could not be installed (apt libegl1)" >&2; exit 16; }}
-  fi
+if [ -d {WAN_TTS_MODEL_LINK} ] && [ ! -L {WAN_TTS_MODEL_LINK} ]; then
+  rm -rf -- {WAN_TTS_MODEL_LINK}
 fi
-_diony_voiceqc_ready() {{
-  _diony_python -c "import cv2, mediapipe; from mediapipe.tasks.python import vision; assert hasattr(cv2, 'FaceDetectorYN')"
-}}
-if ! _diony_voiceqc_ready >/dev/null 2>&1; then
-  echo VOICEQC_INSTALL
-  _diony_pip install -q --disable-pip-version-check --upgrade-strategy only-if-needed -r "$VOICEQC_OVERLAY"
-fi
-_diony_voiceqc_ready >/dev/null 2>&1 || {{ echo "VOICEQC_IMPORT_FAILED the Diony venv cannot import mediapipe/cv2 after installing voice-qc-overlay.txt" >&2; exit 16; }}
-mkdir -p {mouth_sync_dir}
-_diony_python - <<'PY'
-import hashlib, os, urllib.request
-models = {mouth_sync_models}
-root = {mouth_sync_dir_repr}
-def pinned(path, sha256, size):
-    if not os.path.isfile(path) or os.path.getsize(path) != size:
-        return False
-    return hashlib.sha256(open(path, "rb").read()).hexdigest() == sha256
-for url, name, sha256, size in models:
-    dest = os.path.join(root, name)
-    if pinned(dest, sha256, size):
-        continue
-    print(f"VOICEQC_PULL {{name}}", flush=True)
-    tmp = dest + ".partial"
-    urllib.request.urlretrieve(url, tmp)
-    if not pinned(tmp, sha256, size):
-        os.remove(tmp)
-        raise SystemExit(f"VOICEQC_PIN_MISMATCH {{name}} did not match its pinned SHA-256/size")
-    os.replace(tmp, dest)
-print("VOICEQC_OK", flush=True)
-PY
+ln -sfn {WAN_TTS_MODEL[1]} {WAN_TTS_MODEL_LINK}
 mkdir -p {prompt_library_dir}
 _diony_cast_count=0
 {prompt_library_lines}
-echo "VOICEQC_CAST $_diony_cast_count"
+echo "SPEECH_CAST $_diony_cast_count"
 test -d /models/wan/Wan2.2-T2V-A14B
 test -e /models/diony/diony_sr_v1/RealESRGAN_x2.pth || ls /models/diony/diony_sr_v1/*.pth >/dev/null
 exec 9>&-

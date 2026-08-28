@@ -41,9 +41,7 @@ GPU_STAMP_FILES = (
     "apps/producer/src/diony_producer/finish.py",
     "apps/producer/src/diony_producer/mix.py",
     "apps/producer/src/diony_producer/voice.py",
-    "apps/producer/src/diony_producer/cosyvoice_backend.py",
-    "apps/producer/src/diony_producer/cosyvoice_worker.py",
-    "apps/producer/src/diony_producer/av_sync.py",
+    "apps/producer/src/diony_producer/speech_audio.py",
     "apps/finish/src/diony_finish/rrdb.py",
     "apps/finish/src/diony_finish/pipeline.py",
     "apps/wan/src/diony_wan/runner.py",
@@ -74,6 +72,14 @@ _tunnel_key = ""
 _last_error = ""
 _synced_stamp = ""
 _sync_deferred_at = 0.0
+# A GPU Producer takes ~2 minutes to answer after launch (its lifespan resumes
+# the camera before uvicorn binds :8788). Within this window a silent :8788 is
+# "starting", not "down": the desk must not drop the tunnel and re-run the
+# start script, which would kill the starting process and relaunch it — the
+# 2026-08-27 loop that answered every mutation with "control plane not ready".
+_PRODUCER_START_GRACE_SECONDS = 300.0
+_last_producer_start_at = 0.0
+_ensure_lock = threading.Lock()
 _SYNC_DEFER_SECONDS = 60.0
 _ssh_fail_at = 0.0
 _ssh_fail_key = ""
@@ -753,42 +759,32 @@ fi
 HOST_PY="$WAN_VENV/bin/python"
 "$HOST_PY" -c "import torch" >/dev/null 2>&1 || { echo GPU_HOST_PYTHON_WITH_TORCH_MISSING; exit 13; }
 export DIONY_PYTHON="$HOST_PY"
-_diony_cosyvoice_pack_ready() {
-  # Same completeness bar as diony_producer.voice.host_voice_env: a model
-  # directory that Studio App is still filling is not a voice pack yet.
-  [ -x /diony/vault/runtime/cosyvoice/venv/bin/python ] || return 1
-  [ -d /diony/vault/runtime/cosyvoice/CosyVoice ] || return 1
-  for _diony_cosy_file in cosyvoice2.yaml llm.pt flow.pt hift.pt speech_tokenizer_v2.onnx; do
-    [ -f "/diony/vault/models/audio/CosyVoice2-0.5B/$_diony_cosy_file" ] || return 1
+_diony_wan_speech_pack_ready() {
+  # Same completeness bar as diony_producer.voice.speech_pack_missing: Wan2.2's
+  # own TTS lane (generate.py --enable_tts) loads CosyVoice and CosyVoice2-0.5B
+  # from beside generate.py; a directory Studio App is still filling is not a
+  # speech pack yet.
+  [ -f /opt/wan22/CosyVoice/cosyvoice/cli/cosyvoice.py ] || return 1
+  [ -e /opt/wan22/CosyVoice/third_party/Matcha-TTS ] || return 1
+  for _diony_tts_file in cosyvoice2.yaml llm.pt flow.pt hift.pt speech_tokenizer_v2.onnx; do
+    [ -f "/opt/wan22/CosyVoice2-0.5B/$_diony_tts_file" ] || return 1
   done
   return 0
 }
-if _diony_cosyvoice_pack_ready; then
-  export DIONY_COSYVOICE_PYTHON=/diony/vault/runtime/cosyvoice/venv/bin/python
-  export DIONY_COSYVOICE_ROOT=/diony/vault/runtime/cosyvoice/CosyVoice
-  export DIONY_COSYVOICE_MODEL=/diony/vault/models/audio/CosyVoice2-0.5B
-  export DIONY_COSYVOICE_PROMPT_AUDIO=/opt/wan22/examples/zero_shot_prompt.wav
+if _diony_wan_speech_pack_ready; then
   if [ -d /diony/vault/runtime/voice/prompt-library ]; then
-    export DIONY_COSYVOICE_PROMPT_LIBRARY=/diony/vault/runtime/voice/prompt-library
+    export DIONY_WAN_TTS_PROMPT_LIBRARY=/diony/vault/runtime/voice/prompt-library
   fi
-  if [ -d /diony/vault/runtime/audio/library ]; then
-    export DIONY_SOUND_LIBRARY=/diony/vault/runtime/audio/library
-  fi
-  if [ -f /opt/diony-ai/apps/producer/src/diony_producer/audiogen_backend.py ]; then
-    export DIONY_AUDIOGEN_COMMAND="/opt/diony-ai/.venv/bin/python /opt/diony-ai/apps/producer/src/diony_producer/audiogen_backend.py"
-  fi
-  if [ -f /opt/diony-ai/apps/producer/src/diony_producer/cosyvoice_backend.py ]; then
-    export DIONY_VOICE_BACKEND_COMMAND="/opt/diony-ai/.venv/bin/python /opt/diony-ai/apps/producer/src/diony_producer/cosyvoice_backend.py"
-    export DIONY_SPEAKER_EMBEDDING_MODEL=cosyvoice-campplus-v1
+  if [ -f /opt/wan22/examples/zero_shot_prompt.wav ]; then
+    export DIONY_WAN_TTS_PROMPT_AUDIO=/opt/wan22/examples/zero_shot_prompt.wav
+    export DIONY_WAN_TTS_PROMPT_TEXT='希望你以后能够做的比我还好呦。'
   fi
 fi
-if [ -x /diony/vault/runtime/voice/bin/diony-voice-backend ]; then
-  export DIONY_VOICE_BACKEND_COMMAND=/diony/vault/runtime/voice/bin/diony-voice-backend
+if [ -d /diony/vault/runtime/audio/library ]; then
+  export DIONY_SOUND_LIBRARY=/diony/vault/runtime/audio/library
 fi
-if [ -f /diony/vault/runtime/voice/models/face_detection_yunet_2023mar.onnx ] && \
-   [ -f /diony/vault/runtime/voice/models/face_landmarker.task ]; then
-  export DIONY_FACE_DETECTOR_MODEL=/diony/vault/runtime/voice/models/face_detection_yunet_2023mar.onnx
-  export DIONY_FACE_LANDMARKER_MODEL=/diony/vault/runtime/voice/models/face_landmarker.task
+if [ -f /opt/diony-ai/apps/producer/src/diony_producer/audiogen_backend.py ]; then
+  export DIONY_AUDIOGEN_COMMAND="/opt/diony-ai/.venv/bin/python /opt/diony-ai/apps/producer/src/diony_producer/audiogen_backend.py"
 fi
 RUNTIME_PROBE=/opt/diony-ai/apps/wan/src/diony_wan/runtime.py
 RUNTIME_OVERLAY=/opt/diony-ai/infra/runtime/wan-host-overlay.txt
@@ -878,15 +874,11 @@ _diony_existing_producer_ready() {
   printf '%s\n' "$active_env" | grep -Fqx "DIONY_MODEL_HOT_CACHE_GB=$DIONY_MODEL_HOT_CACHE_GB" || return 1
   printf '%s\n' "$active_env" | grep -Fqx "DIONY_MODEL_HOT_CACHE_MIN_FREE_GB=$DIONY_MODEL_HOT_CACHE_MIN_FREE_GB" || return 1
   printf '%s\n' "$active_env" | grep -Fqx "DIONY_CODE_STAMP=$DIONY_CODE_STAMP" || return 1
-  if [ -n "${DIONY_COSYVOICE_PYTHON:-}" ]; then
-    printf '%s\n' "$active_env" | grep -Fqx "DIONY_COSYVOICE_PYTHON=$DIONY_COSYVOICE_PYTHON" || return 1
+  if [ -n "${DIONY_WAN_TTS_PROMPT_LIBRARY:-}" ]; then
+    printf '%s\n' "$active_env" | grep -Fqx "DIONY_WAN_TTS_PROMPT_LIBRARY=$DIONY_WAN_TTS_PROMPT_LIBRARY" || return 1
   fi
-  if [ -n "${DIONY_VOICE_BACKEND_COMMAND:-}" ]; then
-    printf '%s\n' "$active_env" | grep -Fqx "DIONY_VOICE_BACKEND_COMMAND=$DIONY_VOICE_BACKEND_COMMAND" || return 1
-    printf '%s\n' "$active_env" | grep -Fqx "DIONY_SPEAKER_EMBEDDING_MODEL=$DIONY_SPEAKER_EMBEDDING_MODEL" || return 1
-  fi
-  if [ -n "${DIONY_FACE_LANDMARKER_MODEL:-}" ]; then
-    printf '%s\n' "$active_env" | grep -Fqx "DIONY_FACE_LANDMARKER_MODEL=$DIONY_FACE_LANDMARKER_MODEL" || return 1
+  if [ -n "${DIONY_WAN_TTS_PROMPT_AUDIO:-}" ]; then
+    printf '%s\n' "$active_env" | grep -Fqx "DIONY_WAN_TTS_PROMPT_AUDIO=$DIONY_WAN_TTS_PROMPT_AUDIO" || return 1
   fi
 }
 _diony_production_busy() {
@@ -897,8 +889,32 @@ _diony_production_busy() {
   fi
   local endpoint payload
   for endpoint in farm finish mix; do
-    payload=$(curl -sf --max-time 2 "http://127.0.0.1:8788/api/$endpoint" 2>/dev/null || true)
+    # Fail closed: a Producer that is alive but too busy to answer in time
+    # (Wan loading its TTS models for the first spoken Shot) is
+    # busy, not idle. An empty answer must never earn a kill.
+    payload=$(curl -sf --max-time 6 "http://127.0.0.1:8788/api/$endpoint" 2>/dev/null) || return 0
+    [ -n "$payload" ] || return 0
     if printf '%s' "$payload" | grep -Eq '"busy"[[:space:]]*:[[:space:]]*true'; then
+      return 0
+    fi
+  done
+  payload=$(curl -sf --max-time 6 http://127.0.0.1:8788/api/project 2>/dev/null) || return 0
+  if printf '%s' "$payload" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"shooting"'; then
+    return 0
+  fi
+  return 1
+}
+_diony_starting_producer() {
+  # uvicorn binds :8788 only after the lifespan resumes the camera (~2 min).
+  # A young diony-producer carrying this exact code stamp is starting, and
+  # killing it would only start the clock again.
+  local pid age
+  for pid in $(pgrep -f 'bin/diony-producer' 2>/dev/null); do
+    [ -r "/proc/$pid/environ" ] || continue
+    tr '\000' '\n' < "/proc/$pid/environ" | grep -Fqx "DIONY_CODE_STAMP=$DIONY_CODE_STAMP" || continue
+    age=$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ')
+    case "$age" in ''|*[!0-9]*) continue ;; esac
+    if [ "$age" -lt 300 ]; then
       return 0
     fi
   done
@@ -906,6 +922,10 @@ _diony_production_busy() {
 }
 if _diony_existing_producer_ready; then
   echo GPU_PRODUCER_OK
+  exit 0
+fi
+if _diony_starting_producer; then
+  echo GPU_PRODUCER_STARTING
   exit 0
 fi
 if OLD_PRODUCER_PID=$(_diony_8788_pid); then
@@ -931,15 +951,9 @@ nohup env -u DIONY_DRY_RUN PATH="$PATH" DIONY_VAULT=/diony/vault DIONY_BIND=0.0.
   DIONY_MODEL_HOT_CACHE_GB="$DIONY_MODEL_HOT_CACHE_GB" \
   DIONY_MODEL_HOT_CACHE_MIN_FREE_GB="$DIONY_MODEL_HOT_CACHE_MIN_FREE_GB" \
   DIONY_CODE_STAMP="$DIONY_CODE_STAMP" \
-  DIONY_VOICE_BACKEND_COMMAND="${DIONY_VOICE_BACKEND_COMMAND:-}" \
-  DIONY_SPEAKER_EMBEDDING_MODEL="${DIONY_SPEAKER_EMBEDDING_MODEL:-}" \
-  DIONY_COSYVOICE_PYTHON="${DIONY_COSYVOICE_PYTHON:-}" \
-  DIONY_COSYVOICE_ROOT="${DIONY_COSYVOICE_ROOT:-}" \
-  DIONY_COSYVOICE_MODEL="${DIONY_COSYVOICE_MODEL:-}" \
-  DIONY_COSYVOICE_PROMPT_AUDIO="${DIONY_COSYVOICE_PROMPT_AUDIO:-}" \
-  DIONY_COSYVOICE_PROMPT_LIBRARY="${DIONY_COSYVOICE_PROMPT_LIBRARY:-}" \
-  DIONY_FACE_DETECTOR_MODEL="${DIONY_FACE_DETECTOR_MODEL:-}" \
-  DIONY_FACE_LANDMARKER_MODEL="${DIONY_FACE_LANDMARKER_MODEL:-}" \
+  DIONY_WAN_TTS_PROMPT_LIBRARY="${DIONY_WAN_TTS_PROMPT_LIBRARY:-}" \
+  DIONY_WAN_TTS_PROMPT_AUDIO="${DIONY_WAN_TTS_PROMPT_AUDIO:-}" \
+  DIONY_WAN_TTS_PROMPT_TEXT="${DIONY_WAN_TTS_PROMPT_TEXT:-}" \
   DIONY_SOUND_LIBRARY="${DIONY_SOUND_LIBRARY:-}" \
   DIONY_AUDIOGEN="${DIONY_AUDIOGEN:-}" \
   DIONY_AUDIOGEN_COMMAND="${DIONY_AUDIOGEN_COMMAND:-}" \
@@ -947,6 +961,7 @@ nohup env -u DIONY_DRY_RUN PATH="$PATH" DIONY_VAULT=/diony/vault DIONY_BIND=0.0.
   DIONY_AUDIOGEN_CLI_ACE_STEP="${DIONY_AUDIOGEN_CLI_ACE_STEP:-}" \
   DIONY_AUDIOGEN_CLI_STABLE_AUDIO_OPEN="${DIONY_AUDIOGEN_CLI_STABLE_AUDIO_OPEN:-}" \
   "$PRODUCER_BIN" >/diony/vault/.cluster/producer.log 2>&1 &
+echo GPU_PRODUCER_LAUNCHED
 for _diony_start_wait in 1 2 3 4 5 6 7 8 9 10; do
   sleep 1
   if _diony_existing_producer_ready; then
@@ -954,6 +969,13 @@ for _diony_start_wait in 1 2 3 4 5 6 7 8 9 10; do
     exit 0
   fi
 done
+# The Producer resumes the camera before it binds :8788 (about two minutes
+# on a signed lease). A launched process on this stamp is starting, not a
+# mismatch; reporting failure here made the desk relaunch it in a loop.
+if _diony_starting_producer; then
+  echo GPU_PRODUCER_STARTING
+  exit 0
+fi
 echo GPU_PRODUCER_ENV_MISMATCH
 exit 14
 """
@@ -964,6 +986,51 @@ exit 14
         + "\n",
         1,
     )
+
+
+def _mark_producer_started() -> None:
+    global _last_producer_start_at
+    _last_producer_start_at = time.time()
+
+
+def _producer_starting() -> bool:
+    """Did this desk (re)start the GPU Producer within the grace window?"""
+    return 0 <= time.time() - _last_producer_start_at < _PRODUCER_START_GRACE_SECONDS
+
+
+_ALIVE_PROBE_CACHE_SECONDS = 15.0
+_alive_probe: tuple[float, bool] = (0.0, False)
+
+
+def _remote_producer_alive(conn: dict) -> bool:
+    """Is a diony-producer process present on the box right now (cached 15 s)?
+
+    Grace means "give a starting process time", never "leave a dead one for
+    five minutes": measured 2026-08-27, a killed Producer sat unrelaunched for
+    the whole window while a mutation waited on it.
+    """
+    global _alive_probe
+    at, alive = _alive_probe
+    if time.time() - at < _ALIVE_PROBE_CACHE_SECONDS:
+        return alive
+    cmd = [
+        "ssh",
+        *_ssh_args(conn["ssh_port"], connect_timeout=6),
+        f"{conn['ssh_user']}@{conn['host']}",
+        "pgrep", "-f", "bin/diony-producer",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=12, check=False)
+        alive = proc.returncode == 0 and bool((proc.stdout or "").strip())
+    except (OSError, subprocess.SubprocessError):
+        alive = True  # the line, not the Producer, is in doubt: do not relaunch on a guess
+    _alive_probe = (time.time(), alive)
+    return alive
+
+
+def _producer_coming_up(conn: dict) -> bool:
+    """Within the grace window *and* a Producer process exists to wait for."""
+    return _producer_starting() and _remote_producer_alive(conn)
 
 
 def _start_gpu_producer(conn: dict) -> None:
@@ -1000,8 +1067,13 @@ def _start_gpu_producer(conn: dict) -> None:
     if proc.returncode == 0 and (
         "GPU_PRODUCER_OK" in (proc.stdout or "")
         or "GPU_PRODUCER_BUSY_DEFERRED" in (proc.stdout or "")
+        or "GPU_PRODUCER_STARTING" in (proc.stdout or "")
     ):
         _set_error("")
+        if "GPU_PRODUCER_LAUNCHED" in (proc.stdout or "") or "GPU_PRODUCER_STARTING" in (proc.stdout or ""):
+            # We just launched it, or it is still coming up: give it the
+            # grace window before anyone may restart it again.
+            _mark_producer_started()
         return
     if proc.returncode != 0 or "GPU_PRODUCER_OK" not in (proc.stdout or ""):
         _set_error(blob[:800] or f"GPU Producer start failed on {conn['host']}")
@@ -1039,6 +1111,7 @@ def ensure_gpu_producer() -> str | None:
                     _code_stamp()
                     and _code_stamp() != _synced_stamp
                     and time.time() - _sync_deferred_at >= _SYNC_DEFER_SECONDS
+                    and not _producer_starting()
                     and _probe_ssh(conn)
                 ):
                     persist_connect(conn)
@@ -1049,23 +1122,35 @@ def ensure_gpu_producer() -> str | None:
                 return gpu_producer_base()
         except httpx.HTTPError:
             pass
+        if _producer_coming_up(conn) and (_tunnel is None or _tunnel.poll() is None):
+            # The line is up and the Producer is still coming up behind it.
+            _set_error("GPU Producer is starting; the desk will connect when it answers.")
+            return None
         _free_local_tunnel_port()
-    if not _probe_ssh(conn):
-        return None
-    persist_connect(conn)
-    _sync_gpu_apps(conn)
-    _start_gpu_producer(conn)
-    if not _ensure_tunnel(conn):
+    if not _ensure_lock.acquire(blocking=False):
+        # Another request or the reconcile thread is already on the line;
+        # a second start script would only fight the first for the Producer.
         return None
     try:
-        res = httpx.get(gpu_producer_base() + "/api/site", timeout=4.0)
-        if res.status_code == 200:
-            _set_error("")
-            return gpu_producer_base()
-        _set_error(f"GPU Producer HTTP {res.status_code}")
-    except httpx.HTTPError as exc:
-        _set_error(str(exc)[:800])
-    return None
+        if not _probe_ssh(conn):
+            return None
+        persist_connect(conn)
+        if not _producer_coming_up(conn):
+            _sync_gpu_apps(conn)
+            _start_gpu_producer(conn)
+        if not _ensure_tunnel(conn):
+            return None
+        try:
+            res = httpx.get(gpu_producer_base() + "/api/site", timeout=4.0)
+            if res.status_code == 200:
+                _set_error("")
+                return gpu_producer_base()
+            _set_error(f"GPU Producer HTTP {res.status_code}")
+        except httpx.HTTPError as exc:
+            _set_error(str(exc)[:800] if not _producer_coming_up(conn) else "GPU Producer is starting; the desk will connect when it answers.")
+        return None
+    finally:
+        _ensure_lock.release()
 
 
 def sync_connect_from_wizard() -> None:

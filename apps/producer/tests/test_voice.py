@@ -1,1037 +1,308 @@
 from __future__ import annotations
 
-import os
+import math
+import shutil
+import struct
+import subprocess
+import wave
 from pathlib import Path
 
-from diony_contracts.enums import Engine, VoiceProfileSource, VoiceRenderState
-from diony_contracts.fixture import demo_project
 import pytest
 
+from diony_contracts.enums import AssetKind, Engine, VoiceCastingSource, VoiceRenderState
+from diony_contracts.fixture import demo_project
+from diony_contracts.models import Asset
+from diony_contracts.wan_prompt import WAN_NATIVE_TTS_AUDIO_STRATEGY, is_spoken_plan
 from diony_producer.voice import (
-    COSYVOICE_MODEL_FILES,
-    HOST_VOICE_ENV_KEYS,
-    AnimationMeasurements,
-    DeterministicVoiceTestBackend,
-    LocalVoiceCommandBackend,
-    VoicePerformancePipeline,
+    HOST_SPEECH_ENV_KEYS,
+    MAX_WORDS_PER_SECOND,
+    VoiceCastingRegistry,
     VoicePipelineError,
-    VoiceProfileRegistry,
-    default_voice_backend,
-    host_voice_env,
-    optimize_voice_script,
+    host_speech_env,
+    prepare_speech_for_take,
+    resolve_prompt_clip,
+    speech_failure_message,
+    speech_pack_missing,
+    spoken_line,
+    verify_speech_render,
+    wan_speech_inputs,
 )
+
+FFMPEG = shutil.which("ffmpeg")
 
 
 def _spoken_take():
     project = demo_project()
-    shot = project.shots[0]
+    shot = next(item for item in project.shots if item.dialogue_turns or item.audio_line)
     take = project.take(shot.selected_take_id)
     take.artifacts = []
     take.asset_720p_id = None
     take.asset_1080p_id = None
     take.qc = None
+    take.voice_package = None
     return project, shot, take
 
 
-def test_registry_creates_one_project_scoped_locked_synthetic_profile() -> None:
+def _write_tone(path: Path, *, seconds: float, active_seconds: float, rate: int = 16_000, hz: float = 150.0, lead_silence: float = 0.0) -> None:
+    frames = int(seconds * rate)
+    active = int(active_seconds * rate)
+    lead = int(lead_silence * rate)
+    with wave.open(str(path), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(rate)
+        samples = bytearray()
+        for index in range(frames):
+            if lead <= index < active:
+                # Two harmonics with a slow amplitude swell: periodic like voiced speech.
+                value = 0.45 * math.sin(2 * math.pi * hz * index / rate) + 0.2 * math.sin(2 * math.pi * hz * 2 * index / rate)
+                value *= 0.6 + 0.4 * math.sin(2 * math.pi * 3 * index / rate)
+            else:
+                value = 0.0
+            samples += struct.pack("<h", int(max(-1.0, min(1.0, value)) * 32767))
+        out.writeframes(bytes(samples))
+
+
+def _library(tmp_path: Path, monkeypatch, names=("cast-00-a.wav", "cast-01-b.wav")) -> Path:
+    library = tmp_path / "prompt-library"
+    library.mkdir()
+    for name in names:
+        _write_tone(library / name, seconds=6.0, active_seconds=5.0)
+    (library / "cast-01-b.txt").write_text("希望你以后能够做的比我还好呦。\n", encoding="utf-8")
+    monkeypatch.setenv("DIONY_WAN_TTS_PROMPT_LIBRARY", str(library))
+    return library
+
+
+def test_registry_casts_characters_on_the_library_by_roster_order() -> None:
     project, _, _ = _spoken_take()
-    registry = VoiceProfileRegistry(project)
+    registry = VoiceCastingRegistry(project)
+    lead = project.bible.characters[0].id
 
-    first = registry.ensure_synthetic("char-mara")
-    second = registry.ensure_synthetic("char-mara")
+    first = registry.ensure_library(lead)
+    again = registry.ensure_library(lead)
 
-    assert first is second
-    assert first.project_id == project.id
-    assert first.source == VoiceProfileSource.SYNTHETIC
+    assert first is again
+    assert first.source == VoiceCastingSource.LIBRARY
+    assert first.cast_index == 0
     assert first.locked is True
-    assert project.bible.characters[0].voice_profile_id == first.id
-    assert project.voice_profiles == [first]
+    assert project.bible.characters[0].voice_casting_id == first.id
+    assert project.voice_castings == [first]
 
 
-def test_registry_can_lock_a_measured_local_synthetic_prompt_embedding() -> None:
+def test_prompt_clip_resolves_library_slot_then_default_then_holds(tmp_path, monkeypatch) -> None:
     project, _, _ = _spoken_take()
-    measured = [0.1, 0.2, 0.3, 0.4]
+    lead = project.bible.characters[0].id
+    casting = VoiceCastingRegistry(project).ensure_library(lead)
+    monkeypatch.delenv("DIONY_WAN_TTS_PROMPT_LIBRARY", raising=False)
+    monkeypatch.delenv("DIONY_WAN_TTS_PROMPT_AUDIO", raising=False)
+    with pytest.raises(VoicePipelineError, match="Voice casting failed"):
+        resolve_prompt_clip(project, casting, vault=tmp_path)
 
-    profile = VoiceProfileRegistry(project).ensure_synthetic(
-        "char-mara",
-        speaker_embedding=measured,
-        speaker_embedding_model="cosyvoice-campplus-v1",
-    )
+    default = tmp_path / "zero_shot_prompt.wav"
+    _write_tone(default, seconds=6.0, active_seconds=5.0)
+    monkeypatch.setenv("DIONY_WAN_TTS_PROMPT_AUDIO", str(default))
+    monkeypatch.setenv("DIONY_WAN_TTS_PROMPT_TEXT", "希望你以后能够做的比我还好呦。")
+    clip = resolve_prompt_clip(project, casting, vault=tmp_path)
+    assert clip.source == "default" and clip.path == default and clip.text.startswith("希望")
 
-    assert list(profile.speaker_embedding) == measured
-    assert profile.speaker_embedding_model == "cosyvoice-campplus-v1"
-
-
-def test_same_character_lock_is_identical_across_episode_projects() -> None:
-    first_project, _, _ = _spoken_take()
-    second_project, _, _ = _spoken_take()
-    second_project.id = "ep-night-press-002"
-
-    first = VoiceProfileRegistry(first_project).ensure_synthetic("char-mara")
-    second = VoiceProfileRegistry(second_project).ensure_synthetic("char-mara")
-
-    assert first.project_id != second.project_id
-    assert first.identity_lineage_id == second.identity_lineage_id
-    assert first.seed == second.seed
-    assert first.style_lock == second.style_lock
-    assert first.speaker_embedding == second.speaker_embedding
+    library = _library(tmp_path, monkeypatch)
+    second = casting.model_copy(update={"cast_index": 1})
+    clip = resolve_prompt_clip(project, second, vault=tmp_path)
+    assert clip.path == library / "cast-01-b.wav"
+    assert clip.text == "希望你以后能够做的比我还好呦。"
+    assert clip.source == "library:cast-01-b.wav"
+    third = casting.model_copy(update={"cast_index": 2})
+    assert resolve_prompt_clip(project, third, vault=tmp_path).path == library / "cast-00-a.wav"
 
 
-def test_voice_script_optimizer_is_deterministic_and_profile_aware() -> None:
-    project, shot, _ = _spoken_take()
-    profile = VoiceProfileRegistry(project).ensure_synthetic("char-mara")
-
-    first = optimize_voice_script(project, shot, [profile])
-    second = optimize_voice_script(project, shot, [profile])
-
-    from diony_contracts.live import wan_frame_num
-
-    # Voice targets camera truth: the fixture's legacy 120-frame booking
-    # renders at the 81-frame lane cap, and audio must fit what lands.
-    deliverable_ms = round(
-        min(shot.duration_frames, wan_frame_num(shot.duration_frames, shot.fps))
-        / shot.fps
-        * 1000
-    )
-    assert first.content_sha256 == second.content_sha256
-    assert first.lines[0].voice_profile_id == profile.id
-    assert first.lines[0].target_duration_ms <= deliverable_ms
-    assert first.lines[0].breath_after_word_indices
-    assert first.lines[0].intensity_curve
-    assert shot.camera_move.value in first.camera_language
-    assert first.pacing_target_ms == deliverable_ms
-    assert project.bible.logline in first.narrative_context
-
-
-def test_voice_pipeline_locks_audio_before_s2v_and_reuses_content_cache(tmp_path) -> None:
-    project, shot, take = _spoken_take()
-    backend = DeterministicVoiceTestBackend()
-    pipeline = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
-    )
-
-    first = pipeline.prepare_take(project, take)
-    second = pipeline.prepare_take(project, take)
-
-    assert backend.synthesis_calls == 1
-    assert first.cache_key == second.cache_key
-    assert first.state == VoiceRenderState.AUDIO_LOCKED
-    assert first.qc.audio_passed is True
-    assert first.qc.passed is False
-    assert shot.engine == Engine.S2V_14B
-    assert take.engine == Engine.S2V_14B
-    assert shot.audio_asset_ids == [first.clean_dialogue_asset_id]
-    roles = {project.asset(asset_id).role for asset_id in (
-        first.clean_dialogue_asset_id,
-        first.final_mix_asset_id,
-        first.performance_metadata_asset_id,
-    )}
-    assert roles == {"voice_clean_dialogue", "voice_final_mix", "voice_performance_metadata"}
-    assert all((tmp_path / project.asset(asset_id).path).is_file() for asset_id in (
-        first.clean_dialogue_asset_id,
-        first.final_mix_asset_id,
-        first.performance_metadata_asset_id,
-    ))
-
-
-def test_local_synthetic_voice_enrolls_from_a_render_before_identity_qc(
-    tmp_path, monkeypatch
-) -> None:
-    class RenderedEnrollmentBackend(DeterministicVoiceTestBackend):
-        name = "measured-local-voice"
-
-        def __init__(self) -> None:
-            super().__init__()
-            self.enrollment_calls = 0
-            self.enrolled_embedding = []
-
-        def reference_embedding(self, audio, model):
-            del audio, model
-            return [1.0, 0.0]
-
-        def enroll_synthetic(self, line, profile, output, *, cast_index=0):
-            del cast_index
-            self.enrollment_calls += 1
-            self.synthesize(line, profile, output, seed=profile.seed, reference_paths=[])
-            self.enrolled_embedding = [0.0] * len(profile.speaker_embedding)
-            self.enrolled_embedding[1] = 1.0
-            return self.enrolled_embedding
-
-        def speaker_embedding(self, audio, profile):
-            del audio, profile
-            return self.enrolled_embedding
-
-    prompt = tmp_path / "conditioning-prompt.wav"
-    prompt.write_bytes(b"RIFF" + b"0" * 128)
-    monkeypatch.setenv("DIONY_COSYVOICE_PROMPT_AUDIO", str(prompt))
-    monkeypatch.setenv("DIONY_SPEAKER_EMBEDDING_MODEL", "cosyvoice-campplus-v1")
-    project, _, take = _spoken_take()
-    backend = RenderedEnrollmentBackend()
-    pipeline = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
-    )
-
-    package = pipeline.prepare_take(project, take)
-
-    profile = project.voice_profiles[0]
-    # Two enrollment witnesses: the first line and the fixed calibration text.
-    assert backend.enrollment_calls == 2
-    assert backend.synthesis_calls == 3
-    assert profile.speaker_embedding == tuple(backend.enrolled_embedding)
-    assert profile.speaker_embedding_model == "cosyvoice-campplus-v1:synthetic-enrollment-v2"
-    assert profile.enrollment_similarity == 1.0
-    assert profile.speaker_similarity_min == 0.90, "a self-identical pair still caps the floor"
-    assert package.qc.speaker_similarity == 1.0
-    assert package.qc.speaker_similarity_min == 0.90
-    assert package.qc.project_consistency_min == 0.90
-
-
-def test_identity_floor_is_measured_and_bounded() -> None:
-    from diony_producer.voice import identity_floor_from
-
-    assert identity_floor_from(0.777) == 0.697
-    assert identity_floor_from(1.0) == 0.90
-    assert identity_floor_from(0.3) == 0.60
-
-
-def test_legacy_single_render_profile_is_calibrated_in_place(tmp_path, monkeypatch) -> None:
-    """A v1 profile is re-enrolled from two fresh renders and gains a measured floor."""
-    from diony_contracts.voice import VoiceProfile
-
-    class CalibratingBackend(DeterministicVoiceTestBackend):
-        name = "measured-local-voice"
-
-        def __init__(self) -> None:
-            super().__init__()
-            self.enroll_lines: list[str] = []
-            self.calibration_embedding: list[float] = []
-
-        def enroll_synthetic(self, line, profile, output, *, cast_index=0):
-            del cast_index
-            self.enroll_lines.append(line.text)
-            self.synthesize(line, profile, output, seed=profile.seed, reference_paths=[])
-            # Same voice, different text: mostly the anchor with a measurable drift.
-            vector = [0.0] * len(profile.speaker_embedding)
-            vector[0] = 0.9
-            vector[1] = 0.436
-            self.calibration_embedding = vector
-            return vector
-
-        def speaker_embedding(self, audio, profile):
-            del audio
-            return list(profile.speaker_embedding)
-
-    prompt = tmp_path / "conditioning-prompt.wav"
-    prompt.write_bytes(b"RIFF" + b"0" * 128)
-    monkeypatch.setenv("DIONY_COSYVOICE_PROMPT_AUDIO", str(prompt))
-    monkeypatch.setenv("DIONY_SPEAKER_EMBEDDING_MODEL", "cosyvoice-campplus-v1")
-    project, _, take = _spoken_take()
-    registry = VoiceProfileRegistry(project)
-    seeded = registry.ensure_synthetic(project.bible.characters[0].id)
-    anchor = [0.0] * len(seeded.speaker_embedding)
-    anchor[0] = 1.0
-    legacy = registry.enroll_synthetic_render(
-        seeded,
-        speaker_embedding=anchor,
-        speaker_embedding_model="cosyvoice-campplus-v1:synthetic-enrollment-v1",
-    )
-    assert legacy.speaker_similarity_min is None
-    backend = CalibratingBackend()
-    pipeline = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
-    )
-
-    package = pipeline.prepare_take(project, take)
-
-    profile = VoiceProfile.model_validate(project.voice_profiles[0].model_dump(mode="json"))
-    # Both witnesses are rendered fresh: the v1 anchor predates per-character casting.
-    assert len(backend.enroll_lines) == 2
-    assert backend.enroll_lines[1] == "The kettle has started to sing, and the morning light is warm across the kitchen table."
-    assert profile.speaker_embedding_model.endswith(":synthetic-enrollment-v2")
-    assert profile.enrollment_similarity == 1.0
-    assert profile.speaker_similarity_min == 0.90
-    assert profile.speaker_embedding[0] > profile.speaker_embedding[1] > 0.0
-    assert package.qc.speaker_similarity_min == profile.speaker_similarity_min
-    assert package.qc.audio_passed
-
-
-def test_closest_rival_only_considers_other_calibrated_cast_voices() -> None:
-    from diony_producer.voice import _closest_rival
-
+def test_reference_casting_measures_the_clip_and_locks_once(tmp_path, monkeypatch) -> None:
     project, _, _ = _spoken_take()
-    registry = VoiceProfileRegistry(project)
-    marcus = registry.ensure_synthetic(project.bible.characters[0].id)
-    observed = [1.0] + [0.0] * (len(marcus.speaker_embedding) - 1)
-    calibrated = marcus.model_copy(
-        update={
-            "id": "voice-char-other-v1",
-            "character_id": "char-other",
-            "speaker_embedding": tuple(observed),
-            "speaker_similarity_min": 0.7,
-            "enrollment_similarity": 0.78,
-        }
+    lead = project.bible.characters[0].id
+    clip = tmp_path / "references" / "mara-ref.wav"
+    clip.parent.mkdir(parents=True)
+    _write_tone(clip, seconds=8.0, active_seconds=7.0)
+    project.assets.append(
+        Asset(id="ast-ref-mara", kind=AssetKind.AUDIO, filename=clip.name, mime="audio/wav", bytes=clip.stat().st_size, path=str(clip.relative_to(tmp_path)), role="voice_reference")
     )
-    uncalibrated = marcus.model_copy(update={"id": "voice-char-third-v1", "character_id": "char-third"})
+    registry = VoiceCastingRegistry(project)
+    casting = registry.cast_from_reference(lead, "ast-ref-mara", prompt_text="A reference line.", vault=tmp_path)
+    assert casting.source == VoiceCastingSource.REFERENCE
+    assert casting.prompt_duration_seconds == pytest.approx(8.0, abs=0.01)
+    assert casting.prompt_text == "A reference line."
+    assert project.bible.characters[0].voice_casting_id == casting.id
+    resolved = resolve_prompt_clip(project, casting, vault=tmp_path)
+    assert resolved.path == clip and resolved.source == "reference"
+    with pytest.raises(VoicePipelineError, match="already has a locked reference voice"):
+        registry.cast_from_reference(lead, "ast-ref-mara", vault=tmp_path)
 
-    rival = _closest_rival(observed, marcus, [marcus, calibrated, uncalibrated])
-
-    assert rival == ("char-other", 1.0)
-    assert _closest_rival(observed, marcus, [marcus, uncalibrated]) is None
-
-
-def test_audiovisual_qc_promotes_package_only_after_video_evidence(tmp_path) -> None:
-    project, _, take = _spoken_take()
-    backend = DeterministicVoiceTestBackend()
-    pipeline = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
+    short = tmp_path / "references" / "short.wav"
+    _write_tone(short, seconds=2.0, active_seconds=1.0)
+    project.assets.append(
+        Asset(id="ast-ref-short", kind=AssetKind.AUDIO, filename=short.name, mime="audio/wav", bytes=short.stat().st_size, path=str(short.relative_to(tmp_path)), role="voice_reference")
     )
-    pipeline.prepare_take(project, take)
-    negative = Path(tmp_path / "negative.mp4")
-    negative.write_bytes(b"video evidence" * 8)
-
-    verified = pipeline.verify_animation(project, take, negative)
-
-    assert verified.state == VoiceRenderState.VERIFIED
-    assert verified.qc.passed is True
-    assert verified.video_sha256 == __import__("hashlib").sha256(negative.read_bytes()).hexdigest()
-    assert verified.qc.lip_sync_confidence >= verified.qc.lip_sync_confidence_min
-    assert verified.qc.audiovisual_offset_ms_p95 <= verified.qc.audiovisual_offset_ms_max
-    assert verified.qc.performance_consistency >= verified.qc.performance_consistency_min
-    assert verified.qc.audiovisual_measurement_qualified is True
+    other = project.bible.characters[1].id if len(project.bible.characters) > 1 else lead
+    if other != lead:
+        with pytest.raises(VoicePipelineError, match="5–15 second"):
+            registry.cast_from_reference(other, "ast-ref-short", vault=tmp_path)
 
 
-def test_diagnostic_av_measurement_cannot_reject_picture_as_a_qualified_failure(tmp_path) -> None:
-    class DiagnosticBackend(DeterministicVoiceTestBackend):
-        def verify_audiovisual(self, video, audio, performance_metadata):
-            del video, audio, performance_metadata
-            return AnimationMeasurements(
-                lip_sync_confidence=0.8013,
-                audiovisual_offset_ms_p95=83.333,
-                performance_consistency=0.9886,
-                audiovisual_backend="diony-local-av-motion-sync-v1",
-                qualified_for_visual_retake=False,
-            )
+def _install_plan(project, shot) -> None:
+    from diony_contracts.studio import _install_wan_prompt_plan
 
-    project, _, take = _spoken_take()
-    backend = DiagnosticBackend()
-    pipeline = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
+    _install_wan_prompt_plan(
+        shot,
+        idea=project.bible.logline,
+        bible=project.bible,
+        wardrobe=project.bible.characters[0].wardrobe if project.bible.characters else "",
+        shot_index=0,
+        sample_seconds=None,
     )
-    pipeline.prepare_take(project, take)
-    negative = tmp_path / "negative.mp4"
-    negative.write_bytes(b"video evidence" * 8)
-
-    failed = pipeline.verify_animation(project, take, negative)
-
-    assert failed.qc.passed is False
-    assert failed.qc.audiovisual_measurement_qualified is False
-    assert failed.qc.audiovisual_backend == "diony-local-av-motion-sync-v1"
 
 
-def test_animation_uses_the_locked_performance_threshold_not_identity_threshold(tmp_path) -> None:
-    class MarginalPerformanceBackend(DeterministicVoiceTestBackend):
-        def verify_audiovisual(self, video, audio, performance_metadata):
-            del video, audio, performance_metadata
-            return AnimationMeasurements(
-                lip_sync_confidence=0.97,
-                audiovisual_offset_ms_p95=20.0,
-                performance_consistency=0.95,
-                audiovisual_backend="syncnet-local-v1",
-                qualified_for_visual_retake=True,
-            )
-
-    project, _, take = _spoken_take()
-    backend = MarginalPerformanceBackend()
-    pipeline = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
-    )
-    package = pipeline.prepare_take(project, take)
-    package.qc.project_consistency_min = 0.90
-    package.qc.performance_consistency_min = 0.98
-    negative = tmp_path / "negative.mp4"
-    negative.write_bytes(b"video evidence" * 8)
-
-    failed = pipeline.verify_animation(project, take, negative)
-
-    assert failed.qc.animation_passed is False
-
-
-def test_multiple_dialogue_turns_keep_separate_voice_profiles_and_overlap_intent(tmp_path) -> None:
-    from diony_contracts.models import Character, DialogueTurn
-
+def test_prepare_locks_a_wan_speech_request_and_conditions_the_shot(tmp_path, monkeypatch) -> None:
     project, shot, take = _spoken_take()
-    project.bible.characters.append(Character(id="char-editor", name="The Editor"))
-    shot.dialogue_turns = [
-        DialogueTurn(
-            id="turn-mara",
-            character_id="char-mara",
-            text="The page is already locked.",
-            emotion="tension",
-            intensity_curve=[0.3, 0.65],
-            target_duration_ms=1800,
-        ),
-        DialogueTurn(
-            id="turn-editor",
-            character_id="char-editor",
-            text="Then stop the presses.",
-            emotion="command",
-            intensity_curve=[0.6, 0.9],
-            start_ms=1500,
-            overlap_ms=300,
-            interrupts_turn_id="turn-mara",
-            target_duration_ms=1400,
-        ),
-    ]
-    backend = DeterministicVoiceTestBackend()
-    pipeline = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
-    )
+    _library(tmp_path, monkeypatch)
+    _install_plan(project, shot)
+    shot.audio_asset_ids = ["ast-stale-audio"]
+    character_id, text = spoken_line(project, shot)
 
-    package = pipeline.prepare_take(project, take)
+    package = prepare_speech_for_take(project, take, vault=tmp_path)
 
-    assert len(package.voice_profile_ids) == 2
-    assert len(package.script.lines) == 2
-    assert package.script.lines[1].overlap_ms == 300
-    assert package.script.lines[1].interrupts_line_id == "turn-mara"
-    # Two lines, plus one identity probe for the 1.4 s interruption (too short to embed).
-    assert backend.synthesis_calls == 3
+    assert package is not None and take.voice_package is package
+    assert package.state == VoiceRenderState.PLANNED and package.qc is None
+    assert package.request.tts_text == text
+    assert package.request.character_id == character_id
+    assert package.request.tts_prompt_audio_sha256
+    assert package.request.prompt_source.startswith("library:")
+    assert package.request.window_ms == round(shot.duration_frames / shot.fps * 1000)
+    assert shot.engine == Engine.S2V_14B and take.engine == Engine.S2V_14B
+    assert shot.audio_asset_ids == []
+    assert shot.prompt_plan is not None
+    assert shot.prompt_plan.audio_strategy == WAN_NATIVE_TTS_AUDIO_STRATEGY
+    assert is_spoken_plan(shot.prompt_plan)
+    assert "speaks the line straight toward camera" in shot.prompt
+    assert text not in shot.prompt  # the words ride --tts_text, never the picture prompt
+    assert "subtitles" in shot.negative_prompt
+
+    inputs = wan_speech_inputs(project, shot, vault=tmp_path)
+    assert inputs == {
+        "tts_text": text,
+        "tts_prompt_audio": inputs["tts_prompt_audio"],
+        "tts_prompt_text": inputs["tts_prompt_text"],
+    }
+    assert Path(inputs["tts_prompt_audio"]).is_file()
+
+    again = prepare_speech_for_take(project, take, vault=tmp_path)
+    assert again.request.content_sha256 == package.request.content_sha256
 
 
-def test_independent_dialogue_lines_synthesize_in_parallel(tmp_path) -> None:
-    import threading
-
-    from diony_contracts.models import Character, DialogueTurn
-
-    class RendezvousBackend(DeterministicVoiceTestBackend):
-        def __init__(self) -> None:
-            super().__init__()
-            self.rendezvous = threading.Barrier(2)
-
-        def synthesize(self, *args, **kwargs) -> None:
-            self.rendezvous.wait(timeout=2)
-            super().synthesize(*args, **kwargs)
-
+def test_a_line_that_cannot_finish_inside_the_window_holds_before_camera(tmp_path, monkeypatch) -> None:
     project, shot, take = _spoken_take()
-    project.bible.characters.append(Character(id="char-editor", name="The Editor"))
-    shot.dialogue_turns = [
-        DialogueTurn(id="turn-mara", character_id="char-mara", text="Hold the presses."),
-        DialogueTurn(id="turn-editor", character_id="char-editor", text="The edition is locked."),
-    ]
-    backend = RendezvousBackend()
-    pipeline = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
-    )
-
-    package = pipeline.prepare_take(project, take)
-
-    assert package.qc.audio_passed is True
-    assert backend.synthesis_calls == 2
+    _library(tmp_path, monkeypatch)
+    seconds = shot.duration_frames / shot.fps
+    words = " ".join(["word"] * (math.ceil(seconds * MAX_WORDS_PER_SECOND) + 4))
+    if shot.dialogue_turns:
+        shot.dialogue_turns = [shot.dialogue_turns[0].model_copy(update={"text": words})]
+    else:
+        shot.audio_line = words
+    with pytest.raises(VoicePipelineError, match="Voice timing failed"):
+        prepare_speech_for_take(project, take, vault=tmp_path)
+    assert take.voice_package is None
 
 
-def test_run_one_refreshes_creative_contract_then_locks_voice_before_camera(monkeypatch) -> None:
-    from diony_contracts.enums import QCVerdict
-    from diony_contracts.models import QCReport
-    from diony_producer import farm
-
-    project, _, take = _spoken_take()
-    order: list[str] = []
-
-    def prepare(current_project, current_take):
-        order.append("voice")
-        current_project.shot(current_take.shot_id).engine = Engine.S2V_14B
-        current_take.engine = Engine.S2V_14B
-
-    def preflight(current_project, current_shot):
-        del current_project
-        order.append("camera")
-        assert current_shot.engine == Engine.S2V_14B
-        return Engine.S2V_14B.value
-
-    def attach(current_project, current_take, *_args, **_kwargs):
-        current_take.qc = QCReport(
-            id=f"qc-{current_take.id}",
-            take_id=current_take.id,
-            shot_id=current_take.shot_id,
-            verdict=QCVerdict.PASS,
-            identity_ok=True,
-            morph_ok=True,
-            flicker_ok=True,
-            duration_ok=True,
-            legal_ok=True,
-            voice_ready_ok=True,
-        )
-
-    monkeypatch.setattr(
-        farm,
-        "refresh_reference_shot",
-        lambda *_args: order.append("contract"),
-    )
-    monkeypatch.setattr(farm, "prepare_voice_for_take", prepare)
-    monkeypatch.setattr(farm, "camera_task_for", preflight)
-    monkeypatch.setattr(farm, "generate_clip", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(farm, "attach_negative", attach)
-    monkeypatch.setattr(farm, "camera_disk_block", lambda: "")
-    monkeypatch.setattr(farm, "persist_project", lambda *_args: None)
-    monkeypatch.setattr(farm, "record_activity", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(farm, "list_generate_jobs", lambda: [])
-    monkeypatch.setattr(farm, "clear_camera_lock", lambda: None)
-    monkeypatch.setattr(farm, "write_camera_lock", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(farm._PERFORMANCE, "record", lambda **_kwargs: None)
-
-    farm.run_one(project, take)
-
-    assert order[:3] == ["contract", "voice", "camera"]
-
-
-def test_camera_qc_requires_verified_voice_performance(tmp_path, monkeypatch) -> None:
-    from diony_producer import farm
-
+def test_two_speakers_in_one_window_is_a_casting_hold(tmp_path, monkeypatch) -> None:
     project, shot, take = _spoken_take()
-    backend = DeterministicVoiceTestBackend()
-    pipeline = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
-    )
-    pipeline.prepare_take(project, take)
-    relative = farm.negative_rel(project, take)
-    negative = tmp_path / relative
-    negative.parent.mkdir(parents=True, exist_ok=True)
-    negative.write_bytes(b"video evidence" * 8)
-    monkeypatch.setattr(farm, "vault_root", lambda: tmp_path)
-    monkeypatch.setattr(
-        farm,
-        "probe_media",
-        lambda *_args, **_kwargs: {
-            "width": 1280,
-            "height": 720,
-            "fps": shot.fps,
-            "frames": shot.duration_frames,
-            "codec": "h264",
-        },
-    )
-    monkeypatch.setattr(farm, "_reference_similarities", lambda *_args: {})
-    monkeypatch.setattr(farm, "_reference_similarity", lambda *_args: 0.98)
-    monkeypatch.setattr(farm, "camera_task_for", lambda *_args: Engine.S2V_14B.value)
-    monkeypatch.setattr(
-        farm,
-        "verify_voice_animation",
-        lambda current_project, current_take, path: pipeline.verify_animation(
-            current_project, current_take, path
-        ),
-    )
-
-    farm.attach_negative(
-        project,
-        take,
-        relative,
-        shot.duration_frames,
-        live=True,
-        measured_qc_required=False,
-    )
-
-    assert take.qc is not None
-    assert take.qc.voice_ready_ok is True
-    assert take.qc.lipsync_ok is True
-    assert take.qc.loudness_ok is True
-    assert take.qc.voice_measurement_version == "diony-voice-qc-v2"
-    assert take.qc.speech_presence_score >= 0.20
-    assert take.qc.speaker_similarity >= 0.92
-    assert take.qc.lip_sync_confidence >= 0.90
-    assert take.qc.audiovisual_offset_ms_p95 <= 40
-    assert take.qc.voice_performance_consistency >= 0.90
-    assert farm.qc_contract_valid(project, take) is True
+    _library(tmp_path, monkeypatch)
+    turns = list(shot.dialogue_turns)
+    if not turns:
+        pytest.skip("fixture shot has no dialogue turns")
+    other = turns[0].model_copy(update={"id": "turn-other", "character_id": "char-someone-else", "text": "And me."})
+    shot.dialogue_turns = [turns[0], other]
+    with pytest.raises(VoicePipelineError, match="one speaker per window"):
+        prepare_speech_for_take(project, take, vault=tmp_path)
 
 
-def test_voice_clip_cannot_pass_camera_contract_before_animation_qc(tmp_path) -> None:
-    from diony_contracts.enums import QCVerdict
-    from diony_contracts.models import QCReport
-    from diony_producer.farm import qc_contract_valid
-
-    project, _, take = _spoken_take()
-    backend = DeterministicVoiceTestBackend()
-    pipeline = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
-    )
-    pipeline.prepare_take(project, take)
-    take.qc = QCReport(
-        id=f"qc-{take.id}",
-        take_id=take.id,
-        shot_id=take.shot_id,
-        verdict=QCVerdict.PASS,
-        identity_ok=True,
-        morph_ok=True,
-        flicker_ok=True,
-        duration_ok=True,
-        legal_ok=True,
-    )
-
-    assert qc_contract_valid(project, take) is False
+def _negative(tmp_path: Path, *, audio: Path | None, seconds: float = 2.0) -> Path:
+    video = tmp_path / "projects" / "demo" / "takes" / "t" / "negative_720.mp4"
+    video.parent.mkdir(parents=True, exist_ok=True)
+    command = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"color=c=gray:s=64x64:r=16:d={seconds}"]
+    if audio is not None:
+        command += ["-i", str(audio), "-c:a", "aac", "-shortest"]
+    command += ["-c:v", "libx264", "-pix_fmt", "yuv420p", str(video)]
+    subprocess.run(command, check=True, capture_output=True)
+    return video
 
 
-def test_voice_identity_failure_retries_with_diagnostic_seed_before_camera(tmp_path) -> None:
-    class DriftingThenLockedBackend(DeterministicVoiceTestBackend):
-        def speaker_embedding(self, audio, profile):
-            if self.synthesis_calls == 1:
-                return [-value for value in profile.speaker_embedding]
-            return list(profile.speaker_embedding)
-
-    project, _, take = _spoken_take()
-    backend = DriftingThenLockedBackend()
-    pipeline = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
-    )
-
-    package = pipeline.prepare_take(project, take)
-
-    assert backend.synthesis_calls == 2
-    assert package.qc.audio_passed is True
-    metadata = project.asset(package.performance_metadata_asset_id)
-    payload = __import__("json").loads((tmp_path / metadata.path).read_text())
-    assert payload["audio_attempts"][0]["diagnostic"].startswith("speaker identity drift")
-
-
-def test_studio_audio_failure_retries_with_measured_diagnostic(tmp_path) -> None:
-    from diony_producer.voice import AudioMeasurements
-
-    class NoisyThenCleanBackend(DeterministicVoiceTestBackend):
-        def __init__(self):
-            super().__init__()
-            self.audio_process_calls = 0
-
-        def process_audio(self, *args, **kwargs):
-            self.audio_process_calls += 1
-            measured = super().process_audio(*args, **kwargs)
-            if self.audio_process_calls == 1:
-                return AudioMeasurements(
-                    snr_db=12.0,
-                    integrated_lufs=measured.integrated_lufs,
-                    true_peak_dbtp=measured.true_peak_dbtp,
-                    harshness_score=measured.harshness_score,
-                    sibilance_score=measured.sibilance_score,
-                )
-            return measured
-
-    project, _, take = _spoken_take()
-    backend = NoisyThenCleanBackend()
-    pipeline = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
-    )
-
-    package = pipeline.prepare_take(project, take)
-
-    assert backend.audio_process_calls == 2
-    assert package.qc.audio_passed is True
-    metadata = project.asset(package.performance_metadata_asset_id)
-    payload = __import__("json").loads((tmp_path / metadata.path).read_text())
-    post_attempts = [row for row in payload["audio_attempts"] if row.get("stage") == "studio_audio"]
-    assert post_attempts[0]["diagnostic"].startswith("studio audio QC failed")
-
-
-def test_overlong_synthesis_is_rejected_before_studio_audio_can_trim_it(
-    tmp_path, monkeypatch
-) -> None:
-    class OverlongBackend(DeterministicVoiceTestBackend):
-        def __init__(self) -> None:
-            super().__init__()
-            self.audio_process_calls = 0
-
-        def align(self, audio, line):
-            payload = super().align(audio, line)
-            payload["measured_duration_ms"] = round(line.target_duration_ms * 2.2)
-            return payload
-
-        def process_audio(self, *args, **kwargs):
-            self.audio_process_calls += 1
-            return super().process_audio(*args, **kwargs)
-
-    from diony_producer.voice import VoicePipelineError
-
-    monkeypatch.setenv("DIONY_VOICE_RETAKE_CAP", "2")
-    project, _, take = _spoken_take()
-    backend = OverlongBackend()
-    pipeline = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
-    )
-
-    with __import__("pytest").raises(VoicePipelineError, match="timing"):
-        pipeline.prepare_take(project, take)
-
-    assert backend.synthesis_calls == 2
-    assert backend.audio_process_calls == 0
-
-
-def test_voice_failure_message_reports_the_actual_av_thresholds(tmp_path) -> None:
-    from diony_producer.farm import _voice_performance_failure
-
-    project, _, take = _spoken_take()
-    backend = DeterministicVoiceTestBackend()
-    package = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
-    ).prepare_take(project, take)
-    package.qc.lip_sync_confidence = 0.7956
-    package.qc.audiovisual_offset_ms_p95 = 83.333
-    package.qc.performance_consistency = 1.0
-    package.qc.audiovisual_backend = "syncnet-local-v1"
-    package.qc.audiovisual_measurement_qualified = True
-
-    message = _voice_performance_failure(package)
-
-    assert "lip-sync confidence 0.7956 is below 0.80" in message
-    assert "audiovisual offset p95 83.333 ms exceeds 40 ms" in message
-
-
-def test_visual_retake_reuses_locked_audio_but_requires_fresh_animation_qc(tmp_path) -> None:
-    from diony_producer.farm import new_generation_take
-
+@pytest.mark.skipif(FFMPEG is None, reason="ffmpeg is required to measure delivered speech")
+def test_verify_measures_the_speech_wan_delivered_and_binds_the_negative(tmp_path, monkeypatch) -> None:
     project, shot, take = _spoken_take()
-    backend = DeterministicVoiceTestBackend()
-    pipeline = VoicePerformancePipeline(
-        vault=tmp_path,
-        synthesizer=backend,
-        embedder=backend,
-        aligner=backend,
-        audio_processor=backend,
-        audiovisual_qc=backend,
-    )
-    first = pipeline.prepare_take(project, take)
-    negative = tmp_path / "first-negative.mp4"
-    negative.write_bytes(b"video evidence" * 8)
-    pipeline.verify_animation(project, take, negative)
-    retake = new_generation_take(project, shot, live=True)
-    project.takes.append(retake)
-    shot.selected_take_id = retake.id
+    _library(tmp_path, monkeypatch)
+    shot.duration_frames = 48  # 2.0 s at 23.976
+    prepare_speech_for_take(project, take, vault=tmp_path)
+    tone = tmp_path / "line.wav"
+    _write_tone(tone, seconds=2.0, active_seconds=1.2)
+    video = _negative(tmp_path, audio=tone)
 
-    reused = pipeline.prepare_take(project, retake)
+    package = verify_speech_render(project, take, video, vault=tmp_path)
 
-    assert backend.synthesis_calls == 1
-    assert reused.cache_key == first.cache_key
-    assert reused.clean_dialogue_asset_id == first.clean_dialogue_asset_id
-    assert reused.state == VoiceRenderState.AUDIO_LOCKED
-    assert reused.qc.audio_passed is True
-    assert reused.qc.animation_passed is False
-    assert reused.qc.passed is False
+    assert package.state == VoiceRenderState.VERIFIED, package.qc.diagnostics
+    assert package.verified is True
+    qc = package.qc
+    assert qc.audio_present is True
+    assert qc.speech_presence_score >= qc.speech_presence_min
+    assert qc.speech_tail_ms >= qc.speech_tail_min_ms
+    assert abs(qc.integrated_lufs - qc.loudness_target_lufs) <= qc.loudness_tolerance_lu
+    assert qc.true_peak_dbtp <= qc.true_peak_ceiling_dbtp
+    assert package.video_sha256
+    roles = {project.asset(package.dialogue_asset_id).role, project.asset(package.mix_stem_asset_id).role}
+    assert roles == {"voice_dialogue", "voice_mix_stem"}
+    assert all((tmp_path / project.asset(asset_id).path).is_file() for asset_id in (package.dialogue_asset_id, package.mix_stem_asset_id))
+    assert take.voice_package is package
 
 
-def test_reference_voice_lock_builds_multi_emotion_few_shot_profile(tmp_path) -> None:
-    from diony_contracts.enums import AssetKind
-    from diony_contracts.models import Asset
-    from diony_producer.voice import lock_reference_voice_profile
+@pytest.mark.skipif(FFMPEG is None, reason="ffmpeg is required to measure delivered speech")
+def test_verify_fails_a_silent_negative_and_a_line_cut_by_the_picture(tmp_path, monkeypatch) -> None:
+    project, shot, take = _spoken_take()
+    _library(tmp_path, monkeypatch)
+    shot.duration_frames = 48
+    prepare_speech_for_take(project, take, vault=tmp_path)
 
-    project, _, _ = _spoken_take()
-    project.voice_profiles = []
-    project.bible.characters[0].voice_profile_id = ""
-    references = []
-    for index, emotion in enumerate(("neutral", "grief"), start=1):
-        path = tmp_path / f"mara-{emotion}.wav"
-        path.write_bytes(b"RIFF" + bytes([index]) * 64)
-        asset = Asset(
-            id=f"ast-mara-{emotion}",
-            kind=AssetKind.AUDIO,
-            filename=path.name,
-            mime="audio/wav",
-            bytes=path.stat().st_size,
-            path=path.name,
-            sha256=__import__("hashlib").sha256(path.read_bytes()).hexdigest(),
-            metadata={
-                "duration_seconds": 5.0,
-                "emotion": emotion,
-                "transcript": f"Mara reference in {emotion}.",
-            },
-        )
-        project.assets.append(asset)
-        references.append(asset.id)
-    backend = DeterministicVoiceTestBackend()
+    silent = _negative(tmp_path, audio=None)
+    package = verify_speech_render(project, take, silent, vault=tmp_path)
+    assert package.state == VoiceRenderState.FAILED
+    assert package.qc.audio_present is False
+    assert "no audio track" in speech_failure_message(package)
 
-    profile = lock_reference_voice_profile(
-        project,
-        "char-mara",
-        references,
-        vault=tmp_path,
-        backend=backend,
-        descriptors={"accent": "inland American", "texture": "warm alto"},
-    )
-
-    assert profile.source == VoiceProfileSource.FEW_SHOT
-    assert [sample.emotion for sample in profile.reference_samples] == ["neutral", "grief"]
-    assert sum(sample.duration_seconds for sample in profile.reference_samples) == 10.0
-    assert profile.accent_descriptor == "inland American"
-    assert project.bible.characters[0].voice_profile_id == profile.id
+    cut = tmp_path / "cut.wav"
+    _write_tone(cut, seconds=2.0, active_seconds=2.0, lead_silence=0.5)
+    package = verify_speech_render(project, take, _negative(tmp_path, audio=cut), vault=tmp_path)
+    assert package.state == VoiceRenderState.FAILED
+    assert package.qc.speech_tail_ms is not None and package.qc.speech_tail_ms < package.qc.speech_tail_min_ms
+    assert "cut by the picture" in speech_failure_message(package)
 
 
-def test_reference_voice_lock_measures_wav_duration_when_metadata_is_absent(tmp_path) -> None:
-    import wave
+def test_host_speech_env_names_what_the_wan_pack_still_lacks(tmp_path) -> None:
+    repo = tmp_path / "wan22"
+    repo.mkdir()
+    env, missing = host_speech_env(vault=tmp_path, wan_repo=repo)
+    assert env == {}
+    assert any("Wan TTS checkout" in item for item in missing)
+    assert any("CosyVoice2-0.5B weights" in item for item in missing)
 
-    from diony_contracts.enums import AssetKind
-    from diony_contracts.models import Asset
-    from diony_producer.voice import lock_reference_voice_profile
-
-    project, _, _ = _spoken_take()
-    project.voice_profiles = []
-    project.bible.characters[0].voice_profile_id = ""
-    path = tmp_path / "mara-five-seconds.wav"
-    with wave.open(str(path), "wb") as output:
-        output.setnchannels(1)
-        output.setsampwidth(2)
-        output.setframerate(8000)
-        output.writeframes(b"\x00\x00" * 8000 * 5)
-    asset = Asset(
-        id="ast-mara-five-seconds",
-        kind=AssetKind.AUDIO,
-        filename=path.name,
-        mime="audio/wav",
-        bytes=path.stat().st_size,
-        path=path.name,
-        sha256=__import__("hashlib").sha256(path.read_bytes()).hexdigest(),
-    )
-    project.assets.append(asset)
-
-    profile = lock_reference_voice_profile(
-        project,
-        "char-mara",
-        [asset.id],
-        vault=tmp_path,
-        backend=DeterministicVoiceTestBackend(),
-    )
-
-    assert profile.source == VoiceProfileSource.ZERO_SHOT
-    assert profile.reference_samples[0].duration_seconds == 5.0
-
-
-def test_voice_registry_api_locks_synthetic_identity_once() -> None:
-    from fastapi.testclient import TestClient
-    from diony_producer.app import app
-
-    client = TestClient(app)
-    client.post("/api/reset")
-
-    locked = client.post(
-        "/api/characters/char-mara/voice-profiles/lock",
-        json={"source": "synthetic", "descriptors": {"texture": "warm alto"}},
-    )
-    registry = client.get("/api/voice-profiles")
-
-    assert locked.status_code == 200
-    assert registry.status_code == 200
-    assert len(registry.json()["profiles"]) == 1
-    assert registry.json()["profiles"][0]["locked"] is True
-    assert registry.json()["profiles"][0]["project_id"] == locked.json()["project_id"]
-    assert registry.json()["profiles"][0]["texture_descriptor"] == "warm alto"
-
-
-def _host_voice_pack(vault: Path, wan_repo: Path, *, model_files=COSYVOICE_MODEL_FILES) -> None:
-    python = vault / "runtime" / "cosyvoice" / "venv" / "bin" / "python"
-    python.parent.mkdir(parents=True)
-    python.write_text("#!/bin/sh\n")
-    python.chmod(0o755)
-    (vault / "runtime" / "cosyvoice" / "CosyVoice").mkdir(parents=True)
-    model = vault / "models" / "audio" / "CosyVoice2-0.5B"
-    model.mkdir(parents=True)
-    for name in model_files:
+    (repo / "CosyVoice" / "cosyvoice" / "cli").mkdir(parents=True)
+    (repo / "CosyVoice" / "cosyvoice" / "cli" / "cosyvoice.py").write_text("")
+    (repo / "CosyVoice" / "third_party" / "Matcha-TTS").mkdir(parents=True)
+    model = repo / "CosyVoice2-0.5B"
+    model.mkdir()
+    for name in ("cosyvoice2.yaml", "llm.pt", "flow.pt", "hift.pt", "speech_tokenizer_v2.onnx"):
         (model / name).write_bytes(b"x")
-    prompt = wan_repo / "examples" / "zero_shot_prompt.wav"
-    prompt.parent.mkdir(parents=True)
-    prompt.write_bytes(b"RIFF")
-
-
-def _unset_host_voice_env(monkeypatch) -> None:
-    monkeypatch.delenv("DIONY_DRY_RUN", raising=False)
-    for key in HOST_VOICE_ENV_KEYS:
-        # setenv records the pre-test value so the late binding cannot leak.
-        monkeypatch.setenv(key, "")
-
-
-def test_default_voice_backend_late_binds_a_pack_that_finished_after_launch(tmp_path, monkeypatch) -> None:
-    vault = tmp_path / "vault"
-    wan_repo = tmp_path / "wan22"
-    _host_voice_pack(vault, wan_repo)
-    _unset_host_voice_env(monkeypatch)
-    monkeypatch.setenv("DIONY_VAULT", str(vault))
-    monkeypatch.setenv("DIONY_WAN_REPO", str(wan_repo))
-
-    backend = default_voice_backend()
-
-    assert isinstance(backend, LocalVoiceCommandBackend)
-    assert backend.command[-1].endswith("cosyvoice_backend.py")
-    assert os.environ["DIONY_COSYVOICE_PYTHON"] == str(vault / "runtime" / "cosyvoice" / "venv" / "bin" / "python")
-    assert os.environ["DIONY_COSYVOICE_MODEL"] == str(vault / "models" / "audio" / "CosyVoice2-0.5B")
-    assert os.environ["DIONY_COSYVOICE_PROMPT_AUDIO"] == str(wan_repo / "examples" / "zero_shot_prompt.wav")
-    assert os.environ["DIONY_SPEAKER_EMBEDDING_MODEL"] == "cosyvoice-campplus-v1"
-    assert os.environ["DIONY_COSYVOICE_PROMPT_LIBRARY"] == ""
-    activity = (vault / ".cluster" / "activity.jsonl").read_text()
-    assert "bound after Producer launch" in activity
-
-
-def test_default_voice_backend_names_what_an_unfinished_pack_still_lacks(tmp_path, monkeypatch) -> None:
-    vault = tmp_path / "vault"
-    wan_repo = tmp_path / "wan22"
-    _host_voice_pack(vault, wan_repo, model_files=("cosyvoice2.yaml",))
-    _unset_host_voice_env(monkeypatch)
-    monkeypatch.setenv("DIONY_VAULT", str(vault))
-    monkeypatch.setenv("DIONY_WAN_REPO", str(wan_repo))
-
-    with pytest.raises(VoicePipelineError) as excinfo:
-        default_voice_backend()
-
-    message = str(excinfo.value)
-    assert "raw or post-picture TTS is forbidden" in message
-    assert "llm.pt" in message and "hift.pt" in message
-    assert os.environ["DIONY_VOICE_BACKEND_COMMAND"] == ""
-
-
-def test_explicit_voice_backend_wins_over_host_discovery(tmp_path, monkeypatch) -> None:
-    vault = tmp_path / "vault"
-    wan_repo = tmp_path / "wan22"
-    _host_voice_pack(vault, wan_repo)
-    _unset_host_voice_env(monkeypatch)
-    monkeypatch.setenv("DIONY_VAULT", str(vault))
-    monkeypatch.setenv("DIONY_WAN_REPO", str(wan_repo))
-    monkeypatch.setenv("DIONY_VOICE_BACKEND_COMMAND", "/opt/site/voice-backend --strict")
-
-    backend = default_voice_backend()
-
-    assert backend.command == ["/opt/site/voice-backend", "--strict"]
-    assert os.environ["DIONY_COSYVOICE_MODEL"] == ""
-
-
-def test_host_voice_env_prefers_the_operator_backend_binary(tmp_path) -> None:
-    vault = tmp_path / "vault"
-    wan_repo = tmp_path / "wan22"
-    _host_voice_pack(vault, wan_repo)
-    binary = vault / "runtime" / "voice" / "bin" / "diony-voice-backend"
-    binary.parent.mkdir(parents=True)
-    binary.write_text("#!/bin/sh\n")
-    binary.chmod(0o755)
-
-    env, missing = host_voice_env(vault=vault, wan_repo=wan_repo)
-
-    assert env == {"DIONY_VOICE_BACKEND_COMMAND": str(binary)}
+    assert speech_pack_missing(repo) == []
+    (repo / "examples").mkdir()
+    (repo / "examples" / "zero_shot_prompt.wav").write_bytes(b"RIFF")
+    library = tmp_path / "runtime" / "voice" / "prompt-library"
+    library.mkdir(parents=True)
+    (library / "cast-00.wav").write_bytes(b"RIFF")
+    env, missing = host_speech_env(vault=tmp_path, wan_repo=repo)
     assert missing == []
-
-
-def test_host_voice_env_binds_the_pinned_mouth_sync_models(tmp_path) -> None:
-    vault = tmp_path / "vault"
-    wan_repo = tmp_path / "wan22"
-    _host_voice_pack(vault, wan_repo)
-    env, missing = host_voice_env(vault=vault, wan_repo=wan_repo)
-    assert missing == []
-    assert "DIONY_FACE_LANDMARKER_MODEL" not in env, "no models pinned yet: QC stays diagnostic"
-
-    models = vault / "runtime" / "voice" / "models"
-    models.mkdir(parents=True)
-    (models / "face_detection_yunet_2023mar.onnx").write_bytes(b"onnx")
-    (models / "face_landmarker.task").write_bytes(b"task")
-    env, _missing = host_voice_env(vault=vault, wan_repo=wan_repo)
-    assert env["DIONY_FACE_DETECTOR_MODEL"] == str(models / "face_detection_yunet_2023mar.onnx")
-    assert env["DIONY_FACE_LANDMARKER_MODEL"] == str(models / "face_landmarker.task")
-
-
-def test_short_lines_are_identity_checked_on_a_calibration_length_probe(tmp_path, monkeypatch) -> None:
-    """A half-second turn is judged on a probe render, and the line itself is delivered."""
-    from diony_producer import voice as voice_module
-    from diony_producer.voice import CALIBRATION_TEXT, IDENTITY_PROBE_MIN_SECONDS
-
-    pipeline = voice_module.default_voice_pipeline()
-    synthesized: list[tuple[str, Path]] = []
-
-    class Synth:
-        name = "stub"
-
-        def synthesize(self, line, profile, output, *, seed, reference_paths, cast_index=0):
-            synthesized.append((line.text, output))
-            output.write_bytes(b"RIFF" + b"\0" * 64)
-
-    pipeline.synthesizer = Synth()
-    durations = {}
-    monkeypatch.setattr(
-        voice_module, "_media_duration_seconds", lambda path: durations.get(path.name, 0.5)
-    )
-    from types import SimpleNamespace
-
-    from diony_contracts.voice import PerformanceScriptLine
-
-    fields = {name: None for name in PerformanceScriptLine.model_fields}
-    line = PerformanceScriptLine.model_construct(**{**fields, "id": "turn-1", "shot_id": "sh-050", "character_id": "char-marcus", "text": "you two."})
-    profile = SimpleNamespace(id="voice-1")
-    candidate = tmp_path / "line-01-turn-1-a1.wav"
-    candidate.write_bytes(b"RIFF" + b"\0" * 64)
-    durations[candidate.name] = 0.5
-    durations["line-01-turn-1-a1.identity-probe.wav"] = 4.2
-    probe, note = pipeline._identity_probe(line, profile, candidate, seed=7, reference_paths=[], cast_index=0)
-    assert probe.name == "line-01-turn-1-a1.identity-probe.wav"
-    assert synthesized and synthesized[0][0] == f"you two. {CALIBRATION_TEXT}"
-    assert "4.2 s probe" in note and "0.5 s line" in note
-
-    # A line already long enough is embedded directly, with no probe render.
-    synthesized.clear()
-    durations[candidate.name] = IDENTITY_PROBE_MIN_SECONDS + 1
-    assert pipeline._identity_probe(line, profile, candidate, seed=7, reference_paths=[], cast_index=0) == (candidate, "")
-    assert not synthesized
+    assert set(env) == set(HOST_SPEECH_ENV_KEYS)
+    assert env["DIONY_WAN_TTS_PROMPT_LIBRARY"] == str(library)
