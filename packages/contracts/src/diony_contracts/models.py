@@ -355,6 +355,9 @@ class Bible(BaseModel):
     # Mix shifts each score cue's in-point (< one bar) so its downbeats land
     # on the hero cuts it plays under (Blueprint 24 §12).
     score_cuts_on_downbeats: bool = True
+    # Deliverable audio layout (Blueprint 24 §15): "stereo" or "stereo+5.1"
+    # (a 5.1 program mix muxed as a second PCM track and delivered as a stem).
+    audio_layout: str = Field(default="stereo", pattern=r"^(stereo|stereo\+5\.1)$")
     locked: bool = False
     locked_at: datetime | None = None
 
@@ -530,6 +533,14 @@ class QCReport(BaseModel):
     # Optional semantic adherence (CLIP cosine between sampled frames and the
     # subject layer) when a local encoder is installed; None when unmeasured.
     prompt_adherence: float | None = Field(default=None, ge=0, le=1)
+    # Face-embedding identity (Blueprint 24 §14): SFace cosine between the
+    # conditioning still's faces and each sampled frame's main face, when the
+    # OpenCV Zoo models are staged. `face_verified` False is a hard failure.
+    face_identity_version: str = ""
+    face_similarity_min: float | None = None
+    face_similarity_mean: float | None = None
+    face_frames_with_face: int = Field(default=0, ge=0)
+    face_verified: bool | None = None
     # Retake-cap policy: after every bounded attempt failed measured QC, the
     # best-scoring attempt proceeds as the print. The measured verdict stays
     # in `notes`; `settled_best_of` is the attempt count it was chosen from.
@@ -569,6 +580,8 @@ class QCReport(BaseModel):
         if self.reference_asset_ids and self.reference_verified is not True:
             if self.verdict == QCVerdict.PASS:
                 raise ValueError("unverified reference identity cannot be pass")
+        if self.face_verified is False and self.verdict == QCVerdict.PASS:
+            raise ValueError("a measured face-identity failure cannot be pass")
         if self.continuity_from_take_id and self.continuity_verified is not True:
             if self.verdict == QCVerdict.PASS:
                 raise ValueError("unverified temporal continuity cannot be pass")
@@ -784,6 +797,11 @@ class MixLock(BaseModel):
     policy: str = ""
     # Blueprint 24 §12: how each score cue was placed against the hero cuts.
     score_alignments: list[ScoreAlignment] = Field(default_factory=list)
+    # Blueprint 24 §15: the 5.1 program mix when the Bible asks for it.
+    audio_layout: str = "stereo"
+    surround_stem_asset_id: str = ""
+    surround_measured_lufs: float | None = None
+    surround_true_peak_dbtp: float | None = None
 
 
 class Deliverable(BaseModel):

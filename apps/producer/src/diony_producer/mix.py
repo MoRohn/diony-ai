@@ -545,41 +545,140 @@ def _write_program_mixdown(
     os.replace(pending, destination)
 
 
-def _mux_program(master: Path, stem: Path, *, ffmpeg: str) -> None:
+SURROUND_LFE_LOWPASS_HZ = 120.0
+
+
+def _surround_graph(order: list[str], duration: float) -> str:
+    """5.1 from the stereo rails: dialogue centre, score and foley front, ambience
+    and a reduced score in the surrounds, a low-passed bed on the LFE. The same
+    dialogue-keyed ducking as the stereo program applies to ambience and score."""
+    index_of = {role: index for index, role in enumerate(order)}
+    filters: list[str] = []
+    ducked = [role for role in ("ambience", "score") if role in index_of and "dialogue" in index_of]
+    if "dialogue" in index_of:
+        keys = "".join(f"[key{role}]" for role in ducked)
+        filters.append(f"[{index_of['dialogue']}:a]asplit={1 + len(ducked)}[dialogue]{keys}")
+    for role in order:
+        if role == "dialogue":
+            continue
+        source = f"[{index_of[role]}:a]"
+        if role in ducked:
+            filters.append(f"{source}[key{role}]sidechaincompress=threshold=0.02:ratio=6:attack=25:release=350[{role}]")
+        else:
+            filters.append(f"{source}anull[{role}]")
+    # Fan each rail out to the beds that need it.
+    fan = {"dialogue": ["centre"], "score": ["front", "rear", "lfe"], "foley": ["front"], "ambience": ["front", "rear", "lfe"]}
+    beds: dict[str, list[str]] = {"front": [], "rear": [], "lfe": [], "centre": []}
+    gains = {
+        ("score", "front"): 1.0, ("score", "rear"): 0.5, ("score", "lfe"): 0.35,
+        ("foley", "front"): 0.7,
+        ("ambience", "front"): 0.5, ("ambience", "rear"): 1.0, ("ambience", "lfe"): 0.25,
+        ("dialogue", "centre"): 1.0,
+    }
+    for role in order:
+        targets = [bed for bed in fan[role]]
+        filters.append(f"[{role}]asplit={len(targets)}" + "".join(f"[{role}_{bed}]" for bed in targets))
+        for bed in targets:
+            label = f"{role}_{bed}g"
+            filters.append(f"[{role}_{bed}]volume={gains[(role, bed)]:g}[{label}]")
+            beds[bed].append(f"[{label}]")
+
+    def mixed(bed: str, out: str) -> None:
+        labels = beds[bed]
+        if not labels:
+            filters.append(f"anullsrc=channel_layout=stereo:sample_rate=48000,atrim=0:{duration:.6f}[{out}]")
+        elif len(labels) == 1:
+            filters.append(f"{labels[0]}anull[{out}]")
+        else:
+            filters.append("".join(labels) + f"amix=inputs={len(labels)}:normalize=0:dropout_transition=0[{out}]")
+
+    mixed("front", "frontbed")
+    mixed("rear", "rearbed")
+    mixed("lfe", "lfebed")
+    mixed("centre", "centrebed")
+    filters.append("[frontbed]asplit=2[frontL][frontR]")
+    filters.append("[frontL]pan=mono|c0=c0[FL]")
+    filters.append("[frontR]pan=mono|c0=c1[FR]")
+    filters.append("[centrebed]pan=mono|c0=0.5*c0+0.5*c1[FC]")
+    filters.append(f"[lfebed]pan=mono|c0=0.5*c0+0.5*c1,lowpass=f={SURROUND_LFE_LOWPASS_HZ:g}[LFE]")
+    filters.append("[rearbed]asplit=2[rearL][rearR]")
+    filters.append("[rearL]pan=mono|c0=c0[BL]")
+    filters.append("[rearR]pan=mono|c0=c1[BR]")
+    filters.append(
+        "[FL][FR][FC][LFE][BL][BR]join=inputs=6:channel_layout=5.1:"
+        "map=0.0-FL|1.0-FR|2.0-FC|3.0-LFE|4.0-BL|5.0-BR,"
+        f"apad,atrim=0:{duration:.6f}[out]"
+    )
+    return ";".join(filters)
+
+
+def _write_surround_mixdown(
+    destination: Path,
+    *,
+    ffmpeg: str,
+    rails: dict[str, Path],
+    duration: float,
+    target: float,
+    peak: float,
+) -> None:
+    """The 5.1 program (Blueprint 24 §15): beds from the rails, then two-pass loudnorm."""
+    order = [role for role in ("dialogue", "ambience", "foley", "score") if role in rails]
+    if not order:
+        raise MixError("surround mixdown has no rails")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    premix = destination.with_name(f".{destination.stem}.premix.wav")
+    pending = destination.with_name(f".{destination.stem}.part.wav")
+    premix.unlink(missing_ok=True)
+    pending.unlink(missing_ok=True)
+    command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+    for role in order:
+        command.extend(["-i", str(rails[role])])
+    command.extend(["-filter_complex", _surround_graph(order, duration), "-map", "[out]", "-ar", "48000", "-c:a", "pcm_s24le", str(premix)])
+    try:
+        _run(command, label="surround mixdown")
+        if not premix.is_file() or premix.stat().st_size <= 44:
+            raise MixError("surround mixdown returned no audio bytes")
+        measured = _loudness_full_report(premix, ffmpeg=ffmpeg, target=target, peak=peak)
+        try:
+            two_pass = (
+                f"loudnorm=I={target:g}:TP={peak:g}:LRA=7:"
+                f"measured_I={float(measured['input_i']):g}:"
+                f"measured_LRA={float(measured['input_lra']):g}:"
+                f"measured_TP={float(measured['input_tp']):g}:"
+                f"measured_thresh={float(measured['input_thresh']):g}:"
+                f"offset={float(measured['target_offset']):g}:linear=true"
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MixError("surround loudness measurement is incomplete") from exc
+        _run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(premix), "-af", two_pass, "-t", f"{duration:.6f}", "-ar", "48000", "-c:a", "pcm_s24le", str(pending)],
+            label="surround loudness normalization",
+        )
+    finally:
+        premix.unlink(missing_ok=True)
+    if not pending.is_file() or pending.stat().st_size <= 44:
+        raise MixError("surround loudness normalization returned no audio bytes")
+    os.replace(pending, destination)
+
+
+def _mux_program(master: Path, stem: Path, *, ffmpeg: str, surround: Path | None = None) -> None:
+    """Mux the stereo program (track 1) and, when delivered, the 5.1 program (track 2)."""
     pending = master.with_name(f".{master.stem}.mix.part{master.suffix}")
     pending.unlink(missing_ok=True)
-    _run(
-        [
-            ffmpeg,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-i",
-            str(master),
-            "-i",
-            str(stem),
-            "-filter_complex",
-            "[1:a]apad[a]",
-            "-map",
-            "0:v:0",
-            "-map",
-            "[a]",
-            "-map_metadata",
-            "0",
-            "-c:v",
-            "copy",
-            "-c:a",
-            "pcm_s24le",
-            "-ar",
-            "48000",
-            "-ac",
-            "2",
-            "-shortest",
-            str(pending),
-        ],
-        label="program mix mux",
-    )
+    command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(master), "-i", str(stem)]
+    graph = "[1:a]apad[a]"
+    maps = ["-map", "0:v:0", "-map", "[a]"]
+    if surround is not None:
+        command.extend(["-i", str(surround)])
+        graph += ";[2:a]apad[b]"
+        maps.extend(["-map", "[b]"])
+    command.extend(["-filter_complex", graph, *maps, "-map_metadata", "0", "-c:v", "copy", "-c:a", "pcm_s24le", "-ar", "48000"])
+    if surround is None:
+        command.extend(["-ac", "2"])
+    else:
+        command.extend(["-ac:a:0", "2", "-ac:a:1", "6", "-metadata:s:a:0", "title=Stereo program", "-metadata:s:a:1", "title=5.1 program"])
+    command.extend(["-shortest", str(pending)])
+    _run(command, label="program mix mux")
     if not pending.is_file() or pending.stat().st_size <= 32:
         raise MixError("audio-bearing program master bytes are missing")
     os.replace(pending, master)
@@ -594,6 +693,7 @@ def _sha256(path: Path) -> str:
 
 
 _STEM_ROLES = {
+    "surround_mix_stem",
     "room_tone_stem",
     "dialogue_stem",
     "ambience_stem",
@@ -771,7 +871,36 @@ def bounce_mix(project: Project) -> None:
         raise MixError(f"measured loudness {measured:g} LUFS missed the {target:g} LUFS target")
     if true_peak > peak:
         raise MixError(f"measured true peak {true_peak:g} dBTP exceeded the {peak:g} dBTP ceiling")
-    _mux_program(master, program_stem, ffmpeg=ffmpeg)
+    surround_stem: Path | None = None
+    surround_measured: tuple[float, float] | None = None
+    project.mix.audio_layout = project.bible.audio_layout
+    if project.bible.audio_layout == "stereo+5.1":
+        surround_rel = f"{stems_root}/program-mix-51-v{revision}.wav"
+        surround_stem = abs_path(surround_rel)
+        _write_surround_mixdown(surround_stem, ffmpeg=ffmpeg, rails=rails, duration=duration, target=target, peak=peak)
+        surround_measured = _measure_stem(surround_stem, ffmpeg=ffmpeg, target=target, peak=peak)
+        if abs(surround_measured[0] - target) > 1.0:
+            raise MixError(f"measured 5.1 loudness {surround_measured[0]:g} LUFS missed the {target:g} LUFS target")
+        if surround_measured[1] > peak:
+            raise MixError(f"measured 5.1 true peak {surround_measured[1]:g} dBTP exceeded the {peak:g} dBTP ceiling")
+        surround_asset = _stem_asset(
+            project,
+            rel=surround_rel,
+            role="surround_mix_stem",
+            revision=revision,
+            metadata={
+                "timeline_id": project.timeline.id,
+                "channel_layout": "5.1",
+                "measured_lufs": surround_measured[0],
+                "true_peak_dbtp": surround_measured[1],
+            },
+        )
+        rail_assets.append(surround_asset)
+        project.mix.surround_stem_asset_id = surround_asset.id
+        project.mix.surround_measured_lufs = surround_measured[0]
+        project.mix.surround_true_peak_dbtp = surround_measured[1]
+        record_activity("mix", f"5.1 program mixed: {surround_measured[0]:g} LUFS · {surround_measured[1]:g} dBTP", level="live")
+    _mux_program(master, program_stem, ffmpeg=ffmpeg, surround=surround_stem)
     if _visual_qc_required():
         try:
             verify_finished_media(master, label="mixed 1080 program master")

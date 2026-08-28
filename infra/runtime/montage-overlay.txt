@@ -8,3 +8,5 @@ faster-whisper>=1.1.0,<2
 ctranslate2>=4.4.0,<5
 transformers>=4.49.0,<=4.51.3
 Pillow>=10.0
+# OpenCV Zoo YuNet/SFace face-embedding identity (DIONY_FACE_ID_*_MODEL)
+opencv-python-headless>=4.10

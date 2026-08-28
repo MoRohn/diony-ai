@@ -431,6 +431,53 @@
       "default": null,
       "title": "Prompt Adherence"
     },
+    "face_identity_version": {
+      "default": "",
+      "title": "Face Identity Version",
+      "type": "string"
+    },
+    "face_similarity_min": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Face Similarity Min"
+    },
+    "face_similarity_mean": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Face Similarity Mean"
+    },
+    "face_frames_with_face": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Face Frames With Face",
+      "type": "integer"
+    },
+    "face_verified": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Face Verified"
+    },
     "settled_best_of": {
       "anyOf": [
         {

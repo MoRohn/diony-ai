@@ -476,3 +476,100 @@ def test_final_review_delivers_the_edl(tmp_path: Path) -> None:
     assert {item.kind.value for item in project.deliverables} >= {"edl", "subtitles", "qc_packet", "prores_hq"}
     packet = json.loads((program_dir / "qc-packet.json").read_text())
     assert packet["edl"]["decisions"]
+
+
+def test_face_identity_is_unmeasured_without_staged_models(monkeypatch, tmp_path: Path) -> None:
+    from diony_producer.face_identity import face_models, face_threshold, measure_face_identity
+
+    monkeypatch.delenv("DIONY_FACE_ID_DETECTOR_MODEL", raising=False)
+    monkeypatch.delenv("DIONY_FACE_ID_RECOGNIZER_MODEL", raising=False)
+    assert face_models() is None
+    receipt = measure_face_identity(tmp_path / "n.mp4", tmp_path / "ref.png", frame_count=81)
+    assert not receipt.measured and "not staged" in receipt.error
+    monkeypatch.setenv("DIONY_FACE_ID_SIMILARITY_MIN", "0.5")
+    assert face_threshold() == 0.5
+    monkeypatch.setenv("DIONY_FACE_ID_DETECTOR_MODEL", str(tmp_path / "missing.onnx"))
+    monkeypatch.setenv("DIONY_FACE_ID_RECOGNIZER_MODEL", str(tmp_path / "missing2.onnx"))
+    assert face_models() is None
+
+
+def test_qc_report_refuses_pass_on_a_measured_face_failure() -> None:
+    from diony_contracts.enums import QCVerdict
+    from diony_contracts.models import QCReport
+
+    with pytest.raises(ValueError):
+        QCReport(id="qc", take_id="t", shot_id="s", verdict=QCVerdict.PASS, identity_ok=True, morph_ok=True,
+                 flicker_ok=True, duration_ok=True, legal_ok=True, face_verified=False)
+    ok = QCReport(id="qc", take_id="t", shot_id="s", verdict=QCVerdict.FAIL, identity_ok=True, morph_ok=True,
+                  flicker_ok=True, duration_ok=True, legal_ok=True, face_verified=False, face_similarity_min=0.21)
+    assert ok.face_verified is False
+
+
+def test_attempt_score_counts_face_identity_when_measured() -> None:
+    from diony_contracts.enums import QCVerdict
+    from diony_contracts.models import QCReport
+    from diony_producer.farm import attempt_score, new_generation_take
+
+    project = expand_idea(Brief(idea="A keeper repairs the lamp before the storm.", customer_kind=CustomerKind.SERIES, target_minutes=0.5))
+    take = new_generation_take(project, project.shots[0], live=False)
+    base = dict(id="qc", take_id=take.id, shot_id=take.shot_id, verdict=QCVerdict.WARN, identity_ok=True, morph_ok=True,
+                flicker_ok=True, duration_ok=True, legal_ok=True, reference_similarity=0.9, temporal_residual_p95=0.02)
+    take.qc = QCReport(**base)
+    without = attempt_score(take)
+    take.qc = QCReport(**base, face_similarity_min=0.6, face_verified=True)
+    strong = attempt_score(take)
+    take.qc = QCReport(**base, face_similarity_min=0.25, face_verified=False)
+    weak = attempt_score(take)
+    assert strong >= without > weak
+
+
+def test_bible_audio_layout_is_validated() -> None:
+    from diony_contracts.models import Bible
+
+    Bible(title="t", logline="l", visual_grammar="g", world="w", audio_layout="stereo+5.1")
+    with pytest.raises(ValueError):
+        Bible(title="t", logline="l", visual_grammar="g", world="w", audio_layout="7.1")
+
+
+@needs_ffmpeg
+def test_surround_mixdown_and_mux_deliver_a_5_1_track(tmp_path: Path) -> None:
+    from diony_producer.mix import _mux_program, _surround_graph, _write_surround_mixdown
+
+    def rail(name: str, source: str) -> Path:
+        path = tmp_path / f"{name}.wav"
+        subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"{source}:d=2", "-ar", "48000", "-ac", "2", "-c:a", "pcm_s24le", str(path)], check=True)
+        return path
+
+    rails = {
+        "dialogue": rail("dialogue", "sine=frequency=300:sample_rate=48000"),
+        "score": rail("score", "sine=frequency=110:sample_rate=48000"),
+        "ambience": rail("ambience", "anoisesrc=color=pink:sample_rate=48000:amplitude=0.1"),
+    }
+    graph = _surround_graph(["dialogue", "ambience", "score"], 2.0)
+    assert "join=inputs=6:channel_layout=5.1" in graph and "sidechaincompress" in graph and "lowpass=f=120" in graph
+    out = tmp_path / "program-mix-51-v1.wav"
+    _write_surround_mixdown(out, ffmpeg=FFMPEG, rails=rails, duration=2.0, target=-24.0, peak=-2.0)
+    probe = subprocess.run([shutil.which("ffprobe"), "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=channels,channel_layout", "-of", "csv=p=0", str(out)], capture_output=True, text=True, check=True)
+    assert probe.stdout.strip().startswith("6,5.1")
+    master = _lavfi(tmp_path / "master.mov", "testsrc2=s=320x180:r=24", seconds=2.0)
+    stereo = rail("program", "sine=frequency=440:sample_rate=48000")
+    _mux_program(master, stereo, ffmpeg=FFMPEG, surround=out)
+    streams = subprocess.run([shutil.which("ffprobe"), "-v", "error", "-select_streams", "a", "-show_entries", "stream=channels", "-of", "csv=p=0", str(master)], capture_output=True, text=True, check=True)
+    assert [line.split(",")[0] for line in streams.stdout.strip().splitlines()] == ["2", "6"]
+
+
+def test_face_pack_and_surround_reach_the_scripts_and_rail() -> None:
+    from diony_producer.gpu import _gpu_producer_start_script
+    from diony_wizard.apply import FACE_PACK, remote_setup_script
+
+    script = remote_setup_script("/opt/diony-ai")
+    assert "FACE_PACK_START" in script and "FACE_PACK_OPTIONAL_FAIL" in script
+    for url, dest, sha, _bytes in FACE_PACK:
+        assert url in script and dest in script and sha in script
+    start = _gpu_producer_start_script("stamp-face")
+    assert "export DIONY_FACE_ID_DETECTOR_MODEL=" in start and 'grep -Fqx "DIONY_FACE_ID_RECOGNIZER_MODEL=' in start
+    from diony_producer.run import production_standard
+
+    project = expand_idea(Brief(idea="A keeper repairs the lamp before the storm.", customer_kind=CustomerKind.SERIES, target_minutes=0.5))
+    project.bible.audio_layout = "stereo+5.1"
+    assert production_standard(project, clips=[], camera="stub")["audio"]["layout"] == "stereo+5.1"

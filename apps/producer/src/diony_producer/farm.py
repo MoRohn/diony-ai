@@ -73,6 +73,8 @@ from diony_producer.quality import (
 )
 from diony_producer.decisions import record_decision
 from diony_producer.semantic_qc import prompt_adherence
+from diony_producer.face_identity import FACE_IDENTITY_VERSION, measure_face_identity
+from diony_producer.camera import conditioning_image as _conditioning_image_of
 from diony_contracts.montage import DecisionCategory, DecisionOption
 from diony_producer.vault import persist_project, record_activity, vault_root
 from diony_producer.voice import (
@@ -102,6 +104,7 @@ _AUTO_RETAKE_QC_PREFIXES = (
     "Measured flicker failed",
     "Voice audio failed",
     "Black frame detected",
+    "Face identity failed",
 )
 _INFRASTRUCTURE_QC_PREFIXES = (
     "GPU overlay has less than",
@@ -927,6 +930,8 @@ _SCORE_WEIGHTS = (
     # Optional CLIP prompt adherence (Blueprint 24): joins the mean only when a
     # local encoder measured it; the other weights renormalise otherwise.
     ("adherence", 0.15),
+    # Face-embedding identity (Blueprint 24 §14), when the models are staged.
+    ("face", 0.25),
 )
 
 
@@ -963,6 +968,12 @@ def attempt_score(take: Take) -> float:
         "adherence": (
             max(0.0, min(1.0, (qc.prompt_adherence - 0.22) / 0.08))
             if qc.prompt_adherence is not None
+            else None
+        ),
+        # SFace cosine: 0.363 is the same-identity decision; 0.6 reads as certain.
+        "face": (
+            max(0.0, min(1.0, (qc.face_similarity_min - 0.2) / 0.4))
+            if qc.face_similarity_min is not None
             else None
         ),
     }
@@ -1916,6 +1927,14 @@ def attach_negative(
         if not err and dest.is_file()
         else None
     )
+    # Blueprint 24 §14: face-embedding identity against the conditioning still
+    # (measured only when the OpenCV Zoo models are staged on this host).
+    face = None
+    if not err and dest.is_file() and shot.keyframe_asset_ids:
+        conditioning = _conditioning_image_of(dest)
+        if conditioning is not None:
+            face = measure_face_identity(dest, conditioning, frame_count=measured_frames or shot_frames)
+    face_verified = face.verified if face is not None and face.measured else None
     morph_ok = bool(temporal and temporal.measured and temporal.morph_ok) if measured_qc_required else True
     flicker_ok = (
         bool(temporal and temporal.measured and temporal.flicker_ok)
@@ -2031,6 +2050,7 @@ def attach_negative(
         and voice_ready_ok is not False
         and legal_ok
         and black_ok
+        and face_verified is not False
     )
     production_clean_ok = bool(
         dimensions_ok
@@ -2041,6 +2061,7 @@ def attach_negative(
         and flicker_ok
         and legal_ok
         and black_ok
+        and face_verified is not False
     )
     failure = err or voice_failure
     if not failure and dialogue_required and not voice_ready_ok:
@@ -2088,7 +2109,14 @@ def attach_negative(
             f"Black frame detected ({frame_quality.black_frames} of {frame_quality.frame_count} "
             "sampled frames); the plate did not render."
         )
+    if not failure and face_verified is False and face is not None:
+        failure = (
+            f"Face identity failed (minimum SFace cosine {face.similarity_min:.3f} across "
+            f"{face.frames_with_face} sampled face(s); required {face.threshold:.3f})."
+        )
     advisory: list[str] = list(frame_quality.advisory_notes) if frame_quality is not None else []
+    if face is not None and face.measured and face.notes:
+        advisory.extend(face.notes)
     if color_drift is not None and color_drift > CHAIN_DRIFT_WARN:
         advisory.append(f"colour drifts {color_drift:.3f} from the previous print at the boundary")
     take.qc = QCReport(
@@ -2147,6 +2175,11 @@ def attach_negative(
         ),
         chain_color_drift=color_drift,
         prompt_adherence=adherence,
+        face_identity_version=(FACE_IDENTITY_VERSION if face is not None and face.measured else ""),
+        face_similarity_min=(face.similarity_min if face is not None and face.measured else None),
+        face_similarity_mean=(face.similarity_mean if face is not None and face.measured else None),
+        face_frames_with_face=(face.frames_with_face if face is not None and face.measured else 0),
+        face_verified=face_verified,
         notes=(
             failure
             or (

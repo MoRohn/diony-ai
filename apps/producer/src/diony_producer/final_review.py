@@ -358,6 +358,9 @@ def run_final_review(project: Project, *, live: bool) -> FinalReview:
         stems = sorted(stems_dir.glob("program-mix-v*.wav"))
         if stems:
             deliverables.append(_deliverable(project, DeliverableKind.STEMS, stems[-1], "stems"))
+        surround = sorted(stems_dir.glob("program-mix-51-v*.wav"))
+        if surround:
+            deliverables.append(_deliverable(project, DeliverableKind.SURROUND_MIX, surround[-1], "surround"))
     for path in subtitle_paths:
         deliverables.append(_deliverable(project, DeliverableKind.SUBTITLES, path, path.suffix.lstrip(".")))
     for path in write_edl(project, program_dir):

@@ -147,6 +147,7 @@ def test_production_standard_separates_negative_from_verified_master() -> None:
     assert standard["audio"] == {
         "target": "−24 LUFS broadcast",
         "true_peak": "−1 dBTP",
+        "layout": "stereo",
     }
     assert standard["status"] == "PLANNING"
     assert standard["material_label"] == "DRY RUN · NO MASTER"

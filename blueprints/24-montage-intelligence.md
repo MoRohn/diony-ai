@@ -294,6 +294,43 @@ writes `master_1080.edl` (CMX3600: video events, `D` dissolves, `* DIONY
 evidence of the edit the run made; the Timeline remains the stitch
 authority.
 
+## 14. Face-embedding identity
+
+Reference-lock SSIM proves the picture still resembles the still; it cannot
+prove the face is the same person. With OpenCV Zoo's **YuNet** detector and
+**SFace** recogniser staged (`/models/diony/opencv-zoo/`, Apache-2.0, run
+natively through `cv2.FaceDetectorYN` / `cv2.FaceRecognizerSF`; pinned by
+Git-LFS sha256 in `infra/models/manifest.yaml` and pulled best-effort by
+Studio App with checksum verification), every reference-conditioned negative
+measures the SFace cosine between the faces in its conditioning still and the
+most prominent face in each of the five sampled 1280×720 frames
+(`diony_producer.face_identity`). Boxes under 48 px are ignored; a still or
+sample set without a usable face records a note and measures nothing.
+
+`QCReport.face_similarity_min/mean`, `face_frames_with_face`, and
+`face_verified` are recorded; the gate is SFace's published decision
+threshold 0.363 (`DIONY_FACE_ID_SIMILARITY_MIN`). A measured failure is
+"Face identity failed (…)" — a hard, auto-retaken failure; the contract
+refuses `PASS` with `face_verified=False`. The minimum similarity also joins
+`attempt_score` at weight 0.25. Unstaged models measure nothing and gate
+nothing; the GPU start script exports the model paths only when both files
+exist and the Producer interpreter's cv2 exposes both classes.
+
+## 15. 5.1 program mix
+
+`Bible.audio_layout` (`stereo` default, `stereo+5.1`). With 5.1 requested,
+Mix builds a second program from the same rails after the stereo program
+passes: dialogue → centre; score and foley → front L/R; ambience and a
+−6 dB score send → surrounds; a 120 Hz low-passed bed of score and ambience
+→ LFE; the same dialogue-keyed sidechain ducking on ambience and score; then
+the same two-pass linear `loudnorm` to the Bible target (R128 channel
+weighting) and true-peak ceiling. The result is
+`program/<tl>/stems/program-mix-51-v<N>.wav` (`surround_mix_stem`,
+`DeliverableKind.SURROUND_MIX`) with its own measured LUFS / dBTP on the
+`MixLock`, and the master carries it as a second PCM track ("5.1 program")
+after the stereo track, so every player still opens on stereo. Picture-only
+programs stay mute in both layouts.
+
 ## Operational notes
 
 * New env: `DIONY_SHARPNESS_MIN`, `DIONY_BRIGHTNESS_MIN`, `DIONY_BRIGHTNESS_MAX`,
@@ -304,6 +341,7 @@ authority.
 * Every new field on `Bible`, `WanPromptPlan`, `QCReport`, `SpeechQCReceipt`,
   `TimelineEvent`, and `Project` has a default, so persisted projects load
   unchanged; `refresh_reference_shot` and re-measurement fill evidence forward.
-* Not done here, recorded for the next pass: face-embedding identity beyond
-  SSIM, 5.1 stems, energy-aware score dips at reveals (the energy phases are
-  measured; no creative dip is applied automatically).
+* Not done here, recorded for the next pass: energy-aware score dips at
+  reveals (the energy phases are measured; no creative dip is applied
+  automatically), discrete 5.1 stems per role (the 5.1 program is delivered;
+  per-role surround stems are not).

@@ -112,6 +112,24 @@ MONTAGE_PACK = [
     ),
 ]
 
+# Blueprint 24 §14 face-embedding identity: OpenCV Zoo YuNet + SFace (Apache-2.0)
+# as Git-LFS objects pinned by commit and sha256; best-effort, never a pack gate.
+# (url, dest, sha256, bytes)
+FACE_PACK = [
+    (
+        "https://github.com/opencv/opencv_zoo/raw/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+        "/models/diony/opencv-zoo/face_detection_yunet_2023mar.onnx",
+        "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+        232589,
+    ),
+    (
+        "https://github.com/opencv/opencv_zoo/raw/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
+        "/models/diony/opencv-zoo/face_recognition_sface_2021dec.onnx",
+        "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+        38696353,
+    ),
+]
+
 # Wan2.2 speech pack (Blueprint 22): Wan's own S2V TTS lane
 # (`generate.py --enable_tts`, `WanS2V.load_tts`) loads a CosyVoice checkout
 # and the CosyVoice2-0.5B weights from beside generate.py and would download
@@ -1129,6 +1147,9 @@ def remote_setup_script(repo: str, nas: str = "") -> str:
         token_line = "true"
     pack = repr(HF_PACK)
     montage_pack = repr(MONTAGE_PACK)
+    face_pulls = "\n".join(
+        f"_diony_face_pull {shlex.quote(url)} {shlex.quote(dest)} {sha}" for url, dest, sha, _bytes in FACE_PACK
+    )
     tts_model = repr(WAN_TTS_MODEL)
     prompt_library_dir = VOICE_PROMPT_LIBRARY_DIR
     prompt_library_lines = "\n".join(
@@ -1273,6 +1294,19 @@ for repo_id, dest, revision, ignore, _files, _bytes in PACK:
         print(f"HF_OPTIONAL_FAIL {{repo_id}}: {{exc}}", file=sys.stderr, flush=True)
 print("MONTAGE_PACK_OK", flush=True)
 PY
+echo FACE_PACK_START
+_diony_face_pull() {{
+  local url="$1" dest="$2" sha="$3"
+  mkdir -p "$(dirname "$dest")"
+  if [ -f "$dest" ] && [ "$(sha256sum "$dest" | cut -d' ' -f1)" = "$sha" ]; then
+    echo "FACE_PACK_PRESENT $dest"; return 0
+  fi
+  if curl -fsSL --retry 3 -o "$dest.part" "$url" && [ "$(sha256sum "$dest.part" | cut -d' ' -f1)" = "$sha" ]; then
+    mv -f "$dest.part" "$dest"; echo "FACE_PACK_DONE $dest"; return 0
+  fi
+  rm -f "$dest.part"; echo "FACE_PACK_OPTIONAL_FAIL $dest" >&2; return 0
+}}
+{face_pulls}
 fi
 {dedupe}
 echo WAN_RUNTIME_START

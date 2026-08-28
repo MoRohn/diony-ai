@@ -918,6 +918,7 @@ def production_standard(
         "audio": {
             "target": loudness,
             "true_peak": _target_peak(project.bible.true_peak_dbtp),
+            "layout": project.bible.audio_layout,
         },
         "material_label": material_label,
         "status": status,

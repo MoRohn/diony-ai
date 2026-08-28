@@ -224,3 +224,19 @@ Project: OpenMontage (https://github.com/calesthio/OpenMontage), AGPL-3.0.
 Diony's Blueprint 24 production-craft gates were designed after studying that
 project's published strategies. No OpenMontage source code, prompts, or assets
 are included in or linked by Diony AI; every implementation is original.
+
+==============================================================================
+OpenCV Zoo — YuNet face detector and SFace face recogniser (Apache License 2.0)
+— optional Blueprint 24 lane
+==============================================================================
+
+Project: OpenCV Zoo (https://github.com/opencv/opencv_zoo)
+Models: face_detection_yunet_2023mar.onnx (YuNet, Shiqi Yu et al.)
+        face_recognition_sface_2021dec.onnx (SFace, Yaoyao Zhong et al.)
+License: Apache License 2.0 (models and demo code), run through OpenCV's
+cv2.FaceDetectorYN / cv2.FaceRecognizerSF (OpenCV, Apache License 2.0).
+
+Used only when both models are staged on the site (`DIONY_FACE_ID_DETECTOR_MODEL`,
+`DIONY_FACE_ID_RECOGNIZER_MODEL`) to measure, locally, whether the face a
+negative animates is the face in its conditioning still. Never contacted
+over the network by Production.

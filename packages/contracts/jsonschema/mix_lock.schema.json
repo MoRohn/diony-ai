@@ -221,6 +221,40 @@
       },
       "title": "Score Alignments",
       "type": "array"
+    },
+    "audio_layout": {
+      "default": "stereo",
+      "title": "Audio Layout",
+      "type": "string"
+    },
+    "surround_stem_asset_id": {
+      "default": "",
+      "title": "Surround Stem Asset Id",
+      "type": "string"
+    },
+    "surround_measured_lufs": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Surround Measured Lufs"
+    },
+    "surround_true_peak_dbtp": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Surround True Peak Dbtp"
     }
   },
   "required": [

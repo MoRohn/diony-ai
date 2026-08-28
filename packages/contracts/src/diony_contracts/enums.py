@@ -125,6 +125,7 @@ class DeliverableKind(StrEnum):
     QC_PACKET = "qc_packet"
     SUBTITLES = "subtitles"
     EDL = "edl"
+    SURROUND_MIX = "surround_mix"
 
 
 class CustomerKind(StrEnum):

@@ -804,6 +804,14 @@ fi
 if _diony_clip_ready; then
   export DIONY_CLIP_MODEL=/models/diony/clip-vit-base-patch32
 fi
+# Blueprint 24 §14: face-embedding identity (OpenCV Zoo YuNet + SFace) measures
+# only when both models are staged and the Producer interpreter has cv2.
+if [ -f /models/diony/opencv-zoo/face_detection_yunet_2023mar.onnx ] && \
+   [ -f /models/diony/opencv-zoo/face_recognition_sface_2021dec.onnx ] && \
+   /opt/diony-ai/.venv/bin/python -c "import cv2; cv2.FaceDetectorYN; cv2.FaceRecognizerSF" >/dev/null 2>&1; then
+  export DIONY_FACE_ID_DETECTOR_MODEL=/models/diony/opencv-zoo/face_detection_yunet_2023mar.onnx
+  export DIONY_FACE_ID_RECOGNIZER_MODEL=/models/diony/opencv-zoo/face_recognition_sface_2021dec.onnx
+fi
 if [ -f /opt/diony-ai/apps/producer/src/diony_producer/audiogen_backend.py ]; then
   export DIONY_AUDIOGEN_COMMAND="/opt/diony-ai/.venv/bin/python /opt/diony-ai/apps/producer/src/diony_producer/audiogen_backend.py"
 fi
@@ -935,6 +943,9 @@ _diony_existing_producer_ready() {
   if [ -n "${DIONY_CLIP_MODEL:-}" ]; then
     printf '%s\n' "$active_env" | grep -Fqx "DIONY_CLIP_MODEL=$DIONY_CLIP_MODEL" || return 1
   fi
+  if [ -n "${DIONY_FACE_ID_RECOGNIZER_MODEL:-}" ]; then
+    printf '%s\n' "$active_env" | grep -Fqx "DIONY_FACE_ID_RECOGNIZER_MODEL=$DIONY_FACE_ID_RECOGNIZER_MODEL" || return 1
+  fi
 }
 _diony_production_busy() {
   # A code/env refresh may never kill the owner of a live camera, finish, or
@@ -1012,6 +1023,8 @@ nohup env -u DIONY_DRY_RUN PATH="$PATH" DIONY_VAULT=/diony/vault DIONY_BIND=0.0.
   DIONY_SOUND_LIBRARY="${DIONY_SOUND_LIBRARY:-}" \
   DIONY_WHISPER_MODEL="${DIONY_WHISPER_MODEL:-}" \
   DIONY_CLIP_MODEL="${DIONY_CLIP_MODEL:-}" \
+  DIONY_FACE_ID_DETECTOR_MODEL="${DIONY_FACE_ID_DETECTOR_MODEL:-}" \
+  DIONY_FACE_ID_RECOGNIZER_MODEL="${DIONY_FACE_ID_RECOGNIZER_MODEL:-}" \
   DIONY_AUDIOGEN="${DIONY_AUDIOGEN:-}" \
   DIONY_AUDIOGEN_COMMAND="${DIONY_AUDIOGEN_COMMAND:-}" \
   DIONY_AUDIOGEN_CLI_THINKSOUND="${DIONY_AUDIOGEN_CLI_THINKSOUND:-}" \

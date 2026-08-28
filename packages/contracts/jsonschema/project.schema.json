@@ -487,6 +487,12 @@
           "title": "Score Cuts On Downbeats",
           "type": "boolean"
         },
+        "audio_layout": {
+          "default": "stereo",
+          "pattern": "^(stereo|stereo\\+5\\.1)$",
+          "title": "Audio Layout",
+          "type": "string"
+        },
         "locked": {
           "default": false,
           "title": "Locked",
@@ -1226,7 +1232,8 @@
         "stems",
         "qc_packet",
         "subtitles",
-        "edl"
+        "edl",
+        "surround_mix"
       ],
       "title": "DeliverableKind",
       "type": "string"
@@ -1792,6 +1799,40 @@
           },
           "title": "Score Alignments",
           "type": "array"
+        },
+        "audio_layout": {
+          "default": "stereo",
+          "title": "Audio Layout",
+          "type": "string"
+        },
+        "surround_stem_asset_id": {
+          "default": "",
+          "title": "Surround Stem Asset Id",
+          "type": "string"
+        },
+        "surround_measured_lufs": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Surround Measured Lufs"
+        },
+        "surround_true_peak_dbtp": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Surround True Peak Dbtp"
         }
       },
       "required": [
@@ -2615,6 +2656,53 @@
           ],
           "default": null,
           "title": "Prompt Adherence"
+        },
+        "face_identity_version": {
+          "default": "",
+          "title": "Face Identity Version",
+          "type": "string"
+        },
+        "face_similarity_min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Face Similarity Min"
+        },
+        "face_similarity_mean": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Face Similarity Mean"
+        },
+        "face_frames_with_face": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Face Frames With Face",
+          "type": "integer"
+        },
+        "face_verified": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Face Verified"
         },
         "settled_best_of": {
           "anyOf": [
