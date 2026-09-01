@@ -92,7 +92,7 @@ def split_script(
         picture_provider, picture_model = CloudProvider.GROK, PICTURE_MODEL
         dialogue_provider, dialogue_model = CloudProvider.GROK, PICTURE_MODEL
     elif provider_policy == "google-flow":
-        picture_provider, picture_model = CloudProvider.GOOGLE_FLOW, "veo-3.1-quality"
+        picture_provider, picture_model = CloudProvider.GOOGLE_FLOW, "veo-3.1-fast"
         dialogue_provider, dialogue_model = CloudProvider.GOOGLE_FLOW, DIALOGUE_MODEL
     else:
         picture_provider, picture_model = CloudProvider.GROK, PICTURE_MODEL

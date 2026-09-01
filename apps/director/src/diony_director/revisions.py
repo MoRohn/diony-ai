@@ -173,7 +173,7 @@ def plan_revision(
         # it; otherwise force a differently-worded revision.
         if not clip.audio_packet.voice_ref:
             if provider is CloudProvider.GROK:
-                swapped = (CloudProvider.GOOGLE_FLOW, "veo-3.1-quality")
+                swapped = (CloudProvider.GOOGLE_FLOW, "veo-3.1-fast")
             else:
                 swapped = (CloudProvider.GROK, "grok-imagine-video-1.5")
             op_type = DirectorOpType.GENERATE

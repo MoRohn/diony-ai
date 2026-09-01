@@ -286,7 +286,7 @@ def register_voice(name: str, audio_media_id: str) -> str:
 
 
 def submit_extend(
-    media_generation_id: str, *, prompt: str, duration_s: int, model: str = "veo-3.1-quality"
+    media_generation_id: str, *, prompt: str, duration_s: int, model: str = "veo-3.1-fast"
 ) -> base.CloudJobHandle:
     if model in OMNI_MODELS:
         raise base.CloudAdapterError(

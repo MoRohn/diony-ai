@@ -25,7 +25,7 @@ from diony_director.screenwriter import ScreenplayDraft
 
 DEFAULT_MODELS = {
     CloudProvider.GROK: "grok-imagine-video-1.5",
-    CloudProvider.GOOGLE_FLOW: "veo-3.1-quality",
+    CloudProvider.GOOGLE_FLOW: "veo-3.1-fast",
 }
 
 PROVIDER_LABELS = {

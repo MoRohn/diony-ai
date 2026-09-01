@@ -334,13 +334,17 @@ def test_anchor_drift_fails_a_mutated_set(tmp_path) -> None:
 # --- the veo-3.1-quality lane (no reference images) --------------------------
 
 
-def test_flow_picture_lane_rides_quality_with_legal_refs() -> None:
+def test_flow_picture_lane_rides_fast_and_quality_refs_stay_legal() -> None:
+    """Pro plan doctrine: the policy routes picture to veo-3.1-fast (quality is
+    Ultra-paygated). The quality lane stays a tested capability: force a clip
+    onto it and its payload must remain legal (no reference images)."""
     package = packagebuilder.build_package(
         "s-veo-q", "a getaway", _draft(), provider_policy="google-flow"
     )
     picture = [c for c in package.clips if c.model.startswith("veo")]
-    assert picture and all(c.model == "veo-3.1-quality" for c in picture)
+    assert picture and all(c.model == "veo-3.1-fast" for c in picture)
     for clip in picture:
+        clip.model = "veo-3.1-quality"  # the Ultra lane, exercised explicitly
         setting = package.setting(str(clip.continuity.setting_plate["setting_id"]))
         setting.plate_asset_id = "/vault/plates/diner.jpg"
         refs = compiler.provider_artifact_refs(clip, package)
@@ -370,7 +374,8 @@ def test_quality_re_anchor_opens_from_the_scene_master_frame(monkeypatch, tmp_pa
     package = packagebuilder.build_package(
         "s-veo-anchor", "a getaway", _draft(), provider_policy="google-flow"
     )
-    clip = next(c for c in package.clips if c.model == "veo-3.1-quality")
+    clip = next(c for c in package.clips if c.model.startswith("veo"))
+    clip.model = "veo-3.1-quality"  # force the Ultra lane to test its re-anchor
 
     op = _gen_op(
         "op-vq", "s-veo-anchor", clip.clip_id,

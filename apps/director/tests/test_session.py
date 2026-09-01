@@ -39,10 +39,10 @@ def test_flow_proposals_quantize_to_the_veo_grid() -> None:
     proposal = session.propose(sid, "neon diner at night", provider="google-flow", duration_s=5)
     op = proposal.op
     assert op.provider is CloudProvider.GOOGLE_FLOW
-    assert op.model == "veo-3.1-quality"
+    assert op.model == "veo-3.1-fast"
     assert op.duration_s == 8
-    # veo-3.1-quality: 100 credits/generation on the pro plan + captcha solve
-    assert op.estimate is not None and op.estimate.total_usd_micros == 100 * 19_990 + 3_000
+    # veo-3.1-fast: 20 credits/generation on the pro plan + captcha solve
+    assert op.estimate is not None and op.estimate.total_usd_micros == 20 * 19_990 + 3_000
 
 
 def test_ultra_plans_unlock_the_short_veo_durations(monkeypatch) -> None:
