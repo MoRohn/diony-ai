@@ -23,8 +23,10 @@ AUDIO_REQUIRED_CLASSES = {"sync-dialogue", "vo-over", "ambience-led"}
 
 
 def _probe(path: Path) -> dict | None:
-    ffprobe = shutil.which("ffprobe")
-    if ffprobe is None:
+    from diony_producer.gallery_join import resolve_media_tool
+
+    ffprobe = resolve_media_tool("ffprobe") or shutil.which("ffprobe")
+    if not ffprobe:
         return None
     try:
         raw = subprocess.run(

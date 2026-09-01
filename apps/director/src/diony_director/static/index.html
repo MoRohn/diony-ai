@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Diony Director</title>
-<link rel="stylesheet" href="/static/app.css?v=p3">
+<link rel="stylesheet" href="/static/app.css?v=p5">
 </head>
 <body>
 <header class="mast">
@@ -42,7 +42,10 @@
     <span class="chip" id="grok-chip">grok —</span>
     <span class="chip" id="flow-chip">flow —</span>
     <span class="chip" id="brain-chip">brain —</span>
-    <span class="chip cost" id="spent-chip">spent $0.00</span>
+    <span class="chip cost spendstack" id="spent-chip" title="Total spent across all sessions; daily is today's spend">
+      <span class="spendrow"><span class="spendlbl">total spent</span><span class="spendval" id="spent-total">$0.00</span></span>
+      <span class="spendrow"><span class="spendlbl">daily spent</span><span class="spendval" id="spent-today">$0.00</span></span>
+    </span>
     <span class="chip cost" id="committed-chip">committed $0.00</span>
   </div>
 </header>
@@ -111,6 +114,6 @@
   </aside>
 </div>
 
-<script src="/static/app.js?v=p3"></script>
+<script src="/static/app.js?v=p5"></script>
 </body>
 </html>

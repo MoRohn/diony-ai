@@ -137,7 +137,7 @@ def upload_asset(path: Path) -> str:
         url += f"/{quote(account_email(), safe='')}"
     headers = _headers()
     headers["Content-Type"] = content_type
-    response = httpx.post(url, content=payload, headers=headers, timeout=UPLOAD_TIMEOUT_S)
+    response = base.post_with_retries(url, content=payload, headers=headers, timeout=UPLOAD_TIMEOUT_S)
     _guard(response, "asset upload")
     body = response.json()
     media_id = body.get("mediaGenerationId")
@@ -203,7 +203,7 @@ def submit(op: DirectorOp) -> base.CloudJobHandle:
     if source_video and op.mode is not None and op.mode.value == "v2v_edit":
         payload["referenceVideo_1"] = _media_ref(source_video, what="referenceVideo_1")
 
-    response = httpx.post(
+    response = base.post_with_retries(
         f"{api_base()}/videos", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
     _guard(response)
@@ -235,7 +235,7 @@ def submit_image(
         payload["email"] = account_email()
     for index, ref in enumerate(references or [], start=1):
         payload[f"referenceImage_{index}"] = _media_ref(ref, what=f"referenceImage_{index}")
-    response = httpx.post(
+    response = base.post_with_retries(
         f"{api_base()}/images", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
     _guard(response)
@@ -259,7 +259,7 @@ def register_character(name: str, image_media_ids: list[str]) -> str:
         payload["email"] = account_email()
     for index, ref in enumerate(image_media_ids, start=1):
         payload[f"referenceImage_{index}"] = _media_ref(ref, what=f"referenceImage_{index}")
-    response = httpx.post(
+    response = base.post_with_retries(
         f"{api_base()}/characters", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
     _guard(response)
@@ -274,7 +274,7 @@ def register_voice(name: str, audio_media_id: str) -> str:
     payload: dict = {"name": name, "referenceAudio": audio_media_id}
     if account_email():
         payload["email"] = account_email()
-    response = httpx.post(
+    response = base.post_with_retries(
         f"{api_base()}/voices", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
     _guard(response)
@@ -306,7 +306,7 @@ def submit_extend(
     }
     if account_email():
         payload["email"] = account_email()
-    response = httpx.post(
+    response = base.post_with_retries(
         f"{api_base()}/videos/extend", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
     _guard(response)
@@ -332,7 +332,7 @@ def submit_upscale(media_generation_id: str, *, resolution: str = "1080p") -> ba
     }
     if account_email():
         payload["email"] = account_email()
-    response = httpx.post(
+    response = base.post_with_retries(
         f"{api_base()}/videos/upscale", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
     _guard(response)
@@ -352,7 +352,7 @@ def submit_upscale(media_generation_id: str, *, resolution: str = "1080p") -> ba
 
 
 def poll(handle: base.CloudJobHandle) -> base.CloudJobStatus:
-    response = httpx.get(
+    response = base.get_with_retries(
         f"{api_base()}/jobs/{handle.external_id}", headers=_headers(), timeout=CALL_TIMEOUT_S
     )
     _guard(response)

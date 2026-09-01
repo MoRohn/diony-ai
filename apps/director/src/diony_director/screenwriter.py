@@ -168,8 +168,13 @@ def _from_brain(
         ] + [_image_part(r) for r in refs[:4]]
     else:
         user_content = user_text
-    response = httpx.post(
+    from diony_director.providers import base as provider_base
+
+    # retried on transport blips (SSL bad_record_mac killed drafts with
+    # attached stills — large uploads are the most exposed requests we make)
+    response = provider_base.post_with_retries(
         f"{brain_url()}/v1/chat/completions",
+        what="brain draft",
         json={
             "model": brain_model(),
             "messages": [

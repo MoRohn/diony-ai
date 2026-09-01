@@ -73,7 +73,133 @@ def test_full_guided_loop_persists_the_clip_and_reconciles_the_ledger(monkeypatc
 
     ledger = client.get("/api/director/ledger").json()
     assert ledger["totals"]["cost_usd_micros"] == 840_000
+    assert ledger["today_usd_micros"] == 840_000  # the op just completed, so it counts today
     assert ledger["committed_usd_micros"] == 0
+
+
+def test_daily_spend_counts_only_todays_usage() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from diony_contracts.launch import CostBreakdown, ProviderCapability
+    from diony_producer.costs import CostAnalyticsService, UsageSample
+
+    from diony_director import ledger
+
+    client = _client()
+    client.get("/api/director/status")
+    plane, ctx = app_module._boot()
+    run = ledger.ensure_run(plane, ctx.workspace.id, ctx.user.id, "s-daily")
+
+    def sample(sample_id: str, cost: int, occurred_at: datetime) -> UsageSample:
+        return UsageSample(
+            id=sample_id,
+            workspace_id=ctx.workspace.id,
+            project_id=ledger.DIRECTOR_PROJECT_ID,
+            run_id=run.id,
+            job_id=f"job-{sample_id}",
+            capability=ProviderCapability.VIDEO,
+            provider_id="grok",
+            model="grok-imagine-video-1.5",
+            quantity_microunits=1_000_000,
+            unit="clip",
+            actual_internal_credits=0,
+            actual_cost_breakdown=CostBreakdown(compute_usd_micros=cost),
+            occurred_at=occurred_at,
+        )
+
+    service = CostAnalyticsService(plane)
+    now = datetime.now(timezone.utc)
+    service.record(sample("usage-today", 300_000, now))
+    # two days back is before local midnight in every timezone — never flaky
+    service.record(sample("usage-past", 500_000, now - timedelta(days=2)))
+
+    body = client.get("/api/director/ledger").json()
+    assert body["totals"]["cost_usd_micros"] == 800_000
+    assert body["today_usd_micros"] == 300_000
+
+
+def test_transport_errors_are_retried_then_raised_as_transient(monkeypatch) -> None:
+    import httpx
+
+    monkeypatch.setattr(base, "TRANSIENT_BACKOFF_S", 0)
+    calls = {"n": 0}
+
+    class _Ok:
+        status_code = 200
+
+    def flaky(url, **kwargs):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise httpx.ReadError("[SSL: SSLV3_ALERT_BAD_RECORD_MAC] ssl/tls alert bad record mac")
+        return _Ok()
+
+    monkeypatch.setattr(base.httpx, "post", flaky)
+    assert base.post_with_retries("https://api.x.ai/x", what="test").status_code == 200
+    assert calls["n"] == 3
+
+    def always_down(url, **kwargs):
+        raise httpx.ReadError("[SSL: SSLV3_ALERT_BAD_RECORD_MAC] ssl/tls alert bad record mac")
+
+    monkeypatch.setattr(base.httpx, "post", always_down)
+    try:
+        base.post_with_retries("https://api.x.ai/x", what="test")
+        raise AssertionError("expected CloudAdapterTransientError")
+    except base.CloudAdapterTransientError as err:
+        assert "after 3 attempts" in str(err)
+
+
+def test_transient_network_error_keeps_the_op_runnable(monkeypatch) -> None:
+    client = _client()
+    sid = client.post("/api/director/sessions").json()["session_id"]
+    proposal = client.post(
+        f"/api/director/sessions/{sid}/message", json={"text": "a truck", "duration_s": 6}
+    ).json()
+    op_id = proposal["op"]["id"]
+
+    def boom(_op):
+        raise base.CloudAdapterTransientError("xAI video submit failed after 3 attempts — ReadError")
+
+    monkeypatch.setattr(grok, "submit", boom)
+    run = client.post(f"/api/director/ops/{op_id}/run")
+    assert run.status_code == 503
+    state = client.get(f"/api/director/ops/{op_id}").json()
+    assert state["op"]["status"] == "proposed"  # nothing spent, still runnable
+
+
+def test_failed_op_retries_at_its_locked_price(monkeypatch) -> None:
+    client = _client()
+    # keep the retry synchronous-deterministic: no background submit wave
+    monkeypatch.setattr(app_module, "_kick_submitter", lambda sid: None)
+    sid = client.post("/api/director/sessions").json()["session_id"]
+    proposal = client.post(
+        f"/api/director/sessions/{sid}/message", json={"text": "a truck", "duration_s": 6}
+    ).json()
+    op_id = proposal["op"]["id"]
+
+    from diony_director import session as session_mod
+
+    op = session_mod.get_op(op_id)
+    op.status = "failed"  # the stranded state the 2026-09-01 live run was left in
+    op.job_id = "job-old"
+    session_mod.runtime(op_id)["transient_holds"] = 3
+
+    # while failed, the plain run path refuses it
+    assert client.post(f"/api/director/ops/{op_id}/run").status_code == 409
+
+    resumable = client.get("/api/director/resumable").json()["sessions"]
+    assert [row["session_id"] for row in resumable] == [sid]
+    assert resumable[0]["failed"] == 1
+
+    retried = client.post(f"/api/director/ops/{op_id}/retry")
+    assert retried.status_code == 200
+    body = retried.json()["op"]
+    assert body["status"] == "proposed"
+    assert body["job_id"] == ""
+    assert "transient_holds" not in session_mod.runtime(op_id)
+    assert op_id in session_mod.batch_targets(sid)
+
+    # only failed ops retry — a proposed (or printed) op never re-spends this way
+    assert client.post(f"/api/director/ops/{op_id}/retry").status_code == 409
 
 
 def test_run_is_refused_when_the_engine_is_legacy(monkeypatch) -> None:

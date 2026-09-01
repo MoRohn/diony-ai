@@ -140,6 +140,13 @@ def create_session() -> dict:
     return {"session_id": session.create_session()}
 
 
+@app.get("/api/director/resumable")
+def resumable() -> dict:
+    """Rehydrated sessions with unfinished business the room should reattach to."""
+    _boot()  # ensure vault rehydration ran before we claim there's nothing
+    return {"sessions": session.resumable_sessions()}
+
+
 class MessageIn(BaseModel):
     text: str
     provider: str = "auto"
@@ -215,11 +222,12 @@ def _op_or_404(op_id: str):
 
 def _last_frame(clip_path: Path, dest: Path) -> str:
     """Extract the final frame of an accepted clip as the next clip's opening."""
-    import shutil
     import subprocess
 
-    ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg is None or not clip_path.is_file():
+    from diony_producer.gallery_join import resolve_media_tool
+
+    ffmpeg = resolve_media_tool("ffmpeg")
+    if not ffmpeg or not clip_path.is_file():
         return ""
     dest.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
@@ -301,6 +309,9 @@ def _kick_submitter(sid: str) -> None:
     threading.Thread(target=_worker, name=f"diony-submit-{sid}", daemon=True).start()
 
 
+TRANSIENT_HOLD_LIMIT = 3  # waves a single op may be network-held before it needs a manual Run
+
+
 def _submit_ready(sid: str) -> tuple[list[str], list[dict]]:
     """Submit every op the sequence says is safe now; hold the rest with reasons."""
     submitted: list[str] = []
@@ -317,7 +328,31 @@ def _submit_ready(sid: str) -> tuple[list[str], list[dict]]:
         try:
             _run_approved(op)
             submitted.append(op.id)
+            session.runtime(op.id).pop("transient_holds", None)
         except HTTPException as err:
+            if err.status_code == 503:
+                # transient network failure: nothing was submitted, the op is
+                # still proposed. Leave it targeted so the next wave retries,
+                # but give up after a few — a dead link must not loop forever.
+                rt = session.runtime(op.id)
+                holds = int(rt.get("transient_holds", 0)) + 1
+                rt["transient_holds"] = holds
+                if holds < TRANSIENT_HOLD_LIMIT:
+                    held.append(
+                        {
+                            "op_id": op.id,
+                            "reason": f"{err.detail} — held (network retry {holds}/{TRANSIENT_HOLD_LIMIT}), will retry on the next wave",
+                        }
+                    )
+                    continue
+                held.append(
+                    {
+                        "op_id": op.id,
+                        "reason": f"{err.detail} — the network kept failing; Run it manually when the connection is back",
+                    }
+                )
+                session.batch_targets(sid).discard(op.id)  # stays proposed for a manual run
+                continue
             held.append({"op_id": op.id, "reason": str(err.detail)})
             op.status = "failed"
         except Exception as err:  # noqa: BLE001 - one bad op never blocks the wave
@@ -418,6 +453,10 @@ def _run_approved(op: DirectorOp) -> dict:
         plane, ctx = _boot()
         try:
             handle = _dispatch_submit(op)
+        except provider_base.CloudAdapterTransientError as err:
+            # 503 = the network failed, not the op: it stays proposed and a
+            # later wave (or a manual Run) retries without redrafting anything
+            raise HTTPException(status_code=503, detail=str(err)) from err
         except provider_base.CloudAdapterError as err:
             raise HTTPException(status_code=502, detail=str(err)) from err
     except BaseException:
@@ -444,6 +483,26 @@ def _run_approved(op: DirectorOp) -> dict:
 @app.post("/api/director/ops/{op_id}/run")
 def run_op(op_id: str) -> dict:
     return _run_approved(_op_or_404(op_id))
+
+
+@app.post("/api/director/ops/{op_id}/retry")
+def retry_op(op_id: str) -> dict:
+    """Un-strand a failed op: back to proposed with a clean runtime, then roll.
+
+    The locked estimate the user already approved still stands, and the budget
+    gate in the submit wave still applies — a retry re-spends only this op."""
+    op = _op_or_404(op_id)
+    if op.status != "failed":
+        raise HTTPException(status_code=409, detail=f"op is {op.status}; only failed ops retry")
+    op.status = "proposed"
+    op.job_id = ""
+    rt = session.runtime(op.id)
+    for stale in ("handle", "ledger_error", "transient_holds"):
+        rt.pop(stale, None)
+    session.add_batch_target(op.session_id, op.id)
+    session.persist(op.session_id)
+    _kick_submitter(op.session_id)
+    return {"op": op.model_dump(mode="json")}
 
 
 def _clip_dest(op) -> Path:

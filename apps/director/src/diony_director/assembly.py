@@ -40,16 +40,28 @@ class AssemblyResult:
 
 
 def _ffmpeg() -> str:
-    binary = shutil.which("ffmpeg")
-    if binary is None:
-        raise AssemblyUnavailable("ffmpeg is required for assembly and is not installed")
+    # resolve_media_tool also checks DIONY_FFMPEG and Finder-safe locations —
+    # the packaged app's PATH has no /opt/homebrew/bin
+    from diony_producer.gallery_join import resolve_media_tool
+
+    binary = resolve_media_tool("ffmpeg") or shutil.which("ffmpeg")
+    if not binary:
+        raise AssemblyUnavailable(
+            "ffmpeg is required for assembly and was not found — install it "
+            "(brew install ffmpeg) or set DIONY_FFMPEG to its path"
+        )
     return binary
 
 
 def _probe(path: Path) -> dict:
-    ffprobe = shutil.which("ffprobe")
-    if ffprobe is None:
-        raise AssemblyUnavailable("ffprobe is required for assembly and is not installed")
+    from diony_producer.gallery_join import resolve_media_tool
+
+    ffprobe = resolve_media_tool("ffprobe") or shutil.which("ffprobe")
+    if not ffprobe:
+        raise AssemblyUnavailable(
+            "ffprobe is required for assembly and was not found — install it "
+            "(brew install ffmpeg) or set DIONY_FFPROBE to its path"
+        )
     raw = subprocess.run(
         [ffprobe, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", str(path)],
         check=True,

@@ -144,7 +144,9 @@ def measure_negative_quality(
     """Decode a small analysis stream; never retain full-resolution video."""
     import numpy as np
 
-    ffmpeg = os.environ.get("DIONY_FFMPEG", "").strip() or shutil.which("ffmpeg")
+    from diony_producer.gallery_join import resolve_media_tool
+
+    ffmpeg = resolve_media_tool("ffmpeg")
     if not ffmpeg:
         return TemporalQualityReceipt(False, error="FFmpeg is unavailable")
     width, height = ANALYSIS_WIDTH, ANALYSIS_HEIGHT
@@ -282,7 +284,9 @@ def decode_sampled_frames(
     wanted = sorted(dict.fromkeys(int(index) for index in indices))
     if not wanted:
         return []
-    ffmpeg = os.environ.get("DIONY_FFMPEG", "").strip() or shutil.which("ffmpeg")
+    from diony_producer.gallery_join import resolve_media_tool
+
+    ffmpeg = resolve_media_tool("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("FFmpeg is unavailable")
     frame_bytes = width * height * 3
@@ -441,7 +445,9 @@ def frame_channel_stats(path: Path, *, last: bool = False) -> tuple[list[float],
     """Channel stats of a media file's first (or last) frame on the analysis proxy."""
     import numpy as np
 
-    ffmpeg = os.environ.get("DIONY_FFMPEG", "").strip() or shutil.which("ffmpeg")
+    from diony_producer.gallery_join import resolve_media_tool
+
+    ffmpeg = resolve_media_tool("ffmpeg")
     if not ffmpeg or not Path(path).is_file():
         return None
     width, height = ANALYSIS_WIDTH, ANALYSIS_HEIGHT

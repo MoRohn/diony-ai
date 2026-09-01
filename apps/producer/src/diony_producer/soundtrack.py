@@ -115,7 +115,9 @@ def generation_enabled(project: Project) -> bool:
 
 
 def _cue_seconds(path: Path) -> float:
-    ffprobe = os.environ.get("DIONY_FFPROBE", "").strip() or shutil.which("ffprobe")
+    from diony_producer.gallery_join import resolve_media_tool
+
+    ffprobe = resolve_media_tool("ffprobe")
     if not ffprobe:
         return 0.0
     try:

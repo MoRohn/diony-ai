@@ -676,9 +676,14 @@ def stitch_director_films(body: StitchFilmsBody) -> dict:
 
     if len(body.sessions) < 2:
         raise HTTPException(status_code=422, detail="select at least two films to stitch")
-    ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg is None:
-        raise HTTPException(status_code=409, detail="ffmpeg is required for stitching")
+    from diony_producer.gallery_join import resolve_media_tool
+
+    ffmpeg = resolve_media_tool("ffmpeg")
+    if not ffmpeg:
+        raise HTTPException(
+            status_code=409,
+            detail="ffmpeg was not found — install it (brew install ffmpeg) or set DIONY_FFMPEG",
+        )
     root = cluster_root() / "director"
     sources: list[Path] = []
     for sid in body.sessions:

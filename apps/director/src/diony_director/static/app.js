@@ -230,6 +230,7 @@
         if (status === "failed") {
           state.textContent = `failed — ${body.job ? body.job.error_message : ""}`;
           state.className = "state failed";
+          attachRetry(card, opId, state);
           refreshMeter();
           return;
         }
@@ -245,7 +246,8 @@
   async function refreshMeter() {
     try {
       const ledger = await api("/api/director/ledger");
-      $("spent-chip").textContent = `spent ${usd(ledger.totals.cost_usd_micros)}`;
+      $("spent-total").textContent = usd(ledger.totals.cost_usd_micros);
+      $("spent-today").textContent = usd(ledger.today_usd_micros || 0);
       $("committed-chip").textContent = `committed ${usd(ledger.committed_usd_micros)}`;
     } catch (err) {
       /* meter stays as-is; never invent numbers */
@@ -272,13 +274,39 @@
       if (status.engine_choice === "grok" || status.engine_choice === "google-flow") {
         $("provider").value = status.engine_choice;
       }
-      const created = await api("/api/director/sessions", { method: "POST" });
-      sessionId = created.session_id;
-      refreshMeter();
-      addMsg(
-        "director",
-        "I'm the Director. Give me one shot to start — I'll compile the prompt, lock the price, and roll only when you approve."
-      );
+      // A rehydrated session with unfinished business gets the room back —
+      // failed clips carry a Retry, and the printed ones are never re-spent.
+      let resume = null;
+      try {
+        const r = await api("/api/director/resumable");
+        resume = (r.sessions || [])[0] || null;
+      } catch (err) {
+        /* no resume — fresh room */
+      }
+      if (resume) {
+        sessionId = resume.session_id;
+        refreshMeter();
+        const bits = [`${resume.completed} printed`];
+        if (resume.failed) bits.push(`${resume.failed} failed — each has a Retry on the SHOTS tab`);
+        if (resume.in_flight) bits.push(`${resume.in_flight} still rolling`);
+        addMsg(
+          "director",
+          `Resuming session ${resume.session_id}: ${bits.join(", ")}. ` +
+            "Retries re-roll at their locked price; assemble from the CUT tab when the set is complete. " +
+            "＋ NEW SESSION starts fresh — the ledger keeps everything."
+        );
+        setBoardOpen(true);
+        const shotsBtn = document.querySelector('.btabs button[data-tab="shots"]');
+        if (shotsBtn) shotsBtn.click();
+      } else {
+        const created = await api("/api/director/sessions", { method: "POST" });
+        sessionId = created.session_id;
+        refreshMeter();
+        addMsg(
+          "director",
+          "I'm the Director. Give me one shot to start — I'll compile the prompt, lock the price, and roll only when you approve."
+        );
+      }
     } catch (err) {
       addMsg("director", `The service isn't ready: ${err.message || err}`);
     }
@@ -354,6 +382,68 @@
     card.appendChild(accept);
   }
 
+  // Failed ops are never dead ends: retry re-proposes at the locked price and
+  // rejoins the submit wave — completed clips are never re-spent.
+  function attachRetry(card, opId, state) {
+    if (card.querySelector(".retrybtn")) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "retrybtn";
+    btn.textContent = "↻ Retry";
+    btn.title = "Re-roll this clip at its locked price — completed clips are never re-spent";
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        await api(`/api/director/ops/${opId}/retry`, { method: "POST" });
+        btn.remove();
+        state.textContent = "retrying…";
+        state.className = "state";
+        watchRetried(opId, card, state);
+      } catch (err) {
+        state.textContent = String(err.message || err);
+        btn.disabled = false;
+      }
+    });
+    (card.querySelector(".row") || card).appendChild(btn);
+  }
+
+  async function watchRetried(opId, card, state, deadlineTicks = 120) {
+    for (let i = 0; i < deadlineTicks; i++) {
+      await new Promise((r) => setTimeout(r, 2500));
+      let body;
+      try {
+        body = await api(`/api/director/ops/${opId}`);
+      } catch (err) {
+        continue;
+      }
+      const st = body.op.status;
+      if (st === "completed") {
+        state.textContent = "printed";
+        state.className = "state done";
+        if (!card.querySelector("video")) {
+          const video = document.createElement("video");
+          video.controls = true;
+          video.src = `/api/director/clips/${opId}`;
+          card.appendChild(video);
+        }
+        attachVerdict(card, state, body.review, opId);
+        refreshMeter();
+        return;
+      }
+      if (st === "failed") {
+        state.textContent = `failed — ${body.job ? body.job.error_message || "" : ""}`;
+        state.className = "state failed";
+        attachRetry(card, opId, state);
+        refreshMeter();
+        return;
+      }
+      state.textContent = st === "proposed" ? "waiting for the wave…" : `${st}…`;
+    }
+    state.textContent = "still not rolling — check the connection and Retry";
+    state.className = "state failed";
+    attachRetry(card, opId, state);
+  }
+
   function pollProductionOp(op, card, state) {
     const tick = async () => {
       try {
@@ -371,6 +461,7 @@
             // set the text BEFORE the verdict chip lands — textContent wipes children
             state.textContent = `failed — ${body.job ? body.job.error_message || "" : ""}`;
             state.className = "state failed";
+            attachRetry(card, op.id, state);
           }
           attachVerdict(card, state, body.review, op.id);
           if (body.narration) {
@@ -602,6 +693,7 @@
             } else if (body.op.status === "failed") {
               c.state.textContent = `failed — ${body.job ? body.job.error_message : ""}`;
               c.state.className = "state failed";
+              attachRetry(c.card, id, c.state);
               if (body.narration) addMsg("director", body.narration);
             }
             attachVerdict(c.card, c.state, body.review, id);
@@ -923,6 +1015,24 @@
         });
         row.appendChild(accept);
       }
+      if (c.op_id && c.status === "failed") {
+        const retry = document.createElement("button");
+        retry.type = "button";
+        retry.className = "retrybtn";
+        retry.textContent = `↻ Retry — ${usd(c.est_usd_micros)}`;
+        retry.title = "Re-roll this clip at its locked price — completed clips are never re-spent";
+        retry.addEventListener("click", async () => {
+          retry.disabled = true;
+          try {
+            await api(`/api/director/ops/${c.op_id}/retry`, { method: "POST" });
+            addMsg("director", `${c.clip_id} re-queued at its locked price.`);
+            refreshBoard();
+          } catch (err) {
+            retry.textContent = String(err.message || err);
+          }
+        });
+        row.appendChild(retry);
+      }
       if (c.can_upscale) {
         const up = document.createElement("button");
         up.type = "button";
@@ -948,7 +1058,26 @@
   function renderCutTab(pane, b) {
     pane.replaceChildren();
     if (!b.film_ready) {
-      pane.textContent = "No cut yet — the film lands here after Run & Assemble.";
+      const printed = (b.clips || []).filter((c) => c.status === "completed").length;
+      if (!printed) {
+        pane.textContent = "No cut yet — the film lands here after Run & Assemble.";
+        return;
+      }
+      const note = document.createElement("div");
+      note.className = "bnote";
+      note.textContent = `No cut yet — ${printed} printed clip${printed === 1 ? "" : "s"} ready to assemble.`;
+      pane.appendChild(note);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "acceptbtn";
+      btn.textContent = "Assemble the cut";
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "assembling…";
+        await assembleNow();
+        refreshBoard();
+      });
+      pane.appendChild(btn);
       return;
     }
     const video = document.createElement("video");

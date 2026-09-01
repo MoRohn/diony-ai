@@ -261,10 +261,29 @@ def build_receipt(
     }
 
 
+def spent_today_usd_micros(plane: ControlPlane, workspace_id: str, *, now: datetime | None = None) -> int:
+    """Cost allocated to usage that occurred on the current local calendar day."""
+    now = now if now is not None else datetime.now(timezone.utc).astimezone()
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    usage_by_id = {row.id: row for row in plane.usage(workspace_id)}
+    total = 0
+    for allocation in plane.cost_allocations(workspace_id):
+        usage = usage_by_id.get(allocation.usage_event_id)
+        if usage is None:
+            continue
+        occurred = usage.occurred_at
+        if occurred.tzinfo is None:
+            occurred = occurred.replace(tzinfo=timezone.utc)
+        if occurred.astimezone(now.tzinfo) >= day_start:
+            total += allocation.cost_usd_micros
+    return total
+
+
 def snapshot(plane: ControlPlane, workspace_id: str, *, committed_usd_micros: int = 0) -> dict:
     summary = CostAnalyticsService(plane).summary(workspace_id, organization_wide=True)
     return {
         "totals": summary["totals"],
+        "today_usd_micros": spent_today_usd_micros(plane, workspace_id),
         "providers": summary["rollups"]["providers"],
         "models": summary["rollups"]["models"],
         "committed_usd_micros": committed_usd_micros,

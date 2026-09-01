@@ -111,6 +111,38 @@ def get_session(sid: str) -> SessionState:
     return _SESSIONS[sid]
 
 
+def resumable_sessions() -> list[dict[str, Any]]:
+    """Sessions with unfinished business, newest first: failed clips to retry,
+    ops still rolling, or approved work that never rolled. A finished session
+    (everything completed) is not resumable — the Gallery has its film."""
+    rows: list[dict[str, Any]] = []
+    for sid, state in _SESSIONS.items():
+        ops = [_OPS[i] for i in state.op_ids if i in _OPS]
+        if not ops:
+            continue
+        counts = {"completed": 0, "failed": 0, "in_flight": 0, "proposed": 0}
+        for op in ops:
+            if op.status == "completed":
+                counts["completed"] += 1
+            elif op.status == "failed":
+                counts["failed"] += 1
+            elif op.status in {"submitted", "submitting"}:
+                counts["in_flight"] += 1
+            elif op.status == "proposed":
+                counts["proposed"] += 1
+        if counts["failed"] or counts["in_flight"]:
+            rows.append({"session_id": sid, **counts})
+
+    def _mtime(row: dict[str, Any]) -> float:
+        try:
+            return _state_path(row["session_id"]).stat().st_mtime
+        except OSError:
+            return 0.0
+
+    rows.sort(key=_mtime, reverse=True)
+    return rows
+
+
 def get_op(op_id: str) -> DirectorOp:
     return _OPS[op_id]
 
@@ -899,6 +931,10 @@ def set_batch_targets(sid: str, op_ids: set[str]) -> set[str]:
 
 def batch_targets(sid: str) -> set[str]:
     return _BATCH_TARGETS.get(sid, set())
+
+
+def add_batch_target(sid: str, op_id: str) -> None:
+    _BATCH_TARGETS.setdefault(sid, set()).add(op_id)
 
 
 def queued_count(sid: str) -> int:

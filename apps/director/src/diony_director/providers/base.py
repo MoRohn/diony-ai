@@ -51,6 +51,43 @@ class ModerationRefused(CloudAdapterError):
     pass
 
 
+class CloudAdapterTransientError(CloudAdapterError):
+    """The network failed before the provider answered; the op stays runnable."""
+
+
+# Transport-level failures (SSL bad_record_mac, resets, timeouts) are retried
+# in place with backoff. POSTs too: a mid-body TLS abort means the provider
+# never parsed the request, and the bounded worst case of one duplicate clip
+# beats permanently failing a chained wave — the same call the OpenAI-style
+# SDKs make by default.
+TRANSIENT_TRIES = 3
+TRANSIENT_BACKOFF_S = 1.0
+
+
+def _with_transient_retries(send, what: str):
+    import time
+
+    last: Exception | None = None
+    for attempt in range(TRANSIENT_TRIES):
+        try:
+            return send()
+        except httpx.TransportError as err:
+            last = err
+            if attempt + 1 < TRANSIENT_TRIES:
+                time.sleep(TRANSIENT_BACKOFF_S * (2**attempt))
+    raise CloudAdapterTransientError(
+        f"{what} failed after {TRANSIENT_TRIES} attempts — {type(last).__name__}: {last}"
+    ) from last
+
+
+def get_with_retries(url: str, *, what: str = "provider request", **kwargs) -> httpx.Response:
+    return _with_transient_retries(lambda: httpx.get(url, **kwargs), what)
+
+
+def post_with_retries(url: str, *, what: str = "provider request", **kwargs) -> httpx.Response:
+    return _with_transient_retries(lambda: httpx.post(url, **kwargs), what)
+
+
 @dataclass
 class CloudJobHandle:
     provider_id: str
@@ -84,7 +121,9 @@ class FetchedClip:
 
 
 def download(url: str, dest: Path) -> FetchedClip:
-    response = httpx.get(url, timeout=DOWNLOAD_TIMEOUT_S, follow_redirects=True)
+    response = get_with_retries(
+        url, what="media download", timeout=DOWNLOAD_TIMEOUT_S, follow_redirects=True
+    )
     if response.status_code >= 400:
         raise CloudAdapterError(f"media download rejected ({response.status_code}) from {url[:120]}")
     payload = response.content

@@ -112,8 +112,9 @@ def submit(op: DirectorOp) -> base.CloudJobHandle:
         payload["reference_audios"] = [
             {"voice_id": v} for v in voices[:MAX_REFERENCE_AUDIOS]
         ]
-    response = httpx.post(
+    response = base.post_with_retries(
         f"{api_base()}/v1/videos/generations",
+        what="xAI video submit",
         json=payload,
         headers=_headers(),
         timeout=CALL_TIMEOUT_S,
@@ -135,8 +136,8 @@ def submit(op: DirectorOp) -> base.CloudJobHandle:
 
 def _submit_operation(path: str, payload: dict, *, model: str, duration_s: int, kind: str) -> base.CloudJobHandle:
     base.ensure_prompt_fits(str(payload.get("prompt", "")), PROVIDER_ID, what=f"{kind} prompt")
-    response = httpx.post(
-        f"{api_base()}{path}", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
+    response = base.post_with_retries(
+        f"{api_base()}{path}", what=f"xAI {kind} submit", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
     _guard(response)
     body = response.json()
@@ -191,8 +192,9 @@ def submit_image(
     refs = list(references or [])
     if refs:
         payload["image_url"] = _data_uri(refs[0])
-    response = httpx.post(
+    response = base.post_with_retries(
         f"{api_base()}/v1/images/generations",
+        what="xAI image submit",
         json=payload,
         headers=_headers(),
         timeout=CALL_TIMEOUT_S,
@@ -251,8 +253,9 @@ def poll(handle: base.CloudJobHandle) -> base.CloudJobStatus:
     sync_url = handle.metadata.get("sync_result_url")
     if sync_url:
         return base.CloudJobStatus(state="done", result_url=str(sync_url))
-    response = httpx.get(
+    response = base.get_with_retries(
         f"{api_base()}/v1/videos/{handle.external_id}",
+        what="xAI poll",
         headers=_headers(),
         timeout=CALL_TIMEOUT_S,
     )
