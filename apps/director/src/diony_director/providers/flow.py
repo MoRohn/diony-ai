@@ -350,13 +350,13 @@ def submit_extend(
 
 
 def submit_upscale(media_generation_id: str, *, resolution: str = "1080p") -> base.CloudJobHandle:
+    # No email parameter here — /videos/upscale 400s on it (verified live);
+    # the mediaGenerationId already names the owning account.
     payload: dict = {
         "mediaGenerationId": media_generation_id,
         "resolution": resolution,
         "async": True,
     }
-    if account_email():
-        payload["email"] = account_email()
     response = base.post_with_retries(
         f"{api_base()}/videos/upscale", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
