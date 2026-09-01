@@ -222,6 +222,14 @@ def submit(op: DirectorOp) -> base.CloudJobHandle:
     )
 
 
+# POST /images speaks a different dialect from /videos (verified live
+# 2026-09-01 — a production's plates all 400'd on it): synchronous with NO
+# async parameter; aspect ratios are ratio strings ("16:9"), never
+# landscape/portrait; references are reference_N, not referenceImage_N; and
+# count DEFAULTS TO 4 — unpinned, every plate would bill four images.
+_IMAGE_ASPECTS = {"landscape": "16:9", "portrait": "9:16", "": "16:9"}
+
+
 def submit_image(
     prompt: str,
     *,
@@ -230,11 +238,12 @@ def submit_image(
     aspect_ratio: str = "landscape",
 ) -> base.CloudJobHandle:
     base.ensure_prompt_fits(prompt, PROVIDER_ID, what="image prompt")
-    payload: dict = {"prompt": prompt, "model": model, "aspectRatio": aspect_ratio, "async": True}
+    aspect = _IMAGE_ASPECTS.get(aspect_ratio, aspect_ratio)
+    payload: dict = {"prompt": prompt, "model": model, "aspectRatio": aspect, "count": 1}
     if account_email():
         payload["email"] = account_email()
     for index, ref in enumerate(references or [], start=1):
-        payload[f"referenceImage_{index}"] = _media_ref(ref, what=f"referenceImage_{index}")
+        payload[f"reference_{index}"] = _media_ref(ref, what=f"reference_{index}")
     response = base.post_with_retries(
         f"{api_base()}/images", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
@@ -244,27 +253,43 @@ def submit_image(
     if not external_id:
         raise base.CloudAdapterError(f"Flow returned no jobId for image: {body}")
     credits_before = body.get("remainingCredits")
-    return submit_handle(
+    handle = submit_handle(
         external_id,
         model=model,
         duration_s=0,
         credits_before=credits_before if isinstance(credits_before, int) else None,
         kind="image",
     )
+    # The result arrives IN this response: media[].image.generatedImage with a
+    # signed fifeUrl (~6h validity) and the mediaGenerationId later payloads
+    # reference. Capture both so poll never has to guess.
+    nested = body.get("response") if isinstance(body.get("response"), dict) else {}
+    media = body.get("media") or nested.get("media") or []
+    if media and isinstance(media[0], dict):
+        generated = ((media[0].get("image") or {}).get("generatedImage") or {})
+        sync_url = str(generated.get("fifeUrl") or "")
+        media_generation_id = str(generated.get("mediaGenerationId") or "")
+        if sync_url:
+            handle.metadata["sync_result_url"] = sync_url
+        if media_generation_id:
+            handle.metadata["media_generation_id"] = media_generation_id
+    return handle
 
 
 def register_character(name: str, image_media_ids: list[str]) -> str:
-    payload: dict = {"name": name}
+    # /characters dialect (docs, aligned with the /images correction):
+    # displayName + imageReference_N, synchronous, returns entityId.
+    payload: dict = {"displayName": name}
     if account_email():
         payload["email"] = account_email()
     for index, ref in enumerate(image_media_ids, start=1):
-        payload[f"referenceImage_{index}"] = _media_ref(ref, what=f"referenceImage_{index}")
+        payload[f"imageReference_{index}"] = _media_ref(ref, what=f"imageReference_{index}")
     response = base.post_with_retries(
         f"{api_base()}/characters", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
     _guard(response)
     body = response.json()
-    ref = str(body.get("ref") or body.get("id") or "")
+    ref = str(body.get("entityId") or body.get("character") or body.get("ref") or body.get("id") or "")
     if not ref:
         raise base.CloudAdapterError(f"Flow returned no character ref: {body}")
     return ref
@@ -352,6 +377,13 @@ def submit_upscale(media_generation_id: str, *, resolution: str = "1080p") -> ba
 
 
 def poll(handle: base.CloudJobHandle) -> base.CloudJobStatus:
+    sync_url = handle.metadata.get("sync_result_url")
+    if sync_url:
+        # images complete inside their own submit response — no job to poll
+        metadata: dict = {}
+        if handle.metadata.get("media_generation_id"):
+            metadata["media_generation_id"] = handle.metadata["media_generation_id"]
+        return base.CloudJobStatus(state="done", result_url=str(sync_url), metadata=metadata)
     response = base.get_with_retries(
         f"{api_base()}/jobs/{handle.external_id}", headers=_headers(), timeout=CALL_TIMEOUT_S
     )
