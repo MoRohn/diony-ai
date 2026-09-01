@@ -109,7 +109,9 @@ def roll_one(provider: str) -> dict:
     if provider == "grok":
         chosen, model, duration, resolution = CloudProvider.GROK, "grok-imagine-video-1.5", 1, "480p"
     else:
-        chosen, model, duration, resolution = CloudProvider.GOOGLE_FLOW, "veo-3.1-lite", 4, "720p"
+        # 8s: the live account grid is 8s-only on every veo tier (4/6s never
+        # appear in GET /accounts/{email} model lists, whatever the plan)
+        chosen, model, duration, resolution = CloudProvider.GOOGLE_FLOW, "veo-3.1-lite", 8, "720p"
     est = estimate_mod.estimate_op(
         provider=chosen, model=model, mode=CloudGenerationMode.T2V,
         duration_s=duration, resolution=resolution,
