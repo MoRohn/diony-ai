@@ -79,6 +79,11 @@
           "default": "",
           "title": "Scene Id",
           "type": "string"
+        },
+        "shot": {
+          "default": "",
+          "title": "Shot",
+          "type": "string"
         }
       },
       "required": [

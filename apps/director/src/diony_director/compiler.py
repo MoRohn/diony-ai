@@ -18,7 +18,16 @@ from diony_contracts.production import (
 )
 
 ANTI_ARTIFACT = (
-    "No morphing, no floating motion, no warped anatomy, no extra limbs, no on-screen text."
+    "No morphing, no floating motion, no warped anatomy, no extra limbs, "
+    "no on-screen text, no plastic skin, no uncanny stare, no CGI sheen."
+)
+
+# Every Grok picture carries the same photographic ground truth — without it
+# the model drifts toward game-engine gloss and stock-footage lighting.
+REALISM = (
+    "Filmed on a digital cinema camera: natural skin texture, true blacks, "
+    "motivated practical light, physically accurate motion and weight, "
+    "filmic contrast, documentary realism."
 )
 
 REVISION_DIRECTIVES = {
@@ -207,9 +216,14 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
             [
                 (f"{clip.camera_idea}.", 0),
                 (continuity, 1),
-                (action or "The scene breathes; nothing resets.", 3),
+                (
+                    action
+                    or "The action continues truthfully; no reset, no new business.",
+                    3,
+                ),
                 (_setting_block(setting, scene.heading), 2),
                 (spoken, 0),
+                (REALISM, 1),
                 (_sound_clause(clip, setting, continues=bool(continuity)), 2),
                 (char_text, 3),
                 (ANTI_ARTIFACT, 0),

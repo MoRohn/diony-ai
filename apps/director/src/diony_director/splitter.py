@@ -127,22 +127,31 @@ def split_script(
         last_picture: ClipUnit | None = None
 
         def picture_clip(line: ScriptLine) -> ClipUnit:
-            """ONE action beat = one clip, its camera a complete sentence —
-            never a truncated prose fragment, never a synthetic empty opener.
+            """ONE action beat = one clip. The screenwriter's authored shot IS
+            the camera when it exists — the coverage rotation is only the
+            fallback for shotless scripts, never a replacement for authorship.
             Only the scene's FIRST clip is its establishing shot; an action
             beat later in the scene is coverage, never a plate reset."""
             nonlocal order, clip_no, coverage_no
             clip_no += 1
             order += 1
+            authored = (line.shot or "").strip().rstrip(".")
             if not scene_clips:
                 # An opener breathes with the room's own ambience — a forced
                 # silent-picture cut a dead 6s hole into the middle of the film.
                 clip_class = "ambience-led"
-                camera = (
+                camera = authored or (
                     f"Wide establishing shot of {setting.name}, static frame at eye level"
                 )
                 duration = quantize_duration(picture_provider, picture_model, 6)
-                recipe = "still"
+                # The plate can only open the scene when the authored frame IS
+                # the room — a close-up generated from a wide plate first-frame
+                # fights its own opening image.
+                wide_ish = not authored or any(
+                    w in authored.lower()
+                    for w in ("wide", "establish", "master", "aerial", "overhead", "top-")
+                )
+                recipe = "still" if wide_ish else "ref"
             elif prev_was_dialogue:
                 clip_class = "score-led"
                 listener = next(
@@ -153,7 +162,7 @@ def split_script(
                     ),
                     None,
                 )
-                camera = (
+                camera = authored or (
                     f"Reaction close-up on {listener.name}, holding on their face"
                     if listener is not None
                     else f"Close reaction shot inside {setting.name}"
@@ -165,7 +174,7 @@ def split_script(
                 size = coverage_sizes[coverage_no % len(coverage_sizes)]
                 move = coverage_moves[coverage_no % len(coverage_moves)]
                 coverage_no += 1
-                camera = f"{size}, {move}, eye level"
+                camera = authored or f"{size}, {move}, eye level"
                 duration = quantize_duration(picture_provider, picture_model, 4)
                 recipe = "ref"
             clip = ClipUnit(
@@ -232,7 +241,10 @@ def split_script(
                 listener = next(
                     (c for c in cast_chars if c.char_id != char.char_id), None
                 )
-                if not on_camera:
+                authored = (line.shot or "").strip().rstrip(".")
+                if authored:
+                    camera = authored
+                elif not on_camera:
                     camera = f"Picture under voice-over, drifting through {setting.name}"
                 elif listener is not None:
                     camera = (

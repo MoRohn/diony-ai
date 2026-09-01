@@ -158,6 +158,7 @@ def test_brain_call_carries_auth_and_json_mode(monkeypatch) -> None:
 
 
 def test_brain_retries_once_before_falling_back(monkeypatch) -> None:
+    monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_REFINE", "0")  # transport test, not craft
     monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_URL", "http://127.0.0.1:9999")
     calls = {"n": 0}
 
@@ -197,7 +198,8 @@ def test_brain_retries_once_before_falling_back(monkeypatch) -> None:
     draft = screenwriter.write_script("a pier at night", runtime_target_s=45)
     assert calls["n"] == 2
     assert draft.script.logline == "second try wins"
-    assert not draft.warnings
+    # a minimal transport fixture legitimately carries open supervisor notes
+    assert all("supervisor note" in w for w in draft.warnings)
 
 
 def test_template_only_exists_when_the_brain_is_off(monkeypatch) -> None:

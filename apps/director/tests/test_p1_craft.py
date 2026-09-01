@@ -47,8 +47,18 @@ def _brain_body(**overrides) -> dict:
             "cast": ["chr-el"],
             "emotional_job": "make the audience dread the door",
             "lines": [
-                {"kind": "action", "text": "ELIAS turns to the stairwell door."},
-                {"kind": "dialogue", "text": "I know that knock.", "speaker": "ELIAS"},
+                {
+                    "kind": "action",
+                    "text": "ELIAS turns to the stairwell door.",
+                    "shot": "Medium single, slow pan following the turn, lamp flame guttering",
+                },
+                {
+                    "kind": "dialogue",
+                    "text": "I know that knock.",
+                    "speaker": "ELIAS",
+                    "shot": "Close-up at eye level, the door soft over his shoulder",
+                },
+                {"kind": "sound", "text": "Three slow knocks through the iron door."},
             ],
         }],
     }
@@ -73,6 +83,7 @@ class _BrainResponse:
 
 
 def test_brain_craft_fields_reach_the_bibles(monkeypatch) -> None:
+    monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_REFINE", "0")  # transport test, not craft
     monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_URL", "http://127.0.0.1:9999")
     monkeypatch.setattr(screenwriter.httpx, "post", lambda *a, **k: _BrainResponse(_brain_body()))
     draft = screenwriter.write_script("a lighthouse keeper hears a knock", runtime_target_s=30)
@@ -100,6 +111,7 @@ def test_missing_craft_fields_backfill_with_named_warnings(monkeypatch) -> None:
 
 
 def test_reference_images_reach_the_brain_as_pixels(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_REFINE", "0")  # transport test, not craft
     monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_URL", "http://127.0.0.1:9999")
     still = tmp_path / "lead.png"
     still.write_bytes(b"\x89PNG\r\n\x1a\npixels")

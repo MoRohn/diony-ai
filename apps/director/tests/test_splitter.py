@@ -13,6 +13,7 @@ def _draft():
 
 def test_every_scene_opens_with_an_establishing_clip() -> None:
     draft = _draft()
+    lines = {l.line_id: l for l in draft.script.lines}
     clips = splitter.split_script(draft.script, draft.characters, draft.settings)
     by_scene: dict[str, list] = {}
     for clip in clips:
@@ -20,7 +21,22 @@ def test_every_scene_opens_with_an_establishing_clip() -> None:
     for scene_clips in by_scene.values():
         first = min(scene_clips, key=lambda c: c.order)
         assert first.clip_class in {"ambience-led", "silent-picture", "score-led"}
-        assert "establish" in first.camera_idea or "wide" in first.camera_idea
+        authored = next(
+            (lines[i].shot for i in first.script_line_ids if lines.get(i) and lines[i].shot),
+            "",
+        )
+        if authored:
+            # the screenwriter's frame IS the opener; and a non-wide authored
+            # opener must not force the wide plate as its first frame
+            assert first.camera_idea == authored.rstrip(".")
+            lowered = authored.lower()
+            wide_ish = any(
+                w in lowered for w in ("wide", "establish", "master", "aerial", "overhead", "top-")
+            )
+            assert first.continuity.lock_recipe == ("still" if wide_ish else "ref")
+        else:
+            assert "establish" in first.camera_idea or "wide" in first.camera_idea
+            assert first.continuity.lock_recipe == "still"
 
 
 def test_a_dialogue_line_stays_inside_one_clip_with_its_words() -> None:

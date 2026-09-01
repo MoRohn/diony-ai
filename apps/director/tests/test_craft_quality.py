@@ -1,0 +1,256 @@
+"""Studio-grade craft pipeline: authored shots rule the frame, the supervisor
+lint catches slop before a cent is spent, the script-doctor round resolves it,
+and every Grok prompt carries photographic ground truth."""
+
+import json
+
+import pytest
+
+from diony_contracts.production import Scene, Script, ScriptLine
+from diony_director import compiler, packagebuilder, screenwriter, splitter
+
+
+def _draft():
+    return screenwriter.write_script(
+        "a getaway driver decides to leave town from a neon diner", runtime_target_s=60
+    )
+
+
+# --- the supervisor lint -----------------------------------------------------
+
+
+def test_lint_flags_shotless_abstract_and_overlong_writing() -> None:
+    body = {
+        "scenes": [
+            {
+                "lines": [
+                    {"kind": "action", "text": "Tension fills the room."},
+                    {
+                        "kind": "dialogue",
+                        "text": (
+                            "I am going to explain every single part of the plan to you "
+                            "right now in one very long breath"
+                        ),
+                    },
+                ]
+            }
+        ]
+    }
+    notes = screenwriter._script_lint(body)
+    joined = " | ".join(notes)
+    assert "no authored shot" in joined
+    assert "abstract, not filmable" in joined
+    assert "trim under 18" in joined
+    assert "no sound line" in joined
+
+
+def test_lint_flags_repeated_shots_and_identical_scene_shapes() -> None:
+    scene = {
+        "lines": [
+            {"kind": "action", "text": "She stands.", "shot": "Medium single, slow push-in"},
+            {"kind": "action", "text": "She waits.", "shot": "Medium single, slow push-in"},
+            {"kind": "sound", "text": "Rain on tin."},
+        ]
+    }
+    notes = screenwriter._script_lint({"scenes": [scene, dict(scene)]})
+    joined = " | ".join(notes)
+    assert "repeats back-to-back" in joined
+    assert "identical shape" in joined
+
+
+def test_a_clean_script_lints_clean() -> None:
+    body = {
+        "scenes": [
+            {
+                "lines": [
+                    {
+                        "kind": "action",
+                        "text": "MARA slides the keys across the counter.",
+                        "shot": "Top-down insert, keys crossing chipped formica",
+                    },
+                    {"kind": "sound", "text": "The diner compressor hums; keys scrape."},
+                ]
+            },
+            {
+                "lines": [
+                    {
+                        "kind": "dialogue",
+                        "text": "We leave tonight.",
+                        "speaker": "MARA",
+                        "shot": "Close-up at eye level, neon rim light on wet hair",
+                    },
+                    {
+                        "kind": "action",
+                        "text": "COLE pockets the keys without looking down.",
+                        "shot": "Medium two-shot, rack focus to the hand",
+                    },
+                    {"kind": "sound", "text": "A slow surf-rock instrumental from the kitchen radio."},
+                ]
+            },
+        ]
+    }
+    assert screenwriter._script_lint(body) == []
+
+
+# --- the script-doctor round -------------------------------------------------
+
+
+def _minimal_body(logline: str, *, clean: bool) -> dict:
+    line: dict = {"kind": "action", "text": "AVA sets the lantern on the rail."}
+    if clean:
+        line["shot"] = "Wide from the pier end, lantern flame the only warm light"
+    lines = [line]
+    if clean:
+        lines.append({"kind": "sound", "text": "Halyards tick against masts."})
+    return {
+        "logline": logline,
+        "beats": [{"beat": "b", "story_time": "Night 1"}],
+        "settings": [{
+            "setting_id": "set-a", "name": "Pier", "kind": "EXT",
+            "room_tone": "waves", "time_weather": "Night 1, fog",
+            "grade_language": "sodium against black water",
+            "camera_kit": "32/50mm, slow arcs",
+        }],
+        "characters": [{
+            "char_id": "chr-a", "name": "AVA",
+            "age_body_notes": "late 30s, wiry, cropped grey-streaked hair",
+            "wardrobe": "yellow oilskin over a navy sweater",
+        }],
+        "scenes": [{
+            "heading": "EXT. PIER - NIGHT", "setting_ref": "set-a",
+            "story_time": "Night 1", "cast": ["chr-a"], "emotional_job": "unease",
+            "lines": lines,
+        }],
+    }
+
+
+class _Resp:
+    status_code = 200
+
+    def __init__(self, body: dict):
+        self._body = body
+
+    def json(self):
+        return {
+            "choices": [{"message": {"content": json.dumps(self._body)}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20},
+        }
+
+
+def test_script_doctor_round_replaces_a_flagged_draft(monkeypatch) -> None:
+    monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_URL", "http://127.0.0.1:9999")
+    monkeypatch.delenv("DIONY_DIRECTOR_BRAIN_REFINE", raising=False)
+    calls = []
+
+    def fake_post(url, *, what, json: dict, headers, timeout):  # noqa: A002
+        calls.append(what)
+        if what == "brain draft":
+            return _Resp(_minimal_body("first draft", clean=False))
+        return _Resp(_minimal_body("doctored", clean=True))
+
+    from diony_director.providers import base as provider_base
+
+    monkeypatch.setattr(provider_base, "post_with_retries", fake_post)
+    draft = screenwriter.write_script("a pier at night", runtime_target_s=30)
+    assert calls == ["brain draft", "brain refine"]
+    assert draft.script.logline == "doctored"
+    assert any("script-doctor pass resolved" in w for w in draft.warnings)
+    # both rounds' spend is reported honestly
+    assert draft.brain_usage["completion_tokens"] == 40
+
+
+def test_script_doctor_failure_ships_the_first_draft_named(monkeypatch) -> None:
+    monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_URL", "http://127.0.0.1:9999")
+    monkeypatch.delenv("DIONY_DIRECTOR_BRAIN_REFINE", raising=False)
+
+    def fake_post(url, *, what, json: dict, headers, timeout):  # noqa: A002
+        if what == "brain draft":
+            return _Resp(_minimal_body("first draft", clean=False))
+        raise RuntimeError("refine transport died")
+
+    from diony_director.providers import base as provider_base
+
+    monkeypatch.setattr(provider_base, "post_with_retries", fake_post)
+    draft = screenwriter.write_script("a pier at night", runtime_target_s=30)
+    assert draft.script.logline == "first draft"
+    assert any("script-doctor pass unavailable" in w for w in draft.warnings)
+
+
+def test_a_clean_draft_skips_the_doctor_round(monkeypatch) -> None:
+    monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_URL", "http://127.0.0.1:9999")
+    monkeypatch.delenv("DIONY_DIRECTOR_BRAIN_REFINE", raising=False)
+    calls = []
+
+    def fake_post(url, *, what, json: dict, headers, timeout):  # noqa: A002
+        calls.append(what)
+        return _Resp(_minimal_body("clean first try", clean=True))
+
+    from diony_director.providers import base as provider_base
+
+    monkeypatch.setattr(provider_base, "post_with_retries", fake_post)
+    draft = screenwriter.write_script("a pier at night", runtime_target_s=30)
+    assert calls == ["brain draft"], "no notes → no second spend"
+    assert draft.script.logline == "clean first try"
+
+
+# --- authored shots rule the split ------------------------------------------
+
+
+def _script_with_shots():
+    lines = [
+        ScriptLine(line_id="ln-1", kind="heading", text="INT. DINER - NIGHT", scene_id="sc-1"),
+        ScriptLine(
+            line_id="ln-2", kind="action", text="Mara wipes the counter.", scene_id="sc-1",
+            shot="Overhead top-shot, the rag carving clean arcs through spilt sugar",
+        ),
+        ScriptLine(
+            line_id="ln-3", kind="dialogue", text="We leave tonight.", speaker="MARA",
+            scene_id="sc-1",
+            shot="Low-angle close-up, jukebox glow under her jaw",
+        ),
+    ]
+    return Script(
+        id="scr-shots",
+        runtime_target_s=30,
+        scenes=[
+            Scene(
+                scene_id="sc-1", heading="INT. DINER - NIGHT", setting_ref="set-primary",
+                cast=["chr-lead"], line_ids=[l.line_id for l in lines],
+            )
+        ],
+        lines=lines,
+    )
+
+
+def test_authored_shots_become_the_camera_verbatim() -> None:
+    draft = _draft()
+    clips = splitter.split_script(_script_with_shots(), draft.characters, draft.settings)
+    action = clips[0]
+    spoken = next(c for c in clips if c.clip_class in {"sync-dialogue", "vo-over"})
+    assert action.camera_idea.startswith("Overhead top-shot")
+    assert spoken.camera_idea.startswith("Low-angle close-up")
+    # a top-shot opener reads as the room — the plate may open it
+    assert action.continuity.lock_recipe == "still"
+
+
+def test_non_wide_authored_opener_releases_the_plate_first_frame() -> None:
+    draft = _draft()
+    script = _script_with_shots()
+    script.lines[1].shot = "Macro insert on a sugar spoon, everything else falling away"
+    clips = splitter.split_script(script, draft.characters, draft.settings)
+    assert clips[0].continuity.lock_recipe == "ref", (
+        "a macro opener generated FROM a wide plate first-frame fights itself"
+    )
+
+
+# --- the compiled picture carries photographic ground truth ------------------
+
+
+def test_grok_prompts_carry_realism_and_no_filler() -> None:
+    package = packagebuilder.build_package(
+        "s-real", "a getaway", _draft(), provider_policy="grok"
+    )
+    for clip in package.clips:
+        prompt = compiler.compile_clip_prompt(clip, package).prompt
+        assert "natural skin texture" in prompt
+        assert "The scene breathes" not in prompt

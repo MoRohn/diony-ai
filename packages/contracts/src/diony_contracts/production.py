@@ -90,6 +90,10 @@ class ScriptLine(BaseModel):
     text: str
     speaker: str = ""
     scene_id: str = ""
+    # The authored frame for this beat — size, angle, movement, and what
+    # dominates the picture — written by the screenwriter, not synthesized by
+    # a coverage rotation. Empty means the splitter falls back to its grammar.
+    shot: str = ""
 
 
 class Scene(BaseModel):
