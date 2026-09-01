@@ -38,7 +38,7 @@ body {
   border: .22em solid var(--accent); vertical-align: -0.05em;
 }
 .mark .sub { font: 500 .7rem/1 "IBM Plex Mono", monospace; color: var(--mut); letter-spacing: .08em; }
-.meter { display: flex; gap: .5rem; flex-wrap: wrap; }
+.meter { display: flex; gap: .5rem; flex-wrap: wrap; margin-left: auto; justify-content: flex-end; }
 .chip {
   font: 500 .72rem/1 "IBM Plex Mono", monospace; letter-spacing: .05em;
   border: 1px solid var(--line); border-radius: 99px; padding: .35em .7em; color: var(--ink2);
@@ -245,6 +245,17 @@ button.armed { outline: 2px solid var(--accent) !important; outline-offset: 2px;
 }
 .opcard .acceptbtn:hover:not(:disabled) { background: rgba(123, 201, 138, .12); }
 .opcard .acceptbtn:disabled { opacity: .7; cursor: default; }
+/* Links inside chat messages: brand accent, never browser blue */
+.msg .body a { color: var(--accent-ink); text-decoration-color: var(--accent); }
+.msg .body a:hover { color: var(--accent); }
+.msg .body a.linkbtn {
+  display: block; width: max-content; margin-top: .55em;
+  font: 600 .72rem/1 "IBM Plex Mono", monospace; letter-spacing: .08em;
+  color: var(--accent-ink); text-decoration: none;
+  border: 1px solid var(--accent); border-radius: 99px; padding: .45em .9em;
+}
+.msg .body a.linkbtn:hover { color: #0D0D0D; background: var(--grad); border-color: transparent; }
+
 .retrybtn {
   background: none; border: 1px solid var(--accent); color: var(--accent-ink);
   border-radius: 99px; padding: .3em .9em; cursor: pointer;

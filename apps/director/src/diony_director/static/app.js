@@ -248,7 +248,6 @@
       const ledger = await api("/api/director/ledger");
       $("spent-total").textContent = usd(ledger.totals.cost_usd_micros);
       $("spent-today").textContent = usd(ledger.today_usd_micros || 0);
-      $("committed-chip").textContent = `committed ${usd(ledger.committed_usd_micros)}`;
     } catch (err) {
       /* meter stays as-is; never invent numbers */
     }
@@ -543,10 +542,12 @@
       // The film stays on screen — the Gallery is a link, never a 3s countdown
       // that navigates away from the picture we just handed over.
       const producerHref = document.getElementById("producer-link").href.replace(/\/$/, "");
-      const wrap = addMsg("director", "That's a wrap. The Gallery has the film too: ");
+      const wrap = addMsg("director", "That's a wrap. The Gallery has the film too.");
       const link = document.createElement("a");
+      link.className = "linkbtn";
       link.href = `${producerHref}/?bay=gallery`;
-      link.textContent = "open Producer ▸";
+      link.textContent = "OPEN PRODUCER ▸";
+      link.title = "The Gallery in Producer — watch, download, or stitch the film";
       wrap.querySelector(".body").appendChild(link);
       refreshBoard();
     } catch (err) {
