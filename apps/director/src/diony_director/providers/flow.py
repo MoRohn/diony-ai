@@ -208,7 +208,7 @@ def submit(op: DirectorOp) -> base.CloudJobHandle:
     )
     _guard(response)
     body = response.json()
-    external_id = str(body.get("jobId") or "")
+    external_id = str(body.get("jobId") or body.get("jobid") or "")
     if not external_id:
         raise base.CloudAdapterError(f"Flow returned no jobId: {body}")
     credits_before = body.get("remainingCredits")
@@ -240,7 +240,7 @@ def submit_image(
     )
     _guard(response)
     body = response.json()
-    external_id = str(body.get("jobId") or "")
+    external_id = str(body.get("jobId") or body.get("jobid") or "")
     if not external_id:
         raise base.CloudAdapterError(f"Flow returned no jobId for image: {body}")
     credits_before = body.get("remainingCredits")
@@ -311,7 +311,7 @@ def submit_extend(
     )
     _guard(response)
     body = response.json()
-    external_id = str(body.get("jobId") or "")
+    external_id = str(body.get("jobId") or body.get("jobid") or "")
     if not external_id:
         raise base.CloudAdapterError(f"Flow returned no jobId for extend: {body}")
     credits_before = body.get("remainingCredits")
@@ -337,7 +337,7 @@ def submit_upscale(media_generation_id: str, *, resolution: str = "1080p") -> ba
     )
     _guard(response)
     body = response.json()
-    external_id = str(body.get("jobId") or "")
+    external_id = str(body.get("jobId") or body.get("jobid") or "")
     if not external_id:
         raise base.CloudAdapterError(f"Flow returned no jobId for upscale: {body}")
     credits_before = body.get("remainingCredits")
@@ -359,16 +359,23 @@ def poll(handle: base.CloudJobHandle) -> base.CloudJobStatus:
     body = response.json()
     raw_state = str(body.get("status", "")).lower()
     detail = str(body.get("error") or "")
-    media = body.get("media") or []
+    # Live shape (verified on a real job): media and remainingCredits nest
+    # under "response"; older docs showed them at the top level — read both.
+    nested = body.get("response") if isinstance(body.get("response"), dict) else {}
+    media = nested.get("media") or body.get("media") or []
     url = ""
     metadata: dict = {}
     if media and isinstance(media, list):
-        url = str(media[0].get("videoUrl") or media[0].get("imageUrl") or media[0].get("url") or "")
-        media_generation_id = str(media[0].get("mediaGenerationId") or "")
+        first = media[0] if isinstance(media[0], dict) else {}
+        url = str(first.get("videoUrl") or first.get("imageUrl") or first.get("url") or "")
+        media_generation_id = str(
+            first.get("mediaGenerationId") or first.get("name") or ""
+        )
         if media_generation_id:
             metadata["media_generation_id"] = media_generation_id
-    if isinstance(body.get("remainingCredits"), int):
-        metadata["credits_after"] = body["remainingCredits"]
+    remaining = nested.get("remainingCredits", body.get("remainingCredits"))
+    if isinstance(remaining, int):
+        metadata["credits_after"] = remaining
     if raw_state in {"completed", "done"} or (url and not raw_state):
         if not url:
             return base.CloudJobStatus(state="failed", detail="completed without a media URL")
