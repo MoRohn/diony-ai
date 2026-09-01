@@ -382,9 +382,14 @@ def provider_artifact_refs(clip: ClipUnit, package: ProductionPackage) -> dict:
             refs["generate_audio"] = False
         return refs
 
+    from diony_director import capabilities
+
+    caps = capabilities.caps_for(clip.provider.value, clip.model)
+    max_refs = caps.max_reference_images if caps else 7
+    max_chars = caps.max_characters if caps else 7
     character_refs = [c.flow_character_ref for c in chars if c.flow_character_ref]
-    if character_refs:
-        refs["characters"] = character_refs[:7]
+    if character_refs and max_chars:
+        refs["characters"] = character_refs[:max_chars]
     if clip.audio_packet.voice_ref:
         voices = [
             c.voice.engine_ref
@@ -396,6 +401,8 @@ def provider_artifact_refs(clip: ClipUnit, package: ProductionPackage) -> dict:
     if plate_asset:
         if clip.continuity.lock_recipe == "still":
             refs["start_image"] = plate_asset
-        else:
+        elif max_refs:
             refs.setdefault("references", []).append(plate_asset)
+        # A model with no reference lane (veo-3.1-quality) carries the look
+        # through i2v chaining and the prompt — never an illegal payload.
     return refs

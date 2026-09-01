@@ -252,6 +252,37 @@ def _conform_vf(sid: str) -> str:
     )
 
 
+def _scene_master_frame(op: DirectorOp) -> str:
+    """The scene's master frame: the FIRST frame of the scene's first usable
+    take — the room and the cast as the scene established them. The re-anchor
+    target for models with no reference lane."""
+    seq = session.sequence_for(op.session_id)
+    if seq is None:
+        return ""
+    for chain in (seq.get("scenes") or {}).values():
+        if op.id not in chain:
+            continue
+        for op_id in chain:
+            if op_id == op.id:
+                return ""  # nothing usable landed before this op
+            try:
+                candidate = session.get_op(op_id)
+            except KeyError:
+                continue
+            if not session.usable_take(candidate):
+                continue
+            stored = session.runtime(candidate.id).get("clip")
+            if stored is None:
+                continue
+            return _last_frame(
+                Path(stored.path),
+                cluster_root() / "director" / op.session_id / "frames" / f"master-{candidate.id}.jpg",
+                at_s=0.05,
+                sid=op.session_id,
+            )
+    return ""
+
+
 def _cut_point_s(op: DirectorOp, clip_path: Path) -> float | None:
     """Where assembly will actually CUT this clip — the bridge must continue
     from the frame the audience last sees, not from surplus tail that the
@@ -362,7 +393,20 @@ def _late_bind_locks(op: DirectorOp) -> None:
         and bool(refs.get("voices") or refs.get("characters"))
     )
     if frame and not frame_conflicts_with_lock:
-        if re_anchor:
+        caps = (
+            capabilities.caps_for(op.provider.value, op.model)
+            if op.provider is not None
+            else None
+        )
+        if re_anchor and caps is not None and caps.max_reference_images == 0:
+            # No reference lane on this model (veo-3.1-quality): re-anchor by
+            # opening FROM the scene's master frame — the scene opener's own
+            # first frame, which holds the room AND the cast. The empty plate
+            # would make the people pop out of existence.
+            master = _scene_master_frame(op)
+            refs["start_image"] = master or frame
+            refs.pop("references", None)
+        elif re_anchor:
             # Every 2nd link re-anchors on the bible so frame-to-frame drift
             # can't compound. The MASTER look leads the pack — with the bridge
             # frame first, the re-anchor inherited the drift it existed to

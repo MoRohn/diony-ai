@@ -16,7 +16,7 @@ def test_auto_provider_honors_the_studio_choice(tmp_path) -> None:
     sid = session.create_session()
     proposal = session.propose(sid, "neon diner at night", duration_s=6)
     assert proposal.op.provider is CloudProvider.GOOGLE_FLOW
-    assert proposal.op.model == "veo-3.1-fast"
+    assert proposal.op.model == "veo-3.1-quality"
 
 
 def test_explicit_provider_always_beats_the_choice(tmp_path) -> None:
@@ -60,7 +60,7 @@ def test_flow_policy_routes_picture_to_veo() -> None:
     for clip in clips:
         assert clip.provider is CloudProvider.GOOGLE_FLOW
     picture = [c for c in clips if c.clip_class not in {"sync-dialogue", "vo-over"}]
-    assert picture and all(c.model == "veo-3.1-fast" for c in picture)
+    assert picture and all(c.model == "veo-3.1-quality" for c in picture)
 
 
 def test_lock_script_applies_the_studio_choice(tmp_path) -> None:

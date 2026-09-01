@@ -329,3 +329,74 @@ def test_anchor_drift_fails_a_mutated_set(tmp_path) -> None:
     assert measured["anchor_color_drift"] > review_mod.ANCHOR_DRIFT_FAIL
     assert families["continuity"] == "fail"
     assert any("master look" in i for i in issues)
+
+
+# --- the veo-3.1-quality lane (no reference images) --------------------------
+
+
+def test_flow_picture_lane_rides_quality_with_legal_refs() -> None:
+    package = packagebuilder.build_package(
+        "s-veo-q", "a getaway", _draft(), provider_policy="google-flow"
+    )
+    picture = [c for c in package.clips if c.model.startswith("veo")]
+    assert picture and all(c.model == "veo-3.1-quality" for c in picture)
+    for clip in picture:
+        setting = package.setting(str(clip.continuity.setting_plate["setting_id"]))
+        setting.plate_asset_id = "/vault/plates/diner.jpg"
+        refs = compiler.provider_artifact_refs(clip, package)
+        # quality has NO reference lane — the plate may only ride as an i2v
+        # start frame; an illegal referenceImage payload must never compile
+        assert not refs.get("references"), f"{clip.clip_id} built an illegal reference payload"
+        from diony_director import capabilities
+
+        from diony_contracts.director import CloudGenerationMode, DirectorOpType
+        from tests.test_continuity_music import _gen_op
+
+        op = _gen_op(
+            "op-q", "s-veo-q", clip.clip_id,
+            provider=clip.provider, model=clip.model, duration_s=clip.duration_s,
+        )
+        op.artifact_refs = dict(refs)
+        assert capabilities.violations(op) == []
+
+
+def test_quality_re_anchor_opens_from_the_scene_master_frame(monkeypatch, tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from diony_contracts.director import CloudProvider
+    from diony_director import app as app_module, session
+    from tests.test_continuity_music import _gen_op
+
+    package = packagebuilder.build_package(
+        "s-veo-anchor", "a getaway", _draft(), provider_policy="google-flow"
+    )
+    clip = next(c for c in package.clips if c.model == "veo-3.1-quality")
+
+    op = _gen_op(
+        "op-vq", "s-veo-anchor", clip.clip_id,
+        provider=CloudProvider.GOOGLE_FLOW, model="veo-3.1-quality",
+    )
+    prev = _gen_op(
+        "op-vp", "s-veo-anchor", "cl-prev",
+        provider=CloudProvider.GOOGLE_FLOW, model="veo-3.1-quality", status="completed",
+    )
+    frame_path = str(tmp_path / "frames" / "op-vp.jpg")
+    master_path = str(tmp_path / "frames" / "master-op-first.jpg")
+
+    monkeypatch.setattr(session, "clip_for_op", lambda _op: clip)
+    monkeypatch.setattr(session, "package_for", lambda _sid: package)
+    monkeypatch.setattr(session, "apply_uploads_to_refs", lambda _sid, _c, _p, refs: refs)
+    monkeypatch.setattr(session, "chain_position", lambda _sid, _oid: 2)
+    monkeypatch.setattr(session, "previous_completed_clip_op", lambda _sid, _op: prev)
+    monkeypatch.setattr(
+        session, "runtime", lambda _oid: {"clip": SimpleNamespace(path=str(tmp_path / "prev.mp4"))}
+    )
+    monkeypatch.setattr(app_module, "_last_frame", lambda _p, _d, at_s=None, sid="": frame_path)
+    monkeypatch.setattr(app_module, "_scene_master_frame", lambda _op: master_path)
+
+    app_module._late_bind_locks(op)
+
+    assert op.artifact_refs.get("start_image") == master_path, (
+        "a no-reference model re-anchors from the scene's master frame"
+    )
+    assert "references" not in op.artifact_refs
