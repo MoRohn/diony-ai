@@ -342,7 +342,10 @@ def _late_bind_locks(op: DirectorOp) -> None:
         op.session_id, clip, package, compiler.provider_artifact_refs(clip, package)
     )
     position = session.chain_position(op.session_id, op.id)
-    re_anchor = bool(position) and position % 4 == 0
+    # Cadence 2, not 4: at 4 the set had already mutated beyond recall —
+    # per-link drift of 0.003 compounded into a different room by link 4
+    # (s-2e0a74644b measured 0.055 vs its own anchor at cl-1-4).
+    re_anchor = bool(position) and position % 2 == 0
     prev = session.previous_completed_clip_op(op.session_id, op)
     frame = ""
     if prev is not None:
@@ -360,15 +363,17 @@ def _late_bind_locks(op: DirectorOp) -> None:
     )
     if frame and not frame_conflicts_with_lock:
         if re_anchor:
-            # Every 4th link re-anchors on the bible so frame-to-frame drift
-            # can't compound — but the bridge frame STAYS, first in the pack:
-            # sheets alone told the model to invent a brand-new room
-            # (s-1b80548c4d cl-1-5/cl-2-5). Frame carries the place and light;
-            # plate and sheet pull the look and identity back to the locks.
-            anchors = [frame]
+            # Every 2nd link re-anchors on the bible so frame-to-frame drift
+            # can't compound. The MASTER look leads the pack — with the bridge
+            # frame first, the re-anchor inherited the drift it existed to
+            # correct (s-2e0a74644b mutated purple→cyan straight through its
+            # re-anchors). Plate holds the room, bridge holds the pose, sheet
+            # holds the identity. Sheets alone are still never enough
+            # (s-1b80548c4d invented a new room from them).
             plate = compiler._live_plate_asset(clip, package)
-            if plate and plate not in anchors:
-                anchors.append(plate)
+            anchors = [plate] if plate else []
+            if frame not in anchors:
+                anchors.append(frame)
             for image in refs.get("references") or []:
                 if image not in anchors:
                     anchors.append(image)
@@ -923,12 +928,26 @@ def _review_and_maybe_revise(op: DirectorOp, rt: dict, *, allow_spend: bool = Fa
         return
     prev = session.previous_completed_clip_op(op.session_id, op)
     prev_clip = session.runtime(prev.id).get("clip") if prev is not None else None
+    anchor: Path | None = None
+    if package is not None:
+        # The scene's master look: its setting plate. Every clip measures
+        # against it, so drift that compounds invisibly link-by-link is caught
+        # by the third or fourth clip instead of by the audience.
+        try:
+            plate = package.setting(
+                str(clip_unit.continuity.setting_plate.get("setting_id") or "")
+            ).plate_asset_id
+            if plate and Path(plate).is_file():
+                anchor = Path(plate)
+        except KeyError:
+            pass
     result = review_mod.review_clip(
         Path(stored.path),
         clip_unit,
         op_id=op.id,
         package=package,
         prev_clip_path=Path(prev_clip.path) if prev_clip is not None else None,
+        anchor_path=anchor,
     )
     session.register_review(op.id, result)
     if result.verdict == "fail":

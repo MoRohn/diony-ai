@@ -254,3 +254,78 @@ def test_grok_prompts_carry_realism_and_no_filler() -> None:
         prompt = compiler.compile_clip_prompt(clip, package).prompt
         assert "natural skin texture" in prompt
         assert "The scene breathes" not in prompt
+
+
+# --- scene-construction doctrine (s-2e0a74644b postmortem) -------------------
+
+
+def test_blocking_cues_become_camera_law() -> None:
+    package = packagebuilder.build_package(
+        "s-block", "a getaway", _draft(), provider_policy="grok"
+    )
+    clip = next(c for c in package.clips if c.clip_class not in {"sync-dialogue", "vo-over"})
+    clip.camera_idea = "Wide full shot from directly behind the hooded figure"
+    prompt = compiler.compile_clip_prompt(clip, package).prompt
+    assert "never crosses the axis" in prompt
+    assert "face is never visible" in prompt
+
+    clip.camera_idea = "Wide two-shot at eye level across the counter"
+    prompt = compiler.compile_clip_prompt(clip, package).prompt
+    assert "Blocking lock" not in prompt
+
+
+def test_peopled_openers_compose_cast_into_the_plate() -> None:
+    package = packagebuilder.build_package(
+        "s-open", "a getaway", _draft(), provider_policy="grok"
+    )
+    opener = next(
+        c for c in package.clips
+        if c.continuity.lock_recipe == "still" and c.continuity.character_packs
+    )
+    setting = package.setting(str(opener.continuity.setting_plate["setting_id"]))
+    setting.plate_asset_id = "/vault/plates/diner.jpg"
+    for pack in opener.continuity.character_packs:
+        try:
+            package.character(str(pack["char_id"])).grok_ref_pack = ["/vault/sheets/a.jpg"]
+        except KeyError:
+            pass
+    refs = compiler.provider_artifact_refs(opener, package)
+    assert "start_image" not in refs, "an empty plate first-frame makes the cast pop in"
+    references = refs.get("references") or []
+    assert references and references[0] == "/vault/plates/diner.jpg", "the master room leads"
+
+
+def test_anchor_drift_fails_a_mutated_set(tmp_path) -> None:
+    import shutil
+    import subprocess
+
+    from diony_director import review as review_mod
+
+    if not (shutil.which("ffmpeg")):
+        pytest.skip("ffmpeg not installed")
+    try:
+        from diony_producer.quality import frame_channel_stats  # noqa: F401
+    except ImportError:
+        pytest.skip("producer quality tools unavailable")
+    ffmpeg = shutil.which("ffmpeg")
+    anchor = tmp_path / "anchor.jpg"
+    clip_path = tmp_path / "clip.mp4"
+    subprocess.run(
+        [ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi",
+         "-i", "color=c=navy:s=320x180:d=1", "-frames:v", "1", str(anchor)],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        [ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi",
+         "-i", "color=c=cyan:s=320x180:d=2:r=24", str(clip_path)],
+        check=True, capture_output=True,
+    )
+    families: dict = {}
+    measured: dict = {}
+    issues: list = []
+    review_mod._measure_continuity(
+        clip_path, None, families, measured, issues, anchor_path=anchor
+    )
+    assert measured["anchor_color_drift"] > review_mod.ANCHOR_DRIFT_FAIL
+    assert families["continuity"] == "fail"
+    assert any("master look" in i for i in issues)

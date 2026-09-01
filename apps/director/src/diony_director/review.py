@@ -100,6 +100,13 @@ def _measure_identity(
 # through at 0.062 as "advisory" — the bands now split the clusters.
 CHAIN_DRIFT_FAIL = 0.05
 CHAIN_DRIFT_ADVISORY = 0.03
+
+# Neighbor drift is blind to COMPOUNDING: s-2e0a74644b drifted 0.003/link and
+# still mutated its newsroom into a different room by link 4 (0.055 vs its own
+# anchor, 0.12 by link 7; same-set truth measures 0.015-0.017). Every clip is
+# therefore also measured against the scene's MASTER look.
+ANCHOR_DRIFT_FAIL = 0.06
+ANCHOR_DRIFT_ADVISORY = 0.03
 TRANSCRIPT_ACCURACY_FLOOR = 0.85
 
 
@@ -131,30 +138,56 @@ def _measure_frames(
 
 
 def _measure_continuity(
-    path: Path, prev_clip_path: Path | None, families: dict[str, str], measured: dict[str, float], issues: list[str]
+    path: Path,
+    prev_clip_path: Path | None,
+    families: dict[str, str],
+    measured: dict[str, float],
+    issues: list[str],
+    anchor_path: Path | None = None,
 ) -> None:
-    """Chain colour drift against the previous accepted take's last frame."""
-    if prev_clip_path is None or not Path(prev_clip_path).is_file():
-        return
+    """Chain colour drift against the previous take's join frame, AND against
+    the scene's master anchor — the second catches drift that compounds
+    invisibly link by link."""
     try:
         from diony_producer.quality import chain_color_drift, frame_channel_stats
     except ImportError:
         return
-    prev_stats = frame_channel_stats(Path(prev_clip_path), last=True)
-    current_stats = frame_channel_stats(path, last=False)
-    if prev_stats is None or current_stats is None:
-        return
-    drift = chain_color_drift(current_stats, prev_stats)
-    measured["chain_color_drift"] = float(drift)
-    if drift > CHAIN_DRIFT_FAIL:
-        families["continuity"] = "fail"
-        issues.append(
-            f"colour drifted {drift:.3f} from the previous shot — the room changed under the cut"
-        )
-    else:
-        families["continuity"] = "pass"
-        if drift > CHAIN_DRIFT_ADVISORY:
-            issues.append(f"colour drift {drift:.3f} vs the previous shot (advisory)")
+    verdicts: list[str] = []
+    if prev_clip_path is not None and Path(prev_clip_path).is_file():
+        prev_stats = frame_channel_stats(Path(prev_clip_path), last=True)
+        current_stats = frame_channel_stats(path, last=False)
+        if prev_stats is not None and current_stats is not None:
+            drift = chain_color_drift(current_stats, prev_stats)
+            measured["chain_color_drift"] = float(drift)
+            if drift > CHAIN_DRIFT_FAIL:
+                verdicts.append("fail")
+                issues.append(
+                    f"colour drifted {drift:.3f} from the previous shot — the room changed under the cut"
+                )
+            else:
+                verdicts.append("pass")
+                if drift > CHAIN_DRIFT_ADVISORY:
+                    issues.append(f"colour drift {drift:.3f} vs the previous shot (advisory)")
+    if anchor_path is not None and Path(anchor_path).is_file():
+        anchor_stats = frame_channel_stats(Path(anchor_path), last=False)
+        end_stats = frame_channel_stats(path, last=True)
+        if anchor_stats is not None and end_stats is not None:
+            anchor_drift = chain_color_drift(end_stats, anchor_stats)
+            measured["anchor_color_drift"] = float(anchor_drift)
+            if anchor_drift > ANCHOR_DRIFT_FAIL:
+                verdicts.append("fail")
+                issues.append(
+                    f"the set drifted {anchor_drift:.3f} from the scene's master look — "
+                    "the room is mutating away from its anchor"
+                )
+            else:
+                verdicts.append("pass")
+                if anchor_drift > ANCHOR_DRIFT_ADVISORY:
+                    issues.append(
+                        f"set drift {anchor_drift:.3f} vs the scene anchor (advisory)"
+                    )
+    if verdicts:
+        families["continuity"] = "fail" if "fail" in verdicts else "pass"
 
 
 def _measure_transcript(
@@ -219,6 +252,7 @@ def review_clip(
     op_id: str = "",
     package: ProductionPackage | None = None,
     prev_clip_path: Path | None = None,
+    anchor_path: Path | None = None,
 ) -> ClipReview:
     families: dict[str, str] = {}
     measured: dict[str, float] = {}
@@ -261,7 +295,7 @@ def review_clip(
         for family_name, measure in (
             ("identity", lambda: _measure_identity(path, clip, package, families, measured, issues)),
             ("frames", lambda: _measure_frames(path, clip, families, measured, issues)),
-            ("continuity", lambda: _measure_continuity(path, prev_clip_path, families, measured, issues)),
+            ("continuity", lambda: _measure_continuity(path, prev_clip_path, families, measured, issues, anchor_path)),
             ("script_conformance", lambda: _measure_transcript(path, clip, families, measured, issues)),
             ("adherence", lambda: _measure_adherence(path, clip, families, measured, issues)),
         ):

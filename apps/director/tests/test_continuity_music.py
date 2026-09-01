@@ -222,8 +222,10 @@ def test_re_anchor_keeps_the_bridge_frame_first(monkeypatch, tmp_path) -> None:
 
     references = op.artifact_refs.get("references") or []
     assert references, "a re-anchor still carries references"
-    assert references[0] == str(frame_path), "the bridge frame leads the pack"
-    assert "/vault/plates/diner.jpg" in references, "the plate rides the re-anchor"
+    # master look dominates: plate first (bridge-first re-anchors inherited
+    # the drift they existed to correct), bridge second for pose continuity
+    assert references[0] == "/vault/plates/diner.jpg", "the plate leads the pack"
+    assert references[1] == str(frame_path), "the bridge frame rides second"
     assert "start_image" not in op.artifact_refs
     assert op.artifact_refs.get("aspect_ratio") == "16:9"
 
@@ -253,7 +255,7 @@ def test_chained_clip_bridges_from_the_frame_with_aspect_pinned(
     monkeypatch.setattr(
         session, "apply_uploads_to_refs", lambda _sid, _clip, _pkg, refs: refs
     )
-    monkeypatch.setattr(session, "chain_position", lambda _sid, _oid: 2)
+    monkeypatch.setattr(session, "chain_position", lambda _sid, _oid: 1)
     monkeypatch.setattr(session, "previous_completed_clip_op", lambda _sid, _op: prev)
     monkeypatch.setattr(
         session,

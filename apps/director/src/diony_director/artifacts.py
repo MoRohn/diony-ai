@@ -59,9 +59,19 @@ def _sheet_prompt(char: CharacterProfile, slot: str) -> str:
 
 
 def references_for(package: ProductionPackage, op: DirectorOp) -> list[str]:
-    """Earlier approved stills of the same character, as Flow media ids."""
+    """Earlier approved stills of the same character, as Flow media ids.
+
+    A SETTING plate is anchored to the user's uploaded stills when they exist:
+    the uploads ARE the master look of the place — a plate imagined fresh from
+    text gave the same location a different room per scene (s-2e0a74644b shot
+    one studio as three unrelated sets)."""
 
     bible = op.artifact_refs.get("bible") or {}
+    if bible.get("setting_id"):
+        from diony_director import session as _session
+
+        start, extras = _session.upload_refs(op.session_id)
+        return [r for r in [start] + extras if r][:1]
     try:
         char = package.character(str(bible.get("char_id", "")))
     except KeyError:

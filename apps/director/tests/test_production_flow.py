@@ -447,11 +447,22 @@ def test_directed_batch_chains_bridge_frames_and_plates(monkeypatch, tmp_path) -
         for position, op_id in enumerate(chain):
             refs = seen_refs.get(op_id, {})
             start = str(refs.get("start_image", ""))
+            references = [str(r) for r in (refs.get("references") or [])]
             if position == 0:
-                if start.endswith(".jpg") and "frames" not in start:
+                # a peopled opener carries the plate FIRST in its references
+                # (composing the cast into the master room); an empty opener
+                # may still start from the plate frame itself
+                anchored = (start and "frames" not in start) or (
+                    references and "frames" not in references[0]
+                )
+                if anchored:
                     plated += 1  # scene opener locked to its setting plate
-            elif start.endswith(".jpg") and "frames" in start:
-                bridged += 1  # successor chained from the previous clip's last frame
+            elif (start.endswith(".jpg") and "frames" in start) or any(
+                "frames" in r for r in references
+            ):
+                # successor carries the previous clip's join frame — as its
+                # first frame on odd links, or riding the re-anchor pack
+                bridged += 1
     assert plated > 0, "scene openers must lock to setting plates"
     assert bridged > 0, "successor clips must bridge from the previous clip's last frame"
 

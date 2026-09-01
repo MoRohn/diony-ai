@@ -41,8 +41,9 @@ REVISION_DIRECTIVES = {
     ),
     "fix-light": "Keep the established light direction and color; do not relight the scene.",
     "fix-continuity": (
-        "Match the previous shot's color, light, and set dressing exactly — "
-        "the same room in the same minute; no relight, no reset."
+        "Match the scene's master look exactly — the same room in the same "
+        "minute: same walls, screens, floor graphics, furniture, and light; "
+        "no relight, no reset, no redesign."
     ),
     "fix-frames": (
         "Render clean, well-exposed, sharp frames for the full duration; "
@@ -187,9 +188,30 @@ def _sound_clause(clip: ClipUnit, setting: SettingProfile, *, continues: bool = 
 
 
 CONTINUITY_CLAUSE = (
-    "Continues the previous shot directly: the exact same place, light, "
-    "wardrobe, and people; no scene reset."
+    "Continues the previous shot directly in the exact same place: same walls, "
+    "same screens and signage, same floor graphics, same furniture in the same "
+    "positions, same light rig and color; the room never redesigns itself; "
+    "same wardrobe and people; no scene reset."
 )
+
+# Blocking cues in the writing become hard camera law in the prompt — the
+# model happily rotated a back-to-camera figure to face the lens mid-clip
+# (s-2e0a74644b), which also broke a concealed identity.
+_BEHIND_TRIGGERS = ("back to camera", "from behind", "from directly behind", "seen from behind")
+_CONCEAL_TRIGGERS = ("concealed", "faceless", "face hidden", "never seen", "hood drawn", "hooded")
+
+
+def _blocking_locks(clip: ClipUnit, char_text: str, action: str) -> str:
+    haystack = f"{clip.camera_idea} {action} {char_text}".lower()
+    locks: list[str] = []
+    if any(t in haystack for t in _BEHIND_TRIGGERS):
+        locks.append(
+            "the camera stays behind the subject for the entire shot and never "
+            "crosses the axis; the subject never turns to face the camera"
+        )
+    if any(t in haystack for t in _CONCEAL_TRIGGERS):
+        locks.append("the face is never visible in any frame")
+    return f"Blocking lock: {'; '.join(locks)}." if locks else ""
 
 
 def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
@@ -215,6 +237,7 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
         return _fit_prompt(
             [
                 (f"{clip.camera_idea}.", 0),
+                (_blocking_locks(clip, char_text, action), 0),
                 (continuity, 1),
                 (
                     action
@@ -339,7 +362,14 @@ def provider_artifact_refs(clip: ClipUnit, package: ProductionPackage) -> dict:
         images = [asset for c in chars for asset in c.grok_ref_pack]
         plate_asset = _live_plate_asset(clip, package)
         if clip.continuity.lock_recipe == "still" and plate_asset:
-            refs["start_image"] = plate_asset
+            if chars and images:
+                # A scene that opens WITH people cannot open FROM the empty
+                # plate — the cast would pop into existence mid-shot. The
+                # plate leads the reference pack instead: the model composes
+                # the figures INTO the master room from frame one.
+                refs["references"] = ([plate_asset] + images)[:3]
+            else:
+                refs["start_image"] = plate_asset
         elif images or plate_asset:
             # docs.x.ai: ≤3 reference images. The setting plate always rides —
             # identity sheets alone let the model invent a brand-new room
