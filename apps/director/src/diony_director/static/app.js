@@ -555,15 +555,71 @@
       const text = String(err.message || err);
       const note = addMsg("director", `Assembly isn't ready: ${text}`);
       if (text.includes("allow_gaps")) {
+        const body = note.querySelector(".body");
+        const retry = document.createElement("button");
+        retry.type = "button";
+        retry.className = "batch primary";
+        retry.textContent = "Retry missing shots";
         const anyway = document.createElement("button");
         anyway.type = "button";
         anyway.className = "batch ghost";
         anyway.textContent = "Assemble anyway (ship with gaps)";
+        retry.addEventListener("click", async () => {
+          retry.disabled = true;
+          anyway.disabled = true;
+          try {
+            const res = await api(`/api/director/sessions/${sessionId}/run_retakes`, {
+              method: "POST",
+            });
+            (res.held || []).forEach((h) => addMsg("director", `Held: ${h.reason}`));
+            if (!res.targeted.length) {
+              addMsg(
+                "director",
+                res.undrafted && res.undrafted.length
+                  ? `No retake is drafted for ${res.undrafted.join(", ")} — redraft from the board, then assemble again.`
+                  : "Nothing to retry — the missing shots may already be rolling; assemble again once they settle."
+              );
+              retry.disabled = false;
+              anyway.disabled = false;
+              return;
+            }
+            addMsg(
+              "director",
+              `Rolling ${plural(res.missing.length, "missing shot")} (${res.missing.join(", ")}) — I'll cut the film when they print.`
+            );
+            const tick = async () => {
+              let counts;
+              try {
+                counts = await api(`/api/director/sessions/${sessionId}/advance`, { method: "POST" });
+              } catch (e2) {
+                addMsg("director", `Retake watch lost the room: ${e2.message || e2}`);
+                retry.disabled = false;
+                anyway.disabled = false;
+                return;
+              }
+              (counts.held || []).forEach((h) => addMsg("director", `Held: ${h.reason}`));
+              if (counts.pending > 0 || (counts.queued || 0) > 0 || counts.submitting) {
+                setTimeout(tick, 3000);
+                return;
+              }
+              refreshMeter();
+              refreshBoard();
+              await assembleNow();
+            };
+            setTimeout(tick, 2500);
+          } catch (e1) {
+            addMsg("director", `Couldn't roll the retakes: ${e1.message || e1}`);
+            retry.disabled = false;
+            anyway.disabled = false;
+          }
+        });
         anyway.addEventListener("click", async () => {
+          retry.disabled = true;
           anyway.disabled = true;
           await assembleNow(true);
         });
-        note.querySelector(".body").appendChild(anyway);
+        body.appendChild(retry);
+        body.appendChild(anyway);
       }
     }
   }

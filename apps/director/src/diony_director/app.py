@@ -1217,6 +1217,58 @@ class AssembleIn(BaseModel):
     allow_gaps: bool = False
 
 
+def _cut_gaps(sid: str) -> tuple[list[str], list[DirectorOp], list[str]]:
+    """Scripted clips with no usable take on disk; the drafted (proposed) ops
+    that would fill them — originals never run, or retakes awaiting a Run —
+    and the clips whose fill is already rolling (submitting/submitted)."""
+    package = session.package_for(sid)
+    if package is None:
+        return [], [], []
+    have: set[str] = set()
+    for op in session.completed_clip_ops(sid):
+        stored = session.runtime(op.id).get("clip")
+        if stored is not None and Path(stored.path).is_file():
+            have.add(op.clip_id)
+    missing = [c.clip_id for c in package.clips if c.clip_id not in have]
+    gaps = set(missing)
+    drafts = [
+        o for o in session.ops_for(sid) if o.clip_id in gaps and o.status == "proposed"
+    ]
+    rolling = sorted(
+        {
+            o.clip_id
+            for o in session.ops_for(sid)
+            if o.clip_id in gaps and o.status in {"submitting", "submitted"}
+        }
+    )
+    return missing, drafts, rolling
+
+
+@app.post("/api/director/sessions/{sid}/run_retakes")
+def run_retakes(sid: str) -> dict:
+    """Roll the drafted ops that fill the cut's missing shots — the functional
+    'Retry' beside 'Assemble anyway'. Targets ride the directed sequence, so a
+    retake still bridges from its predecessor's frame."""
+    _boot()
+    missing, drafts, rolling = _cut_gaps(sid)
+    drafted_clips = {o.clip_id for o in drafts}
+    undrafted = [c for c in missing if c not in drafted_clips and c not in rolling]
+    targets = {o.id for o in drafts}
+    all_targets: set[str] = set()
+    if targets:
+        all_targets = session.set_batch_targets(sid, targets)
+        _kick_submitter(sid)
+    return {
+        "missing": missing,
+        "targeted": sorted(all_targets),
+        "rolling": rolling,
+        "undrafted": undrafted,
+        "queued": session.queued_count(sid),
+        "submitting": session.submitter_active(sid),
+        "held": session.drain_held(sid),
+    }
+
+
 def _assembly_spec(op: DirectorOp) -> dict:
     """Per-clip assembly instructions from the clip unit: spoken clips trim the
     provider round-up beyond what the words need (plus handles and a safety
@@ -1253,29 +1305,22 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
             used_ops.append(op)
     if not paths:
         raise HTTPException(status_code=409, detail="no completed clips to assemble yet")
-    package = session.package_for(sid)
-    if package is not None and not body.allow_gaps:
-        have = {op.clip_id for op in used_ops}
-        missing = [c.clip_id for c in package.clips if c.clip_id not in have]
+    if not body.allow_gaps:
+        missing, drafts, rolling = _cut_gaps(sid)
         if missing:
-            pending = sorted(
-                {
-                    o.clip_id
-                    for o in session.ops_for(sid)
-                    if o.clip_id in missing
-                    and o.status in {"proposed", "approved", "submitting", "submitted"}
-                }
-            )
+            pending = sorted({o.clip_id for o in drafts})
+            if pending:
+                why = f" — retakes are drafted for {', '.join(pending)}; run them first"
+            elif rolling:
+                why = f" — {', '.join(rolling)} are rolling now; assemble again when they print"
+            else:
+                why = " — no usable take exists; rerun those clips"
             raise HTTPException(
                 status_code=409,
                 detail=(
                     "refusing to cut the film with missing shots: "
                     + ", ".join(missing)
-                    + (
-                        f" — retakes are drafted for {', '.join(pending)}; run them first"
-                        if pending
-                        else " — no usable take exists; rerun those clips"
-                    )
+                    + why
                     + ", or assemble with allow_gaps to ship without them"
                 ),
             )

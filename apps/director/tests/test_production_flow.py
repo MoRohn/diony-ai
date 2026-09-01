@@ -216,6 +216,38 @@ def test_full_loop_generate_review_assemble_receipt(monkeypatch, tmp_path) -> No
     assert all(l["actual_usd_micros"] > 0 for l in completed_lines)
 
 
+@pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
+def test_retry_missing_shots_fills_the_gaps_and_cuts_clean(monkeypatch, tmp_path) -> None:
+    """The functional 'Retry' beside 'Assemble anyway': run_retakes rolls the
+    drafted ops for every missing shot, and the default cut then succeeds."""
+    client = _client()
+    _fake_adapters(monkeypatch, tmp_path)
+    sid = _start(client)
+    client.post(
+        f"/api/director/sessions/{sid}/produce",
+        json={"idea": "a getaway driver decides to leave town from a neon diner"},
+    )
+    ops = client.post(f"/api/director/sessions/{sid}/lock_script").json()["ops"]
+
+    for op in ops[:3]:
+        assert client.post(f"/api/director/ops/{op['id']}/run").status_code == 200
+        state = client.get(f"/api/director/ops/{op['id']}").json()
+        assert state["op"]["status"] == "completed"
+
+    refused = client.post(f"/api/director/sessions/{sid}/assemble", json={})
+    assert refused.status_code == 409
+
+    res = client.post(f"/api/director/sessions/{sid}/run_retakes").json()
+    assert res["missing"], "the unrun clips are the gaps"
+    assert res["targeted"], "each gap has a drafted op to roll"
+    assert res["undrafted"] == []
+    assert res["rolling"] == []
+
+    _drive(client, sid)
+    film = client.post(f"/api/director/sessions/{sid}/assemble", json={}).json()
+    assert film["clip_count"] == len(ops)
+
+
 def test_a_failed_job_drafts_the_next_revision(monkeypatch, tmp_path) -> None:
     client = _client()
     _fake_adapters(monkeypatch, tmp_path, fail_external={"grok-1"})
