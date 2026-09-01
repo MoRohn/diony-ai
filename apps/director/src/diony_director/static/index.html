@@ -4,9 +4,28 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Diony Director</title>
-<link rel="stylesheet" href="/static/app.css?v=p7">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/static/app.css?v=p10">
 </head>
 <body>
+
+<svg hidden aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <symbol id="i-gear" viewBox="0 0 24 24"><path d="M10.4 3.6a1.7 1.7 0 0 1 3.2 0l.3 1.2a7 7 0 0 1 1.7 1l1.2-.4a1.7 1.7 0 0 1 2 2.4l-.7 1a7 7 0 0 1 0 2l.7 1a1.7 1.7 0 0 1-2 2.4l-1.2-.4a7 7 0 0 1-1.7 1l-.3 1.2a1.7 1.7 0 0 1-3.2 0l-.3-1.2a7 7 0 0 1-1.7-1l-1.2.4a1.7 1.7 0 0 1-2-2.4l.7-1a7 7 0 0 1 0-2l-.7-1a1.7 1.7 0 0 1 2-2.4l1.2.4a7 7 0 0 1 1.7-1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="13" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.2 8.6v4.8l4.2-2.4z" fill="currentColor"/><path d="M8 20.5h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-board" viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="16" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9.5 4v16M15.5 4v16" stroke="currentColor" stroke-width="1.6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="10" r="1.7" fill="currentColor"/><path d="M4.5 17.5l4.5-4 3.5 3 3-2.5 4 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+    <symbol id="i-clapper" viewBox="0 0 24 24"><path d="M3.5 10h17v8a2.5 2.5 0 0 1-2.5 2.5H6A2.5 2.5 0 0 1 3.5 18z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M3.7 9.8 20.2 6l-.8-2.3a1.5 1.5 0 0 0-1.9-1L4.3 6.3a1.5 1.5 0 0 0-1 1.9z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="m8.2 8.9 2-3.4M12.7 7.8l2-3.4M17.2 6.7l1.6-2.7" stroke="currentColor" stroke-width="1.4"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M13.2 2.8 5.5 13.4h5l-1 7.8 8-11.2h-5.2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+    <symbol id="i-image-add" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4.5 17.5l4.5-4 3.5 3 3-2.5 4 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M15.5 8h5M18 5.5v5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+
 <header class="mast">
   <div class="brandlock" aria-label="Diony Director">
     <svg class="diony-mark" viewBox="-4 -4 715 666" aria-hidden="true" focusable="false">
@@ -32,10 +51,10 @@
     <span class="brandsub">DIRECTOR</span>
   </div>
   <nav class="navlinks">
-    <a href="http://studio.diony.local" id="studio-link" title="Configuration and engine selection">STUDIO ⚙</a>
-    <a href="http://producer.diony.local" id="producer-link" title="Production monitoring and the Gallery">PRODUCER ▸</a>
-    <button id="board-toggle" type="button" class="resetbtn" title="The production board: script, bibles, shots, and the cut">▤ BOARD</button>
-    <button id="reset" type="button" class="resetbtn" title="Clear the room and start a fresh session — the ledger keeps everything">＋ NEW SESSION</button>
+    <a href="http://studio.diony.local" id="studio-link" title="Configuration and engine selection"><svg class="icon"><use href="#i-gear"/></svg><span>Studio</span></a>
+    <a href="http://producer.diony.local" id="producer-link" title="Production monitoring and the Gallery"><svg class="icon"><use href="#i-play"/></svg><span>Producer</span></a>
+    <button id="board-toggle" type="button" class="resetbtn" title="The production board: script, bibles, shots, and the cut"><svg class="icon"><use href="#i-board"/></svg><span>Board</span></button>
+    <button id="reset" type="button" class="resetbtn" title="Clear the room and start a fresh session — the ledger keeps everything"><svg class="icon"><use href="#i-plus"/></svg><span>New session</span></button>
   </nav>
   <div class="meter" id="meter">
     <span class="chip" id="engine-chip">engine —</span>
@@ -43,8 +62,8 @@
     <span class="chip" id="flow-chip">flow —</span>
     <span class="chip" id="brain-chip">brain —</span>
     <span class="chip cost spendstack" id="spent-chip" title="Total spent across all sessions; daily is today's spend">
-      <span class="spendrow"><span class="spendlbl">total spent</span><span class="spendval" id="spent-total">$0.00</span></span>
-      <span class="spendrow"><span class="spendlbl">daily spent</span><span class="spendval" id="spent-today">$0.00</span></span>
+      <span class="spendrow"><span class="spendlbl">total</span><span class="spendval" id="spent-total">$0.00</span></span>
+      <span class="spendrow"><span class="spendlbl">today</span><span class="spendval" id="spent-today">$0.00</span></span>
     </span>
   </div>
 </header>
@@ -56,69 +75,74 @@
     </main>
 
     <footer class="composer">
-  <div class="controls">
-    <label>Provider
-      <select id="provider">
-        <option value="auto" selected>Auto (Director)</option>
-        <option value="grok">Grok Imagine</option>
-        <option value="google-flow">Google Flow</option>
-      </select>
-    </label>
-    <div class="durwrap">
-      <span class="durlabel">Duration</span>
-      <span class="durbox" id="durbox">
-        <input id="dur-min" type="number" min="0" max="180" step="1" value="0" inputmode="numeric" aria-label="minutes">
-        <span class="unit">m</span>
-        <span class="sep">:</span>
-        <input id="dur-sec" type="number" min="0" max="59" step="1" value="0" inputmode="numeric" aria-label="seconds">
-        <span class="unit">s</span>
-      </span>
-      <span class="durhint" id="durhint">one shot ≤ 15s · scripts run longer</span>
-    </div>
-    <label>Res
-      <select id="resolution">
-        <option value="720p" selected>720p</option>
-        <option value="480p">480p</option>
-      </select>
-    </label>
-    <label title="Program shape for the whole production — every shot, plate, and the final cut hold this aspect">Aspect
-      <select id="aspect">
-        <option value="16:9" selected>16:9 wide</option>
-        <option value="9:16">9:16 vertical</option>
-      </select>
-    </label>
-    <label title="Ceiling for this session's scripted production — holds anything that would breach it. Empty = no ceiling.">Budget $
-      <input id="budget" type="number" min="0" step="1" inputmode="numeric" placeholder="∞">
-    </label>
-  </div>
-  <div class="refbar">
-    <button id="add-img" type="button" class="addimg" title="Attach reference stills — they anchor the first shot's characters and scene">＋ IMAGES</button>
-    <input id="img-file" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
-    <div class="refchips" id="refchips"></div>
-    <span class="refhint" id="refhint">drop or paste stills — they anchor the first shot's look</span>
-  </div>
-  <div class="entry">
-    <textarea id="idea" rows="2" placeholder="Tell the Director your idea. One shot, or a whole scripted piece — cost is locked before anything rolls."></textarea>
-    <div class="actions">
-      <button id="send" type="button">One shot</button>
-      <button id="produce" type="button" class="alt">Draft script</button>
-    </div>
-  </div>
+      <div class="console">
+        <div class="entry">
+          <textarea id="idea" rows="2" placeholder="Describe the film. One line is enough — the Director writes the script, prices every shot, and locks the cost before anything rolls."></textarea>
+          <div class="actions">
+            <button id="send" type="button" class="alt"><svg class="icon"><use href="#i-spark"/></svg><span>One shot</span></button>
+            <button id="produce" type="button"><svg class="icon"><use href="#i-clapper"/></svg><span>Draft script</span></button>
+          </div>
+        </div>
+        <div class="refbar">
+          <button id="add-img" type="button" class="addimg" title="Attach reference stills — they anchor the film's characters and scene"><svg class="icon"><use href="#i-image-add"/></svg><span>Add stills</span></button>
+          <input id="img-file" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+          <div class="refchips" id="refchips"></div>
+          <span class="refhint" id="refhint">drop or paste stills — they anchor the film's look</span>
+        </div>
+        <div class="controls">
+          <label class="pill" title="Which engine rolls the pictures">
+            <span class="plabel">Provider</span>
+            <select id="provider">
+              <option value="auto" selected>Auto</option>
+              <option value="grok">Grok Imagine</option>
+              <option value="google-flow">Google Flow</option>
+            </select>
+          </label>
+          <div class="durwrap pill" title="One shot caps at 15s — scripts run longer">
+            <span class="plabel durlabel">Duration</span>
+            <span class="durbox" id="durbox">
+              <input id="dur-min" type="number" min="0" max="180" step="1" value="0" inputmode="numeric" aria-label="minutes">
+              <span class="unit">m</span>
+              <span class="sep">:</span>
+              <input id="dur-sec" type="number" min="0" max="59" step="1" value="0" inputmode="numeric" aria-label="seconds">
+              <span class="unit">s</span>
+            </span>
+          </div>
+          <label class="pill" title="Render resolution">
+            <span class="plabel">Res</span>
+            <select id="resolution">
+              <option value="720p" selected>720p</option>
+              <option value="480p">480p</option>
+            </select>
+          </label>
+          <label class="pill" title="Program shape for the whole production — every shot, plate, and the final cut hold this aspect">
+            <span class="plabel">Aspect</span>
+            <select id="aspect">
+              <option value="16:9" selected>16:9</option>
+              <option value="9:16">9:16</option>
+            </select>
+          </label>
+          <label class="pill" title="Ceiling for this session's scripted production — holds anything that would breach it. Empty = no ceiling.">
+            <span class="plabel">Budget $</span>
+            <input id="budget" type="number" min="0" step="1" inputmode="numeric" placeholder="∞">
+          </label>
+          <span class="durhint" id="durhint">one shot ≤ 15s · scripts run longer</span>
+        </div>
+      </div>
     </footer>
   </div>
 
   <aside class="board" id="board" hidden aria-label="Production board">
     <div class="btabs" role="tablist">
-      <button type="button" data-tab="script" class="on">SCRIPT</button>
-      <button type="button" data-tab="bibles">BIBLES</button>
-      <button type="button" data-tab="shots">SHOTS</button>
-      <button type="button" data-tab="cut">CUT</button>
-      <button type="button" id="board-close" class="bclose" title="Close the board" aria-label="Close the board">✕</button>
+      <button type="button" data-tab="script" class="on">Script</button>
+      <button type="button" data-tab="bibles">Bibles</button>
+      <button type="button" data-tab="shots">Shots</button>
+      <button type="button" data-tab="cut">Cut</button>
+      <button type="button" id="board-close" class="bclose" title="Close the board" aria-label="Close the board"><svg class="icon"><use href="#i-x"/></svg></button>
     </div>
     <div class="bpane" id="bpane"></div>
   </aside>
 </div>
-
-<script src="/static/app.js?v=p9"></script>
+<script src="/static/app.js?v=p10"></script>
 </body>
 </html>
