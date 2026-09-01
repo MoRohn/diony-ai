@@ -144,14 +144,31 @@ def _continues_scene(clip: ClipUnit, package: ProductionPackage) -> bool:
     return bool(orders) and clip.order != min(orders)
 
 
-def _sound_clause(clip: ClipUnit, setting: SettingProfile) -> str:
+def _sound_clause(clip: ClipUnit, setting: SettingProfile, *, continues: bool = True) -> str:
     """Every dialect names its soundtrack: room, foley, score in or out, and
     what must be absent. A model told nothing about sound invents a soundtrack."""
+    from diony_director.splitter import _is_music_cue
+
     packet = clip.audio_packet
+    events = [str(event.get("event", "")) for event in packet.foley if event.get("event")]
+    # A music-describing foley event (older packages) is a score cue, never an
+    # ambience event — it must not sit next to a "no music" directive.
+    music_events = [e for e in events if _is_music_cue(e)]
+    ambient = [e for e in events if e not in music_events]
     bits = [setting.architecture_notes or "natural ambience that belongs to the scene"]
-    bits += [str(event.get("event", "")) for event in packet.foley if event.get("event")]
-    if packet.score == "in":
-        bits.append("a restrained score enters low, no melody over the action")
+    bits += ambient
+    score_desc = packet.score_desc or (music_events[0] if music_events else "")
+    if packet.score == "in" or score_desc:
+        piece = score_desc or "a restrained underscore entering low"
+        position = (
+            "already playing, continuing at the same tempo, key, and instrumentation"
+            if continues
+            else "it establishes the tempo, key, and instrumentation every later shot keeps"
+        )
+        bits.append(
+            f"score: {piece} — the one piece of music in this scene, {position}; "
+            "never a restart, never a new tune, never a ringtone or jingle"
+        )
     else:
         bits.append("no music")
     clause = f"Sound: {', '.join(b for b in bits if b)}."
@@ -193,7 +210,7 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 (action or "The scene breathes; nothing resets.", 3),
                 (_setting_block(setting, scene.heading), 2),
                 (spoken, 0),
-                (_sound_clause(clip, setting), 2),
+                (_sound_clause(clip, setting, continues=bool(continuity)), 2),
                 (char_text, 3),
                 (ANTI_ARTIFACT, 0),
             ],
@@ -218,7 +235,7 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 (_setting_block(setting, scene.heading), 2),
                 (char_text, 3),
                 (spoken, 0),
-                (_sound_clause(clip, setting), 2),
+                (_sound_clause(clip, setting, continues=bool(continuity)), 2),
                 ("Performance is grounded and unhurried.", 1),
                 (ANTI_ARTIFACT, 0),
             ],
@@ -238,7 +255,7 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 "light, natural color, restrained movement.",
                 1,
             ),
-            (_sound_clause(clip, setting), 2),
+            (_sound_clause(clip, setting, continues=bool(continuity)), 2),
             (char_text, 3),
             (ANTI_ARTIFACT, 0),
         ],
@@ -309,8 +326,14 @@ def provider_artifact_refs(clip: ClipUnit, package: ProductionPackage) -> dict:
         plate_asset = _live_plate_asset(clip, package)
         if clip.continuity.lock_recipe == "still" and plate_asset:
             refs["start_image"] = plate_asset
-        elif images:
-            refs["references"] = images[:3]  # docs.x.ai: ≤3 reference images
+        elif images or plate_asset:
+            # docs.x.ai: ≤3 reference images. The setting plate always rides —
+            # identity sheets alone let the model invent a brand-new room
+            # (the s-1b80548c4d re-anchor reset).
+            pack = images[:2] if plate_asset else images[:3]
+            if plate_asset and plate_asset not in pack:
+                pack = pack + [plate_asset]
+            refs["references"] = pack[:3]
         if clip.clip_class == "silent-picture":
             refs["generate_audio"] = False
         return refs

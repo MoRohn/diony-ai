@@ -75,6 +75,12 @@ _ACCEPTED: set[str] = set()
 
 DEFAULT_BUDGET = {"max_usd_micros": 0, "max_revisions_per_clip": 3, "autopilot": False}
 
+# The program raster is a session-level lock: every generation, bridge frame,
+# plate conform, and the final assembly all cut to the SAME shape.
+PROGRAM_ASPECTS: dict[str, tuple[int, int]] = {"16:9": (1280, 720), "9:16": (720, 1280)}
+DEFAULT_ASPECT = "16:9"
+_ASPECTS: dict[str, str] = {}
+
 
 def reset() -> None:
     """Clear all in-process session state (test isolation and dev restarts)."""
@@ -97,6 +103,7 @@ def reset() -> None:
         _HELD_LOG,
         _UPLOADS,
         _ACCEPTED,
+        _ASPECTS,
     ):
         store.clear()
 
@@ -395,6 +402,24 @@ def propose(
 
 def budget_for(sid: str) -> dict[str, Any]:
     return _BUDGETS.setdefault(sid, dict(DEFAULT_BUDGET))
+
+
+def aspect_for(sid: str) -> str:
+    return _ASPECTS.get(sid, DEFAULT_ASPECT)
+
+
+def program_raster(sid: str) -> tuple[int, int]:
+    return PROGRAM_ASPECTS[aspect_for(sid)]
+
+
+def set_aspect(sid: str, aspect: str) -> None:
+    if aspect not in PROGRAM_ASPECTS:
+        raise ValueError(
+            f"unknown aspect {aspect!r} — expected one of {sorted(PROGRAM_ASPECTS)}"
+        )
+    _ASPECTS[sid] = aspect
+    if sid in _SESSIONS:
+        persist(sid)
 
 
 def set_budget(sid: str, *, max_usd_micros: int, max_revisions_per_clip: int, autopilot: bool) -> None:
@@ -1172,6 +1197,7 @@ def persist(sid: str) -> None:
         "sequence": seq_doc,
         "batch_targets": sorted(_BATCH_TARGETS.get(sid, set())),
         "budget": _BUDGETS.get(sid),
+        "aspect": _ASPECTS.get(sid),
         "uploads": list(_UPLOADS.get(sid) or []),
         "runtime": runtime_doc,
         "draft": draft_doc,
@@ -1222,6 +1248,8 @@ def _load_state(sid: str, doc: dict) -> None:
         _BATCH_TARGETS[sid] = set(doc["batch_targets"])
     if doc.get("budget"):
         _BUDGETS[sid] = dict(doc["budget"])
+    if doc.get("aspect") in PROGRAM_ASPECTS:
+        _ASPECTS[sid] = str(doc["aspect"])
     if doc.get("uploads"):
         _UPLOADS[sid] = list(doc["uploads"])
     for op_id, entry in (doc.get("runtime") or {}).items():

@@ -198,7 +198,14 @@ def test_full_loop_generate_review_assemble_receipt(monkeypatch, tmp_path) -> No
         assert state["review"]["verdict"] in {"pass", "warn"}
         assert state["review"]["families"]["duration"] == "pass"
 
-    film = client.post(f"/api/director/sessions/{sid}/assemble", json={}).json()
+    # only 3 of the scripted clips exist: the default cut refuses the gaps…
+    refused = client.post(f"/api/director/sessions/{sid}/assemble", json={})
+    assert refused.status_code == 409
+    assert "missing shots" in refused.json()["detail"]
+    # …and an explicit allow_gaps ships what exists
+    film = client.post(
+        f"/api/director/sessions/{sid}/assemble", json={"allow_gaps": True}
+    ).json()
     assert film["clip_count"] == 3
     assert film["duration_s"] > 3
 

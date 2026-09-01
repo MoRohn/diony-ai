@@ -189,6 +189,10 @@ def submit_image(
     payload: dict = {"model": model, "prompt": prompt, "response_format": "url"}
     if resolution in {"1k", "2k"}:
         payload["resolution"] = resolution
+    if aspect_ratio in {"16:9", "9:16", "1:1"}:
+        # plates and sheets are born at the program aspect — a landscape plate
+        # centre-cropped to 9:16 throws away most of the set
+        payload["aspect_ratio"] = aspect_ratio
     refs = list(references or [])
     if refs:
         payload["image_url"] = _data_uri(refs[0])

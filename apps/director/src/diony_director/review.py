@@ -95,7 +95,11 @@ def _measure_identity(
             return
 
 
-CHAIN_DRIFT_FAIL = 0.10  # producer warns at 0.06; a bridge that moved 0.10 is a new room
+# Measured clusters (s-1b80548c4d): healthy bridge joins sit under 0.005; a
+# scene reset reads 0.06–0.12. The old 0.10 let a completely different room
+# through at 0.062 as "advisory" — the bands now split the clusters.
+CHAIN_DRIFT_FAIL = 0.05
+CHAIN_DRIFT_ADVISORY = 0.03
 TRANSCRIPT_ACCURACY_FLOOR = 0.85
 
 
@@ -149,7 +153,7 @@ def _measure_continuity(
         )
     else:
         families["continuity"] = "pass"
-        if drift > 0.06:
+        if drift > CHAIN_DRIFT_ADVISORY:
             issues.append(f"colour drift {drift:.3f} vs the previous shot (advisory)")
 
 

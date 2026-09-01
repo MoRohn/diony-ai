@@ -63,6 +63,11 @@
           "title": "Score",
           "type": "string"
         },
+        "score_desc": {
+          "default": "",
+          "title": "Score Desc",
+          "type": "string"
+        },
         "handles_s": {
           "additionalProperties": {
             "type": "number"

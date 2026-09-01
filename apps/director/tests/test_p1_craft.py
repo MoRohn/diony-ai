@@ -242,7 +242,11 @@ def test_score_direction_reaches_score_led_clips() -> None:
     package = _package()
     scored = next(c for c in package.clips if c.clip_class == "score-led")
     version = compiler.compile_clip_prompt(scored, package)
-    assert "score enters low" in version.prompt
+    # a scored clip names its music as one continuing piece — and never also
+    # says "no music" (the s-1b80548c4d contradiction that produced a ringtone)
+    assert "score:" in version.prompt
+    assert "continuing at the same tempo" in version.prompt
+    assert "no music" not in version.prompt
 
 
 # --- W7: the ledger leaks are closed ----------------------------------------

@@ -28,6 +28,19 @@ PICTURE_MODEL = "grok-imagine-video-1.5"
 PRE_HANDLE_S = 0.5
 TAIL_HANDLE_S = 1.0
 
+# A sound line that describes MUSIC is a score cue for the whole scene, not a
+# one-clip foley event: every clip must describe the same piece, or thirteen
+# generations invent thirteen unrelated jingles.
+MUSIC_HINTS = (
+    "music", "groove", "tune", "theme", "melody", "song", "riff", "jingle",
+    "anthem", "instrumental", "soundtrack", "score", "bassline", "beat drops",
+)
+
+
+def _is_music_cue(text: str) -> bool:
+    lowered = text.lower()
+    return any(hint in lowered for hint in MUSIC_HINTS)
+
 
 def _speech_duration(text: str) -> float:
     words = max(1, len(text.split()))
@@ -99,6 +112,12 @@ def split_script(
         tone = setting.room_tone_id
         scene_lines = [script.line(i) for i in scene.line_ids]
         cast_chars = [known_chars[c] for c in scene.cast if c in known_chars]
+        # The scene's scripted music, if any — carried verbatim on every clip
+        # so each generation scores the same piece.
+        scene_score = next(
+            (l.text for l in scene_lines if l.kind == "sound" and _is_music_cue(l.text)),
+            "",
+        )
         scene_clips: list[ClipUnit] = []
         clip_no = 0
         coverage_no = 0
@@ -116,7 +135,9 @@ def split_script(
             clip_no += 1
             order += 1
             if not scene_clips:
-                clip_class = "silent-picture"
+                # An opener breathes with the room's own ambience — a forced
+                # silent-picture cut a dead 6s hole into the middle of the film.
+                clip_class = "ambience-led"
                 camera = (
                     f"Wide establishing shot of {setting.name}, static frame at eye level"
                 )
@@ -161,7 +182,8 @@ def split_script(
                 audio_packet=AudioPacket(
                     clip_class=clip_class,
                     room_tone_id=tone,
-                    score="in" if clip_class == "score-led" else "none",
+                    score="in" if (clip_class == "score-led" or scene_score) else "none",
+                    score_desc=scene_score,
                 ),
                 continuity=ContinuityLock(
                     lock_recipe=recipe,
@@ -175,6 +197,8 @@ def split_script(
             if line.kind == "heading":
                 continue
             if line.kind == "sound":
+                if _is_music_cue(line.text):
+                    continue  # already the scene-wide score, never per-clip foley
                 # A sound line enriches the pictures around it: foley on the
                 # nearest picture clip, and a silent opener becomes ambience-led.
                 if last_picture is not None:
@@ -245,6 +269,8 @@ def split_script(
                         else {"pace": "measured", "distance": "close, dry"},
                         on_camera=on_camera,
                         room_tone_id=tone,
+                        score="in" if scene_score else "none",
+                        score_desc=scene_score,
                     ),
                     continuity=ContinuityLock(
                         lock_recipe="character_asset" if dialogue_voice_locked else "ref",

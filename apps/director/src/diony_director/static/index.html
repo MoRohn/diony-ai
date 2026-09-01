@@ -81,6 +81,12 @@
         <option value="480p">480p</option>
       </select>
     </label>
+    <label title="Program shape for the whole production — every shot, plate, and the final cut hold this aspect">Aspect
+      <select id="aspect">
+        <option value="16:9" selected>16:9 wide</option>
+        <option value="9:16">9:16 vertical</option>
+      </select>
+    </label>
     <label title="Ceiling for this session's scripted production — holds anything that would breach it. Empty = no ceiling.">Budget $
       <input id="budget" type="number" min="0" step="1" inputmode="numeric" placeholder="∞">
     </label>
@@ -113,6 +119,6 @@
   </aside>
 </div>
 
-<script src="/static/app.js?v=p7"></script>
+<script src="/static/app.js?v=p8"></script>
 </body>
 </html>

@@ -65,6 +65,27 @@ def control_plane_path() -> Path:
     return vault / ".control" / "diony.sqlite3"
 
 
+# Process-wide: serializes ALL control-plane connections in this process (see
+# ControlPlane._connect). Reentrant so a caller that briefly nests a read and
+# a transaction on one thread never self-deadlocks.
+_PLANE_DB_LOCK = threading.RLock()
+
+
+class _LockedConnection(sqlite3.Connection):
+    """A connection that holds _PLANE_DB_LOCK for its lifetime, releasing it
+    exactly once on close()."""
+
+    _lock_released = False
+
+    def close(self) -> None:  # type: ignore[override]
+        try:
+            super().close()
+        finally:
+            if not self._lock_released:
+                self._lock_released = True
+                _PLANE_DB_LOCK.release()
+
+
 class ControlPlane:
     """Small transactional document/event store with strict workspace scoping."""
 
@@ -77,13 +98,29 @@ class ControlPlane:
         self._migrate()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, timeout=30, isolation_level=None)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA busy_timeout = 30000")
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA synchronous = FULL")
-        return conn
+        # One connection at a time per process. Two threads using this file
+        # through separate connections intermittently wedged each other inside
+        # ordinary sqlite calls (faulthandler dumps: one thread frozen in
+        # sqlite3.connect, another mid-SELECT, for 60s+ — a GIL/sqlite-mutex
+        # interleave, not row contention). Every plane call is milliseconds of
+        # local I/O, so the lock costs nothing; the connection releases it on
+        # close. Cross-process safety is still sqlite's own file locking.
+        _PLANE_DB_LOCK.acquire()
+        try:
+            conn = sqlite3.connect(
+                self.path, timeout=30, isolation_level=None, factory=_LockedConnection
+            )
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA busy_timeout = 30000")
+            # journal_mode is NOT set here: WAL is a persistent property of the
+            # database file, set once in _migrate. Re-issuing the PRAGMA on
+            # every connection takes a lock that fights open transactions.
+            conn.execute("PRAGMA synchronous = FULL")
+            return conn
+        except BaseException:
+            _PLANE_DB_LOCK.release()
+            raise
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -102,6 +139,7 @@ class ControlPlane:
         with self._migration_lock:
             conn = self._connect()
             try:
+                conn.execute("PRAGMA journal_mode = WAL")  # persistent; once per DB
                 conn.executescript(
                     """
                     CREATE TABLE IF NOT EXISTS control_meta (

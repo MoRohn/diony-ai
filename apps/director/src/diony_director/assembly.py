@@ -135,6 +135,8 @@ def build_filter(
     loudness_target: str,
     specs: list[dict] | None = None,
     look_profile: str = "diony-default",
+    width: int = WIDTH,
+    height: int = HEIGHT,
 ) -> list[str]:
     """The join chain: per-clip trim → normalize → declick, one concat, a
     room-tone bed under the whole program, then the loudness lock."""
@@ -145,8 +147,8 @@ def build_filter(
         head, effective = windows[index]
         chains.append(
             f"[{index}:v]trim=start={head:.3f}:end={head + effective:.3f},setpts=PTS-STARTPTS,"
-            f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
-            f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={FPS},format=yuv420p[v{index}]"
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={FPS},format=yuv420p[v{index}]"
         )
         fade_out_start = max(0.0, effective - DECLICK_FADE_S)
         if index in silent_index:
@@ -190,6 +192,8 @@ def assemble(
     loudness_target: str = "streaming",
     specs: list[dict] | None = None,
     look_profile: str = "diony-default",
+    width: int = WIDTH,
+    height: int = HEIGHT,
 ) -> AssemblyResult:
     if not clip_paths:
         raise AssemblyFailed("nothing to assemble: no completed clips")
@@ -228,6 +232,8 @@ def assemble(
         loudness_target=loudness_target,
         specs=specs,
         look_profile=look_profile,
+        width=width,
+        height=height,
     )
     video_out = "[vlook]" if resolve_look_chain(look, look_profile) else "[vc]"
 

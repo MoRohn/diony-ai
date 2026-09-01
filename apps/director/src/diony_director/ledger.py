@@ -7,6 +7,8 @@ completion, and a failed job that burned money stays visible — never hidden.
 
 from __future__ import annotations
 
+import functools
+import threading
 import uuid
 from datetime import datetime, timezone
 
@@ -26,7 +28,26 @@ from diony_director import ratecards
 
 DIRECTOR_PROJECT_ID = "director"
 
+# The advance endpoint and the batch-submitter worker hit the control plane
+# concurrently. Two same-process sqlite connections on that file intermittently
+# wedged each other for the full 30s busy timeout per call (faulthandler dumps:
+# one thread mid-commit_job, the other mid-reconcile_completion, both stalled
+# inside sqlite). Every ledger call is milliseconds of local I/O, so one
+# process-wide lock removes the contention outright; cross-process safety is
+# still sqlite's own locking.
+_PLANE_LOCK = threading.RLock()
 
+
+def _serialized(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _PLANE_LOCK:
+            return fn(*args, **kwargs)
+
+    return wrapper
+
+
+@_serialized
 def seed_rate_cards(plane: ControlPlane, workspace_id: str) -> int:
     service = CostAnalyticsService(plane)
     cards = ratecards.contract_rate_cards(workspace_id)
@@ -35,6 +56,7 @@ def seed_rate_cards(plane: ControlPlane, workspace_id: str) -> int:
     return len(cards)
 
 
+@_serialized
 def ensure_run(plane: ControlPlane, workspace_id: str, created_by: str, session_id: str) -> WorkflowRun:
     run_id = f"director-{session_id}"
     try:
@@ -49,6 +71,7 @@ def ensure_run(plane: ControlPlane, workspace_id: str, created_by: str, session_
         return plane.save_run(run)
 
 
+@_serialized
 def commit_job(
     plane: ControlPlane,
     workspace_id: str,
@@ -126,6 +149,7 @@ def _image_actuals(op: DirectorOp) -> tuple[CostBreakdown, int, str]:
     )
 
 
+@_serialized
 def reconcile_completion(
     plane: ControlPlane,
     workspace_id: str,
@@ -176,6 +200,7 @@ def reconcile_completion(
     return plane.save_job(job)
 
 
+@_serialized
 def record_failure(
     plane: ControlPlane,
     workspace_id: str,
@@ -210,6 +235,7 @@ def record_failure(
     return plane.save_job(job)
 
 
+@_serialized
 def build_receipt(
     plane: ControlPlane,
     workspace_id: str,
@@ -261,6 +287,7 @@ def build_receipt(
     }
 
 
+@_serialized
 def spent_today_usd_micros(plane: ControlPlane, workspace_id: str, *, now: datetime | None = None) -> int:
     """Cost allocated to usage that occurred on the current local calendar day."""
     now = now if now is not None else datetime.now(timezone.utc).astimezone()
@@ -279,6 +306,7 @@ def spent_today_usd_micros(plane: ControlPlane, workspace_id: str, *, now: datet
     return total
 
 
+@_serialized
 def snapshot(plane: ControlPlane, workspace_id: str, *, committed_usd_micros: int = 0) -> dict:
     summary = CostAnalyticsService(plane).summary(workspace_id, organization_wide=True)
     return {

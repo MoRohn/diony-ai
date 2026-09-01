@@ -153,12 +153,31 @@ class MessageIn(BaseModel):
     model: str = ""
     duration_s: float = Field(default=6.0, gt=0)
     resolution: str = "720p"
+    aspect: str = Field(default="16:9", pattern="^(16:9|9:16)$")
+
+
+def _apply_aspect(sid: str, aspect: str) -> None:
+    """Adopt the requested program aspect — unless footage already exists at
+    another shape. A film never changes raster halfway through."""
+    if aspect == session.aspect_for(sid):
+        return
+    if any(op.status == "completed" and op.clip_id for op in session.ops_for(sid)):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"the program aspect is locked at {session.aspect_for(sid)} — "
+                "footage already exists at that shape; start a new session for "
+                f"a {aspect} production"
+            ),
+        )
+    session.set_aspect(sid, aspect)
 
 
 @app.post("/api/director/sessions/{sid}/message")
 def message(sid: str, body: MessageIn) -> dict:
     plane, ctx = _boot()
     spent = _session_spent(plane, ctx, sid)  # the reply talks about THIS session
+    _apply_aspect(sid, body.aspect)
     try:
         proposal = session.propose(
             sid,
@@ -220,8 +239,38 @@ def _op_or_404(op_id: str):
         raise HTTPException(status_code=404, detail=f"unknown op {op_id}") from err
 
 
-def _last_frame(clip_path: Path, dest: Path) -> str:
-    """Extract the final frame of an accepted clip as the next clip's opening."""
+# Every bridge frame and plate is conformed to the program raster before it
+# seeds a generation: mixed input shapes were echoed back as mixed output
+# shapes (1456×624 / 1168×768 / 1280×720 in one film) — the raster is locked
+# at the source, not papered over with letterboxing at assembly. The raster is
+# a session setting: 16:9 by default, 9:16 for vertical productions.
+def _conform_vf(sid: str) -> str:
+    width, height = session.program_raster(sid)
+    return (
+        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height}"
+    )
+
+
+def _cut_point_s(op: DirectorOp, clip_path: Path) -> float | None:
+    """Where assembly will actually CUT this clip — the bridge must continue
+    from the frame the audience last sees, not from surplus tail that the
+    needed_s trim throws away."""
+    try:
+        probe = assembly._probe(clip_path)
+    except Exception:  # noqa: BLE001 - a failed probe falls back to the raw tail
+        return None
+    if float(probe.get("duration_s") or 0) <= 0:
+        return None
+    head, effective = assembly.effective_windows([probe], [_assembly_spec(op)])[0]
+    return max(0.0, head + effective - 0.1)
+
+
+def _last_frame(
+    clip_path: Path, dest: Path, *, at_s: float | None = None, sid: str = ""
+) -> str:
+    """Extract the join frame of an accepted clip as the next clip's opening,
+    conformed to the program raster."""
     import subprocess
 
     from diony_producer.gallery_join import resolve_media_tool
@@ -230,12 +279,49 @@ def _last_frame(clip_path: Path, dest: Path) -> str:
     if not ffmpeg or not clip_path.is_file():
         return ""
     dest.parent.mkdir(parents=True, exist_ok=True)
+    seek = ["-ss", f"{at_s:.3f}"] if at_s and at_s > 0 else ["-sseof", "-0.2"]
     result = subprocess.run(
         [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-         "-sseof", "-0.2", "-i", str(clip_path), "-frames:v", "1", "-q:v", "3", str(dest)],
+         *seek, "-i", str(clip_path), "-frames:v", "1",
+         "-vf", _conform_vf(sid), "-q:v", "2", str(dest)],
         capture_output=True, timeout=120,
     )
     return str(dest) if result.returncode == 0 and dest.is_file() else ""
+
+
+def _conform_still(src: str, dest: Path, *, sid: str = "") -> str:
+    """A still (setting plate, uploaded frame) scaled and center-cropped to the
+    program raster so an off-shape input never re-shapes the generated clip."""
+    import subprocess
+
+    from diony_producer.gallery_join import resolve_media_tool
+
+    ffmpeg = resolve_media_tool("ffmpeg")
+    source = Path(src)
+    if not ffmpeg or not source.is_file():
+        return ""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+         "-i", str(source), "-frames:v", "1", "-vf", _conform_vf(sid), "-q:v", "2", str(dest)],
+        capture_output=True, timeout=120,
+    )
+    return str(dest) if result.returncode == 0 and dest.is_file() else ""
+
+
+def _pin_aspect(op: DirectorOp) -> None:
+    """Every video generation carries the session's program aspect, in the
+    dialect its provider speaks — an unpinned request echoes whatever shape
+    the seed image happened to have."""
+    if op.provider is None:
+        return
+    aspect = session.aspect_for(op.session_id)
+    if op.provider.value == "grok":
+        op.artifact_refs.setdefault("aspect_ratio", aspect)
+    else:
+        op.artifact_refs.setdefault(
+            "aspect_ratio", "portrait" if aspect == "9:16" else "landscape"
+        )
 
 
 def _late_bind_locks(op: DirectorOp) -> None:
@@ -258,23 +344,50 @@ def _late_bind_locks(op: DirectorOp) -> None:
     position = session.chain_position(op.session_id, op.id)
     re_anchor = bool(position) and position % 4 == 0
     prev = session.previous_completed_clip_op(op.session_id, op)
-    if prev is not None and not re_anchor:
+    frame = ""
+    if prev is not None:
         stored = session.runtime(prev.id).get("clip")
         if stored is not None:
             frame = _last_frame(
                 Path(stored.path),
                 cluster_root() / "director" / op.session_id / "frames" / f"{prev.id}.jpg",
+                at_s=_cut_point_s(prev, Path(stored.path)),
+                sid=op.session_id,
             )
-            frame_conflicts_with_lock = op.provider is not None and (
-                op.provider.value == "google-flow"
-                and bool(refs.get("voices") or refs.get("characters"))
-            )
-            if frame and not frame_conflicts_with_lock:
-                refs["start_image"] = frame
-                refs.pop("references", None)
-    # Every 4th link re-anchors on the bible instead of the bridge frame:
-    # frame-to-frame chains drift, and the compiled refs (plate + identity
-    # pack) pull the look back to the locked anchors before it wanders.
+    frame_conflicts_with_lock = op.provider is not None and (
+        op.provider.value == "google-flow"
+        and bool(refs.get("voices") or refs.get("characters"))
+    )
+    if frame and not frame_conflicts_with_lock:
+        if re_anchor:
+            # Every 4th link re-anchors on the bible so frame-to-frame drift
+            # can't compound — but the bridge frame STAYS, first in the pack:
+            # sheets alone told the model to invent a brand-new room
+            # (s-1b80548c4d cl-1-5/cl-2-5). Frame carries the place and light;
+            # plate and sheet pull the look and identity back to the locks.
+            anchors = [frame]
+            plate = compiler._live_plate_asset(clip, package)
+            if plate and plate not in anchors:
+                anchors.append(plate)
+            for image in refs.get("references") or []:
+                if image not in anchors:
+                    anchors.append(image)
+            refs["references"] = anchors[:3]
+            refs.pop("start_image", None)
+        else:
+            refs["start_image"] = frame
+            refs.pop("references", None)
+    start = str(refs.get("start_image") or "")
+    if start and Path(start).is_file() and Path(start).parent.name != "frames":
+        # A plate start still is conformed to the program raster before it
+        # seeds the clip — bridge frames from _last_frame already are.
+        conformed = _conform_still(
+            start,
+            cluster_root() / "director" / op.session_id / "frames" / f"plate-{op.id}.jpg",
+            sid=op.session_id,
+        )
+        if conformed:
+            refs["start_image"] = conformed
     for key in ("source_video", "end_image"):
         if op.artifact_refs.get(key) and not refs.get(key):
             refs[key] = op.artifact_refs[key]
@@ -372,6 +485,21 @@ def _dispatch_submit(op: DirectorOp) -> provider_base.CloudJobHandle:
         DirectorOpType.UPSCALE,
     }:
         _late_bind_locks(op)
+    if op.mode in {
+        CloudGenerationMode.T2V,
+        CloudGenerationMode.I2V,
+        CloudGenerationMode.R2V,
+        CloudGenerationMode.FIRST_LAST,
+    } and op.op is DirectorOpType.GENERATE:
+        # single shots and scripted clips alike carry the session's aspect;
+        # edits, extensions, and upscales inherit their source's shape.
+        # After late binding: the locks rebuild artifact_refs from scratch.
+        _pin_aspect(op)
+    if op.clip_id and op.op not in {
+        DirectorOpType.EDIT,
+        DirectorOpType.EXTEND,
+        DirectorOpType.UPSCALE,
+    }:
         problems = capabilities.violations(op)
         if problems:
             # the legality gate holds AFTER late binding too — the refs that
@@ -389,14 +517,21 @@ def _dispatch_submit(op: DirectorOp) -> provider_base.CloudJobHandle:
         package = session.package_for(op.session_id)
         if package is not None and op.artifact_refs.get("bible"):
             references = artifacts.references_for(package, op) + references
+        aspect = session.aspect_for(op.session_id)
         if op.provider.value == "grok":
             return grok.submit_image(
                 op.prompt,
                 model=op.model,
                 references=references[:1],
+                aspect_ratio=aspect,
                 resolution=op.resolution if op.resolution in {"1k", "2k"} else "",
             )
-        return flow.submit_image(op.prompt, model=op.model, references=references[:7])
+        return flow.submit_image(
+            op.prompt,
+            model=op.model,
+            references=references[:7],
+            aspect_ratio="portrait" if aspect == "9:16" else "landscape",
+        )
     if op.provider.value == "grok":
         if op.mode is CloudGenerationMode.EXTENSION:
             return grok.submit_extension(
@@ -834,6 +969,7 @@ class ProduceIn(BaseModel):
     autopilot: bool = False
     max_usd: float = Field(default=0, ge=0)
     max_revisions_per_clip: int = Field(default=3, ge=0, le=10)
+    aspect: str = Field(default="16:9", pattern="^(16:9|9:16)$")
 
 
 @app.post("/api/director/sessions/{sid}/produce")
@@ -852,6 +988,7 @@ def produce(sid: str, body: ProduceIn) -> dict:
         max_revisions_per_clip=body.max_revisions_per_clip,
         autopilot=body.autopilot,
     )
+    _apply_aspect(sid, body.aspect)
     state = session.begin_draft(sid, body.idea, body.runtime_s)
     return state
 
@@ -1074,6 +1211,10 @@ class AssembleIn(BaseModel):
     loudness: str = "streaming"
     look: bool = True
     look_profile: str = "diony-default"
+    # Ship the cut even when scripted shots have no usable take. Off by
+    # default: a silently missing story beat (s-1b80548c4d shipped without
+    # cl-2-5) is a defect, not a preference.
+    allow_gaps: bool = False
 
 
 def _assembly_spec(op: DirectorOp) -> dict:
@@ -1112,7 +1253,34 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
             used_ops.append(op)
     if not paths:
         raise HTTPException(status_code=409, detail="no completed clips to assemble yet")
+    package = session.package_for(sid)
+    if package is not None and not body.allow_gaps:
+        have = {op.clip_id for op in used_ops}
+        missing = [c.clip_id for c in package.clips if c.clip_id not in have]
+        if missing:
+            pending = sorted(
+                {
+                    o.clip_id
+                    for o in session.ops_for(sid)
+                    if o.clip_id in missing
+                    and o.status in {"proposed", "approved", "submitting", "submitted"}
+                }
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "refusing to cut the film with missing shots: "
+                    + ", ".join(missing)
+                    + (
+                        f" — retakes are drafted for {', '.join(pending)}; run them first"
+                        if pending
+                        else " — no usable take exists; rerun those clips"
+                    )
+                    + ", or assemble with allow_gaps to ship without them"
+                ),
+            )
     dest = cluster_root() / "director" / sid / "film.mp4"
+    raster_w, raster_h = session.program_raster(sid)
     try:
         result = assembly.assemble(
             paths,
@@ -1121,6 +1289,8 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
             loudness_target=body.loudness,
             specs=specs,
             look_profile=body.look_profile,
+            width=raster_w,
+            height=raster_h,
         )
     except assembly.AssemblyUnavailable as err:
         raise HTTPException(status_code=409, detail=str(err)) from err

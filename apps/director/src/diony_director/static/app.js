@@ -325,6 +325,7 @@
           provider: $("provider").value,
           duration_s: Math.min(15, durationSeconds() || 8),
           resolution: $("resolution").value,
+          aspect: ($("aspect") && $("aspect").value) || "16:9",
         }),
       });
       const li = addMsg("director", body.reply);
@@ -512,12 +513,12 @@
     return card;
   }
 
-  async function assembleNow() {
+  async function assembleNow(allowGaps) {
     try {
       const film = await api(`/api/director/sessions/${sessionId}/assemble`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify(allowGaps === true ? { allow_gaps: true } : {}),
       });
       const done = addMsg(
         "director",
@@ -551,7 +552,19 @@
       wrap.querySelector(".body").appendChild(link);
       refreshBoard();
     } catch (err) {
-      addMsg("director", `Assembly isn't ready: ${err.message || err}`);
+      const text = String(err.message || err);
+      const note = addMsg("director", `Assembly isn't ready: ${text}`);
+      if (text.includes("allow_gaps")) {
+        const anyway = document.createElement("button");
+        anyway.type = "button";
+        anyway.className = "batch ghost";
+        anyway.textContent = "Assemble anyway (ship with gaps)";
+        anyway.addEventListener("click", async () => {
+          anyway.disabled = true;
+          await assembleNow(true);
+        });
+        note.querySelector(".body").appendChild(anyway);
+      }
     }
   }
 
@@ -757,6 +770,7 @@
           idea: idea,
           runtime_s: durationSeconds() || 60,
           max_usd: maxUsd,
+          aspect: ($("aspect") && $("aspect").value) || "16:9",
         }),
       });
       if (maxUsd > 0) addMsg("director", `Budget ceiling set: $${maxUsd.toFixed(2)} for this session — anything past it holds.`);

@@ -153,6 +153,10 @@ class AudioPacket(BaseModel):
     room_tone_id: str = ""
     foley: list[dict[str, Any]] = Field(default_factory=list)
     score: Literal["in", "out", "none"] = "none"
+    # The scripted piece itself ("a catchy funky instrumental groove…"), shared
+    # verbatim by every clip in the scene so each generation describes the SAME
+    # music instead of inventing a new jingle per clip.
+    score_desc: str = ""
     handles_s: dict[str, float] = Field(
         default_factory=lambda: {"pre": 0.5, "tail": 1.0}
     )
