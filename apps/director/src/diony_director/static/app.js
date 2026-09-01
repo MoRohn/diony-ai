@@ -968,8 +968,7 @@
     }
   }
 
-  $("board-toggle").addEventListener("click", () => {
-    const opening = $("board").hidden;
+  function setBoardOpen(opening) {
     $("board").hidden = !opening;
     document.body.classList.toggle("board-open", opening);
     if (opening) {
@@ -979,11 +978,13 @@
       clearInterval(boardTimer);
       boardTimer = null;
     }
-  });
-  document.querySelectorAll(".btabs button").forEach((btn) => {
+  }
+  $("board-toggle").addEventListener("click", () => setBoardOpen($("board").hidden));
+  $("board-close").addEventListener("click", () => setBoardOpen(false));
+  document.querySelectorAll(".btabs button[data-tab]").forEach((btn) => {
     btn.addEventListener("click", () => {
       boardTab = btn.dataset.tab;
-      document.querySelectorAll(".btabs button").forEach((other) => other.classList.toggle("on", other === btn));
+      document.querySelectorAll(".btabs button[data-tab]").forEach((other) => other.classList.toggle("on", other === btn));
       refreshBoard();
     });
   });

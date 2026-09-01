@@ -1490,7 +1490,10 @@ async function loadDirectorFilms() {
       const video = document.createElement("video");
       video.controls = true;
       video.preload = "metadata";
-      video.src = film.url;
+      video.playsInline = true;
+      // #t=0.001 makes the browser seek to and paint the first frame as the
+      // preview; without it preload="metadata" leaves the box black.
+      video.src = `${film.url}#t=0.001`;
       const caption = document.createElement("p");
       caption.className = "hint";
       const when = new Date(film.modified);

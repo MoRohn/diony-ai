@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Diony Director</title>
-<link rel="stylesheet" href="/static/app.css?v=p2a">
+<link rel="stylesheet" href="/static/app.css?v=p3">
 </head>
 <body>
 <header class="mast">
@@ -47,21 +47,13 @@
   </div>
 </header>
 
-<main class="stage">
-  <ol class="thread" id="thread" aria-live="polite"></ol>
-</main>
+<div class="workspace">
+  <div class="room">
+    <main class="stage">
+      <ol class="thread" id="thread" aria-live="polite"></ol>
+    </main>
 
-<aside class="board" id="board" hidden aria-label="Production board">
-  <div class="btabs" role="tablist">
-    <button type="button" data-tab="script" class="on">SCRIPT</button>
-    <button type="button" data-tab="bibles">BIBLES</button>
-    <button type="button" data-tab="shots">SHOTS</button>
-    <button type="button" data-tab="cut">CUT</button>
-  </div>
-  <div class="bpane" id="bpane"></div>
-</aside>
-
-<footer class="composer">
+    <footer class="composer">
   <div class="controls">
     <label>Provider
       <select id="provider">
@@ -104,8 +96,21 @@
       <button id="produce" type="button" class="alt">Draft script</button>
     </div>
   </div>
-</footer>
+    </footer>
+  </div>
 
-<script src="/static/app.js?v=p2a"></script>
+  <aside class="board" id="board" hidden aria-label="Production board">
+    <div class="btabs" role="tablist">
+      <button type="button" data-tab="script" class="on">SCRIPT</button>
+      <button type="button" data-tab="bibles">BIBLES</button>
+      <button type="button" data-tab="shots">SHOTS</button>
+      <button type="button" data-tab="cut">CUT</button>
+      <button type="button" id="board-close" class="bclose" title="Close the board" aria-label="Close the board">✕</button>
+    </div>
+    <div class="bpane" id="bpane"></div>
+  </aside>
+</div>
+
+<script src="/static/app.js?v=p3"></script>
 </body>
 </html>
