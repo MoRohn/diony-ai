@@ -166,6 +166,30 @@
       "default": null,
       "title": "Speech Presence Score"
     },
+    "speech_presence_min": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Speech Presence Min"
+    },
+    "speech_dialogue_sha256": {
+      "default": "",
+      "title": "Speech Dialogue Sha256",
+      "type": "string"
+    },
+    "speech_request_sha256": {
+      "default": "",
+      "title": "Speech Request Sha256",
+      "type": "string"
+    },
     "speech_tail_ms": {
       "anyOf": [
         {
@@ -229,6 +253,30 @@
       "title": "Reference Similarities",
       "type": "object"
     },
+    "reference_layout_similarity": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reference Layout Similarity"
+    },
+    "reference_layout_similarities": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Reference Layout Similarities",
+      "type": "object"
+    },
+    "reference_lock_measure": {
+      "default": "",
+      "title": "Reference Lock Measure",
+      "type": "string"
+    },
     "reference_verified": {
       "anyOf": [
         {
@@ -276,6 +324,11 @@
       ],
       "default": null,
       "title": "Continuity Verified"
+    },
+    "continuity_waived": {
+      "default": "",
+      "title": "Continuity Waived",
+      "type": "string"
     },
     "measurement_version": {
       "default": "",

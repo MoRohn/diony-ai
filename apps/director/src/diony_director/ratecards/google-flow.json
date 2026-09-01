@@ -1,0 +1,34 @@
+{
+  "provider_id": "google-flow",
+  "label": "Google Flow via useapi.net",
+  "pricing_basis": "modeled_from_plan",
+  "source": "https://useapi.net/docs/api-google-flow-v1",
+  "fetched_at": "2026-08-31",
+  "stale_after_days": 45,
+  "plans_usd_micros_per_credit": {
+    "plus": 39950,
+    "pro": 19990,
+    "ultra-99": 9999,
+    "ultra-199": 8000
+  },
+  "captcha_usd_micros_per_solve": 3000,
+  "cards": [
+    { "capability": "video", "model": "veo-3.1-lite", "unit": "generation", "credits": 10, "credits_ultra": 5 },
+    { "capability": "video", "model": "veo-3.1-fast", "unit": "generation", "credits": 20, "credits_ultra": 10 },
+    { "capability": "video", "model": "veo-3.1-quality", "unit": "generation", "credits": 100, "credits_ultra": 100 },
+    { "capability": "video", "model": "omni-flash", "unit": "generation:720p:4s", "credits": 7 },
+    { "capability": "video", "model": "omni-flash", "unit": "generation:720p:6s", "credits": 10 },
+    { "capability": "video", "model": "omni-flash", "unit": "generation:720p:8s", "credits": 12 },
+    { "capability": "video", "model": "omni-flash", "unit": "generation:720p:10s", "credits": 15 },
+    { "capability": "video", "model": "omni-flash", "unit": "generation:360p:4s", "credits": 4 },
+    { "capability": "video", "model": "omni-flash", "unit": "generation:360p:6s", "credits": 5 },
+    { "capability": "video", "model": "omni-flash", "unit": "generation:360p:8s", "credits": 6 },
+    { "capability": "video", "model": "omni-flash", "unit": "generation:360p:10s", "credits": 7 },
+    { "capability": "video", "model": "omni-flash", "unit": "v2v:720p", "credits": 20 },
+    { "capability": "video", "model": "omni-flash", "unit": "v2v:360p", "credits": 10 },
+    { "capability": "video", "model": "video-upscale", "unit": "generation", "credits": 20, "confidence": "estimated" },
+    { "capability": "image", "model": "nano-banana-2-lite", "unit": "generation", "credits": 1, "confidence": "estimated" },
+    { "capability": "image", "model": "nano-banana-2", "unit": "generation", "credits": 1, "confidence": "estimated" },
+    { "capability": "image", "model": "nano-banana-pro", "unit": "generation", "credits": 2, "confidence": "estimated" }
+  ]
+}

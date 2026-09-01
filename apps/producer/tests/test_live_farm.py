@@ -1879,3 +1879,343 @@ def test_pre_camera_voice_holds_never_spend_the_render_cap() -> None:
     take.qc = measured
     assert farm_module._pre_camera_voice_hold(take) is False
     assert farm_module._auto_retake_quality_failure(take) is True, "a measured render still retakes"
+
+
+def test_reference_lock_is_judged_on_the_layout_proxy_with_full_frame_kept_as_evidence() -> None:
+    """B200 2026-08-28 calibration: a faithful static wide shot with subject motion."""
+    from diony_producer import farm as farm_module
+
+    raw = {"first": 0.7795, "quarter": 0.6647, "middle": 0.6702, "three_quarter": 0.6482, "last": 0.6366}
+    layout = {"first": 0.9120, "quarter": 0.7238, "middle": 0.7189, "three_quarter": 0.6337, "last": 0.6040}
+    ok, detail = farm_module._reference_lock_verdict(raw, layout, first_floor=0.75, drift_floor=0.55, legacy_floor=0.75)
+    assert ok is True
+    assert "layout SSIM first 0.9120" in detail and "later minimum 0.6040 at last" in detail
+    assert "full-frame minimum 0.6366" in detail
+
+    # An unrelated scene in the same medium: recognisable nowhere.
+    unrelated = {"first": 0.4906, "quarter": 0.4887, "middle": 0.4915, "three_quarter": 0.4947, "last": 0.4980}
+    ok, detail = farm_module._reference_lock_verdict({"first": 0.5664}, unrelated, first_floor=0.75, drift_floor=0.55, legacy_floor=0.75)
+    assert ok is False
+    assert "required first ≥ 0.75" in detail
+
+    # A faithful start with walking subjects (sh-010-t3, static camera): later checkpoints are advisory.
+    walking = {"first": 0.8201, "quarter": 0.5976, "middle": 0.5729, "three_quarter": 0.5607, "last": 0.5464}
+    ok, detail = farm_module._reference_lock_verdict({}, walking, first_floor=0.75, drift_floor=0.55, legacy_floor=0.75)
+    assert ok is True
+    assert "later minimum 0.5464 at last" in detail and "advisory" in detail
+
+    # A steadicam push-in from the wide still (sh-040-t1): faithful frames, layout later 0.54.
+    push_in = {"first": 0.9195, "quarter": 0.5905, "middle": 0.5473, "three_quarter": 0.5402, "last": 0.5451}
+    ok, detail = farm_module._reference_lock_verdict(
+        {"first": 0.831, "last": 0.6279}, push_in, first_floor=0.75, drift_floor=0.55, legacy_floor=0.75, camera_move="steadicam"
+    )
+    assert ok is True
+    assert "advisory (camera steadicam)" in detail
+    # A moving camera still needs the still recognisable in the first frame.
+    ok, _ = farm_module._reference_lock_verdict(
+        {}, {"first": 0.52, "last": 0.50}, first_floor=0.75, drift_floor=0.55, legacy_floor=0.75, camera_move="dolly_in"
+    )
+    assert ok is False
+
+    # Without the layout measure the legacy full-frame floor still judges.
+    ok, detail = farm_module._reference_lock_verdict(raw, {}, first_floor=0.75, drift_floor=0.55, legacy_floor=0.75)
+    assert ok is False and "minimum sampled SSIM 0.6366; required 0.75" in detail
+    ok, _ = farm_module._reference_lock_verdict({"first": 0.99}, {}, first_floor=0.75, drift_floor=0.55, legacy_floor=0.75)
+    assert ok is True
+    assert farm_module._reference_lock_verdict({}, {}, first_floor=0.75, drift_floor=0.55, legacy_floor=0.75) == (None, "missing")
+
+
+def test_reference_lock_floors_can_only_tighten(monkeypatch) -> None:
+    from diony_producer.farm import REFERENCE_LOCK_DRIFT_FLOOR, _quality_ssim_floor
+
+    monkeypatch.setenv("DIONY_REFERENCE_DRIFT_SSIM_MIN", "0.10")
+    assert _quality_ssim_floor("DIONY_REFERENCE_DRIFT_SSIM_MIN", REFERENCE_LOCK_DRIFT_FLOOR) == 0.55
+    monkeypatch.setenv("DIONY_REFERENCE_DRIFT_SSIM_MIN", "0.70")
+    assert _quality_ssim_floor("DIONY_REFERENCE_DRIFT_SSIM_MIN", REFERENCE_LOCK_DRIFT_FLOOR) == 0.70
+
+
+def test_layout_ssim_softens_and_downscales_both_frames(monkeypatch, tmp_path) -> None:
+    from diony_producer import farm as farm_module
+
+    seen: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        seen.append(list(command))
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": "SSIM Y:0.9 U:0.9 V:0.9 All:0.912 (10.5)"})()
+
+    monkeypatch.setattr(farm_module, "resolve_media_tool", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(farm_module.subprocess, "run", fake_run)
+    assert farm_module._layout_ssim_at(tmp_path / "n.mp4", tmp_path / "r.png", seconds=1.25) == 0.912
+    graph = seen[-1][seen[-1].index("-filter_complex") + 1]
+    assert graph.count("scale=320:180,gblur=sigma=1.5") == 2
+    assert farm_module._ssim_at(tmp_path / "n.mp4", tmp_path / "r.png", seconds=0.0) == 0.912
+    graph = seen[-1][seen[-1].index("-filter_complex") + 1]
+    assert graph.count("scale=1280:720") == 2 and "gblur" not in graph
+
+
+def test_identical_speech_on_a_second_attempt_settles_instead_of_retaking() -> None:
+    """sh-030 2026-08-28: four renders, byte-identical dialogue, presence 0.108 every time."""
+    from diony_producer import farm as farm_module
+
+    project = demo_project()
+    shot = project.shots[0]
+    base = project.takes_for(shot.id)[0]
+    project.takes = [take for take in project.takes if take.shot_id != shot.id]
+    same_audio = "e5981236cded" + "0" * 52
+    for attempt in (1, 2):
+        take = base.model_copy(update={"id": f"{shot.id}-t{attempt}", "attempt": attempt})
+        take.qc = QCReport(
+            id=f"qc-{take.id}",
+            take_id=take.id,
+            shot_id=shot.id,
+            verdict=QCVerdict.FAIL,
+            identity_ok=False,
+            morph_ok=True,
+            flicker_ok=True,
+            duration_ok=True,
+            legal_ok=True,
+            production_clean_ok=True,
+            voice_ready_ok=False,
+            speech_backend="wan2.2-s2v-native-tts",
+            speech_presence_score=0.108,
+            speech_presence_min=0.20,
+            speech_dialogue_sha256=same_audio,
+            speech_request_sha256="req-1",
+            speech_tail_ms=2873.0,
+            reference_similarity=0.88 + attempt * 0.01,
+            temporal_residual_p95=0.03,
+            notes="Voice audio failed: voiced-speech presence 0.11 is below 0.20.",
+        )
+        project.takes.append(take)
+    first, second = project.take(f"{shot.id}-t1"), project.take(f"{shot.id}-t2")
+    shot.selected_take_id = second.id
+    assert farm_module.futile_voice_retake(project, first) is None
+    assert farm_module.futile_voice_retake(project, second) is first
+
+    # A different speech request (directed retake rewrote the line) is not futile.
+    second.qc.speech_request_sha256 = "req-2"
+    assert farm_module.futile_voice_retake(project, second) is None
+    second.qc.speech_request_sha256 = "req-1"
+    # A picture failure alongside the voice failure is still worth a retake.
+    second.qc.production_clean_ok = False
+    assert farm_module.futile_voice_retake(project, second) is None
+    second.qc.production_clean_ok = True
+
+    activity: list[str] = []
+    farm_module.record_activity, kept = (lambda _src, text, **_kw: activity.append(text)), farm_module.record_activity
+    farm_module.take_has_live_negative, kept_live = (lambda take, project: True), farm_module.take_has_live_negative
+    farm_module.persist_project, kept_persist = (lambda project: None), farm_module.persist_project
+    try:
+        retry = farm_module.auto_retake_for_qc_failure(project, second)
+    finally:
+        farm_module.record_activity = kept
+        farm_module.take_has_live_negative = kept_live
+        farm_module.persist_project = kept_persist
+    assert retry is None
+    assert len([t for t in project.takes if t.shot_id == shot.id]) == 2
+    settled = farm_module.settled_print(project, shot.id)
+    assert settled is second and settled.qc.verdict == QCVerdict.WARN
+    assert settled.qc.settled_best_of == 2
+    assert "identical speech on sh-010-t1" in settled.qc.notes or f"identical speech on {first.id}" in settled.qc.notes
+    assert any("a retake cannot change it" in line for line in activity)
+
+
+def test_stale_speech_receipt_is_re_measured_under_the_current_floor(tmp_path, monkeypatch) -> None:
+    """sh-030's settled print: v1 floor 0.20 rejected presence 0.108; v2 measures the line's own floor."""
+    from diony_contracts.enums import ArtifactKind
+    from diony_contracts.voice import SpeechQCReceipt
+    from diony_producer import farm as farm_module
+    from diony_producer import voice as voice_module
+
+    project = demo_project()
+    shot = next(s for s in project.shots if s.dialogue_turns or s.audio_line)
+    take = project.takes_for(shot.id)[0]
+    negative = tmp_path / "negative_720.mp4"
+    negative.write_bytes(b"x" * 64)
+    monkeypatch.setattr(farm_module, "vault_root", lambda: tmp_path)
+    take.artifacts = [a for a in take.artifacts if a.kind != ArtifactKind.NEGATIVE_720]
+    from diony_contracts.models import Artifact
+
+    take.artifacts.append(
+        Artifact(id="art-neg", take_id=take.id, kind=ArtifactKind.NEGATIVE_720, path="negative_720.mp4", sha256="0" * 64, bytes=64)
+    )
+    old_receipt = SpeechQCReceipt(
+        measurement_version="diony-speech-qc-v1", audio_present=True, duration_ms=3541, window_ms=3541,
+        speech_presence_score=0.108, speech_presence_min=0.20, speech_tail_ms=2873.0,
+        integrated_lufs=-24.03, true_peak_dbtp=-11.05, passed=False,
+    )
+    from diony_contracts.enums import VoiceRenderState
+    from diony_contracts.voice import SpeechClipPackage, WanSpeechRequest
+
+    request = WanSpeechRequest(
+        character_id="char-robot", casting_id="cast-char-robot-v1", tts_text="QUACK!",
+        tts_prompt_audio_sha256="a" * 64, prompt_source="library:cast-00.wav", window_ms=3541,
+    )
+    take.voice_package = SpeechClipPackage(
+        id=f"speech-{take.id}", project_id=project.id, shot_id=take.shot_id, take_id=take.id,
+        character_id="char-robot", casting_id="cast-char-robot-v1", request=request,
+        video_sha256="b" * 64, state=VoiceRenderState.FAILED, qc=old_receipt,
+    )
+    take.qc = QCReport(
+        id=f"qc-{take.id}", take_id=take.id, shot_id=shot.id, verdict=QCVerdict.WARN, identity_ok=True,
+        morph_ok=True, flicker_ok=True, duration_ok=True, legal_ok=True, production_clean_ok=True,
+        voice_ready_ok=False, speech_backend="wan2.2-s2v-native-tts", speech_presence_score=0.108,
+        settled_best_of=4, settled_score=0.60,
+        notes="Best of 4 attempts selected by policy (score 0.60) · Voice audio failed: voiced-speech presence 0.11 is below 0.20.",
+    )
+    new_receipt = old_receipt.model_copy(update={
+        "measurement_version": voice_module.SPEECH_QC_VERSION, "speech_presence_min": 0.0847,
+        "line_word_count": 1, "expected_speech_ms": 600.0, "dialogue_sha256": "e" * 64, "request_sha256": "req",
+        "passed": True,
+    })
+    seen: list[str] = []
+
+    def fake_verify(project_, take_, video):
+        seen.append(str(video))
+        updated = take_.voice_package.model_copy(update={"qc": new_receipt, "state": VoiceRenderState.VERIFIED})
+        take_.voice_package = updated
+        return updated
+
+    monkeypatch.setattr(voice_module, "verify_voice_animation", fake_verify)
+    monkeypatch.setattr(farm_module, "persist_project", lambda project: None)
+    activity: list[str] = []
+    monkeypatch.setattr(farm_module, "record_activity", lambda _src, text, **_kw: activity.append(text))
+
+    assert farm_module.refresh_voice_measurement(project, take) is True
+    assert seen == [str(negative)]
+    assert take.qc.verdict == QCVerdict.WARN  # the policy decision stands
+    assert take.qc.voice_ready_ok is True
+    assert take.qc.speech_presence_min == 0.0847
+    assert take.qc.speech_dialogue_sha256 == "e" * 64
+    assert take.qc.notes.startswith("Best of 4 attempts selected by policy (score 0.60) · Speech re-measured at diony-speech-qc-v2: passes")
+    assert "previously: Voice audio failed" in take.qc.notes
+    assert any("against floor 0.08 for a 1-word line; passes" in line for line in activity)
+    # Current version: nothing to do.
+    assert farm_module.refresh_voice_measurement(project, take) is False
+    assert seen == [str(negative)]
+
+
+def test_pending_queue_follows_the_rundown_and_a_parked_canary_is_recognised() -> None:
+    from diony_producer import farm as farm_module
+
+    project = demo_project()
+    shots = project.shots
+    late_retake = farm_module.new_generation_take(project, shots[0], attempt=3, live=True)
+    queue = [project.takes_for(shots[2].id)[0], project.takes_for(shots[1].id)[0], late_retake]
+    queue.sort(key=farm_module._rundown_position(project))
+    assert [t.shot_id for t in queue] == [shots[0].id, shots[1].id, shots[2].id]
+
+    project.takes.append(late_retake)
+    parked = farm_module._parked_canary_take(project, late_retake.id)
+    assert parked is late_retake
+    assert farm_module._parked_canary_take(project, "sh-999-t9") is None
+    from diony_contracts.enums import ArtifactKind
+    from diony_contracts.models import Artifact
+
+    late_retake.artifacts.append(
+        Artifact(id="art-x", take_id=late_retake.id, kind=ArtifactKind.NEGATIVE_720, path="x.mp4", sha256="0" * 64, bytes=64)
+    )
+    assert farm_module._parked_canary_take(project, late_retake.id) is None
+
+
+def test_stale_previous_frame_chain_re_rolls_or_waives_instead_of_deadlocking(monkeypatch) -> None:
+    """sh-020-t1 chained to sh-010-t1; sh-010 printed on t4 two hours later (2026-08-28)."""
+    from diony_contracts.enums import ContinuityMode
+    from diony_producer import advance as adv
+
+    project = demo_project()
+    first, second = project.shots[0], project.shots[1]
+    second.continuity_mode = ContinuityMode.PREVIOUS_FRAME
+    second.character_ref_ids = list(first.character_ref_ids) or ["ast-still"]
+    first.character_ref_ids = list(second.character_ref_ids)
+    prior = project.takes_for(first.id)[0]
+    prior.qc = QCReport(id="qc-a", take_id=prior.id, shot_id=first.id, verdict=QCVerdict.PASS, identity_ok=True,
+                        morph_ok=True, flicker_ok=True, duration_ok=True, legal_ok=True)
+    first.selected_take_id = prior.id
+    following = project.takes_for(second.id)[0]
+    following.qc = QCReport(id="qc-b", take_id=following.id, shot_id=second.id, verdict=QCVerdict.PASS, identity_ok=True,
+                            morph_ok=True, flicker_ok=True, duration_ok=True, legal_ok=True,
+                            continuity_from_take_id="stale-print", continuity_verified=True, continuity_similarity=0.9)
+    second.selected_take_id = following.id
+    assert [(s.id, t.id, e) for s, t, e in adv.stale_continuity(project)] == [(second.id, following.id, prior.id)]
+
+    activity: list[str] = []
+    started: list[list[str]] = []
+    monkeypatch.setattr(adv, "record_activity", lambda _src, text, **_kw: activity.append(text))
+    monkeypatch.setattr(adv, "persist_project", lambda project: None)
+    monkeypatch.setattr(adv, "record_decision", lambda *a, **k: None)
+    monkeypatch.setattr(adv, "enter_farm", lambda: None)
+    monkeypatch.setattr(adv, "start_farm", lambda project, takes: started.append([t.id for t in takes]))
+
+    # Budget remains: a chained retake is queued and becomes the selected take.
+    assert adv.refresh_stale_continuity(project, live=True) is True
+    assert started and started[0] == [second.selected_take_id]
+    assert second.selected_take_id != following.id
+    assert any("continuity refresh" in line for line in activity)
+    assert adv.stale_continuity(project) == []  # the new take has no chain evidence yet
+
+    # Budget spent: the print is kept with a recorded waiver and the contract accepts it.
+    second.selected_take_id = following.id
+    from diony_contracts.cluster import RETAKE_CAP
+    from diony_contracts.enums import TakeOrigin
+
+    while len([t for t in project.takes_for(second.id) if t.origin == TakeOrigin.GENERATION]) < RETAKE_CAP:
+        project.takes.append(following.model_copy(update={"id": f"{second.id}-x{len(project.takes)}", "attempt": 9}))
+    started.clear()
+    assert adv.refresh_stale_continuity(project, live=True) is False
+    assert started == []
+    assert "replaced by" in following.qc.continuity_waived and "budget spent" in following.qc.continuity_waived
+    assert any("continuity waived" in line for line in activity)
+    from diony_producer.farm import qc_contract_valid
+
+    monkeypatch.setattr("diony_producer.farm.measured_qc_required_default", lambda: False)
+    assert qc_contract_valid(project, following) is True
+
+
+def test_a_refused_lock_is_reported_once_on_the_feed(monkeypatch) -> None:
+    from diony_producer import advance as adv
+
+    activity: list[str] = []
+    monkeypatch.setattr(adv, "record_activity", lambda _src, text, **_kw: activity.append(text))
+    monkeypatch.setattr(adv, "_last_lock_refusal", "")
+    adv._report_lock_refusal("Picture", ValueError("picture lock refuses selected Takes without current reference/continuity QC: sh-020/sh-020-t1"))
+    adv._report_lock_refusal("Picture", ValueError("picture lock refuses selected Takes without current reference/continuity QC: sh-020/sh-020-t1"))
+    assert activity == ["Picture lock is waiting: picture lock refuses selected Takes without current reference/continuity QC: sh-020/sh-020-t1"]
+
+
+def test_hero_selection_prefers_the_print_whose_chain_is_current(monkeypatch) -> None:
+    """sh-020 2026-08-28: t3/t4 chained to the replacement print lost to stale t1 on raw SSIM."""
+    from diony_contracts.enums import ContinuityMode
+    from diony_producer import farm as farm_module
+
+    project = demo_project()
+    first, second = project.shots[0], project.shots[1]
+    second.continuity_mode = ContinuityMode.PREVIOUS_FRAME
+    first.selected_take_id = "sh-010-t4"
+    monkeypatch.setattr(farm_module, "measured_qc_required_default", lambda: False)
+
+    def qc(take_id, *, from_take, raw, layout):
+        return QCReport(
+            id=f"qc-{take_id}", take_id=take_id, shot_id=second.id, verdict=QCVerdict.PASS, identity_ok=True,
+            morph_ok=True, flicker_ok=True, duration_ok=True, legal_ok=True,
+            reference_asset_ids=list(second.keyframe_asset_ids), reference_verified=True,
+            reference_similarity=raw, reference_similarities={k: raw for k in ("first", "quarter", "middle", "three_quarter", "last")},
+            reference_layout_similarity=layout, continuity_from_take_id=from_take, continuity_verified=True, continuity_similarity=0.9,
+            temporal_residual_p95=0.03, flicker_luma_p95=0.001,
+        )
+
+    base = project.takes_for(second.id)[0]
+    project.takes = [t for t in project.takes if t.shot_id != second.id]
+    stale = base.model_copy(update={"id": f"{second.id}-t1", "attempt": 1}); stale.qc = qc(stale.id, from_take="sh-010-t1", raw=0.6992, layout=0.83)
+    fresh = base.model_copy(update={"id": f"{second.id}-t3", "attempt": 3}); fresh.qc = qc(fresh.id, from_take="sh-010-t4", raw=0.6100, layout=0.79)
+    project.takes.extend([stale, fresh])
+    assert farm_module._candidate_score(fresh, project) > farm_module._candidate_score(stale, project)
+    # Without a project the legacy ranking still orders by verdict then fidelity.
+    assert farm_module._candidate_score(stale) > farm_module._candidate_score(fresh)
+    second.selected_take_id = stale.id
+    monkeypatch.setattr(farm_module, "persist_project", lambda project: None)
+    monkeypatch.setattr(farm_module, "record_activity", lambda *a, **k: None)
+    monkeypatch.setattr(farm_module, "record_decision", lambda *a, **k: None)
+    monkeypatch.setattr(farm_module, "assemble_program", lambda project: None)
+    assert farm_module.select_hero_print(project, second) is fresh
+    assert second.selected_take_id == fresh.id

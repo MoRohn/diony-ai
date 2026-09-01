@@ -161,6 +161,44 @@ def rebind_failed_project_canary(
     return rebound
 
 
+def rebind_unrolled_project_canary(
+    receipt: dict[str, Any],
+    *,
+    project_id: str,
+    unrolled_take_id: str,
+    next_take_id: str,
+) -> dict[str, Any]:
+    """Move an unpromoted canary from a Take that has not rolled to the Take rolling now.
+
+    The canary is whichever Take first renders on the candidate kernel and
+    proves it through AutoQC and 1080 finish. A canary parked behind the
+    queue (a retake re-queued last after a restart) keeps the whole rundown
+    on the plain lane for nothing; the proof binds to the next Take instead.
+    """
+    clean_project_id = project_id.strip()
+    clean_unrolled_id = unrolled_take_id.strip()
+    clean_next_id = next_take_id.strip()
+    if not clean_project_id or not clean_unrolled_id or not clean_next_id:
+        raise QualificationError("Project, unrolled Take, and next Take are required.")
+    if clean_unrolled_id == clean_next_id:
+        raise QualificationError("The unrolled canary and the next Take must differ.")
+    if receipt.get("stage") != "operator_passed_quality_canary_required":
+        raise QualificationError("Only an unpromoted Project canary may be rebound.")
+    if receipt.get("scope_project_id") != clean_project_id:
+        raise QualificationError("Another Project owns this attention canary.")
+    if str(receipt.get("quality_canary_take_id") or "").strip() != clean_unrolled_id:
+        raise QualificationError("Another selected immutable Take owns this Project canary.")
+    rebound = build_operator_receipt(
+        dict(receipt.get("operator_evidence") or {}),
+        scope_project_id=clean_project_id,
+        approved_by=str(receipt.get("approved_by") or "Diony B200 qualification"),
+    )
+    rebound["quality_canary_take_id"] = clean_next_id
+    rebound["previous_unrolled_canary_take_id"] = clean_unrolled_id
+    rebound["source_receipt_sha256"] = _sha256(receipt)
+    return rebound
+
+
 def promote_quality_canary(
     receipt: dict[str, Any],
     evidence: dict[str, Any],

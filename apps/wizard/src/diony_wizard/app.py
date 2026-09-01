@@ -692,15 +692,68 @@ def _record_connect(answers: dict[str, str]) -> None:
     bind_ssh_env(_workbook.get("connect") or {})
 
 
+NO_STORE = {"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"}
+
+
+def _keys_loaded() -> None:
+    """Load ~/.diony/keys.env into env when the Director package is present."""
+    try:
+        from diony_director.config import load_keys_env
+
+        load_keys_env()
+    except ImportError:
+        pass
+
+
 @app.get("/")
 def index() -> FileResponse:
-    # Every Studio open re-identifies a signed GPU: a lease recycled since the
-    # last open must land on Connect, not on "Setup is locked".
+    """The Studio opening: engine selection is always the front door.
+
+    The classic hardware rail is retired from the chooser; it remains
+    reachable only at /classic for existing local-cluster operators.
+    """
+    return FileResponse(STATIC / "opening.html", headers=NO_STORE)
+
+
+@app.get("/classic")
+def classic() -> FileResponse:
+    # Every classic Studio open re-identifies a signed GPU: a lease recycled
+    # since the last open must land on Connect, not on "Setup is locked".
     kick_identify_signed_gpu()
-    return FileResponse(
-        STATIC / "index.html",
-        headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
-    )
+    return FileResponse(STATIC / "index.html", headers=NO_STORE)
+
+
+@app.get("/api/opening")
+def opening_state() -> dict:
+    from diony_contracts.cluster import read_engine_choice
+
+    _keys_loaded()
+    return {
+        "engine": read_engine_choice(),
+        "providers": {
+            "grok": bool(os.environ.get("XAI_API_KEY", "").strip()),
+            "google-flow": bool(os.environ.get("USEAPI_TOKEN", "").strip()),
+        },
+        "flow_plan": os.environ.get("DIONY_FLOW_PLAN", "pro").strip() or "pro",
+        "director_url": "http://director.diony.local",
+        "producer_url": "http://producer.diony.local",
+        "classic_url": "/classic",
+    }
+
+
+class EngineChoiceBody(BaseModel):
+    engine: str
+
+
+@app.post("/api/opening/engine")
+def choose_engine(body: EngineChoiceBody) -> dict:
+    from diony_contracts.cluster import write_engine_choice
+
+    try:
+        write_engine_choice(body.engine)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    return {"engine": body.engine, "next": "http://director.diony.local"}
 
 
 @app.get("/api/state")

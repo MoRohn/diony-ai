@@ -153,9 +153,22 @@ def _attention_plan(project: Project, take: Take) -> tuple[str | None, bool, Pat
             return decision.backend, False, path
         prior_scope = str(receipt.get("scope_project_id") or "").strip()
         expected_take = str(receipt.get("quality_canary_take_id") or "").strip()
+        moved_from = ""
         if prior_scope == project.id and expected_take and expected_take != take.id:
-            return None, False, path
-        rebound = bind_project_canary(receipt, project_id=project.id, take_id=take.id)
+            parked = _parked_canary_take(project, expected_take)
+            if parked is None:
+                return None, False, path
+            from diony_wan.attention_qualification import rebind_unrolled_project_canary
+
+            # The bound canary has not rolled (re-queued last after a restart):
+            # the proof binds to the Take rolling now so the rundown does not
+            # spend itself on the plain lane waiting for it.
+            rebound = rebind_unrolled_project_canary(
+                receipt, project_id=project.id, unrolled_take_id=parked.id, next_take_id=take.id
+            )
+            moved_from = parked.id
+        else:
+            rebound = bind_project_canary(receipt, project_id=project.id, take_id=take.id)
     except (ImportError, ValueError):
         return None, False, path
     if prior_scope and prior_scope != project.id:
@@ -166,11 +179,30 @@ def _attention_plan(project: Project, take: Take) -> tuple[str | None, bool, Pat
         _write_json_atomic(path, rebound)
         record_activity(
             "gpu",
-            f"{take.id} · B200 cuDNN attention quality canary selected",
+            f"{take.id} · B200 cuDNN attention quality canary selected"
+            + (f" (moved from {moved_from}, which has not rolled yet)" if moved_from else ""),
             level="live",
             shot_id=take.shot_id,
         )
     return "cudnn_sdpa", True, path
+
+
+def _parked_canary_take(project: Project, take_id: str) -> Take | None:
+    """The bound canary Take if it exists and has never rendered; None when it rolled or is unknown."""
+    try:
+        other = project.take(take_id)
+    except KeyError:
+        return None
+    if other.generation_receipt is not None:
+        return None
+    # A fresh Take pre-registers its negative's path; only landed bytes mean it rolled.
+    if any(artifact.kind == ArtifactKind.NEGATIVE_720 and artifact.bytes > 32 for artifact in other.artifacts):
+        return None
+    if take_has_live_negative(other, project):
+        return None
+    if other.qc is not None and other.qc.measurement_version:
+        return None
+    return other
 
 
 def _complete_attention_canary(project: Project, take: Take, receipt_path: Path) -> None:
@@ -326,6 +358,11 @@ def qc_contract_valid(project: Project, take: Take) -> bool:
         except StopIteration:
             return False
         expected = project.shots[index - 1].selected_take_id if index > 0 else None
+        if qc.continuity_waived:
+            # The previous print changed after this clip rolled and no retake
+            # could chain from it (advance.refresh_stale_continuity); the
+            # waiver is the recorded decision, not missing evidence.
+            return True
         if (
             not expected
             or qc.continuity_from_take_id != expected
@@ -684,21 +721,37 @@ def hero_candidates_enabled() -> bool:
     }
 
 
-def _candidate_score(take: Take) -> tuple:
-    """Order hero candidates by measured quality; deterministic tie-breaks."""
+def _candidate_score(take: Take, project: Project | None = None) -> tuple:
+    """Order hero candidates by measured quality; deterministic tie-breaks.
+
+    A PASS that proves the current Shot contract (its previous-frame chain
+    names the previous Shot's print today) outranks a PASS that does not:
+    sh-020 (2026-08-28) re-rolled twice from the replacement print, passed
+    both, and lost the hero pick to the stale first take on raw SSIM alone.
+    Reference fidelity is the layout proxy when measured (see
+    REFERENCE_LOCK_MEASURE); the full-frame value is the legacy fallback.
+    """
     qc = take.qc
     if qc is None:
-        return (-1, 0.0, 0.0, 0.0, 0.0, -take.attempt)
+        return (-1, 1, 0.0, 0.0, 0.0, 0.0, -take.attempt)
     verdict_rank = {QCVerdict.PASS: 3, QCVerdict.WARN: 1, QCVerdict.FAIL: 0}.get(qc.verdict, 0)
     if qc.settled_by_policy:
         # A print settled at the retake cap outranks every rejection and any
         # queued placeholder; only a measured PASS beats it.
         verdict_rank = 2
-    reference = qc.reference_similarity
+    chain_ok = 1
+    if project is not None and qc.verdict == QCVerdict.PASS and not qc_contract_valid(project, take):
+        chain_ok = 0
+    reference = qc.reference_layout_similarity
+    if reference is None and qc.reference_layout_similarities:
+        reference = min(qc.reference_layout_similarities.values())
+    if reference is None:
+        reference = qc.reference_similarity
     if reference is None and qc.reference_similarities:
         reference = min(qc.reference_similarities.values())
     return (
         verdict_rank,
+        chain_ok,
         round(reference or 0.0, 4),
         -(qc.temporal_residual_p95 or 0.0),
         -(qc.flicker_luma_p95 or 0.0),
@@ -721,7 +774,7 @@ def select_hero_print(project: Project, shot) -> Take:
         item.qc is not None and item.qc.verdict == QCVerdict.PASS for item in candidates
     ):
         return settled
-    best = max(candidates, key=_candidate_score)
+    best = max(candidates, key=lambda item: _candidate_score(item, project))
     if shot.selected_take_id != best.id:
         previous = shot.selected_take_id
         shot.selected_take_id = best.id
@@ -740,7 +793,7 @@ def select_hero_print(project: Project, shot) -> Take:
                         reason=(item.qc.notes if item.qc else "")[:200],
                         rejected_because="" if item.id == best.id else "ranked below by verdict, identity, and temporal evidence",
                     )
-                    for item in sorted(candidates, key=_candidate_score, reverse=True)
+                    for item in sorted(candidates, key=lambda item: _candidate_score(item, project), reverse=True)
                 ],
                 selected=best.id,
                 reason="hero coverage rolled two seeds; AutoQC evidence ranks the print",
@@ -813,6 +866,78 @@ def refresh_take_measurement(project: Project, take: Take) -> bool:
     record_activity(
         "qc",
         f"{take.shot_id} · re-measured temporal evidence at {MEASUREMENT_VERSION}",
+        shot_id=take.shot_id,
+    )
+    return True
+
+
+def refresh_voice_measurement(project: Project, take: Take) -> bool:
+    """Re-measure a selected print's delivered speech when the speech QC version is stale.
+
+    The negative and its audio are on disk, so a version bump (a floor that
+    now follows the line, new fingerprints) costs one audio decode and no
+    render. A print settled by retake-cap policy keeps its WARN and its
+    policy note; the speech evidence underneath it is refreshed so Mix reads
+    the current receipt. Runs at most once per take.
+    """
+    from diony_producer.voice import SPEECH_QC_VERSION, verify_voice_animation
+
+    qc = take.qc
+    package = take.voice_package
+    if qc is None or package is None or package.qc is None:
+        return False
+    if package.qc.measurement_version == SPEECH_QC_VERSION:
+        return False
+    negative = next(
+        (item for item in take.artifacts if item.kind == ArtifactKind.NEGATIVE_720),
+        None,
+    )
+    if negative is None:
+        return False
+    path = vault_root() / negative.path
+    if not path.is_file():
+        return False
+    try:
+        updated = verify_voice_animation(project, take, path)
+    except Exception as exc:  # noqa: BLE001 — a failed re-measure keeps the standing evidence
+        record_activity(
+            "qc",
+            f"{take.shot_id} · speech re-measure at {SPEECH_QC_VERSION} failed: {exc}",
+            level="warn",
+            shot_id=take.shot_id,
+        )
+        return False
+    if updated is None or updated.qc is None:
+        return False
+    speech_qc = updated.qc
+    shot = project.shot(take.shot_id)
+    dialogue_required = bool(shot.audio_line or shot.dialogue_turns)
+    qc.voice_measurement_version = speech_qc.measurement_version
+    qc.speech_presence_score = speech_qc.speech_presence_score
+    qc.speech_presence_min = speech_qc.speech_presence_min
+    qc.speech_dialogue_sha256 = speech_qc.dialogue_sha256
+    qc.speech_request_sha256 = speech_qc.request_sha256
+    qc.speech_tail_ms = speech_qc.speech_tail_ms
+    qc.dialogue_lufs = speech_qc.integrated_lufs
+    qc.dialogue_true_peak_dbtp = speech_qc.true_peak_dbtp
+    qc.voice_ready_ok = bool(updated.verified) if dialogue_required else None
+    qc.audio_ready_ok = bool(speech_qc.audio_present) if dialogue_required else qc.audio_ready_ok
+    if updated.verified and qc.notes.strip().startswith(("Voice audio failed", "Best of")):
+        note = qc.notes.strip()
+        policy, _, rest = note.partition(" · ") if note.startswith("Best of") else ("", "", note)
+        verdict_note = f"Speech re-measured at {SPEECH_QC_VERSION}: passes (previously: {rest.strip()})"
+        qc.notes = f"{policy} · {verdict_note}" if policy else verdict_note
+        if qc.verdict == QCVerdict.FAIL and qc.production_clean_ok:
+            qc.verdict = QCVerdict.PASS
+    persist_project(project)
+    record_activity(
+        "qc",
+        (
+            f"{take.shot_id} · re-measured speech evidence at {SPEECH_QC_VERSION}: "
+            f"presence {speech_qc.speech_presence_score if speech_qc.speech_presence_score is not None else 'unmeasured'} "
+            f"against floor {speech_qc.speech_presence_min:.2f} for a {speech_qc.line_word_count}-word line; "
+            + ("passes" if updated.verified else "; ".join(speech_qc.failures()))
+        ),
         shot_id=take.shot_id,
     )
     return True
@@ -998,7 +1123,45 @@ def settled_print(project: Project, shot_id: str) -> Take | None:
     return take if take.qc is not None and take.qc.settled_by_policy else None
 
 
-def settle_exhausted_shot(project: Project, shot) -> Take | None:
+def _voice_only_rejection(take: Take) -> bool:
+    """A measured negative whose only failed gate is the delivered speech."""
+    qc = take.qc
+    if qc is None or qc.verdict != QCVerdict.FAIL:
+        return False
+    if not qc.notes.strip().startswith("Voice audio failed"):
+        return False
+    return bool(qc.production_clean_ok) and bool(qc.speech_dialogue_sha256)
+
+
+def futile_voice_retake(project: Project, take: Take) -> Take | None:
+    """The earlier attempt whose identical speech already failed the same way, if any.
+
+    Wan2.2's native TTS is deterministic for one speech request: the four
+    sh-030 renders of 2026-08-28 carried byte-identical dialogue and the same
+    presence 0.108 four times. When a voice-only rejection repeats an earlier
+    attempt's dialogue fingerprint and request, another picture roll cannot
+    change the measurement.
+    """
+    if not _voice_only_rejection(take):
+        return None
+    qc = take.qc
+    assert qc is not None
+    for item in project.takes_for(take.shot_id):
+        if item.id == take.id or item.origin != TakeOrigin.GENERATION or item.qc is None:
+            continue
+        if item.attempt >= take.attempt:
+            continue
+        if not _voice_only_rejection(item):
+            continue
+        if (
+            item.qc.speech_dialogue_sha256 == qc.speech_dialogue_sha256
+            and item.qc.speech_request_sha256 == qc.speech_request_sha256
+        ):
+            return item
+    return None
+
+
+def settle_exhausted_shot(project: Project, shot, *, futile_after: Take | None = None) -> Take | None:
     """After the retake cap, the best-scoring attempt proceeds as the print.
 
     Four measured rejections are the evidence that this line does not pass
@@ -1016,7 +1179,7 @@ def settle_exhausted_shot(project: Project, shot) -> Take | None:
         for item in project.takes_for(shot.id)
         if item.origin == TakeOrigin.GENERATION
     ]
-    if len(generations) < RETAKE_CAP:
+    if len(generations) < RETAKE_CAP and futile_after is None:
         return None
     measured = [
         item
@@ -1033,6 +1196,11 @@ def settle_exhausted_shot(project: Project, shot) -> Take | None:
     best.qc.settled_score = score
     best.qc.notes = (
         f"Best of {len(generations)} attempts selected by policy (score {score:.2f})"
+        + (
+            f" · identical speech on {futile_after.id}; a retake cannot change the voice measurement"
+            if futile_after is not None
+            else ""
+        )
         + (f" · {verdict_note}" if verdict_note else "")
     )
     previous = shot.selected_take_id
@@ -1054,7 +1222,12 @@ def settle_exhausted_shot(project: Project, shot) -> Take | None:
             for item in sorted(measured, key=lambda item: (-attempt_score(item), -item.attempt))
         ],
         selected=best.id,
-        reason=f"retake cap reached; highest attempt score {score:.2f} proceeds by policy as WARN",
+        reason=(
+            f"voice-only rejection repeats {futile_after.id}'s identical dialogue audio; "
+            f"highest attempt score {score:.2f} proceeds by policy as WARN"
+            if futile_after is not None
+            else f"retake cap reached; highest attempt score {score:.2f} proceeds by policy as WARN"
+        ),
         confidence=min(0.9, max(0.3, score)),
         shot_id=shot.id,
         take_id=best.id,
@@ -1067,8 +1240,13 @@ def settle_exhausted_shot(project: Project, shot) -> Take | None:
     record_activity(
         "qc",
         (
-            f"{shot.id} · {len(generations)} attempts spent; best attempt {best.id} proceeds "
-            f"by policy (score {score:.2f}; ranked {ranked})"
+            (
+                f"{shot.id} · {len(generations)} attempts spent; "
+                if futile_after is None
+                else f"{shot.id} · voice measurement is identical on {futile_after.id} and {generations[-1].id} "
+                "(same speech request, same dialogue audio); a retake cannot change it; "
+            )
+            + f"best attempt {best.id} proceeds by policy (score {score:.2f}; ranked {ranked})"
             + (f"; replaces {previous}" if previous and previous != best.id else "")
         ),
         level="live",
@@ -1109,6 +1287,10 @@ def auto_retake_for_qc_failure(project: Project, take: Take) -> Take | None:
     ]
     if len(generations) >= RETAKE_CAP:
         settle_exhausted_shot(project, shot)
+        return None
+    repeated = futile_voice_retake(project, take)
+    if repeated is not None:
+        settle_exhausted_shot(project, shot, futile_after=repeated)
         return None
     refresh_reference_shot(project, shot)
     # Evidence-driven direction first: DeepSeek addresses every measured symptom
@@ -1186,10 +1368,39 @@ def _reference_sha256(project: Project, take: Take) -> str:
     return hashlib.sha256("|".join(rows).encode("utf-8")).hexdigest() if rows else ""
 
 
+# Reference lock is judged on a layout proxy: both frames scaled to 320x180 and
+# softened (gblur sigma 1.5) before SSIM. Full-frame 1280x720 SSIM against the
+# conditioning still is dominated by fine texture that Wan's VAE re-renders and
+# by ordinary subject motion: measured on the B200 (2026-08-28) a faithful
+# static-camera wide shot fell to 0.64 while an unrelated scene in the same
+# medium scored 0.57, a 0.07 band no floor can sit in. On the layout proxy the
+# same faithful take holds 0.91 first / 0.60 last and unrelated or drifted
+# takes stay at or below 0.56 first / 0.49 later.
+REFERENCE_LOCK_MEASURE = "layout-ssim-320x180-gblur1.5"
+_LAYOUT_SSIM_PREFILTER = "scale=320:180,gblur=sigma=1.5"
+_RAW_SSIM_PREFILTER = "scale=1280:720"
+REFERENCE_LOCK_FIRST_FLOOR = 0.75
+REFERENCE_LOCK_DRIFT_FLOOR = 0.55
+
+
 def _ssim_at(negative: Path, reference: Path, *, seconds: float = 0.0) -> float | None:
+    """Full-frame 1280x720 SSIM of the negative at ``seconds`` against ``reference`` (evidence)."""
+    return _ssim_between(negative, reference, seconds=seconds, prefilter=_RAW_SSIM_PREFILTER)
+
+
+def _layout_ssim_at(negative: Path, reference: Path, *, seconds: float = 0.0) -> float | None:
+    """Layout-proxy SSIM (320x180, softened) of the negative at ``seconds`` against ``reference``."""
+    return _ssim_between(negative, reference, seconds=seconds, prefilter=_LAYOUT_SSIM_PREFILTER)
+
+
+def _ssim_between(negative: Path, reference: Path, *, seconds: float, prefilter: str) -> float | None:
     ffmpeg = resolve_media_tool("ffmpeg")
     if not ffmpeg:
         return None
+    graph = (
+        f"[0:v:0]{prefilter},setpts=PTS-STARTPTS[a];"
+        f"[1:v:0]{prefilter},setpts=PTS-STARTPTS[b];[a][b]ssim"
+    )
     command = [
         ffmpeg,
         "-nostdin",
@@ -1203,7 +1414,7 @@ def _ssim_at(negative: Path, reference: Path, *, seconds: float = 0.0) -> float 
         "-i",
         str(reference),
         "-filter_complex",
-        r"[0:v:0]scale=1280:720,setpts=PTS-STARTPTS[a];[1:v:0]scale=1280:720,setpts=PTS-STARTPTS[b];[a][b]ssim",
+        graph,
         "-frames:v",
         "1",
         "-f",
@@ -1233,6 +1444,15 @@ def _reference_similarities(
     reference = conditioning_image(negative) or reference_frame(project, shot)
     if reference is None:
         return {}
+    scores: dict[str, float] = {}
+    for label, seconds in _reference_checkpoints(shot, media).items():
+        score = _ssim_at(negative, reference, seconds=seconds)
+        if score is not None:
+            scores[label] = score
+    return scores
+
+
+def _reference_checkpoints(shot, media: dict) -> dict[str, float]:
     fps = float(media.get("fps") or shot.fps or 23.976)
     frames = int(media.get("frames") or shot.duration_frames)
     duration = max(0.0, (frames - 1) / fps) if fps else 0.0
@@ -1246,12 +1466,75 @@ def _reference_similarities(
                 "last": duration,
             }
         )
+    return positions
+
+
+def _reference_layout_similarities(
+    project: Project,
+    take: Take,
+    negative: Path,
+    media: dict,
+) -> dict[str, float]:
+    """The gated measure: layout-proxy SSIM at the same checkpoints as the full-frame evidence."""
+    shot = project.shot(take.shot_id)
+    if not shot.keyframe_asset_ids:
+        return {}
+    reference = conditioning_image(negative) or reference_frame(project, shot)
+    if reference is None:
+        return {}
     scores: dict[str, float] = {}
-    for label, seconds in positions.items():
-        score = _ssim_at(negative, reference, seconds=seconds)
+    for label, seconds in _reference_checkpoints(shot, media).items():
+        score = _layout_ssim_at(negative, reference, seconds=seconds)
         if score is not None:
             scores[label] = score
     return scores
+
+
+def _reference_lock_verdict(
+    raw: dict[str, float],
+    layout: dict[str, float],
+    *,
+    first_floor: float,
+    drift_floor: float,
+    legacy_floor: float,
+    camera_move: str = "static",
+) -> tuple[bool | None, str]:
+    """Judge the reference lock. Returns (verified, detail); verified is None without evidence.
+
+    The conditioning still must be recognisable in the first frame (layout
+    SSIM >= ``first_floor``: faithful takes measure 0.82–0.99, unrelated or
+    drifted ≤ 0.56). Later checkpoints are evidence, not a gate: on the
+    B200 (2026-08-28) faithful static wide shots with walking subjects fell
+    to 0.55–0.60 and a steadicam push-in to 0.54, while an unrelated scene
+    sits flat at 0.49 — no floor separates them, and a clip that starts
+    faithful and then cuts or morphs is caught by the temporal residual and
+    flicker gates, and identity by the face and adherence lanes. A later
+    checkpoint under ``drift_floor`` is reported as advisory. Without a
+    layout measure the legacy full-frame floor judges the raw evidence.
+    """
+    if layout:
+        first = layout.get("first")
+        later = {k: v for k, v in layout.items() if k != "first"}
+        low_label, low = min(later.items(), key=lambda kv: kv[1]) if later else ("", None)
+        first_ok = first is None or first >= first_floor
+        bits = []
+        if first is not None:
+            bits.append(f"layout SSIM first {first:.4f}")
+        if low is not None:
+            bits.append(f"later minimum {low:.4f} at {low_label}")
+        bits.append(f"required first ≥ {first_floor:.2f}")
+        if low is not None and low < drift_floor:
+            bits.append(
+                f"later checkpoints under {drift_floor:.2f} are advisory"
+                + (f" (camera {camera_move})" if str(camera_move or "static") != "static" else "")
+            )
+        if raw:
+            bits.append(f"full-frame minimum {min(raw.values()):.4f}")
+        return first_ok, "; ".join(bits)
+    if raw:
+        low = min(raw.values())
+        return low >= legacy_floor, f"minimum sampled SSIM {low:.4f}; required {legacy_floor:.2f}"
+    return None, "missing"
 
 
 def _reference_similarity(project: Project, take: Take, negative: Path) -> float | None:
@@ -1297,13 +1580,13 @@ def _chain_color_evidence(project: Project, take: Take, negative: Path) -> float
     return chain_color_drift(current, reference)
 
 
-def _quality_ssim_floor(name: str) -> float:
+def _quality_ssim_floor(name: str, floor: float = 0.75) -> float:
     """Allow stricter site policy, never a weaker binding-reference floor."""
     try:
-        configured = float(os.environ.get(name, "0.75"))
+        configured = float(os.environ.get(name, str(floor)))
     except ValueError:
-        configured = 0.75
-    return max(0.75, configured)
+        configured = floor
+    return max(floor, configured)
 
 
 def negative_lineage_valid(project: Project, take: Take, *, verify_hash: bool = False) -> bool:
@@ -1987,12 +2270,28 @@ def attach_negative(
         if compatibility_score is not None:
             similarities = {"first": compatibility_score}
     similarity = min(similarities.values()) if similarities else None
+    layout_similarities = (
+        {}
+        if err or not dest.is_file() or not similarities
+        else _reference_layout_similarities(project, take, dest, media)
+    )
+    layout_similarity = min(layout_similarities.values()) if layout_similarities else None
     reference_ids = list(shot.keyframe_asset_ids)
-    # Background-dominant SSIM can otherwise let an unrelated subject pass. A
-    # binding character or world reference must retain at least 0.75 at every
-    # sampled checkpoint; camera motion is carried by previous-frame handoff.
-    threshold = _quality_ssim_floor("DIONY_REFERENCE_SSIM_MIN")
-    reference_verified = not reference_ids or (similarity is not None and similarity >= threshold)
+    # A binding character or world reference must be recognisable in the
+    # first frame and the scene must stay that scene at every sampled
+    # checkpoint, judged on the layout proxy (see REFERENCE_LOCK_MEASURE);
+    # camera motion is carried by previous-frame handoff.
+    threshold = _quality_ssim_floor("DIONY_REFERENCE_SSIM_MIN", REFERENCE_LOCK_FIRST_FLOOR)
+    drift_threshold = _quality_ssim_floor("DIONY_REFERENCE_DRIFT_SSIM_MIN", REFERENCE_LOCK_DRIFT_FLOOR)
+    lock_ok, lock_detail = _reference_lock_verdict(
+        similarities,
+        layout_similarities,
+        first_floor=threshold,
+        drift_floor=drift_threshold,
+        legacy_floor=threshold,
+        camera_move=str(getattr(shot.camera_move, "value", shot.camera_move) or "static"),
+    )
+    reference_verified = not reference_ids or lock_ok is True
     continuity_take_id, continuity_similarity = (
         (None, None) if err or not dest.is_file() else _continuity_evidence(project, take, dest)
     )
@@ -2080,11 +2379,7 @@ def attach_negative(
             f"contract requires {expected_frames}; booked picture is trimmed, never stretched."
         )
     if not failure and not reference_verified:
-        measured = "missing" if similarity is None else f"{similarity:.4f}"
-        failure = (
-            f"Reference lock failed across the clip (minimum sampled SSIM {measured}; "
-            f"required {threshold:.2f})."
-        )
+        failure = f"Reference lock failed across the clip ({lock_detail})."
     if not failure and not continuity_verified:
         measured = "missing" if continuity_similarity is None else f"{continuity_similarity:.4f}"
         failure = (
@@ -2140,12 +2435,18 @@ def attach_negative(
         voice_measurement_version=(speech_qc.measurement_version if speech_qc else ""),
         speech_backend=(voice_package.backend if voice_package and speech_qc else ""),
         speech_presence_score=(speech_qc.speech_presence_score if speech_qc else None),
+        speech_presence_min=(speech_qc.speech_presence_min if speech_qc else None),
+        speech_dialogue_sha256=(speech_qc.dialogue_sha256 if speech_qc else ""),
+        speech_request_sha256=(speech_qc.request_sha256 if speech_qc else ""),
         speech_tail_ms=(speech_qc.speech_tail_ms if speech_qc else None),
         dialogue_lufs=(speech_qc.integrated_lufs if speech_qc else None),
         dialogue_true_peak_dbtp=(speech_qc.true_peak_dbtp if speech_qc else None),
         reference_asset_ids=reference_ids,
         reference_similarity=similarity,
         reference_similarities=similarities,
+        reference_layout_similarity=layout_similarity,
+        reference_layout_similarities=layout_similarities,
+        reference_lock_measure=REFERENCE_LOCK_MEASURE if layout_similarities else "",
         reference_verified=reference_verified,
         continuity_from_take_id=continuity_take_id,
         continuity_similarity=continuity_similarity,
@@ -2392,6 +2693,15 @@ def run_one(
         )
 
 
+def _rundown_position(project: Project):
+    order = {shot.id: index for index, shot in enumerate(project.shots)}
+
+    def key(take: Take) -> tuple[int, int]:
+        return order.get(take.shot_id, len(order)), int(take.attempt or 0)
+
+    return key
+
+
 def start_farm(project: Project, takes: list[Take]) -> None:
     """Queue clips. Mark busy on this thread so Produce poll does not miss FARM.
 
@@ -2415,6 +2725,10 @@ def start_farm(project: Project, takes: list[Take]) -> None:
             if _total == 0:
                 _done = 0
         _pending.extend(takes)
+        # Rundown order, not arrival order: a retake minted late (or re-queued
+        # last by a restart) rolls in its Shot's place so previous-frame
+        # handoff and the attention canary follow the story, not the clock.
+        _pending.sort(key=_rundown_position(project))
         _total = max(_total, _done + len(_pending))
         if not _busy:
             _busy = True

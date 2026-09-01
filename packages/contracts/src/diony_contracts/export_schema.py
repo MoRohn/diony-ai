@@ -3,6 +3,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from diony_contracts.director import CostEstimate, DirectorOp
+from diony_contracts.production import (
+    AssemblyMap,
+    CharacterProfile,
+    ClipReview,
+    ClipUnit,
+    ProductionPackage,
+    Script,
+    SettingProfile,
+    VoiceProfile,
+)
 from diony_contracts.fixture import demo_project
 from diony_contracts.models import (
     Asset,
@@ -144,6 +155,16 @@ def exported_models() -> dict[str, type]:
         "beat_grid": BeatGrid,
         "score_alignment": ScoreAlignment,
         "edit_decision_list": EditDecisionList,
+        "cost_estimate": CostEstimate,
+        "director_op": DirectorOp,
+        "assembly_map": AssemblyMap,
+        "character_profile": CharacterProfile,
+        "clip_review": ClipReview,
+        "clip_unit": ClipUnit,
+        "production_package": ProductionPackage,
+        "script": Script,
+        "setting_profile": SettingProfile,
+        "voice_profile": VoiceProfile,
     }
     return models
 

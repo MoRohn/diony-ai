@@ -2,6 +2,7 @@
 
 http://studio.diony.local → 127.0.0.1:8787
 http://producer.diony.local → 127.0.0.1:8788
+http://director.diony.local → 127.0.0.1:8790
 """
 
 from __future__ import annotations
@@ -18,11 +19,17 @@ from pathlib import Path
 
 STUDIO_HOST = "studio.diony.local"
 PRODUCER_HOST = "producer.diony.local"
+DIRECTOR_HOST = "director.diony.local"
 WIZARD_PORT = 8787
 PRODUCER_PORT = 8788
+DIRECTOR_PORT = 8790
 GATEWAY_PORT = 80
 HOSTS_MARK = "# diony-ai product names"
 NAMES_HEADER = "X-Diony-Names"
+NAMES_GEN_HEADER = "X-Diony-Names-Gen"
+# Bump when router behavior changes (gen 2: 300s forward timeout, director route).
+# A router advertising an older generation reads as stale and gets replaced.
+NAMES_GEN = "2"
 
 
 def wizard_port() -> int:
@@ -31,6 +38,10 @@ def wizard_port() -> int:
 
 def producer_port() -> int:
     return int(os.environ.get("DIONY_PRODUCER_PORT", str(PRODUCER_PORT)))
+
+
+def director_port() -> int:
+    return int(os.environ.get("DIONY_DIRECTOR_PORT", str(DIRECTOR_PORT)))
 
 
 def gateway_port() -> int:
@@ -52,8 +63,10 @@ def hosts_block() -> str:
         f"{HOSTS_MARK}\n"
         f"127.0.0.1 {STUDIO_HOST}\n"
         f"127.0.0.1 {PRODUCER_HOST}\n"
+        f"127.0.0.1 {DIRECTOR_HOST}\n"
         f"::1 {STUDIO_HOST}\n"
         f"::1 {PRODUCER_HOST}\n"
+        f"::1 {DIRECTOR_HOST}\n"
     )
 
 
@@ -86,7 +99,7 @@ def hosts_ready(path: Path | None = None) -> bool:
         text = dest.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
-    return STUDIO_HOST in text and PRODUCER_HOST in text
+    return STUDIO_HOST in text and PRODUCER_HOST in text and DIRECTOR_HOST in text
 
 
 def write_hosts(path: Path | None = None) -> bool:
@@ -179,7 +192,20 @@ def _note_privilege_error(proc: subprocess.CompletedProcess[str]) -> None:
         return
 
 
-def handler_class(wizard: int, producer: int) -> type[BaseHTTPRequestHandler]:
+def route_label(host: str) -> str:
+    """Host header → service label. Unknown names fall back to Studio."""
+    name = (host or "").split(":")[0].lower()
+    if name.startswith("producer."):
+        return "producer"
+    if name.startswith("director."):
+        return "director"
+    return "studio"
+
+
+def handler_class(
+    wizard: int, producer: int, director: int | None = None
+) -> type[BaseHTTPRequestHandler]:
+    director_backend = director if director is not None else director_port()
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: object) -> None:  # noqa: A003
             return
@@ -206,11 +232,15 @@ def handler_class(wizard: int, producer: int) -> type[BaseHTTPRequestHandler]:
             self._forward()
 
         def _label(self) -> str:
-            host = (self.headers.get("Host") or "").split(":")[0].lower()
-            return "producer" if host.startswith("producer.") else "studio"
+            return route_label(self.headers.get("Host") or "")
 
         def _backend(self) -> int:
-            return producer if self._label() == "producer" else wizard
+            label = self._label()
+            if label == "producer":
+                return producer
+            if label == "director":
+                return director_backend
+            return wizard
 
         def _forward(self) -> None:
             label = self._label()
@@ -220,16 +250,17 @@ def handler_class(wizard: int, producer: int) -> type[BaseHTTPRequestHandler]:
             headers = {
                 k: v for k, v in self.headers.items() if k.lower() not in {"host", "connection"}
             }
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=300)
             try:
                 conn.request(self.command, self.path, body=body, headers=headers)
                 resp = conn.getresponse()
                 data = resp.read()
             except OSError:
-                msg = b"Studio or Producer is not up.\n"
+                msg = b"Studio, Producer, or Director is not up.\n"
                 self.send_response(502)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
                 self.send_header(NAMES_HEADER, label)
+                self.send_header(NAMES_GEN_HEADER, NAMES_GEN)
                 self.send_header("Content-Length", str(len(msg)))
                 self.end_headers()
                 if self.command != "HEAD":
@@ -239,6 +270,7 @@ def handler_class(wizard: int, producer: int) -> type[BaseHTTPRequestHandler]:
                 conn.close()
             self.send_response(resp.status)
             self.send_header(NAMES_HEADER, label)
+            self.send_header(NAMES_GEN_HEADER, NAMES_GEN)
             for key, value in resp.getheaders():
                 if key.lower() not in {"transfer-encoding", "connection", NAMES_HEADER.lower()}:
                     self.send_header(key, value)
@@ -263,6 +295,131 @@ def gateway_healthy(port: int | None = None, timeout: float = 0.6) -> bool:
     # `wizard` is the label emitted by the first installed Diony gateway.
     # Accept it so an existing privileged router does not trigger a password loop.
     return names.startswith(("studio", "wizard"))
+
+
+def _route_label_at(port: int, host: str, timeout: float = 0.6) -> str:
+    label, _gen = _route_probe_at(port, host, timeout)
+    return label
+
+
+def _route_probe_at(port: int, host: str, timeout: float = 0.6) -> tuple[str, str]:
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        conn.request("GET", "/", headers={"Host": host})
+        resp = conn.getresponse()
+        resp.read()
+        label = (resp.getheader(NAMES_HEADER) or "").lower()
+        gen = (resp.getheader(NAMES_GEN_HEADER) or "").strip()
+        conn.close()
+    except OSError:
+        return "", ""
+    return label, gen
+
+
+def gateway_current(port: int | None = None, timeout: float = 0.6) -> bool:
+    """A Diony router answers AND it routes all three product names.
+
+    A pre-Director router labels director.diony.local as studio/wizard — that
+    router is healthy but stale, and stale must be replaceable, not accepted.
+    """
+    dest = gateway_port() if port is None else port
+    if not gateway_healthy(dest, timeout):
+        return False
+    label, gen = _route_probe_at(dest, DIRECTOR_HOST, timeout)
+    return label.startswith("director") and gen == NAMES_GEN
+
+
+def _gateway_listener_pids(port: int) -> list[int]:
+    if os.name == "nt":
+        try:
+            out = subprocess.check_output(
+                ["netstat", "-ano", "-p", "TCP"], text=True, timeout=8,
+                stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return []
+        pids: list[int] = []
+        for line in out.splitlines():
+            if "LISTEN" not in line.upper() or f":{port}" not in line:
+                continue
+            try:
+                pids.append(int(line.split()[-1]))
+            except ValueError:
+                continue
+        return list(dict.fromkeys(pids))
+    try:
+        out = subprocess.check_output(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            text=True, timeout=5, stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids = []
+    for token in out.split():
+        try:
+            pids.append(int(token))
+        except ValueError:
+            continue
+    return list(dict.fromkeys(pids))
+
+
+def _process_command(pid: int) -> str:
+    try:
+        if os.name == "nt":
+            query = (
+                "$p=Get-CimInstance Win32_Process -Filter \"ProcessId = "
+                + str(int(pid))
+                + "\"; if ($p) {$p.CommandLine}"
+            )
+            return subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command", query],
+                text=True, timeout=8, stderr=subprocess.DEVNULL,
+            ).strip()
+        return subprocess.check_output(
+            ["ps", "-p", str(int(pid)), "-o", "command="],
+            text=True, timeout=5, stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return ""
+
+
+GATEWAY_PROCESS_MARKS = ("diony_wizard.gateway", "--service gateway", "diony-names", "diony")
+
+
+def stop_stale_gateway(port: int | None = None) -> bool:
+    """Stop a stale Diony router so a current one can bind. Never touches
+    a foreign server: the listener must answer with our names header AND the
+    process command must look like a Diony gateway."""
+    dest = gateway_port() if port is None else port
+    if not _route_label_at(dest, STUDIO_HOST):
+        return not _gateway_listener_pids(dest)
+    victims = [
+        pid
+        for pid in _gateway_listener_pids(dest)
+        if any(mark in _process_command(pid).lower() for mark in GATEWAY_PROCESS_MARKS)
+    ]
+    if not victims:
+        return not _gateway_listener_pids(dest)
+    import signal as _signal
+    import time as _time
+
+    for pid in victims:
+        try:
+            os.kill(pid, _signal.SIGTERM)
+        except (OSError, PermissionError):
+            pass
+    deadline = _time.monotonic() + 4.0
+    while _time.monotonic() < deadline:
+        if not _gateway_listener_pids(dest):
+            return True
+        _time.sleep(0.2)
+    for pid in victims:
+        try:
+            os.kill(pid, _signal.SIGKILL)
+        except (OSError, PermissionError, AttributeError):
+            pass
+    _time.sleep(0.3)
+    return not _gateway_listener_pids(dest)
 
 
 def _bind_server(
@@ -291,15 +448,17 @@ def start_product_gateway(
     *,
     wizard: int | None = None,
     producer: int | None = None,
+    director: int | None = None,
     background: bool = True,
 ) -> bool:
-    """Bind the Host router. studio.diony.local → Studio, producer.diony.local → Producer."""
+    """Bind the Host router: studio/producer/director.diony.local → their ports."""
     dest = gateway_port() if port is None else port
-    if gateway_healthy(dest):
+    if gateway_current(dest):
         return True
     handler = handler_class(
         wizard if wizard is not None else wizard_port(),
         producer if producer is not None else producer_port(),
+        director if director is not None else director_port(),
     )
     ThreadingHTTPServer.allow_reuse_address = True
     servers: list[ThreadingHTTPServer] = []
@@ -308,7 +467,7 @@ def start_product_gateway(
         if srv:
             servers.append(srv)
     if not servers:
-        return gateway_healthy(dest)
+        return gateway_current(dest)
     for srv in servers:
         thread = threading.Thread(
             target=srv.serve_forever,
@@ -324,10 +483,10 @@ def start_product_gateway(
 
 def _wait_healthy(port: int, tries: int = 80) -> bool:
     for _ in range(tries):
-        if gateway_healthy(port):
+        if gateway_current(port):
             return True
         threading.Event().wait(0.15)
-    return gateway_healthy(port)
+    return gateway_current(port)
 
 
 def _detach_serve() -> None:
@@ -391,10 +550,10 @@ def ensure_product_urls(*, prompt: bool | None = None) -> bool:
     if hosts_ok and _wait_healthy(dest, tries=10):
         return True
     if not _may_prompt():
-        return hosts_ready() and gateway_healthy(dest)
+        return hosts_ready() and gateway_current(dest)
     if _spawn_privileged_install():
         return hosts_ready() and _wait_healthy(dest, tries=80)
-    return hosts_ready() and gateway_healthy(dest)
+    return hosts_ready() and gateway_current(dest)
 
 
 def cmd_write_hosts() -> int:
@@ -403,9 +562,10 @@ def cmd_write_hosts() -> int:
 
 def cmd_serve() -> int:
     dest = gateway_port()
-    if gateway_healthy(dest):
+    if gateway_current(dest):
         threading.Event().wait()
         return 0
+    stop_stale_gateway(dest)
     start_product_gateway(dest, background=False)
     return 1
 
@@ -415,8 +575,11 @@ def cmd_install() -> int:
         return 1
     flush_name_cache()
     dest = gateway_port()
-    if gateway_healthy(dest):
+    if gateway_current(dest):
         return 0
+    # A pre-Director router may hold :80; install runs privileged, so it can
+    # retire the stale Diony router before serving the current one.
+    stop_stale_gateway(dest)
     try:
         _detach_serve()
     except OSError as exc:
@@ -430,6 +593,7 @@ def cmd_ensure() -> int:
     if ok:
         print(f"http://{STUDIO_HOST}")
         print(f"http://{PRODUCER_HOST}")
+        print(f"http://{DIRECTOR_HOST}")
         return 0
     print(
         "Could not lay studio.diony.local. Approve the administrator prompt, "
@@ -444,7 +608,7 @@ def main(argv: list[str] | None = None) -> int:
     cmd = args[0] if args else "ensure"
     if cmd in {"-h", "--help"}:
         print("diony names: write-hosts | serve | install | ensure")
-        print("Lays studio.diony.local and producer.diony.local on this machine.")
+        print("Lays studio, producer, and director .diony.local names on this machine.")
         return 0
     if cmd == "write-hosts":
         return cmd_write_hosts()

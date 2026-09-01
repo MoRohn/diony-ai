@@ -83,6 +83,40 @@ _ensure_lock = threading.Lock()
 _SYNC_DEFER_SECONDS = 60.0
 _ssh_fail_at = 0.0
 _ssh_fail_key = ""
+_ssh_ok_at = 0.0
+_SSH_OK_FRESH_SECONDS = 90.0
+
+# What the desk is doing to the GPU Producer right now, so the bay can say
+# "updating to build X: repairing host deps" instead of "cannot reach
+# Producer … pod restart" while a relaunch it started itself is in flight.
+_LAUNCH_STAGES: dict[str, str] = {
+    "GPU_STAGE_WAN_PATCH": "applying Diony's Wan2.2 patches on the GPU",
+    "GPU_STAGE_RUNTIME_CHECK": "running the Wan2.2 host runtime check (about three minutes)",
+    "GPU_STAGE_PRODUCER_STOP": "stopping the previous GPU Producer",
+    "GPU_RUNTIME_OVERLAY_REPAIR": "repairing Wan2.2 host Python dependencies",
+    "GPU_MONTAGE_OVERLAY_REPAIR": "installing the montage intelligence overlay",
+    "GPU_MONTAGE_OVERLAY_UNAVAILABLE": "montage overlay unavailable; continuing without it",
+    "GPU_RUNTIME_MISSING": "Wan2.2 runtime is missing on the GPU",
+    "GPU_PACK_MISSING": "Wan2.2 pack is missing on the GPU",
+    "GPU_PRODUCER_BUSY_DEFERRED": "GPU Producer is busy; the restart waits for an idle boundary",
+    "GPU_PRODUCER_STOP_FAILED": "the previous GPU Producer would not stop",
+    "GPU_PRODUCER_LAUNCHED": "GPU Producer launched; waiting for it to answer on :8788",
+    "GPU_PRODUCER_STARTING": "GPU Producer is coming up",
+    "GPU_PRODUCER_OK": "GPU Producer answered",
+    "GPU_PRODUCER_ENV_MISMATCH": "GPU Producer environment mismatch",
+}
+_launch_lock = threading.Lock()
+_LAUNCH_STALE_SECONDS = 1200.0
+_launch: dict = {
+    "active": False,
+    "phase": "",
+    "stage": "",
+    "stamp": "",
+    "since": 0.0,
+    "updated": 0.0,
+    "finished_at": 0.0,
+    "outcome": "",
+}
 
 
 def _dry() -> bool:
@@ -545,7 +579,7 @@ PY
 
 
 def _probe_ssh(conn: dict) -> bool:
-    global _ssh_fail_at, _ssh_fail_key
+    global _ssh_fail_at, _ssh_fail_key, _ssh_ok_at
     key = f"{conn.get('host')}:{conn.get('ssh_port')}"
     if key == _ssh_fail_key and time.time() - _ssh_fail_at < 8:
         return False
@@ -569,6 +603,7 @@ def _probe_ssh(conn: dict) -> bool:
         return False
     if proc.returncode == 0 and "GPU_SSH_OK" in (proc.stdout or ""):
         _ssh_fail_key = ""
+        _ssh_ok_at = time.time()
         return True
     blob = (proc.stderr or proc.stdout or "").strip()
     _ssh_fail_at = time.time()
@@ -617,7 +652,9 @@ def _sync_gpu_apps(conn: dict) -> bool:
             return True
     if _remote_producer_busy(conn):
         _sync_deferred_at = time.time()
+        _launch_deferred(stamp)
         return False
+    _launch_begin("sync", "pushing the desk build to the GPU", stamp)
     remote = [
         "ssh",
         *_ssh_args(conn["ssh_port"]),
@@ -632,6 +669,7 @@ def _sync_gpu_apps(conn: dict) -> bool:
             "Studio App did not leave /opt/diony-ai on this GPU. "
             "App Continue, then Ready Test GPU. Produce farms that box, not this desk."
         )
+        _launch_end("failed", "/opt/diony-ai is missing on the GPU")
         return False
     ssh_e = " ".join(shlex.quote(p) for p in ["ssh", *_ssh_args(conn["ssh_port"])])
     for rel, dest in GPU_SYNC_TREES:
@@ -653,12 +691,15 @@ def _sync_gpu_apps(conn: dict) -> bool:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, check=False)
         if proc.returncode != 0:
             _set_error((proc.stderr or proc.stdout or "rsync failed")[:800])
+            _launch_end("failed", "code push to the GPU failed")
             return False
+    _launch_stage("verifying the pushed code against local digests")
     if not _remote_code_matches(conn, root):
         _set_error(
             "GPU sync integrity check failed: one or more runtime source files "
             "are missing or do not match their local SHA-256 digest."
         )
+        _launch_end("failed", "pushed code did not match local digests")
         return False
     mark = [
         "ssh",
@@ -682,8 +723,10 @@ def _sync_gpu_apps(conn: dict) -> bool:
     )
     if marked.returncode != 0:
         _set_error((marked.stderr or marked.stdout or "GPU sync stamp write failed")[:800])
+        _launch_end("failed", "desk stamp could not be written on the GPU")
         return False
     _synced_stamp = stamp
+    _launch_stage("code landed; freeing GPU :8788 for the new Producer")
     _restart_gpu_producer_bind(conn)
     return True
 
@@ -825,6 +868,15 @@ RUNTIME_REPORT=/diony/vault/.cluster/wan-host-runtime.json
 VPY=/opt/diony-ai/.venv/bin/python
 PRODUCER_BIN=/opt/diony-ai/.venv/bin/diony-producer
 ATTENTION_RECEIPT=/diony/vault/qualification/wan-cudnn-sdpa-validation.json
+# A live camera pass never pays for a runtime probe or an overlay repair: a
+# Producer that answers :8788 while generate.py --task runs is busy, and the
+# refresh waits for the idle boundary (the desk saw "updating … runtime check"
+# for three minutes on every dropped tunnel, 2026-08-28 16:09).
+if pgrep -f '[g]enerate.py.*--task' >/dev/null 2>&1 \
+  && curl -sf --max-time 4 http://127.0.0.1:8788/api/site >/dev/null 2>&1; then
+  echo GPU_PRODUCER_BUSY_DEFERRED
+  exit 0
+fi
 if [ -x "$VPY" ] && [ -f "$ATTENTION_RECEIPT" ]; then
   if DIONY_ATTENTION_RECEIPT="$ATTENTION_RECEIPT" "$VPY" -c "import json, os; from pathlib import Path; from diony_wan.attention_qualification import attention_decision; pointer=json.loads(Path('/diony/vault/.cluster/current.json').read_text()); decision=attention_decision(Path(os.environ['DIONY_ATTENTION_RECEIPT']), project_id=str(pointer.get('project_id') or '')); raise SystemExit(0 if decision.enabled else 1)"; then
     export DIONY_WAN_ATTENTION_BACKEND=cudnn_sdpa
@@ -853,6 +905,7 @@ if [ -x "$VPY" ] && [ -f "$MONTAGE_OVERLAY" ] && { [ -n "${DIONY_WHISPER_MODEL:-
     unset DIONY_WHISPER_MODEL DIONY_CLIP_MODEL
   fi
 fi
+echo GPU_STAGE_WAN_PATCH
 if [ -x "$VPY" ]; then
   "$VPY" -c "from pathlib import Path; from diony_wan.runner import ensure_attention_fallback, ensure_negative_prompt_input, ensure_optional_engine_lazy_imports, ensure_s2v_tts_prompt_path; ensure_attention_fallback(Path('/opt/wan22')); ensure_negative_prompt_input(Path('/opt/wan22')); ensure_optional_engine_lazy_imports(Path('/opt/wan22')); ensure_s2v_tts_prompt_path(Path('/opt/wan22'))"
 fi
@@ -862,6 +915,7 @@ _diony_wan_host_ready() {
       --require-capability s2v --require-capability animate \
       --write "$RUNTIME_REPORT" >/dev/null 2>&1
 }
+echo GPU_STAGE_RUNTIME_CHECK
 if ! _diony_wan_host_ready; then
   [ -f "$RUNTIME_PROBE" ] || { echo "GPU_RUNTIME_PROBE_MISSING"; exit 13; }
   [ -f "$RUNTIME_OVERLAY" ] || { echo "GPU_RUNTIME_OVERLAY_MISSING"; exit 13; }
@@ -999,6 +1053,7 @@ if OLD_PRODUCER_PID=$(_diony_8788_pid); then
     echo GPU_PRODUCER_BUSY_DEFERRED
     exit 0
   fi
+  echo GPU_STAGE_PRODUCER_STOP
   kill "$OLD_PRODUCER_PID" >/dev/null 2>&1 || true
   for _diony_stop_wait in 1 2 3 4 5; do
     kill -0 "$OLD_PRODUCER_PID" >/dev/null 2>&1 || break
@@ -1098,55 +1153,249 @@ def _remote_producer_alive(conn: dict) -> bool:
     return alive
 
 
+_answering_probe: tuple[float, bool] = (0.0, False)
+
+
+def _remote_producer_answering(conn: dict) -> bool:
+    """Does the GPU Producer answer :8788 on the box itself? A dropped desk tunnel is not a dead Producer.
+
+    Relaunching on a dropped tunnel ran the start script (a three-minute
+    runtime probe) against a Producer mid-render (2026-08-28 16:09). The line
+    is re-opened instead; the code-stamp path judges the refresh once the
+    tunnel answers. An SSH failure answers True: the line, not the Producer,
+    is in doubt, and a relaunch on a guess is the costlier mistake.
+    """
+    global _answering_probe
+    if in_pytest():
+        return False
+    at, answering = _answering_probe
+    if time.time() - at < _ALIVE_PROBE_CACHE_SECONDS:
+        return answering
+    cmd = [
+        "ssh",
+        *_ssh_args(conn["ssh_port"], connect_timeout=6),
+        f"{conn['ssh_user']}@{conn['host']}",
+        "curl", "-sf", "--max-time", "4", "http://127.0.0.1:8788/api/site",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=14, check=False)
+        answering = proc.returncode == 0 and bool((proc.stdout or "").strip())
+    except (OSError, subprocess.SubprocessError):
+        answering = True
+    _answering_probe = (time.time(), answering)
+    return answering
+
+
 def _producer_coming_up(conn: dict) -> bool:
     """Within the grace window *and* a Producer process exists to wait for."""
     return _producer_starting() and _remote_producer_alive(conn)
 
 
+def _launch_begin(phase: str, stage: str, stamp: str = "") -> None:
+    now = time.time()
+    with _launch_lock:
+        if not _launch["active"]:
+            _launch["since"] = now
+        _launch.update(
+            active=True,
+            phase=phase,
+            stage=stage,
+            stamp=stamp or _launch.get("stamp") or "",
+            updated=now,
+            finished_at=0.0,
+            outcome="",
+        )
+
+
+def _launch_stage(stage: str) -> None:
+    with _launch_lock:
+        if not _launch["active"]:
+            return
+        _launch["stage"] = stage
+        _launch["updated"] = time.time()
+
+
+def _launch_end(outcome: str, stage: str) -> None:
+    now = time.time()
+    with _launch_lock:
+        _launch.update(active=False, stage=stage, updated=now, finished_at=now, outcome=outcome)
+
+
+def _launch_deferred(stamp: str) -> None:
+    now = time.time()
+    with _launch_lock:
+        _launch.update(
+            active=False,
+            phase="sync",
+            stage="GPU Producer is busy; the desk build lands at the next idle boundary",
+            stamp=stamp,
+            updated=now,
+            finished_at=now,
+            outcome="deferred",
+        )
+
+
+def _launch_marker(line: str) -> None:
+    token = line.strip().split(" ", 1)[0] if line.strip() else ""
+    stage = _LAUNCH_STAGES.get(token)
+    if stage:
+        _launch_stage(stage)
+
+
+def gpu_launch_state() -> dict:
+    """What the desk is doing to the GPU Producer, for the run payload. Never blocks."""
+    with _launch_lock:
+        if _launch["active"] and time.time() - float(_launch.get("updated") or 0) > _LAUNCH_STALE_SECONDS:
+            # The start script has a 15-minute ceiling; anything older is a
+            # tracker left behind by an exception, not a live relaunch.
+            _launch.update(
+                active=False,
+                outcome="failed",
+                stage="lost track of the start script",
+                finished_at=time.time(),
+            )
+        row = dict(_launch)
+    stamp = str(row.get("stamp") or "")[:8]
+    active = bool(row.get("active"))
+    stage = str(row.get("stage") or "")
+    phase = str(row.get("phase") or "")
+    if active:
+        head = "Updating GPU Producer" + (f" to build {stamp}" if stamp else "")
+        label = f"{head}: {stage}" if stage else head
+    elif row.get("outcome") == "ok":
+        label = "GPU Producer" + (f" build {stamp}" if stamp else "") + " answered"
+    elif row.get("outcome") == "deferred":
+        label = stage
+    elif row.get("outcome") == "failed":
+        label = "GPU Producer update failed" + (f": {stage}" if stage else "")
+    else:
+        label = ""
+    return {
+        "active": active,
+        "phase": phase,
+        "stage": stage,
+        "stamp": stamp,
+        "outcome": str(row.get("outcome") or ""),
+        "label": label,
+        "since": _iso(row.get("since")) if active else "",
+        "finished_at": _iso(row.get("finished_at")),
+        "age_seconds": round(time.time() - float(row.get("finished_at") or 0), 1)
+        if row.get("finished_at")
+        else None,
+    }
+
+
+def _iso(stamp: float | None) -> str:
+    if not stamp:
+        return ""
+    return datetime.fromtimestamp(float(stamp), tz=timezone.utc).isoformat()
+
+
+def _run_start_script(cmd: list[str], script: str, *, timeout: float) -> tuple[int, str, str]:
+    """Run the start script, reporting each GPU_* marker as it streams.
+
+    Raises subprocess.TimeoutExpired past ``timeout``. Returns
+    (returncode, stdout, stderr) exactly as ``subprocess.run`` would.
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    out: list[str] = []
+    err: list[str] = []
+
+    def pump(stream, sink: list[str], hook) -> None:
+        try:
+            for line in iter(stream.readline, ""):
+                sink.append(line)
+                if hook is not None:
+                    hook(line)
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+    readers = [
+        threading.Thread(target=pump, args=(proc.stdout, out, _launch_marker), daemon=True),
+        threading.Thread(target=pump, args=(proc.stderr, err, None), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    try:
+        assert proc.stdin is not None
+        proc.stdin.write(script)
+        proc.stdin.close()
+    except (OSError, ValueError):
+        pass
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise
+    for reader in readers:
+        reader.join(timeout=5)
+    return proc.returncode, "".join(out), "".join(err)
+
+
 def _start_gpu_producer(conn: dict) -> None:
     script = _gpu_producer_start_script()
     cmd = ["ssh", *_ssh_args(conn["ssh_port"]), f"{conn['ssh_user']}@{conn['host']}", "bash", "-s"]
+    _launch_begin("start", "running the runtime check on the GPU", _code_stamp())
     try:
-        proc = subprocess.run(
-            cmd,
-            input=script,
-            capture_output=True,
-            text=True,
-            timeout=900,
-            check=False,
-        )
+        returncode, stdout, stderr = _run_start_script(cmd, script, timeout=900)
     except subprocess.TimeoutExpired:
         _set_error(
             f"GPU Producer startup timed out on {conn['host']} after 15 minutes. "
             "The local Producer remains open; check Studio Connect and retry Produce."
         )
+        _launch_end("failed", "start script timed out after 15 minutes")
         return
-    blob = (proc.stderr or proc.stdout or "").strip()
-    if "GPU_PACK_MISSING" in (proc.stdout or "") or proc.returncode == 12:
+    except OSError as exc:
+        _set_error(f"GPU Producer start could not open SSH: {exc}"[:800])
+        _launch_end("failed", "SSH could not be opened for the start script")
+        return
+    blob = (stderr or stdout or "").strip()
+    if "GPU_PACK_MISSING" in stdout or returncode == 12:
         _set_error(
             "Studio App did not leave Wan2.2 on this GPU. "
             "App Continue, then Ready Test GPU. Produce farms that box, not this desk."
         )
+        _launch_end("failed", "Wan2.2 pack is missing on the GPU")
         return
-    if "GPU_RUNTIME_" in (proc.stdout or "") or proc.returncode == 13:
+    if "GPU_RUNTIME_" in stdout or returncode == 13:
         _set_error(
             "Wan2.2 host Python dependencies could not be repaired. "
             "Studio requires a passing runtime report before Production."
         )
+        _launch_end("failed", "Wan2.2 host dependencies could not be repaired")
         return
-    if proc.returncode == 0 and (
-        "GPU_PRODUCER_OK" in (proc.stdout or "")
-        or "GPU_PRODUCER_BUSY_DEFERRED" in (proc.stdout or "")
-        or "GPU_PRODUCER_STARTING" in (proc.stdout or "")
+    if returncode == 0 and (
+        "GPU_PRODUCER_OK" in stdout
+        or "GPU_PRODUCER_BUSY_DEFERRED" in stdout
+        or "GPU_PRODUCER_STARTING" in stdout
     ):
         _set_error("")
-        if "GPU_PRODUCER_LAUNCHED" in (proc.stdout or "") or "GPU_PRODUCER_STARTING" in (proc.stdout or ""):
+        if "GPU_PRODUCER_LAUNCHED" in stdout or "GPU_PRODUCER_STARTING" in stdout:
             # We just launched it, or it is still coming up: give it the
             # grace window before anyone may restart it again.
             _mark_producer_started()
+        if "GPU_PRODUCER_BUSY_DEFERRED" in stdout and "GPU_PRODUCER_OK" not in stdout:
+            _launch_end("deferred", _LAUNCH_STAGES["GPU_PRODUCER_BUSY_DEFERRED"])
+        elif "GPU_PRODUCER_OK" in stdout:
+            _launch_end("ok", _LAUNCH_STAGES["GPU_PRODUCER_OK"])
+        else:
+            _launch_end("starting", _LAUNCH_STAGES["GPU_PRODUCER_STARTING"])
         return
-    if proc.returncode != 0 or "GPU_PRODUCER_OK" not in (proc.stdout or ""):
+    if returncode != 0 or "GPU_PRODUCER_OK" not in stdout:
         _set_error(blob[:800] or f"GPU Producer start failed on {conn['host']}")
+        _launch_end("failed", (blob.splitlines() or ["start script failed"])[-1][:160])
 
 
 def gpu_producer_up() -> bool:
@@ -1205,7 +1454,7 @@ def ensure_gpu_producer() -> str | None:
         if not _probe_ssh(conn):
             return None
         persist_connect(conn)
-        if not _producer_coming_up(conn):
+        if not _producer_coming_up(conn) and not _remote_producer_answering(conn):
             _sync_gpu_apps(conn)
             _start_gpu_producer(conn)
         if not _ensure_tunnel(conn):
@@ -1243,12 +1492,79 @@ def backfill_connect_from_wizard() -> None:
     sync_connect_from_wizard()
 
 
+def _ssh_line_known_up(conn: dict | None = None) -> bool:
+    key = f"{(conn or {}).get('host')}:{(conn or {}).get('ssh_port')}"
+    if _ssh_fail_key and _ssh_fail_key == key and time.time() - _ssh_fail_at < _SSH_OK_FRESH_SECONDS:
+        return False
+    return 0 < time.time() - _ssh_ok_at < _SSH_OK_FRESH_SECONDS
+
+
+def _ssh_line_known_down(conn: dict | None = None) -> bool:
+    key = f"{(conn or {}).get('host')}:{(conn or {}).get('ssh_port')}"
+    return bool(_ssh_fail_key) and _ssh_fail_key == key and time.time() - _ssh_fail_at < _SSH_OK_FRESH_SECONDS
+
+
+def gpu_line_state(*, live: bool | None = None) -> dict:
+    """SSH line + GPU Producer state as the bay should show it. Never opens SSH."""
+    conn = connect_from_lock() or {}
+    host = conn.get("host") or ""
+    port = str(conn.get("ssh_port") or "")
+    err = last_gpu_error()
+    launch = gpu_launch_state()
+    if live is None:
+        live = gpu_producer_up()
+    ssh = "up" if (live or _ssh_line_known_up(conn)) else "down" if _ssh_line_known_down(conn) else "unknown"
+    if ssh == "up" and err.startswith("SSH "):
+        err = ""
+    if live:
+        producer = "up"
+        beat = "Live"
+    elif launch["active"]:
+        producer = "updating"
+        beat = "Updating…"
+    elif _producer_starting() and ssh != "down":
+        producer = "starting"
+        beat = "Starting…"
+    elif ssh == "down":
+        producer = "unreachable"
+        beat = "Connect required"
+    elif not host:
+        producer = "unsigned"
+        beat = "Connect required"
+    else:
+        producer = "down"
+        beat = "Reconnecting…" if ssh == "up" else "Connect required"
+    return {
+        "host": host,
+        "port": port,
+        "ssh": ssh,
+        "producer": producer,
+        "beat": beat,
+        "build": launch["stamp"],
+        "stage": launch["stage"] if launch["active"] else "",
+        "since": launch["since"],
+        "launch": launch,
+        "error": err,
+    }
+
+
 def gpu_block_copy() -> str:
     conn = connect_from_lock()
     host = conn.get("host") or "the leased GPU"
     port = conn.get("ssh_port") or "22"
     err = last_gpu_error()
     site = (read_site_lock() or {}).get("sku") or "lease"
+    launch = gpu_launch_state()
+    if launch["active"]:
+        return (
+            f"{site} is signed. {launch['label']}. "
+            "Production resumes on its own when the GPU Producer answers."
+        )
+    if _producer_starting() and not _ssh_line_known_down(conn):
+        return (
+            f"{site} is signed. GPU Producer is starting on {host}:{port}; "
+            "the desk connects when it answers on :8788. Nothing to do yet."
+        )
     base = (
         f"{site} is signed. Wan2.2 is on that GPU, not on this desk. "
         f"Cannot reach Producer on {host}:{port}."
@@ -1257,6 +1573,14 @@ def gpu_block_copy() -> str:
         " After a pod restart the SSH over exposed TCP IP and -p change. "
         "Save the new line on Studio Connect, then Produce."
     )
+    if launch["outcome"] == "failed" and launch["label"]:
+        return f"{base} {launch['label']}." + (f" {err}" if err else "")
+    if _ssh_line_known_up(conn) and not _ssh_line_known_down(conn):
+        line_up = (
+            f" The SSH line to {host}:{port} is up; the GPU Producer is not answering on :8788 yet. "
+            "The desk relaunches it on the next tick."
+        )
+        return f"{base}{line_up}" + (f" {err}" if err and "SSH " not in err else "")
     if err:
         if "Studio Connect" in err or "pod restart" in err:
             return f"{base} {err}"
@@ -1314,6 +1638,18 @@ def drive_remote_advance(base: str) -> None:
 
 
 _MONITOR_CACHE: dict = {"at": 0.0, "row": None}
+_MONITOR_ACTIVE_CACHE_SECONDS = 2.5
+_MONITOR_STANDBY_CACHE_SECONDS = 10.0
+
+
+def _monitor_cache_seconds(row: dict | None) -> float:
+    """Sample every 2.5 s while a camera pass is on the GPU; 10 s at standby."""
+    if not isinstance(row, dict):
+        return _MONITOR_ACTIVE_CACHE_SECONDS
+    gpu = row.get("gpu") if isinstance(row.get("gpu"), dict) else {}
+    util = gpu.get("util")
+    busy = bool(row.get("generate")) or (isinstance(util, (int, float)) and util > 0)
+    return _MONITOR_ACTIVE_CACHE_SECONDS if busy else _MONITOR_STANDBY_CACHE_SECONDS
 
 _ACCESS_MARK = ("HTTP/1.1", "GET /api/", "POST /api/", "127.0.0.1:")
 _NOISE_MARK = (
@@ -1432,7 +1768,12 @@ def gpu_monitor() -> dict:
             pass
         return empty
     err = last_gpu_error()
-    if err and ("refused" in err.lower() or "Studio Connect" in err or "timed out" in err.lower()):
+    conn = connect_from_lock()
+    # A refused tunnel means the GPU Producer is down or relaunching — the
+    # SSH line is still there and nvidia-smi still answers. Only a dead SSH
+    # line (or no Connect line at all) skips the sample.
+    line_dead = bool(err) and (("Studio Connect" in err and "SSH" in err) or "no Connect host" in err)
+    if line_dead or _ssh_line_known_down(conn):
         now = time.time()
         cached = _MONITOR_CACHE.get("row")
         if cached and now - float(_MONITOR_CACHE.get("at") or 0) < 8:
@@ -1442,9 +1783,8 @@ def gpu_monitor() -> dict:
         return empty
     now = time.time()
     cached = _MONITOR_CACHE.get("row")
-    if cached and now - float(_MONITOR_CACHE.get("at") or 0) < 2.5:
+    if cached and now - float(_MONITOR_CACHE.get("at") or 0) < _monitor_cache_seconds(cached):
         return cached
-    conn = connect_from_lock()
     if not conn or not routable_host(conn["host"]):
         return empty
     script = r"""

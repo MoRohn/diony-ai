@@ -17,7 +17,7 @@ WINDOWS_ICON = ICONS / "diony-ai-app-icon.ico"
 DESKTOP_ICON = MAC_ICON if sys.platform == "darwin" else WINDOWS_ICON
 SOURCE_DIRS = [
     ROOT / "apps" / name / "src"
-    for name in ("desk", "wizard", "wan", "finish", "producer", "conductor")
+    for name in ("desk", "wizard", "wan", "finish", "producer", "director")
 ] + [ROOT / "packages" / "contracts" / "src"]
 PACKAGES = (
     "diony_contracts",
@@ -26,7 +26,7 @@ PACKAGES = (
     "diony_wan",
     "diony_finish",
     "diony_producer",
-    "diony_conductor",
+    "diony_director",
 )
 hiddenimports = []
 datas = [(str(PAYLOAD), "product")]

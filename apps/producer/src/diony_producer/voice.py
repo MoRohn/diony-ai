@@ -35,6 +35,8 @@ from diony_contracts.voice import (
     SPEECH_BACKEND,
     SpeechClipPackage,
     SpeechQCReceipt,
+    expected_speech_ms,
+    presence_floor_for,
     VoiceCasting,
     WanSpeechRequest,
 )
@@ -46,7 +48,9 @@ from diony_contracts.wan_prompt import (
 )
 
 VOICE_LANE_VERSION = "diony-wan-native-speech-v1"
-SPEECH_QC_VERSION = "diony-speech-qc-v1"
+# v2: the voiced-presence floor follows the line (presence_floor_for) and the
+# receipt fingerprints the dialogue audio and speech request.
+SPEECH_QC_VERSION = "diony-speech-qc-v2"
 # Studio allocates authored dialogue at two words per second of Shot time;
 # Wan's TTS speaks English at roughly 2.3–2.8. Past three the line cannot
 # finish inside the window and the render would only prove it.
@@ -476,12 +480,19 @@ def verify_speech_render(project: Project, take: Take, video: Path, *, vault: Pa
     root = vault / "projects" / project.id / "voice" / "takes" / take.id
     root.mkdir(parents=True, exist_ok=True)
     diagnostics: list[str] = [f"backend={SPEECH_BACKEND}", f"request={package.request.content_sha256[:12]}"]
+    words = int(package.request.word_count or len(package.request.tts_text.split()))
+    floor = presence_floor_for(words, window)
     receipt_fields: dict[str, object] = {
         "measurement_version": SPEECH_QC_VERSION,
         "window_ms": window,
         "loudness_target_lufs": target_lufs,
         "true_peak_ceiling_dbtp": ceiling,
+        "speech_presence_min": floor,
+        "line_word_count": words,
+        "expected_speech_ms": expected_speech_ms(words),
+        "request_sha256": package.request.content_sha256,
     }
+    diagnostics.append(f"presence floor {floor:.2f} for a {words}-word line in {window:.0f} ms")
     dialogue_asset: Asset | None = None
     stem_asset: Asset | None = None
     try:
@@ -493,6 +504,7 @@ def verify_speech_render(project: Project, take: Take, video: Path, *, vault: Pa
             presence, last_active_ms = speech_activity(decode_pcm(dialogue, sample_rate=16_000), sample_rate=16_000)
             receipt_fields["duration_ms"] = duration_ms
             receipt_fields["speech_presence_score"] = presence
+            receipt_fields["dialogue_sha256"] = _sha256_file(dialogue)
             if last_active_ms is not None:
                 receipt_fields["speech_tail_ms"] = max(0.0, round(window - last_active_ms, 1))
                 diagnostics.append(f"speech ends at {last_active_ms:.0f} ms of {window:.0f}")

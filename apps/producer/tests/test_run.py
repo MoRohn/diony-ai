@@ -778,3 +778,88 @@ def test_a_rolling_hero_sibling_shows_as_rolling_even_when_the_selected_take_fai
     assert row["state"] == "rolling"
     assert row["take_id"] == sibling.id
     assert row["status"].startswith("Retake")
+
+
+def test_monitoring_summary_names_the_desk_relaunch_on_the_gpu_phase() -> None:
+    from diony_producer import run as run_module
+
+    line = {
+        "ssh": "up",
+        "producer": "updating",
+        "beat": "Updating…",
+        "build": "9db3a0e1",
+        "stage": "repairing Wan2.2 host Python dependencies",
+        "since": "2026-08-28T12:26:30+00:00",
+        "host": "198.13.252.53",
+        "port": "48848",
+        "launch": {
+            "active": True,
+            "label": "Updating GPU Producer to build 9db3a0e1: repairing Wan2.2 host Python dependencies",
+            "since": "2026-08-28T12:26:30+00:00",
+            "outcome": "",
+        },
+    }
+    summary = run_module._monitoring_summary(
+        [],
+        phase="gpu",
+        now="b200-v1 is signed. Updating GPU Producer to build 9db3a0e1: repairing Wan2.2 host Python dependencies.",
+        failed=False,
+        monitor={
+            "heartbeat": "",
+            "journal": [],
+            "log": "",
+            "gpu": {"name": "B200", "util": 0, "used_mib": 0, "total_mib": 183359},
+        },
+        activity=[],
+        progress={},
+        master_ready=False,
+        material_label="",
+        line=line,
+    )
+    assert summary["signal"]["title"] == "Desk is updating the GPU Producer"
+    assert summary["signal"]["eyebrow"] == "GPU LINE · UPDATING"
+    assert summary["signal"]["state"] == "waiting"
+    assert "repairing Wan2.2" in summary["signal"]["detail"]
+    # nvidia-smi answered over SSH, so the line is live even though :8788 is silent.
+    assert summary["connection"] == "live"
+    assert summary["gpu"]["name"] == "B200"
+    assert summary["gpu"]["util"] == 0
+    assert summary["line"] == {
+        "ssh": "up",
+        "producer": "updating",
+        "beat": "Updating…",
+        "build": "9db3a0e1",
+        "stage": "repairing Wan2.2 host Python dependencies",
+        "since": "2026-08-28T12:26:30+00:00",
+    }
+
+    rows = run_module._activity_lines([], {}, {}, "", {}, line=line)
+    assert rows and rows[0]["title"] == "Desk is updating the GPU Producer"
+    assert "build 9db3a0e1" in rows[0]["detail"]
+
+    dead = {
+        "ssh": "down",
+        "producer": "unreachable",
+        "host": "198.13.252.53",
+        "port": "48848",
+        "error": "SSH refused.",
+        "launch": {},
+    }
+    attention = run_module._monitoring_summary(
+        [],
+        phase="gpu",
+        now="x",
+        failed=False,
+        monitor={},
+        activity=[],
+        progress={},
+        master_ready=False,
+        material_label="",
+        line=dead,
+    )
+    assert attention["signal"]["state"] == "attention"
+    assert attention["signal"]["eyebrow"] == "GPU LINE · ATTENTION"
+    assert attention["connection"] == "idle"
+    dead_rows = run_module._activity_lines([], {}, {}, "", {}, line=dead)
+    assert dead_rows[0]["title"] == "SSH line to the GPU is down"
+    assert dead_rows[0]["level"] == "fail"

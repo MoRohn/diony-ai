@@ -370,13 +370,20 @@ def _chain_color_match(project: Project, take: Take, negative: Path) -> dict | N
     drift = take.qc.chain_color_drift if take.qc is not None else None
     if drift is None or drift < CHAIN_DRIFT_MATCH:
         return None
-    previous_id = take.qc.continuity_from_take_id if take.qc is not None else None
-    if not previous_id:
-        return None
-    try:
-        previous = project.take(previous_id)
-    except KeyError:
-        return None
+    # Match toward the previous Shot's print as it stands today (the chain the
+    # program cuts against); the recorded chain source is the fallback when
+    # that print is not a passing boundary.
+    from diony_producer.camera import _previous_take
+
+    previous = _previous_take(project, shot)
+    if previous is None:
+        previous_id = take.qc.continuity_from_take_id if take.qc is not None else None
+        if not previous_id:
+            return None
+        try:
+            previous = project.take(previous_id)
+        except KeyError:
+            return None
     previous_negative = vault_root() / negative_rel(project, previous)
     stats = frame_channel_stats(previous_negative, last=True)
     if stats is None:

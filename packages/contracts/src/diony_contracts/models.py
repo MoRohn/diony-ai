@@ -501,16 +501,28 @@ class QCReport(BaseModel):
     voice_measurement_version: str = ""
     speech_backend: str = ""
     speech_presence_score: float | None = Field(default=None, ge=0, le=1)
+    speech_presence_min: float | None = Field(default=None, ge=0, le=1)
+    speech_dialogue_sha256: str = ""
+    speech_request_sha256: str = ""
     speech_tail_ms: float | None = Field(default=None, ge=0)
     dialogue_lufs: float | None = None
     dialogue_true_peak_dbtp: float | None = None
     reference_asset_ids: list[str] = Field(default_factory=list)
     reference_similarity: float | None = None
     reference_similarities: dict[str, float] = Field(default_factory=dict)
+    # The gated reference-lock measure: layout-proxy SSIM (320x180, softened)
+    # at the same checkpoints. Full-frame values above remain as evidence.
+    reference_layout_similarity: float | None = None
+    reference_layout_similarities: dict[str, float] = Field(default_factory=dict)
+    reference_lock_measure: str = ""
     reference_verified: bool | None = None
     continuity_from_take_id: str | None = None
     continuity_similarity: float | None = None
     continuity_verified: bool | None = None
+    # Set when the previous Shot's print was replaced after this clip rolled
+    # and the retake budget could not chain a fresh roll from it: the
+    # recorded continuity evidence names the earlier print, by decision.
+    continuity_waived: str = ""
     measurement_version: str = ""
     temporal_delta_p95: float | None = Field(default=None, ge=0)
     temporal_residual_p95: float | None = Field(default=None, ge=0)

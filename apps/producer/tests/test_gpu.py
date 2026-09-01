@@ -1,3 +1,4 @@
+import pytest
 from diony_producer.gpu import (
     _gpu_producer_start_script,
     gpu_block_copy,
@@ -107,15 +108,11 @@ def test_gpu_start_allows_persistent_optional_runtime_repair(monkeypatch) -> Non
 
     observed: dict[str, int] = {}
 
-    def fake_run(command, **kwargs):
-        observed["timeout"] = kwargs["timeout"]
-        return type(
-            "Result",
-            (),
-            {"returncode": 0, "stdout": "GPU_PRODUCER_OK\n", "stderr": ""},
-        )()
+    def fake_start(command, script, *, timeout):
+        observed["timeout"] = timeout
+        return 0, "GPU_PRODUCER_OK\n", ""
 
-    monkeypatch.setattr(gpu.subprocess, "run", fake_run)
+    monkeypatch.setattr(gpu, "_run_start_script", fake_start)
 
     gpu._start_gpu_producer({"ssh_port": "28869", "ssh_user": "root", "host": "gpu"})
 
@@ -125,14 +122,7 @@ def test_gpu_start_allows_persistent_optional_runtime_repair(monkeypatch) -> Non
 def test_gpu_start_treats_active_production_restart_deferral_as_healthy(monkeypatch) -> None:
     import diony_producer.gpu as gpu
 
-    def fake_run(command, **kwargs):
-        return type(
-            "Result",
-            (),
-            {"returncode": 0, "stdout": "GPU_PRODUCER_BUSY_DEFERRED\n", "stderr": ""},
-        )()
-
-    monkeypatch.setattr(gpu.subprocess, "run", fake_run)
+    monkeypatch.setattr(gpu, "_run_start_script", lambda c, s, *, timeout: (0, "GPU_PRODUCER_BUSY_DEFERRED\n", ""))
     gpu._set_error("stale error")
 
     gpu._start_gpu_producer({"ssh_port": "28869", "ssh_user": "root", "host": "gpu"})
@@ -502,6 +492,35 @@ def test_gpu_monitor_reads_the_local_activity_journal_on_the_gpu(tmp_path, monke
     ]
 
 
+@pytest.fixture(autouse=True)
+def _clean_launch_state():
+    import diony_producer.gpu as gpu
+
+    with gpu._launch_lock:
+        gpu._launch.update(
+            active=False,
+            phase="",
+            stage="",
+            stamp="",
+            since=0.0,
+            updated=0.0,
+            finished_at=0.0,
+            outcome="",
+        )
+    yield
+    with gpu._launch_lock:
+        gpu._launch.update(
+            active=False,
+            phase="",
+            stage="",
+            stamp="",
+            since=0.0,
+            updated=0.0,
+            finished_at=0.0,
+            outcome="",
+        )
+
+
 def _fake_conn() -> dict:
     return {"ssh_port": "27168", "ssh_user": "root", "host": "198.13.252.73"}
 
@@ -509,10 +528,7 @@ def _fake_conn() -> dict:
 def test_gpu_start_treats_a_starting_producer_as_healthy_and_arms_the_grace_window(monkeypatch) -> None:
     import diony_producer.gpu as gpu
 
-    def fake_run(command, **kwargs):
-        return type("Result", (), {"returncode": 0, "stdout": "GPU_PRODUCER_STARTING\n", "stderr": ""})()
-
-    monkeypatch.setattr(gpu.subprocess, "run", fake_run)
+    monkeypatch.setattr(gpu, "_run_start_script", lambda c, s, *, timeout: (0, "GPU_PRODUCER_STARTING\n", ""))
     monkeypatch.setattr(gpu, "_last_producer_start_at", 0.0)
     gpu._set_error("stale error")
     gpu._start_gpu_producer(_fake_conn())
@@ -652,3 +668,309 @@ def test_gpu_start_script_treats_a_silent_alive_producer_as_busy() -> None:
     assert '[ -n "$payload" ] || return 0' in body
     assert '"status"[[:space:]]*:[[:space:]]*"shooting"' in body, "a shooting project is busy even between renders"
     assert "--max-time 2 " not in body
+
+
+def _reset_line_state(monkeypatch) -> None:
+    import diony_producer.gpu as gpu
+
+    monkeypatch.setattr(gpu, "_ssh_ok_at", 0.0)
+    monkeypatch.setattr(gpu, "_ssh_fail_at", 0.0)
+    monkeypatch.setattr(gpu, "_ssh_fail_key", "")
+    monkeypatch.setattr(gpu, "_last_producer_start_at", 0.0)
+    gpu._launch_end("", "")
+    gpu._launch.update(outcome="", stage="", stamp="", finished_at=0.0)
+
+
+def test_block_copy_reports_the_desk_relaunch_instead_of_a_pod_restart(
+    monkeypatch,
+) -> None:
+    import diony_producer.gpu as gpu
+
+    _reset_line_state(monkeypatch)
+    monkeypatch.setattr(
+        gpu,
+        "connect_from_lock",
+        lambda lock=None: {"host": "10.0.0.8", "ssh_port": "40123"},
+    )
+    monkeypatch.setattr(gpu, "last_gpu_error", lambda: "[Errno 61] Connection refused")
+    monkeypatch.setattr(gpu, "read_site_lock", lambda: {"sku": "b200-v1"})
+    gpu._launch_begin("start", "running the runtime check on the GPU", "9db3a0e1ff00")
+    gpu._launch_marker("GPU_RUNTIME_OVERLAY_REPAIR\n")
+    text = gpu_block_copy()
+    assert "Updating GPU Producer to build 9db3a0e1" in text
+    assert "repairing Wan2.2 host Python dependencies" in text
+    assert "pod restart" not in text
+    assert "Cannot reach" not in text
+    state = gpu.gpu_line_state(live=False)
+    assert state["producer"] == "updating"
+    assert state["beat"] == "Updating…"
+    assert state["ssh"] == "unknown"
+
+    gpu._launch_marker("GPU_PRODUCER_LAUNCHED\n")
+    assert "waiting for it to answer on :8788" in gpu_block_copy()
+    gpu._launch_end("ok", "GPU Producer answered")
+    launch = gpu.gpu_launch_state()
+    assert launch["active"] is False
+    assert launch["outcome"] == "ok"
+    assert launch["label"] == "GPU Producer build 9db3a0e1 answered"
+
+
+def test_block_copy_keeps_the_pod_restart_hint_for_a_dead_ssh_line(monkeypatch) -> None:
+    import time
+
+    import diony_producer.gpu as gpu
+
+    _reset_line_state(monkeypatch)
+    monkeypatch.setattr(
+        gpu,
+        "connect_from_lock",
+        lambda lock=None: {"host": "10.0.0.8", "ssh_port": "40123"},
+    )
+    monkeypatch.setattr(gpu, "read_site_lock", lambda: {"sku": "b200-v1"})
+    monkeypatch.setattr(gpu, "_ssh_fail_key", "10.0.0.8:40123")
+    monkeypatch.setattr(gpu, "_ssh_fail_at", time.time())
+    monkeypatch.setattr(gpu, "_last_producer_start_at", time.time())
+    monkeypatch.setattr(
+        gpu,
+        "last_gpu_error",
+        lambda: "SSH 10.0.0.8:40123 refused. After a pod restart the SSH over exposed TCP IP and -p change. Save the new line on Studio Connect, then Produce.",
+    )
+    text = gpu_block_copy()
+    assert "Cannot reach Producer on 10.0.0.8:40123" in text
+    assert "pod restart" in text
+    assert "starting" not in text.lower()
+    state = gpu.gpu_line_state(live=False)
+    assert state["ssh"] == "down"
+    assert state["producer"] == "unreachable"
+    assert state["beat"] == "Connect required"
+
+
+def test_block_copy_says_the_line_is_up_when_only_the_producer_is_silent(
+    monkeypatch,
+) -> None:
+    import time
+
+    import diony_producer.gpu as gpu
+
+    _reset_line_state(monkeypatch)
+    monkeypatch.setattr(
+        gpu,
+        "connect_from_lock",
+        lambda lock=None: {"host": "10.0.0.8", "ssh_port": "40123"},
+    )
+    monkeypatch.setattr(gpu, "read_site_lock", lambda: {"sku": "b200-v1"})
+    monkeypatch.setattr(gpu, "_ssh_ok_at", time.time())
+    monkeypatch.setattr(gpu, "last_gpu_error", lambda: "All connection attempts failed")
+    text = gpu_block_copy()
+    assert "SSH line to 10.0.0.8:40123 is up" in text
+    assert "pod restart" not in text
+    state = gpu.gpu_line_state(live=False)
+    assert state["ssh"] == "up"
+    assert state["producer"] == "down"
+    assert state["beat"] == "Reconnecting…"
+
+
+def test_start_script_markers_stream_into_the_launch_state(monkeypatch) -> None:
+    import diony_producer.gpu as gpu
+
+    _reset_line_state(monkeypatch)
+    monkeypatch.setattr(gpu, "_code_stamp", lambda: "abcdef0123456789")
+    stages: list[str] = []
+
+    def fake_start(command, script, *, timeout):
+        for marker in (
+            "GPU_STAGE_RUNTIME_CHECK",
+            "GPU_MONTAGE_OVERLAY_REPAIR",
+            "GPU_PRODUCER_LAUNCHED",
+            "GPU_PRODUCER_OK",
+        ):
+            gpu._launch_marker(marker + "\n")
+            stages.append(gpu.gpu_launch_state()["stage"])
+        return (
+            0,
+            "GPU_MONTAGE_OVERLAY_REPAIR\nGPU_PRODUCER_LAUNCHED\nGPU_PRODUCER_OK\n",
+            "",
+        )
+
+    monkeypatch.setattr(gpu, "_run_start_script", fake_start)
+    gpu._start_gpu_producer(_fake_conn())
+    assert stages == [
+        "running the Wan2.2 host runtime check (about three minutes)",
+        "installing the montage intelligence overlay",
+        "GPU Producer launched; waiting for it to answer on :8788",
+        "GPU Producer answered",
+    ]
+    launch = gpu.gpu_launch_state()
+    assert launch["active"] is False
+    assert launch["outcome"] == "ok"
+    assert launch["stamp"] == "abcdef01"
+    assert gpu._producer_starting() is True
+
+
+def test_start_script_failure_lands_in_the_launch_state(monkeypatch) -> None:
+    import diony_producer.gpu as gpu
+
+    _reset_line_state(monkeypatch)
+    monkeypatch.setattr(
+        gpu,
+        "_run_start_script",
+        lambda c, s, *, timeout: (13, "GPU_RUNTIME_MISSING\n", ""),
+    )
+    gpu._start_gpu_producer(_fake_conn())
+    launch = gpu.gpu_launch_state()
+    assert launch["active"] is False
+    assert launch["outcome"] == "failed"
+    assert "could not be repaired" in launch["label"]
+    assert "GPU Producer update failed" in gpu_block_copy()
+
+
+def test_run_start_script_streams_markers_from_a_real_process(monkeypatch) -> None:
+    import sys
+
+    import diony_producer.gpu as gpu
+
+    _reset_line_state(monkeypatch)
+    seen: list[str] = []
+    monkeypatch.setattr(gpu, "_launch_marker", lambda line: seen.append(line.strip()))
+    code, out, err = gpu._run_start_script(
+        [
+            sys.executable,
+            "-c",
+            "import sys; print(sys.stdin.read().strip()); print('GPU_PRODUCER_OK'); sys.stderr.write('warn\\n')",
+        ],
+        "GPU_PRODUCER_LAUNCHED\n",
+        timeout=30,
+    )
+    assert code == 0
+    assert seen == ["GPU_PRODUCER_LAUNCHED", "GPU_PRODUCER_OK"]
+    assert "GPU_PRODUCER_OK" in out
+    assert err.strip() == "warn"
+
+
+def test_gpu_monitor_still_samples_when_only_the_tunnel_is_refused(monkeypatch) -> None:
+    import diony_producer.gpu as gpu
+
+    _reset_line_state(monkeypatch)
+    monkeypatch.setattr(gpu, "in_pytest", lambda: False)
+    monkeypatch.setattr(gpu, "should_proxy", lambda: True)
+    monkeypatch.setattr(gpu, "last_gpu_error", lambda: "[Errno 61] Connection refused")
+    monkeypatch.setattr(
+        gpu,
+        "connect_from_lock",
+        lambda lock=None: {"host": "10.0.0.8", "ssh_port": "40123", "ssh_user": "root"},
+    )
+    monkeypatch.setattr(gpu, "routable_host", lambda host: True)
+    monkeypatch.setattr(gpu, "_MONITOR_CACHE", {"at": 0.0, "row": None})
+
+    def fake_run(command, **kwargs):
+        return type(
+            "Result",
+            (),
+            {
+                "returncode": 0,
+                "stdout": "NVIDIA B200, 0 %, 0 MiB, 183359 MiB\n---PS---\n---JOURNAL---\n---LOG---\n",
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr(gpu.subprocess, "run", fake_run)
+    row = gpu.gpu_monitor()
+    assert row["gpu"]["name"] == "B200"
+    assert row["gpu"]["util"] == 0
+    assert row["gpu"]["total_mib"] == 183359
+    assert gpu._monitor_cache_seconds(row) == gpu._MONITOR_STANDBY_CACHE_SECONDS
+    row["generate"] = "generate.py 00:12"
+    assert gpu._monitor_cache_seconds(row) == gpu._MONITOR_ACTIVE_CACHE_SECONDS
+
+
+def test_gpu_monitor_skips_ssh_when_the_line_is_down(monkeypatch) -> None:
+    import time
+
+    import diony_producer.gpu as gpu
+
+    _reset_line_state(monkeypatch)
+    monkeypatch.setattr(gpu, "in_pytest", lambda: False)
+    monkeypatch.setattr(gpu, "should_proxy", lambda: True)
+    monkeypatch.setattr(gpu, "last_gpu_error", lambda: "SSH 10.0.0.8:40123 refused.")
+    monkeypatch.setattr(
+        gpu,
+        "connect_from_lock",
+        lambda lock=None: {"host": "10.0.0.8", "ssh_port": "40123", "ssh_user": "root"},
+    )
+    monkeypatch.setattr(gpu, "_ssh_fail_key", "10.0.0.8:40123")
+    monkeypatch.setattr(gpu, "_ssh_fail_at", time.time())
+    monkeypatch.setattr(gpu, "_MONITOR_CACHE", {"at": 0.0, "row": None})
+
+    def boom(command, **kwargs):
+        raise AssertionError("SSH must not be opened on a dead line")
+
+    monkeypatch.setattr(gpu.subprocess, "run", boom)
+    assert gpu.gpu_monitor()["gpu"]["name"] == ""
+
+
+def test_start_script_emits_stage_markers_that_never_read_as_runtime_failures() -> None:
+    import diony_producer.gpu as gpu
+
+    script = _gpu_producer_start_script()
+    for marker in ("GPU_STAGE_WAN_PATCH", "GPU_STAGE_RUNTIME_CHECK", "GPU_STAGE_PRODUCER_STOP"):
+        assert f"echo {marker}" in script
+        assert marker in gpu._LAUNCH_STAGES
+        assert "GPU_RUNTIME_" not in marker
+    assert script.index("echo GPU_STAGE_RUNTIME_CHECK") < script.index("echo GPU_RUNTIME_OVERLAY_REPAIR")
+    assert script.index("echo GPU_STAGE_PRODUCER_STOP") < script.index("echo GPU_PRODUCER_LAUNCHED")
+
+
+def test_start_script_defers_before_any_probe_while_a_camera_pass_is_live() -> None:
+    script = _gpu_producer_start_script()
+    guard = script.index("echo GPU_PRODUCER_BUSY_DEFERRED")
+    assert "[g]enerate.py.*--task" in script[:guard]
+    assert guard < script.index("echo GPU_STAGE_WAN_PATCH")
+    assert guard < script.index("echo GPU_STAGE_RUNTIME_CHECK")
+    assert guard < script.index("_diony_wan_host_ready")
+
+
+def test_dropped_tunnel_to_an_answering_producer_reopens_the_line_without_a_relaunch(monkeypatch) -> None:
+    import diony_producer.gpu as gpu
+
+    _reset_line_state(monkeypatch)
+    conn = {"host": "10.0.0.8", "ssh_port": "40123", "ssh_user": "root"}
+    monkeypatch.setattr(gpu, "should_proxy", lambda: True)
+    monkeypatch.setattr(gpu, "sync_connect_from_wizard", lambda: None)
+    monkeypatch.setattr(gpu, "connect_from_lock", lambda lock=None: dict(conn))
+    monkeypatch.setattr(gpu, "apply_ssh_env", lambda c: None)
+    monkeypatch.setattr(gpu, "persist_connect", lambda c: None)
+    monkeypatch.setattr(gpu, "_port_open", lambda port: False)
+    monkeypatch.setattr(gpu, "_probe_ssh", lambda c: True)
+    monkeypatch.setattr(gpu, "_producer_coming_up", lambda c: False)
+    monkeypatch.setattr(gpu, "_remote_producer_answering", lambda c: True)
+    steps: list[str] = []
+    monkeypatch.setattr(gpu, "_sync_gpu_apps", lambda c: steps.append("sync") or True)
+    monkeypatch.setattr(gpu, "_start_gpu_producer", lambda c: steps.append("start"))
+    monkeypatch.setattr(gpu, "_ensure_tunnel", lambda c: steps.append("tunnel") or True)
+
+    class Res:
+        status_code = 200
+
+    monkeypatch.setattr(gpu.httpx, "get", lambda *a, **k: Res())
+    assert gpu.ensure_gpu_producer() == gpu.gpu_producer_base()
+    assert steps == ["tunnel"]
+
+    # A Producer that does not answer on the box is relaunched as before.
+    steps.clear()
+    monkeypatch.setattr(gpu, "_remote_producer_answering", lambda c: False)
+    assert gpu.ensure_gpu_producer() == gpu.gpu_producer_base()
+    assert steps == ["sync", "start", "tunnel"]
+
+
+def test_line_state_drops_a_stale_ssh_error_once_the_line_is_up(monkeypatch) -> None:
+    import time
+
+    import diony_producer.gpu as gpu
+
+    _reset_line_state(monkeypatch)
+    monkeypatch.setattr(gpu, "connect_from_lock", lambda lock=None: {"host": "10.0.0.8", "ssh_port": "40123"})
+    monkeypatch.setattr(gpu, "_ssh_ok_at", time.time())
+    monkeypatch.setattr(gpu, "last_gpu_error", lambda: "SSH 10.0.0.8:40123 refused. After a pod restart …")
+    state = gpu.gpu_line_state(live=False)
+    assert state["ssh"] == "up" and state["error"] == ""
+

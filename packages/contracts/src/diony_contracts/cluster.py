@@ -15,6 +15,48 @@ from diony_contracts.enums import ComputePath, FleetMode
 from diony_contracts.live import inference_live
 from diony_contracts.models import ClusterSite
 
+
+# --- Production-engine choice (Blueprint 25) --------------------------------
+# Written by Studio's opening screen, read by the Director and the desk.
+
+# "local_legacy" was retired from the chooser (2026-08-31): the classic local
+# rail is no longer a selectable production engine. A stale on-disk choice of
+# it reads as no choice at all.
+ENGINE_CHOICES = ("auto", "grok", "google-flow")
+
+
+def engine_choice_path() -> Path:
+    return cluster_root() / ".cluster" / "engine.json"
+
+
+def engine_is_cloud() -> bool:
+    """Blueprint 25: cloud is the primary engine unless DIONY_ENGINE says
+    legacy. The ONE definition — desk, Producer, and Director all read this."""
+    return os.environ.get("DIONY_ENGINE", "").strip().lower() != "local_legacy"
+
+
+def read_engine_choice() -> str:
+    """The chosen production engine, or "" when nothing valid is on disk."""
+    try:
+        payload = json.loads(engine_choice_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    choice = str(payload.get("engine", "")) if isinstance(payload, dict) else ""
+    return choice if choice in ENGINE_CHOICES else ""
+
+
+def write_engine_choice(engine: str) -> Path:
+    if engine not in ENGINE_CHOICES:
+        raise ValueError(f"unknown production engine {engine!r}; known: {ENGINE_CHOICES}")
+    path = engine_choice_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "engine": engine,
+        "chosen_at": datetime.now(timezone.utc).isoformat(),
+    }
+    path.write_text(json.dumps(payload, indent=2) + chr(10), encoding="utf-8")
+    return path
+
 SITE_LOCK_REL = Path(".cluster") / "site.json"
 MODE_LOCK_REL = Path(".cluster") / "mode.lock"
 

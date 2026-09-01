@@ -151,3 +151,34 @@ def test_an_authored_line_is_enough_for_an_s2v_shot() -> None:
     assert spoken.engine == Engine.S2V_14B
     with pytest.raises(ValidationError):
         Shot.model_validate(payload | {"audio_line": None, "dialogue_turns": []})
+
+
+def test_presence_floor_follows_the_line_length() -> None:
+    from diony_contracts.voice import expected_speech_ms, presence_floor_for
+
+    # "QUACK!" in a 3541 ms window (B200 2026-08-28): measured 0.108 must pass.
+    assert expected_speech_ms(1) == 600.0
+    floor = presence_floor_for(1, 3541)
+    assert 0.04 <= floor < 0.108
+    assert floor == 0.0847
+    # A six-word line in five seconds keeps the long-line floor.
+    assert presence_floor_for(6, 5000) == 0.20
+    # Never below the some-speech floor, never above the long-line floor.
+    assert presence_floor_for(0, 20000) == 0.04
+    assert presence_floor_for(40, 3000) == 0.20
+    assert presence_floor_for(3, 0) == 0.20
+
+
+def test_receipt_gates_presence_on_its_own_floor() -> None:
+    from diony_contracts.voice import SpeechQCReceipt
+
+    short = SpeechQCReceipt(
+        measurement_version="t", audio_present=True, duration_ms=3541, window_ms=3541,
+        speech_presence_score=0.108, speech_presence_min=0.0847, line_word_count=1,
+        expected_speech_ms=600.0, speech_tail_ms=2873.0, integrated_lufs=-24.03, true_peak_dbtp=-11.05,
+        dialogue_sha256="e" * 64, request_sha256="r1",
+    )
+    assert not [f for f in short.failures() if "presence" in f]
+    fixed = short.model_copy(update={"speech_presence_min": 0.20})
+    assert any("presence 0.11 is below 0.20" in f for f in fixed.failures())
+

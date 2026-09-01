@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diony Director</title>
+<link rel="stylesheet" href="/static/app.css?v=p2a">
+</head>
+<body>
+<header class="mast">
+  <div class="brandlock" aria-label="Diony Director">
+    <svg class="diony-mark" viewBox="-4 -4 715 666" aria-hidden="true" focusable="false">
+      <defs>
+        <linearGradient id="dr-bar1" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#EA573C" /><stop offset="1" stop-color="#E74B43" />
+        </linearGradient>
+        <linearGradient id="dr-bar2" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#EF7921" /><stop offset="1" stop-color="#F46F24" />
+        </linearGradient>
+        <linearGradient id="dr-bar3" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#F38216" /><stop offset=".3" stop-color="#E86C22" /><stop offset=".55" stop-color="#BB462E" /><stop offset=".8" stop-color="#ED453F" /><stop offset="1" stop-color="#F14B42" />
+        </linearGradient>
+      </defs>
+      <rect x="0" y="325" width="39" height="166" rx="19.5" fill="url(#dr-bar1)" />
+      <rect x="107" y="210" width="39" height="397" rx="19.5" fill="url(#dr-bar2)" />
+      <rect x="211" y="0" width="49" height="658" rx="24.5" fill="url(#dr-bar3)" />
+      <rect x="329" y="42" width="56" height="571" rx="28" fill="currentColor" />
+      <rect x="445" y="83" width="62" height="484" rx="31" fill="currentColor" />
+      <path d="M558 138Q558 124 572 124A135 199.5 0 0 1 572 523Q558 523 558 509Z" fill="currentColor" />
+    </svg>
+    <span class="diony-word">Diony</span>
+    <span class="brandsub">DIRECTOR</span>
+  </div>
+  <nav class="navlinks">
+    <a href="http://studio.diony.local" id="studio-link" title="Configuration and engine selection">STUDIO ⚙</a>
+    <a href="http://producer.diony.local" id="producer-link" title="Production monitoring and the Gallery">PRODUCER ▸</a>
+    <button id="board-toggle" type="button" class="resetbtn" title="The production board: script, bibles, shots, and the cut">▤ BOARD</button>
+    <button id="reset" type="button" class="resetbtn" title="Clear the room and start a fresh session — the ledger keeps everything">＋ NEW SESSION</button>
+  </nav>
+  <div class="meter" id="meter">
+    <span class="chip" id="engine-chip">engine —</span>
+    <span class="chip" id="grok-chip">grok —</span>
+    <span class="chip" id="flow-chip">flow —</span>
+    <span class="chip" id="brain-chip">brain —</span>
+    <span class="chip cost" id="spent-chip">spent $0.00</span>
+    <span class="chip cost" id="committed-chip">committed $0.00</span>
+  </div>
+</header>
+
+<main class="stage">
+  <ol class="thread" id="thread" aria-live="polite"></ol>
+</main>
+
+<aside class="board" id="board" hidden aria-label="Production board">
+  <div class="btabs" role="tablist">
+    <button type="button" data-tab="script" class="on">SCRIPT</button>
+    <button type="button" data-tab="bibles">BIBLES</button>
+    <button type="button" data-tab="shots">SHOTS</button>
+    <button type="button" data-tab="cut">CUT</button>
+  </div>
+  <div class="bpane" id="bpane"></div>
+</aside>
+
+<footer class="composer">
+  <div class="controls">
+    <label>Provider
+      <select id="provider">
+        <option value="auto" selected>Auto (Director)</option>
+        <option value="grok">Grok Imagine</option>
+        <option value="google-flow">Google Flow</option>
+      </select>
+    </label>
+    <div class="durwrap">
+      <span class="durlabel">Duration</span>
+      <span class="durbox" id="durbox">
+        <input id="dur-min" type="number" min="0" max="180" step="1" value="0" inputmode="numeric" aria-label="minutes">
+        <span class="unit">m</span>
+        <span class="sep">:</span>
+        <input id="dur-sec" type="number" min="0" max="59" step="1" value="8" inputmode="numeric" aria-label="seconds">
+        <span class="unit">s</span>
+      </span>
+      <span class="durhint" id="durhint">one shot ≤ 15s · scripts run longer</span>
+    </div>
+    <label>Res
+      <select id="resolution">
+        <option value="720p" selected>720p</option>
+        <option value="480p">480p</option>
+      </select>
+    </label>
+    <label title="Ceiling for this session's scripted production — holds anything that would breach it. Empty = no ceiling.">Budget $
+      <input id="budget" type="number" min="0" step="1" inputmode="numeric" placeholder="∞">
+    </label>
+  </div>
+  <div class="refbar">
+    <button id="add-img" type="button" class="addimg" title="Attach reference stills — they anchor the first shot's characters and scene">＋ IMAGES</button>
+    <input id="img-file" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+    <div class="refchips" id="refchips"></div>
+    <span class="refhint" id="refhint">drop or paste stills — they anchor the first shot's look</span>
+  </div>
+  <div class="entry">
+    <textarea id="idea" rows="2" placeholder="Tell the Director your idea. One shot, or a whole scripted piece — cost is locked before anything rolls."></textarea>
+    <div class="actions">
+      <button id="send" type="button">One shot</button>
+      <button id="produce" type="button" class="alt">Draft script</button>
+    </div>
+  </div>
+</footer>
+
+<script src="/static/app.js?v=p2a"></script>
+</body>
+</html>

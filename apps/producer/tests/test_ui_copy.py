@@ -43,8 +43,8 @@ def test_producer_floors_are_idea_production_gallery() -> None:
     assert 'class="clap"' in html
     assert 'id="cast"' in html
     assert 'id="site-line"' in html
-    assert 'href="/static/app.css?v=wanvoice1"' in html
-    assert 'src="/static/app.js?v=wanvoice1"' in html
+    assert 'href="/static/app.css?v=p2a"' in html
+    assert 'src="/static/app.js?v=p2a"' in html
     assert "v=run30" not in html
     assert "Unsigned" not in html
     assert "Unsigned" not in js
@@ -59,7 +59,7 @@ def test_producer_floors_are_idea_production_gallery() -> None:
     assert '["production", "gallery"].includes(requestedBay)' in js
     assert 'fetch("/api/run"' in js
     assert "const productionActive = Boolean(" in js
-    assert 'showBay(requested || (productionActive ? "production" : "idea"))' in js
+    assert 'showBay(requested || (productionActive ? "production" : engineCloud ? "gallery" : "idea"))' in js
     assert 'getElementById("run-refresh")?.addEventListener("click", refreshProductionPage)' in js
     assert 'getElementById("start-over")?.addEventListener("click", startOverStudio)' in js
     assert "function refreshProductionPage" in js
@@ -392,7 +392,7 @@ def test_gallery_library_remains_available_when_the_active_project_is_blank() ->
     assert 'if (openGallery) openGallery.disabled = false;' in js
     assert 'if (name === "gallery" && !galleryReady())' not in js
     assert "function galleryReady()" not in js
-    assert 'if (name === "gallery") loadGallery();' in js
+    assert 'if (name === "gallery") {' in js
     assert 'meta.textContent = "Loading finished clips…";' in js
     assert 'note.textContent = `Gallery could not be loaded: ${error.message}`;' in js
 
@@ -448,8 +448,8 @@ def test_production_header_and_idea_body_explain_the_working_state() -> None:
     assert ".reference-hint" in css
     assert ".reference-hint-label" in css
     assert 'stageEl.addEventListener("drop"' in js
-    assert 'href="/static/app.css?v=wanvoice1"' in html
-    assert 'src="/static/app.js?v=wanvoice1"' in html
+    assert 'href="/static/app.css?v=p2a"' in html
+    assert 'src="/static/app.js?v=p2a"' in html
     assert "v=run30" not in html
 
 

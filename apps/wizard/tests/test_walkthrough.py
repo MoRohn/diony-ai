@@ -707,7 +707,7 @@ def test_lesson_endpoint_hides_accept() -> None:
 
 def test_ui_is_crate_to_system() -> None:
     client = TestClient(app)
-    html = client.get("/").text
+    html = client.get("/classic").text
     css = client.get("/static/app.css").text
     js = client.get("/static/app.js").text
     assert "Crate to system" in html
@@ -827,7 +827,7 @@ def test_connect_confirmation_tracks_live_form_values() -> None:
 
 def test_signed_producer_handoff_cannot_reveal_or_repaint_wizard_entry() -> None:
     client = TestClient(app)
-    html = client.get("/").text
+    html = client.get("/classic").text
     js = client.get("/static/app.js").text
     css = client.get("/static/app.css").text
     assert 'id="studio-entry" class="studio-entry"' in html
@@ -845,7 +845,7 @@ def test_signed_producer_handoff_cannot_reveal_or_repaint_wizard_entry() -> None
 
 def test_studio_intro_enters_start_join_in_place_on_the_named_studio_url() -> None:
     client = TestClient(app)
-    html = client.get("/").text
+    html = client.get("/classic").text
     css = client.get("/static/app.css").text
     js = client.get("/static/app.js").text
 
@@ -870,7 +870,7 @@ def test_studio_intro_enters_start_join_in_place_on_the_named_studio_url() -> No
 
 def test_wizard_first_page_has_equal_start_and_join_paths() -> None:
     client = TestClient(app)
-    html = client.get("/").text
+    html = client.get("/classic").text
     css = client.get("/static/app.css").text
     js = client.get("/static/app.js").text
     assert 'id="studio-entry"' in html
@@ -907,7 +907,7 @@ def test_wizard_first_page_has_equal_start_and_join_paths() -> None:
 
 def test_wizard_first_page_plays_cropped_entry_motion_once_then_restores_the_first_frame() -> None:
     client = TestClient(app)
-    html = client.get("/").text
+    html = client.get("/classic").text
     css = client.get("/static/app.css").text
     js = client.get("/static/app.js").text
 
@@ -1000,7 +1000,7 @@ def test_studio_entry_uses_right_aligned_team_type_blended_art_and_capsule_actio
 
 def test_compute_page_uses_balanced_readable_responsive_layout() -> None:
     client = TestClient(app)
-    html = client.get("/").text
+    html = client.get("/classic").text
     js = client.get("/static/app.js").text
     css = client.get("/static/app.css").text
 
@@ -1062,7 +1062,7 @@ def test_compute_page_uses_balanced_readable_responsive_layout() -> None:
 
 def test_studio_motion_grade_matches_the_static_art_transition() -> None:
     client = TestClient(app)
-    html = client.get("/").text
+    html = client.get("/classic").text
     css = client.get("/static/app.css").text
 
     assert html.count("?v=entrymotion8") == 4
@@ -1079,7 +1079,7 @@ def test_studio_motion_grade_matches_the_static_art_transition() -> None:
 
 def test_studio_motion_and_final_frame_share_one_video_color_pipeline() -> None:
     client = TestClient(app)
-    html = client.get("/").text
+    html = client.get("/classic").text
     css = client.get("/static/app.css").text
 
     assert 'class="entry-motion-still"' not in html
@@ -1107,7 +1107,7 @@ def test_production_folio_never_replays_a_full_surface_opacity_animation() -> No
 
 
 def test_wizard_keeps_only_the_action_and_fields_visible_by_default() -> None:
-    html = TestClient(app).get("/").text
+    html = TestClient(app).get("/classic").text
     js = TestClient(app).get("/static/app.js").text
 
     details_at = html.index('<details id="about"')
@@ -1303,7 +1303,7 @@ def test_studio_open_identifies_the_signed_gpu(isolated_vault, monkeypatch) -> N
 
     client = TestClient(app)
     _restored_signed_studio(wizard, client, monkeypatch)
-    assert client.get("/").status_code == 200
+    assert client.get("/classic").status_code == 200
     deadline = time.monotonic() + 5
     status = ""
     while time.monotonic() < deadline:
@@ -1333,7 +1333,7 @@ def test_studio_front_end_waits_for_the_signed_gpu_before_offering_producer() ->
 def test_compute_and_connect_share_one_adaptive_console() -> None:
     """Ready 37: the sheet is laid out for the line on screen; Connect is a console card."""
     client = TestClient(app)
-    html = client.get("/").text
+    html = client.get("/classic").text
     js = client.get("/static/app.js").text
     folio = client.get("/static/folio.css").text
 

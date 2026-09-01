@@ -25,9 +25,11 @@ from urllib.parse import urlparse
 
 WIZARD_PORT = 8787
 PRODUCER_PORT = 8788
+DIRECTOR_PORT = 8790
 DESK_PORT = 8765
 STUDIO_URL = "http://studio.diony.local"
 PRODUCER_URL = "http://producer.diony.local"
+DIRECTOR_URL = "http://director.diony.local"
 MIN_PY = (3, 11)
 
 EDITABLES = (
@@ -36,7 +38,7 @@ EDITABLES = (
     "apps/wan",
     "apps/finish",
     "apps/producer",
-    "apps/conductor",
+    "apps/director",
     "apps/desk",
 )
 
@@ -306,6 +308,8 @@ def diagnostic_snapshot(root: Path | None = None) -> dict:
             "wizard_current": wizard_is_current(root),
             "producer_port_open": port_open(PRODUCER_PORT),
             "producer_current": producer_is_current(root),
+            "director_port_open": port_open(DIRECTOR_PORT),
+            "director_current": director_is_current(root),
             "product_names_live": product_names_live(),
         },
     }
@@ -493,7 +497,7 @@ def service_command(
     frozen: bool | None = None,
     executable: Path | None = None,
 ) -> list[str]:
-    if name not in {"wizard", "producer", "gateway"}:
+    if name not in {"wizard", "producer", "director", "gateway"}:
         raise ValueError(f"unknown Diony service: {name}")
     bundled = is_frozen() if frozen is None else frozen
     if bundled:
@@ -582,10 +586,9 @@ def wizard_ui_stamp(root: Path | None = None) -> str:
 
 
 def wizard_html_ok(root: Path | None = None, host: str = "127.0.0.1", port: int | None = None) -> bool:
-    """True when GET / on the Studio bind matches the on-disk UI stamp."""
+    """True when GET / serves this desk's Studio: the engine-selection opening
+    (cloud engines) or the classic rail matching the on-disk UI stamp."""
     stamp = wizard_ui_stamp(root)
-    if not stamp:
-        return True
     dest = WIZARD_PORT if port is None else port
     try:
         conn = http.client.HTTPConnection(host, dest, timeout=1.5)
@@ -598,7 +601,9 @@ def wizard_html_ok(root: Path | None = None, host: str = "127.0.0.1", port: int 
         return False
     if code != 200:
         return False
-    return stamp.encode("utf-8") in raw
+    if b'data-diony="studio-opening"' in raw:
+        return True
+    return not stamp or stamp.encode("utf-8") in raw
 
 
 def wizard_is_current(root: Path | None = None) -> bool:
@@ -668,6 +673,100 @@ def producer_html_ok(
 
 def producer_is_current(root: Path | None = None) -> bool:
     return producer_state_ok() and producer_html_ok(root)
+
+
+def director_in_flight_jobs(host: str = "127.0.0.1", port: int | None = None) -> int:
+    """How many generation jobs the running Director has at the provider.
+
+    The desk asks before killing a Director: paid in-flight work outranks a
+    build refresh. The cost asymmetry decides the failure mode — leaving a
+    stale Director for one launch costs nothing, killing a mid-batch one burns
+    provider spend — so an unreachable or erroring probe reads as UNKNOWN (-1)
+    and callers treat it as busy. Only a positive "0 in flight" answer clears
+    the way. (A pre-P2 build answers 200 without the field → 0 → replaceable.)
+    The status handler can be slow on a cold process (control-plane bootstrap,
+    rehydrate, reap), hence the generous timeout and one retry."""
+    dest = DIRECTOR_PORT if port is None else port
+    for _attempt in range(2):
+        try:
+            conn = http.client.HTTPConnection(host, dest, timeout=5.0)
+            conn.request("GET", "/api/director/status")
+            resp = conn.getresponse()
+            raw = resp.read()
+            code = resp.status
+            conn.close()
+            if code != 200:
+                continue
+            payload = json.loads(raw.decode())
+            return int(payload.get("in_flight_jobs") or 0)
+        except (OSError, ValueError, UnicodeDecodeError):
+            continue
+    return -1  # unknown — could not confirm idle
+
+
+def director_state_ok(host: str = "127.0.0.1", port: int | None = None) -> bool:
+    dest = DIRECTOR_PORT if port is None else port
+    try:
+        conn = http.client.HTTPConnection(host, dest, timeout=1.5)
+        conn.request("GET", "/api/director/status")
+        resp = conn.getresponse()
+        code = resp.status
+        raw = resp.read()
+        conn.close()
+    except OSError:
+        return False
+    if code != 200:
+        return False
+    try:
+        payload = json.loads(raw.decode())
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return isinstance(payload, dict) and bool(payload.get("engine"))
+
+
+def director_ui_stamp(root: Path | None = None) -> str:
+    html = (
+        (root or repo_root())
+        / "apps"
+        / "director"
+        / "src"
+        / "diony_director"
+        / "static"
+        / "index.html"
+    )
+    try:
+        text = html.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    token = "app.js?v="
+    start = text.find(token)
+    if start < 0:
+        return ""
+    rest = text[start + len(token) :]
+    return rest.split('"', 1)[0].split("'", 1)[0].split("&", 1)[0].split(" ", 1)[0].strip()
+
+
+def director_html_ok(
+    root: Path | None = None, host: str = "127.0.0.1", port: int | None = None
+) -> bool:
+    stamp = director_ui_stamp(root)
+    if not stamp:
+        return True
+    dest = DIRECTOR_PORT if port is None else port
+    try:
+        conn = http.client.HTTPConnection(host, dest, timeout=1.5)
+        conn.request("GET", "/")
+        resp = conn.getresponse()
+        code = resp.status
+        raw = resp.read()
+        conn.close()
+    except OSError:
+        return False
+    return code == 200 and stamp.encode("utf-8") in raw
+
+
+def director_is_current(root: Path | None = None) -> bool:
+    return director_state_ok() and director_html_ok(root)
 
 
 def listener_pids(port: int) -> list[int]:
@@ -740,10 +839,13 @@ def listener_is_diony(port: int) -> bool:
     signatures = (
         "diony-wizard",
         "diony-producer",
+        "diony-director",
         "diony_wizard",
         "diony_producer",
+        "diony_director",
         "--service wizard",
         "--service producer",
+        "--service director",
     )
     commands = [process_command(pid).lower() for pid in listener_pids(port)]
     return bool(commands) and all(any(mark in command for mark in signatures) for command in commands)
@@ -816,8 +918,21 @@ def claim_desk_port(root: Path | None = None) -> bool:
     if port_open(DESK_PORT):
         raise RuntimeError("The previous Diony Desk did not close. Open Diony AI again.")
     stop_legacy_duplicate_desks()
-    for service_port in (WIZARD_PORT, PRODUCER_PORT):
+    for service_port in (WIZARD_PORT, PRODUCER_PORT, DIRECTOR_PORT):
         if port_open(service_port) and listener_is_diony(service_port):
+            if service_port == DIRECTOR_PORT:
+                in_flight = director_in_flight_jobs()
+                if in_flight != 0:
+                    say(
+                        (
+                            f"Director is mid-batch ({in_flight} generation job(s) at the provider)"
+                            if in_flight > 0
+                            else "Could not confirm the Director is idle"
+                        )
+                        + " — leaving the running Director in place. It will be "
+                        "replaced on the next launch after the batch settles."
+                    )
+                    continue
             stop_listener(service_port)
     return False
 
@@ -847,19 +962,41 @@ def start_app(command: Path | list[str], log_name: str, root: Path) -> None:
     subprocess.Popen(argv, **kwargs)
 
 
-def product_names_live() -> bool:
-    """True when http://studio.diony.local reaches the Host router (not just :8787)."""
-    host = urlparse(STUDIO_URL).hostname or "studio.diony.local"
+NAMES_GEN_EXPECTED = "2"  # keep in lockstep with diony_wizard.gateway.NAMES_GEN
+
+
+def _name_route_label(url: str, path: str = "/") -> str:
+    names, _gen = _name_route_probe(url, path)
+    return names
+
+
+def _name_route_probe(url: str, path: str = "/") -> tuple[str, str]:
+    host = urlparse(url).hostname or ""
     try:
         conn = http.client.HTTPConnection(host, 80, timeout=1.2)
-        conn.request("GET", "/api/state")
+        conn.request("GET", path)
         resp = conn.getresponse()
         names = (resp.getheader("X-Diony-Names") or "").lower()
+        gen = (resp.getheader("X-Diony-Names-Gen") or "").strip()
         resp.read()
         conn.close()
     except OSError:
+        return "", ""
+    return names, gen
+
+
+def product_names_live() -> bool:
+    """True when the :80 Host router serves ALL the product names.
+
+    A pre-Director router answers for Studio but labels director.diony.local
+    as studio/wizard — that router is stale, and reporting it live would skip
+    the one-time privileged refresh that replaces it.
+    """
+    studio = _name_route_label(STUDIO_URL, "/api/state")
+    if not studio.startswith(("studio", "wizard")):
         return False
-    return names.startswith(("studio", "wizard"))
+    label, gen = _name_route_probe(DIRECTOR_URL)
+    return label.startswith("director") and gen == NAMES_GEN_EXPECTED
 
 
 PREPARING_STUDIO_COPY = (
@@ -879,7 +1016,7 @@ def ensure_product_names(root: Path | None = None) -> bool:
         say("Product names wait until the desk Python exists.")
         return False
     if product_names_live():
-        say("Studio is http://studio.diony.local. Producer is http://producer.diony.local.")
+        say("Studio is http://studio.diony.local. Producer is http://producer.diony.local. Director is http://director.diony.local.")
         return True
     say(PREPARING_STUDIO_COPY)
     env = os.environ.copy()
@@ -903,7 +1040,7 @@ def ensure_product_names(root: Path | None = None) -> bool:
             "or run: python -m diony_wizard.gateway ensure"
         )
         return False
-    say("Studio is http://studio.diony.local. Producer is http://producer.diony.local.")
+    say("Studio is http://studio.diony.local. Producer is http://producer.diony.local. Director is http://director.diony.local.")
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return True
     deadline = time.time() + 8
@@ -1004,14 +1141,34 @@ def studio_identifying(host: str = "127.0.0.1", port: int | None = None) -> bool
 IDENTIFY_WAIT_SECONDS = 20.0  # one TCP timeout plus one SSH attempt on the signed line
 
 
-def landing_url(*, wait: float = 3.0, identify_wait: float = IDENTIFY_WAIT_SECONDS) -> str:
-    """Where a launch should bring the user: Producer once signed, else Studio.
+def engine_is_cloud() -> bool:
+    """Blueprint 25: cloud is the primary engine unless explicitly set to legacy.
 
-    Studio may still be reading its site lock right after start; give it a
-    moment before deciding the user belongs on the setup page. While Studio is
-    identifying the signed GPU, keep waiting (bounded) so a recycled lease
-    lands on Connect instead of a Producer with no camera.
+    boot.py runs under the SYSTEM interpreter in source mode ("stdlib only
+    until the venv exists") — diony_contracts lives in the venv and may not be
+    importable here, so the shared rule is used when present and restated
+    verbatim when not. The two must stay in lockstep (pinned by test)."""
+    try:
+        from diony_contracts.cluster import engine_is_cloud as _shared
+    except ImportError:
+        return os.environ.get("DIONY_ENGINE", "").strip().lower() != "local_legacy"
+    return _shared()
+
+
+def landing_url(*, wait: float = 3.0, identify_wait: float = IDENTIFY_WAIT_SECONDS) -> str:
+    """Where a launch should bring the user.
+
+    Cloud engine (the default): the Director is the front door; Producer when
+    the Director is down; Studio only when nothing else answers. The legacy
+    local engine keeps the signed-GPU landing: Producer once signed, else
+    Studio — a launch must never wait on a recycled lease's Connect line when
+    the product no longer generates there.
     """
+    if engine_is_cloud():
+        # The flow is Studio (configure + choose engine) → Director → Producer.
+        # Studio's opening page is the front door; it hands the user onward.
+        return STUDIO_URL
+
     now = time.monotonic()
     deadline = now + max(0.0, wait)
     identify_deadline = now + max(0.0, wait, identify_wait)
@@ -1095,7 +1252,70 @@ def ensure_running(root: Path) -> None:
         start_app(producer, "producer.log", root)
         if not wait_port(PRODUCER_PORT, timeout=20) or not producer_is_current(root):
             raise RuntimeError("Producer is not serving this desk’s UI after restart.")
+    ensure_director_running(root)
     finish_open(names_ok=ensure_product_names(root))
+
+
+def ensure_director_installed(root: Path) -> bool:
+    """Self-heal venvs created before the Director existed. Source mode only."""
+    if is_frozen():
+        return True
+    if venv_script("diony-director", root).is_file():
+        return True
+    say("Installing the Director service into the desk runtime.")
+    try:
+        proc = subprocess.run(
+            [str(venv_python(root)), "-m", "pip", "install", "-e", "apps/director", "-q"],
+            cwd=str(root),
+            timeout=600,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        say(f"Director install failed: {exc}")
+        return False
+    return proc.returncode == 0 and venv_script("diony-director", root).is_file()
+
+
+def ensure_director_running(root: Path) -> None:
+    """Start the Director beside Studio and Producer. Best-effort: a Director
+    problem is reported loudly but never blocks Studio or Producer."""
+    try:
+        if not ensure_director_installed(root):
+            say("Director is unavailable this session (install failed). Studio and Producer are unaffected.")
+            return
+        director = service_command("director", root)
+        if port_open(DIRECTOR_PORT) and not director_is_current(root):
+            if not listener_is_diony(DIRECTOR_PORT):
+                say("Port 8790 is used by another application; the Director stays off this session.")
+                return
+            in_flight = director_in_flight_jobs()
+            if in_flight != 0:
+                say(
+                    (
+                        f"Director is stale but mid-batch ({in_flight} job(s) in flight)"
+                        if in_flight > 0
+                        else "Director is stale but could not confirm it is idle"
+                    )
+                    + " — leaving the running build in place until the batch settles."
+                )
+                return
+            say("Director is listening but stale. Restarting the Director.")
+            stop_listener(DIRECTOR_PORT)
+        if not port_open(DIRECTOR_PORT):
+            start_app(director, "director.log", root)
+        if not wait_port(DIRECTOR_PORT, timeout=20):
+            say("Director did not open on port 8790. Studio and Producer are unaffected.")
+            return
+        if not director_is_current(root):
+            say("Director opened but looks stale. Restarting the Director once.")
+            stop_listener(DIRECTOR_PORT)
+            start_app(director, "director.log", root)
+            if not wait_port(DIRECTOR_PORT, timeout=20) or not director_is_current(root):
+                say("Director is not serving this desk's UI. Studio and Producer are unaffected.")
+                return
+        say("Director is http://director.diony.local.")
+    except Exception as exc:  # noqa: BLE001 - the Director never blocks the desk
+        say(f"Director startup skipped: {exc}")
 
 
 def work() -> None:
@@ -1122,6 +1342,7 @@ def work() -> None:
         set_state(python=f"{py} ({ver[0]}.{ver[1]})")
         if desk_already_installed(root) and port_open(WIZARD_PORT) and port_open(PRODUCER_PORT):
             if wizard_is_current(root) and producer_is_current(root):
+                ensure_director_running(root)
                 finish_open(names_ok=ensure_product_names(root))
                 return
             say("A studio service is stale or not answering. Repairing the desk.")
@@ -1246,6 +1467,11 @@ def run_embedded_service(name: str, args: list[str]) -> int:
 
         producer_main()
         return 0
+    if name == "director":
+        from diony_director.app import main as director_main
+
+        director_main()
+        return 0
     if name == "gateway":
         from diony_wizard.gateway import main as gateway_main
 
@@ -1267,6 +1493,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Double-click Open Diony AI in the Diony AI folder.")
         print("Studio: http://studio.diony.local")
         print("Producer: http://producer.diony.local")
+        print("Director: http://director.diony.local")
         print("Leave the window open until it says you can close it.")
         return 0
     try:
@@ -1303,7 +1530,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     server = serve()
     url = lobby_url(server.server_address[1])
-    print(f"Diony AI — Studio will open at {STUDIO_URL}", flush=True)
+    print(f"Diony AI — opening at {STUDIO_URL}", flush=True)
     print("A browser page will open. Leave this window open until it says you can close it.", flush=True)
     worker = threading.Thread(target=work, name="diony-desk-work", daemon=True)
     worker.start()
@@ -1319,11 +1546,19 @@ def main(argv: list[str] | None = None) -> int:
     phase = public_state()["phase"]
     if should_open_studio_after_work(lobby_opened=lobby_opened, phase=phase):
         open_browser(landing_url())
-        print(f"Studio is open at {STUDIO_URL}. You can close this window.", flush=True)
-        print(f"Producer is {PRODUCER_URL} after you Sign.", flush=True)
+        if engine_is_cloud():
+            print(f"Studio is open at {STUDIO_URL}. You can close this window.", flush=True)
+            print(f"Choose an engine there; the Director is {DIRECTOR_URL}, Producer is {PRODUCER_URL}.", flush=True)
+        else:
+            print(f"Studio is open at {STUDIO_URL}. You can close this window.", flush=True)
+            print(f"Producer is {PRODUCER_URL} after you Sign.", flush=True)
     elif phase == "ready":
-        print(f"Studio is opening here at {STUDIO_URL}. You can close this window.", flush=True)
-        print(f"Producer is {PRODUCER_URL} after you Sign.", flush=True)
+        if engine_is_cloud():
+            print(f"Studio is opening at {STUDIO_URL}. You can close this window.", flush=True)
+            print(f"Choose an engine there; the Director is {DIRECTOR_URL}, Producer is {PRODUCER_URL}.", flush=True)
+        else:
+            print(f"Studio is opening here at {STUDIO_URL}. You can close this window.", flush=True)
+            print(f"Producer is {PRODUCER_URL} after you Sign.", flush=True)
     elif phase == "need_names":
         if not lobby_opened:
             open_browser(url)

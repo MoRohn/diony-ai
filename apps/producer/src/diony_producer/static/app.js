@@ -126,10 +126,13 @@ function resetProductionViewport() {
   });
 }
 
+let engineCloud = false;
+
 function showBay(name) {
   const previousBay = bay;
-  if (name === "production" && !productionReady()) name = "idea";
-  if (!["idea", "production", "gallery"].includes(name)) name = "idea";
+  if (name === "production" && !productionReady()) name = engineCloud ? "gallery" : "idea";
+  if (!["idea", "production", "gallery"].includes(name)) name = engineCloud ? "gallery" : "idea";
+  if (engineCloud && name === "idea") name = "gallery";
   bay = name;
   document.body.dataset.activeBay = name;
   document.querySelectorAll(".bay").forEach((el) => {
@@ -147,7 +150,11 @@ function showBay(name) {
     clearInterval(clockTimer);
     clockTimer = null;
   }
-  if (name === "gallery") loadGallery();
+  if (name === "gallery") {
+    loadGallery();
+    loadDirectorFilms();
+    loadCloudProduction();
+  }
   paintFloors();
   triggerBayTransition(previousBay, name);
 }
@@ -728,7 +735,7 @@ function renderRun() {
   if (beat) {
     const connection = run.monitoring?.connection || "idle";
     if (run.phase === "gpu" || (run.camera === "site" && !run.rolling)) {
-      beat.textContent = "Connect required";
+      beat.textContent = run.reach?.beat || "Connect required";
       beat.classList.remove("live");
     } else {
       beat.textContent = connection === "live"
@@ -1366,6 +1373,225 @@ function renderGallery() {
   renderGallerySelection();
 }
 
+let cloudProductionTimer = null;
+
+async function loadCloudProduction() {
+  const host = document.getElementById("cloud-production");
+  const rows = document.getElementById("cloud-production-rows");
+  if (!host || !rows || !engineCloud) return;
+  try {
+    const res = await fetch("/api/cloud-production");
+    const payload = await res.json();
+    const sessions = payload.sessions || [];
+    host.classList.toggle("hidden", sessions.length === 0);
+    rows.replaceChildren();
+    let anyActive = false;
+    sessions.forEach((item) => {
+      anyActive = anyActive || item.active;
+      const row = document.createElement("div");
+      row.className = "row";
+      const done = item.counts.succeeded || 0;
+      const failed = item.counts.failed || 0;
+      const pending = item.jobs - done - failed;
+      row.innerHTML =
+        `<span class="sid"></span>` +
+        `<span class="ok">${done} printed</span>` +
+        (failed ? `<span class="bad">${failed} failed</span>` : "") +
+        (pending ? `<span class="live">${pending} generating</span>` : "") +
+        `<span>$${(item.actual_usd_micros / 1e6).toFixed(2)} spent</span>`;
+      row.querySelector(".sid").textContent = item.session;
+      rows.appendChild(row);
+    });
+    if (anyActive && !cloudProductionTimer) {
+      cloudProductionTimer = setInterval(loadCloudProduction, 5000);
+    } else if (!anyActive && cloudProductionTimer) {
+      clearInterval(cloudProductionTimer);
+      cloudProductionTimer = null;
+      loadDirectorFilms();
+    }
+  } catch (error) {
+    /* strip stays as-is */
+  }
+}
+
+const filmSelection = new Map(); // session -> url
+
+function armFilmConfirm(btn, confirmLabel, onConfirm) {
+  // Same doctrine as the Director UI: no native dialogs, ever.
+  if (btn.dataset.armed === "1") {
+    btn.dataset.armed = "";
+    btn.classList.remove("armed");
+    btn.textContent = btn.dataset.restLabel || btn.textContent;
+    onConfirm();
+    return;
+  }
+  btn.dataset.restLabel = btn.textContent;
+  btn.dataset.armed = "1";
+  btn.classList.add("armed");
+  btn.textContent = confirmLabel;
+  setTimeout(() => {
+    if (btn.dataset.armed === "1") {
+      btn.dataset.armed = "";
+      btn.classList.remove("armed");
+      btn.textContent = btn.dataset.restLabel;
+    }
+  }, 6000);
+}
+
+function refreshFilmActions() {
+  const download = document.getElementById("film-download");
+  const stitch = document.getElementById("film-stitch");
+  const remove = document.getElementById("film-delete");
+  const selectAll = document.getElementById("film-select-all");
+  const count = filmSelection.size;
+  if (remove && remove.dataset.armed !== "1") {
+    remove.disabled = count === 0;
+    remove.textContent = count ? `Delete selected (${count})` : "Delete selected";
+  }
+  if (download) {
+    download.disabled = count === 0;
+    download.textContent = count ? `Download selected (${count})` : "Download selected";
+  }
+  if (stitch) {
+    stitch.disabled = count < 2;
+    stitch.textContent = count >= 2 ? `Stitch selected (${count})` : "Stitch selected";
+  }
+  if (selectAll) {
+    const boxes = document.querySelectorAll("#director-films-grid input.film-select");
+    selectAll.checked = boxes.length > 0 && count === boxes.length;
+  }
+}
+
+async function loadDirectorFilms() {
+  const host = document.getElementById("director-films");
+  const grid = document.getElementById("director-films-grid");
+  if (!host || !grid) return;
+  try {
+    const res = await fetch("/api/director-films");
+    const payload = await res.json();
+    const films = payload.films || [];
+    host.classList.toggle("hidden", films.length === 0);
+    filmSelection.clear();
+    grid.replaceChildren();
+    films.forEach((film) => {
+      const card = document.createElement("div");
+      card.className = "gallery-card director-film-card";
+      card.setAttribute("role", "listitem");
+      const pick = document.createElement("input");
+      pick.type = "checkbox";
+      pick.className = "film-select";
+      pick.setAttribute("aria-label", `select ${film.session}`);
+      pick.addEventListener("change", () => {
+        if (pick.checked) filmSelection.set(film.session, film.url);
+        else filmSelection.delete(film.session);
+        card.classList.toggle("selected", pick.checked);
+        refreshFilmActions();
+      });
+      const video = document.createElement("video");
+      video.controls = true;
+      video.preload = "metadata";
+      video.src = film.url;
+      const caption = document.createElement("p");
+      caption.className = "hint";
+      const when = new Date(film.modified);
+      caption.textContent = `${film.session} · ${when.toLocaleString()} · ${(film.bytes / 1048576).toFixed(1)} MB`;
+      card.appendChild(pick);
+      card.appendChild(video);
+      card.appendChild(caption);
+      grid.appendChild(card);
+    });
+    refreshFilmActions();
+  } catch (error) {
+    host.classList.add("hidden");
+  }
+}
+
+function bootFilmActions() {
+  const download = document.getElementById("film-download");
+  const stitch = document.getElementById("film-stitch");
+  const remove = document.getElementById("film-delete");
+  const selectAll = document.getElementById("film-select-all");
+  const note = document.getElementById("film-actions-note");
+  if (!download || !stitch || !selectAll) return;
+
+  if (remove) {
+    remove.addEventListener("click", () => {
+      const sessions = [...filmSelection.keys()];
+      if (!sessions.length) return;
+      armFilmConfirm(remove, `Confirm — delete ${sessions.length} film(s)`, async () => {
+        remove.disabled = true;
+        if (note) note.textContent = `Removing ${sessions.length} film(s)…`;
+        try {
+          const res = await fetch("/api/director-films/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessions: sessions }),
+          });
+          const body = await res.json();
+          if (!res.ok) throw new Error(body.detail || res.status);
+          if (note) {
+            note.textContent =
+              `${body.removed.length} removed — the ledger keeps every receipt` +
+              (body.missing.length ? ` (${body.missing.length} already gone)` : "");
+          }
+          await loadDirectorFilms();
+        } catch (error) {
+          if (note) note.textContent = `Delete failed: ${error.message || error}`;
+        }
+        refreshFilmActions();
+      });
+    });
+  }
+
+  selectAll.addEventListener("change", () => {
+    document.querySelectorAll("#director-films-grid input.film-select").forEach((box) => {
+      if (box.checked !== selectAll.checked) {
+        box.checked = selectAll.checked;
+        box.dispatchEvent(new Event("change"));
+      }
+    });
+  });
+
+  download.addEventListener("click", () => {
+    let delay = 0;
+    filmSelection.forEach((url, session) => {
+      setTimeout(() => {
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `diony-${session}.mp4`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      }, delay);
+      delay += 400; // stagger so the browser accepts every download
+    });
+    if (note) note.textContent = `${filmSelection.size} download(s) started`;
+  });
+
+  stitch.addEventListener("click", async () => {
+    const sessions = [...filmSelection.keys()];
+    if (sessions.length < 2) return;
+    stitch.disabled = true;
+    if (note) note.textContent = `Stitching ${sessions.length} films…`;
+    try {
+      const res = await fetch("/api/director-films/stitch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessions: sessions }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.detail || res.status);
+      if (note) note.textContent = `Stitched into ${body.session} (${(body.bytes / 1048576).toFixed(1)} MB)`;
+      await loadDirectorFilms();
+    } catch (error) {
+      if (note) note.textContent = `Stitch failed: ${error.message || error}`;
+    }
+    refreshFilmActions();
+  });
+}
+
+bootFilmActions();
+
 async function loadGallery() {
   const meta = document.getElementById("gallery-meta");
   const note = document.getElementById("gallery-note");
@@ -1894,11 +2120,42 @@ async function load() {
     targetMinutes = project.brief.target_minutes;
   }
   render();
+  let engineInfo = null;
+  try {
+    const engineRes = await fetch("/api/engine");
+    engineInfo = await engineRes.json();
+    engineCloud = Boolean(engineInfo.cloud);
+  } catch (error) {
+    engineCloud = false;
+  }
+  try {
+    const directorLink = document.getElementById("director-link");
+    if (directorLink && engineInfo && engineInfo.director_url) {
+      directorLink.href = engineInfo.director_url;
+    }
+  } catch (error) { /* static default href stands */ }
+  if (engineCloud) {
+    document.body.classList.add("cloud-engine");
+    const ideaTab = document.querySelector('.bays button[data-bay="idea"]');
+    if (ideaTab) ideaTab.classList.add("hidden");
+    const galleryTitle = document.getElementById("gallery-title");
+    if (galleryTitle) galleryTitle.textContent = "Gallery";
+    const galleryNote = document.getElementById("gallery-note");
+    if (galleryNote) {
+      galleryNote.textContent =
+        "Director films and program masters. Watch, review, join, or download.";
+    }
+    const emptyHint = document.getElementById("gallery-empty");
+    if (emptyHint) {
+      emptyHint.textContent =
+        "Director films land here after Run & Assemble; program masters after Production.";
+    }
+  }
   const requested = ["production", "gallery"].includes(requestedBay) ? requestedBay : "";
   const productionActive = Boolean(
     run?.rolling || run?.can_stop || run?.farm?.busy || run?.finish?.busy || run?.mix?.busy
   );
-  showBay(requested || (productionActive ? "production" : "idea"));
+  showBay(requested || (productionActive ? "production" : engineCloud ? "gallery" : "idea"));
 }
 
 function pollFinish() {

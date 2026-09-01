@@ -45,6 +45,29 @@
           "title": "Speech Presence Min",
           "type": "number"
         },
+        "line_word_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Line Word Count",
+          "type": "integer"
+        },
+        "expected_speech_ms": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Expected Speech Ms",
+          "type": "number"
+        },
+        "dialogue_sha256": {
+          "default": "",
+          "pattern": "^(?:|[0-9a-f]{64})$",
+          "title": "Dialogue Sha256",
+          "type": "string"
+        },
+        "request_sha256": {
+          "default": "",
+          "title": "Request Sha256",
+          "type": "string"
+        },
         "speech_tail_ms": {
           "anyOf": [
             {

@@ -123,12 +123,11 @@ def test_ready_studio_reuses_an_open_lobby_instead_of_opening_another_page() -> 
     assert should_open_studio_after_work(lobby_opened=False, phase="error") is False
 
 
-def test_duplicate_launch_brings_studio_back_to_the_user(monkeypatch) -> None:
+def test_duplicate_launch_lands_on_the_studio_opening(monkeypatch) -> None:
     opened: list[str] = []
     monkeypatch.setattr("diony_desk.boot.claim_desk_port", lambda root=None: True)
     monkeypatch.setattr("diony_desk.boot.desk_already_installed", lambda root=None: True)
     monkeypatch.setattr("diony_desk.boot.product_names_live", lambda: True)
-    monkeypatch.setattr("diony_desk.boot.wizard_signed", lambda host="127.0.0.1", port=None: False)
     monkeypatch.setattr("diony_desk.boot.open_browser", opened.append)
 
     from diony_desk.boot import main
@@ -138,8 +137,9 @@ def test_duplicate_launch_brings_studio_back_to_the_user(monkeypatch) -> None:
 
 
 def test_duplicate_launch_on_a_signed_site_lands_on_producer(monkeypatch) -> None:
-    """Reopening the app during Production must not send the user back to Setup."""
+    """Legacy engine: reopening during Production must not send the user to Setup."""
     opened: list[str] = []
+    monkeypatch.setenv("DIONY_ENGINE", "local_legacy")
     monkeypatch.setattr("diony_desk.boot.claim_desk_port", lambda root=None: True)
     monkeypatch.setattr("diony_desk.boot.desk_already_installed", lambda root=None: True)
     monkeypatch.setattr("diony_desk.boot.product_names_live", lambda: True)
@@ -563,28 +563,30 @@ def test_ensure_product_names_runs_gateway(monkeypatch, tmp_path) -> None:
     assert calls[0][-3:] == ["-m", "diony_wizard.gateway", "ensure"]
 
 
-def test_product_names_live_accepts_the_installed_legacy_gateway(monkeypatch) -> None:
-    class Resp:
-        def getheader(self, name: str) -> str:
-            return "wizard" if name == "X-Diony-Names" else ""
+def test_product_names_reject_the_stale_pre_director_gateway(monkeypatch) -> None:
+    """A legacy router labels every host "wizard": Studio answers but the
+    Director cannot be routed. That router must read as NOT live so the
+    one-time privileged refresh replaces it with the three-name router."""
 
-        def read(self) -> bytes:
-            return b"{}"
+    labels = {"studio.diony.local": "wizard", "director.diony.local": "wizard"}
 
-    class Conn:
-        def request(self, method: str, path: str) -> None:
-            assert method == "GET"
-            assert path == "/api/state"
+    def fake_probe(url, path="/"):
+        from urllib.parse import urlparse as _parse
 
-        def getresponse(self) -> Resp:
-            return Resp()
+        from diony_desk import boot as _boot
 
-        def close(self) -> None:
-            return None
+        return labels.get(_parse(url).hostname or "", ""), _boot.NAMES_GEN_EXPECTED
 
+    monkeypatch.setattr("diony_desk.boot._name_route_probe", fake_probe)
     monkeypatch.setattr(
-        "diony_desk.boot.http.client.HTTPConnection", lambda *_a, **_k: Conn()
+        "diony_desk.boot._name_route_label", lambda url, path="/": fake_probe(url, path)[0]
     )
+    assert product_names_live() is False
+
+    # A refreshed install may keep the legacy "wizard" label on the Studio
+    # route — that is still live once the Director route answers as itself
+    # on the current router generation.
+    labels["director.diony.local"] = "director"
     assert product_names_live() is True
 
 
@@ -731,7 +733,7 @@ def test_producer_state_ok_accepts_a_large_project_payload(monkeypatch) -> None:
 
 def test_producer_ui_stamp_matches_html() -> None:
     stamp = producer_ui_stamp()
-    assert stamp == "wanvoice1"
+    assert stamp == "p2a"
     html = repo_root() / "apps" / "producer" / "src" / "diony_producer" / "static" / "index.html"
     assert f"app.js?v={stamp}" in html.read_text(encoding="utf-8")
     assert f"app.css?v={stamp}" in html.read_text(encoding="utf-8")
@@ -1047,6 +1049,9 @@ def test_a_restored_lock_is_not_signed_until_studio_identifies_its_gpu(monkeypat
 def test_landing_waits_through_identification_then_lands_on_the_answer(monkeypatch) -> None:
     from diony_desk import boot
 
+    # This is the legacy local engine's landing; the cloud engine lands on the
+    # Director and never consults the signed-GPU line (test_director_registration).
+    monkeypatch.setenv("DIONY_ENGINE", "local_legacy")
     monkeypatch.setattr(boot.time, "sleep", lambda _s: None)
     monkeypatch.setattr(boot, "port_open", lambda port: True)
 

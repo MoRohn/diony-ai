@@ -1,0 +1,903 @@
+{
+  "$defs": {
+    "AudioPacket": {
+      "properties": {
+        "clip_class": {
+          "enum": [
+            "sync-dialogue",
+            "vo-over",
+            "silent-picture",
+            "score-led",
+            "ambience-led"
+          ],
+          "title": "Clip Class",
+          "type": "string"
+        },
+        "script_excerpt": {
+          "items": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "title": "Script Excerpt",
+          "type": "array"
+        },
+        "voice_ref": {
+          "default": "",
+          "title": "Voice Ref",
+          "type": "string"
+        },
+        "delivery": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Delivery",
+          "type": "object"
+        },
+        "on_camera": {
+          "default": true,
+          "title": "On Camera",
+          "type": "boolean"
+        },
+        "room_tone_id": {
+          "default": "",
+          "title": "Room Tone Id",
+          "type": "string"
+        },
+        "foley": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Foley",
+          "type": "array"
+        },
+        "score": {
+          "default": "none",
+          "enum": [
+            "in",
+            "out",
+            "none"
+          ],
+          "title": "Score",
+          "type": "string"
+        },
+        "handles_s": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Handles S",
+          "type": "object"
+        },
+        "forbidden": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Forbidden",
+          "type": "array"
+        }
+      },
+      "required": [
+        "clip_class"
+      ],
+      "title": "AudioPacket",
+      "type": "object"
+    },
+    "CharacterProfile": {
+      "properties": {
+        "schema_version": {
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "char_id": {
+          "title": "Char Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "role": {
+          "default": "",
+          "title": "Role",
+          "type": "string"
+        },
+        "sheet_version": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Sheet Version",
+          "type": "integer"
+        },
+        "hero_stills": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Hero Stills",
+          "type": "object"
+        },
+        "wardrobe": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Wardrobe",
+          "type": "object"
+        },
+        "age_body_notes": {
+          "default": "",
+          "title": "Age Body Notes",
+          "type": "string"
+        },
+        "forbidden_drift": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Forbidden Drift",
+          "type": "array"
+        },
+        "grok_ref_pack": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Grok Ref Pack",
+          "type": "array"
+        },
+        "flow_media_ids": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Flow Media Ids",
+          "type": "object"
+        },
+        "flow_character_ref": {
+          "default": "",
+          "title": "Flow Character Ref",
+          "type": "string"
+        },
+        "voice": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VoiceProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "casting_card": {
+          "default": "",
+          "title": "Casting Card",
+          "type": "string"
+        },
+        "face_approved": {
+          "default": false,
+          "title": "Face Approved",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "char_id",
+        "name"
+      ],
+      "title": "CharacterProfile",
+      "type": "object"
+    },
+    "ClipUnit": {
+      "properties": {
+        "schema_version": {
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "clip_id": {
+          "title": "Clip Id",
+          "type": "string"
+        },
+        "scene_id": {
+          "title": "Scene Id",
+          "type": "string"
+        },
+        "order": {
+          "minimum": 0,
+          "title": "Order",
+          "type": "integer"
+        },
+        "script_line_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Script Line Ids",
+          "type": "array"
+        },
+        "clip_class": {
+          "enum": [
+            "sync-dialogue",
+            "vo-over",
+            "silent-picture",
+            "score-led",
+            "ambience-led"
+          ],
+          "title": "Clip Class",
+          "type": "string"
+        },
+        "duration_s": {
+          "exclusiveMinimum": 0,
+          "title": "Duration S",
+          "type": "integer"
+        },
+        "camera_idea": {
+          "title": "Camera Idea",
+          "type": "string"
+        },
+        "join_next": {
+          "default": "cut",
+          "enum": [
+            "bridge",
+            "reaction_cut",
+            "extend",
+            "cut"
+          ],
+          "title": "Join Next",
+          "type": "string"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudProvider"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "model": {
+          "default": "",
+          "title": "Model",
+          "type": "string"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudGenerationMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "resolution": {
+          "default": "720p",
+          "title": "Resolution",
+          "type": "string"
+        },
+        "audio_packet": {
+          "$ref": "#/$defs/AudioPacket"
+        },
+        "continuity": {
+          "$ref": "#/$defs/ContinuityLock"
+        },
+        "prompt_versions": {
+          "items": {
+            "$ref": "#/$defs/PromptVersion"
+          },
+          "title": "Prompt Versions",
+          "type": "array"
+        },
+        "estimate_usd_micros": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Estimate Usd Micros",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "clip_id",
+        "scene_id",
+        "order",
+        "clip_class",
+        "duration_s",
+        "camera_idea",
+        "audio_packet"
+      ],
+      "title": "ClipUnit",
+      "type": "object"
+    },
+    "CloudGenerationMode": {
+      "enum": [
+        "t2v",
+        "i2v",
+        "r2v",
+        "first_last",
+        "v2v_edit",
+        "extension",
+        "upscale",
+        "image"
+      ],
+      "title": "CloudGenerationMode",
+      "type": "string"
+    },
+    "CloudProvider": {
+      "enum": [
+        "grok",
+        "google-flow"
+      ],
+      "title": "CloudProvider",
+      "type": "string"
+    },
+    "ContinuityLock": {
+      "properties": {
+        "lock_recipe": {
+          "default": "none",
+          "enum": [
+            "still",
+            "character_asset",
+            "edit",
+            "ref",
+            "bridge",
+            "hybrid",
+            "none"
+          ],
+          "title": "Lock Recipe",
+          "type": "string"
+        },
+        "character_packs": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Character Packs",
+          "type": "array"
+        },
+        "setting_plate": {
+          "additionalProperties": true,
+          "title": "Setting Plate",
+          "type": "object"
+        },
+        "prev_frame_ptr": {
+          "additionalProperties": true,
+          "title": "Prev Frame Ptr",
+          "type": "object"
+        }
+      },
+      "title": "ContinuityLock",
+      "type": "object"
+    },
+    "CostEstimate": {
+      "properties": {
+        "schema_version": {
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "title": "Workspace Id",
+          "type": "string"
+        },
+        "project_id": {
+          "default": "",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "op_id": {
+          "default": "",
+          "title": "Op Id",
+          "type": "string"
+        },
+        "currency": {
+          "const": "USD",
+          "default": "USD",
+          "title": "Currency",
+          "type": "string"
+        },
+        "lines": {
+          "items": {
+            "$ref": "#/$defs/CostEstimateLine"
+          },
+          "title": "Lines",
+          "type": "array"
+        },
+        "revision_allowance_usd_micros": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Revision Allowance Usd Micros",
+          "type": "integer"
+        },
+        "total_usd_micros": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Total Usd Micros",
+          "type": "integer"
+        },
+        "rate_cards_stale": {
+          "default": false,
+          "title": "Rate Cards Stale",
+          "type": "boolean"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "workspace_id"
+      ],
+      "title": "CostEstimate",
+      "type": "object"
+    },
+    "CostEstimateLine": {
+      "properties": {
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "provider_id": {
+          "title": "Provider Id",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "unit": {
+          "title": "Unit",
+          "type": "string"
+        },
+        "unit_rate_usd_micros": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Unit Rate Usd Micros",
+          "type": "integer"
+        },
+        "quantity_microunits": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Quantity Microunits",
+          "type": "integer"
+        },
+        "internal_credits": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Internal Credits",
+          "type": "integer"
+        },
+        "usd_micros": {
+          "minimum": 0,
+          "title": "Usd Micros",
+          "type": "integer"
+        },
+        "rate_card_id": {
+          "default": "",
+          "title": "Rate Card Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "provider_id",
+        "model",
+        "unit",
+        "usd_micros"
+      ],
+      "title": "CostEstimateLine",
+      "type": "object"
+    },
+    "PromptVersion": {
+      "properties": {
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "prompt"
+      ],
+      "title": "PromptVersion",
+      "type": "object"
+    },
+    "Scene": {
+      "properties": {
+        "scene_id": {
+          "title": "Scene Id",
+          "type": "string"
+        },
+        "heading": {
+          "title": "Heading",
+          "type": "string"
+        },
+        "setting_ref": {
+          "title": "Setting Ref",
+          "type": "string"
+        },
+        "cast": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Cast",
+          "type": "array"
+        },
+        "story_time": {
+          "default": "",
+          "title": "Story Time",
+          "type": "string"
+        },
+        "line_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Line Ids",
+          "type": "array"
+        },
+        "emotional_job": {
+          "default": "",
+          "title": "Emotional Job",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scene_id",
+        "heading",
+        "setting_ref"
+      ],
+      "title": "Scene",
+      "type": "object"
+    },
+    "Script": {
+      "properties": {
+        "schema_version": {
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "project_id": {
+          "default": "",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "version": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "logline": {
+          "default": "",
+          "title": "Logline",
+          "type": "string"
+        },
+        "runtime_target_s": {
+          "default": 60,
+          "exclusiveMinimum": 0,
+          "title": "Runtime Target S",
+          "type": "integer"
+        },
+        "beats": {
+          "items": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "title": "Beats",
+          "type": "array"
+        },
+        "scenes": {
+          "items": {
+            "$ref": "#/$defs/Scene"
+          },
+          "title": "Scenes",
+          "type": "array"
+        },
+        "lines": {
+          "items": {
+            "$ref": "#/$defs/ScriptLine"
+          },
+          "title": "Lines",
+          "type": "array"
+        },
+        "locked": {
+          "default": false,
+          "title": "Locked",
+          "type": "boolean"
+        },
+        "locked_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Locked At"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "Script",
+      "type": "object"
+    },
+    "ScriptLine": {
+      "properties": {
+        "line_id": {
+          "title": "Line Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "heading",
+            "action",
+            "cue",
+            "dialogue",
+            "parenthetical",
+            "vo",
+            "sound"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "speaker": {
+          "default": "",
+          "title": "Speaker",
+          "type": "string"
+        },
+        "scene_id": {
+          "default": "",
+          "title": "Scene Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "line_id",
+        "kind",
+        "text"
+      ],
+      "title": "ScriptLine",
+      "type": "object"
+    },
+    "SettingProfile": {
+      "properties": {
+        "schema_version": {
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "setting_id": {
+          "title": "Setting Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "plate_asset_id": {
+          "default": "",
+          "title": "Plate Asset Id",
+          "type": "string"
+        },
+        "plate_version": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Plate Version",
+          "type": "integer"
+        },
+        "architecture_notes": {
+          "default": "",
+          "title": "Architecture Notes",
+          "type": "string"
+        },
+        "time_weather": {
+          "default": "",
+          "title": "Time Weather",
+          "type": "string"
+        },
+        "grade_language": {
+          "default": "",
+          "title": "Grade Language",
+          "type": "string"
+        },
+        "camera_kit": {
+          "default": "",
+          "title": "Camera Kit",
+          "type": "string"
+        },
+        "props": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Props",
+          "type": "array"
+        },
+        "geography": {
+          "default": "",
+          "title": "Geography",
+          "type": "string"
+        },
+        "room_tone_id": {
+          "default": "",
+          "title": "Room Tone Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "setting_id",
+        "name"
+      ],
+      "title": "SettingProfile",
+      "type": "object"
+    },
+    "VoiceProfile": {
+      "properties": {
+        "voice_id": {
+          "title": "Voice Id",
+          "type": "string"
+        },
+        "engine": {
+          "default": "omni_preset",
+          "enum": [
+            "omni_preset",
+            "flow_user_voice",
+            "none"
+          ],
+          "title": "Engine",
+          "type": "string"
+        },
+        "engine_ref": {
+          "default": "",
+          "title": "Engine Ref",
+          "type": "string"
+        },
+        "sample_asset_id": {
+          "default": "",
+          "title": "Sample Asset Id",
+          "type": "string"
+        },
+        "accent": {
+          "default": "",
+          "title": "Accent",
+          "type": "string"
+        },
+        "pace_wpm": {
+          "default": 150,
+          "exclusiveMinimum": 0,
+          "title": "Pace Wpm",
+          "type": "integer"
+        },
+        "pitch_band": {
+          "default": "",
+          "title": "Pitch Band",
+          "type": "string"
+        },
+        "mic_distance": {
+          "default": "close, dry",
+          "title": "Mic Distance",
+          "type": "string"
+        },
+        "approved": {
+          "default": false,
+          "title": "Approved",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "voice_id"
+      ],
+      "title": "VoiceProfile",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "idea": {
+      "title": "Idea",
+      "type": "string"
+    },
+    "characters": {
+      "items": {
+        "$ref": "#/$defs/CharacterProfile"
+      },
+      "title": "Characters",
+      "type": "array"
+    },
+    "settings": {
+      "items": {
+        "$ref": "#/$defs/SettingProfile"
+      },
+      "title": "Settings",
+      "type": "array"
+    },
+    "script": {
+      "$ref": "#/$defs/Script"
+    },
+    "clips": {
+      "items": {
+        "$ref": "#/$defs/ClipUnit"
+      },
+      "title": "Clips",
+      "type": "array"
+    },
+    "estimate": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CostEstimate"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "revision_allowance_bp": {
+      "default": 4000,
+      "maximum": 10000,
+      "minimum": 0,
+      "title": "Revision Allowance Bp",
+      "type": "integer"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "session_id",
+    "idea",
+    "script"
+  ],
+  "title": "ProductionPackage",
+  "type": "object"
+}

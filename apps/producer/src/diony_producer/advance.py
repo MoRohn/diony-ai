@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from diony_contracts.enums import GateName, MixLockState, PictureLockState, ProjectStatus, QCVerdict
+from diony_contracts.enums import (
+    ContinuityMode,
+    GateName,
+    MixLockState,
+    PictureLockState,
+    ProjectStatus,
+    QCVerdict,
+)
 from diony_contracts.live import inference_live
 from diony_contracts.models import Gate, Project, Take
 from diony_producer.camera import live_camera
@@ -12,9 +19,11 @@ from diony_producer.farm import (
     auto_retake_for_qc_failure,
     enter_farm,
     farm_status,
+    new_generation_take,
     start_farm,
     qc_contract_valid,
     refresh_take_measurement,
+    refresh_voice_measurement,
     take_has_live_negative,
 )
 from diony_producer.final_review import final_review_refuses_current_master, run_final_review
@@ -65,6 +74,143 @@ def rundown_ready(project: Project) -> bool:
     return all(_selected_take(project, shot.id) is not None for shot in project.shots)
 
 
+def stale_continuity(project: Project) -> list[tuple[object, Take, str]]:
+    """Selected prints whose previous-frame chain names a print that is no longer the previous Shot's.
+
+    sh-020-t1 (2026-08-28) rolled while sh-010 had no passing print, chained
+    its evidence to sh-010-t1, and passed; sh-010 later printed on t4. The
+    contract then refused sh-020 at picture lock on every tick, silently,
+    for two hours: the rundown was complete and nothing could move.
+    """
+    rows: list[tuple[object, Take, str]] = []
+    for index, shot in enumerate(project.shots):
+        if index == 0 or shot.continuity_mode != ContinuityMode.PREVIOUS_FRAME:
+            continue
+        take = _selected_take(project, shot.id)
+        qc = take.qc if take is not None else None
+        if take is None or qc is None or qc.verdict not in {QCVerdict.PASS, QCVerdict.WARN}:
+            continue
+        if qc.continuity_waived or not qc.continuity_from_take_id:
+            continue
+        previous = project.shots[index - 1]
+        expected = previous.selected_take_id or ""
+        if not expected or qc.continuity_from_take_id == expected:
+            continue
+        prior = _selected_take(project, previous.id)
+        if prior is None or prior.qc is None or prior.qc.verdict == QCVerdict.FAIL:
+            continue
+        rows.append((shot, take, expected))
+    return rows
+
+
+def refresh_stale_continuity(project: Project, *, live: bool) -> bool:
+    """Re-roll a following clip from the replaced print, or waive when the budget is spent.
+
+    Returns True when retakes were queued (the caller waits for the farm).
+    """
+    rows = stale_continuity(project)
+    if not rows:
+        return False
+    retakes: list[Take] = []
+    for shot, take, expected in rows:
+        assert take.qc is not None
+        generations = [item for item in project.takes_for(shot.id) if item.origin == TakeOrigin.GENERATION]
+        stale_from = take.qc.continuity_from_take_id
+        if live and len(generations) < RETAKE_CAP:
+            retry = new_generation_take(project, shot, live=True)
+            project.takes.append(retry)
+            shot.selected_take_id = retry.id
+            record_decision(
+                project,
+                stage="camera",
+                category=DecisionCategory.RETAKE,
+                subject=f"{shot.id} continuity refresh {retry.attempt}",
+                options=[
+                    DecisionOption(
+                        id="reroll",
+                        label=f"chain {shot.id} from {expected}'s last frame",
+                        reason=f"previous print {stale_from} was replaced by {expected} after {take.id} rolled",
+                    ),
+                    DecisionOption(
+                        id="waive",
+                        label="keep the print and waive the chain",
+                        rejected_because="retake budget remains",
+                    ),
+                ],
+                selected="reroll",
+                reason=f"previous-frame continuity: {take.id} chained to {stale_from}, now replaced by {expected}",
+                confidence=0.8,
+                shot_id=shot.id,
+                take_id=retry.id,
+            )
+            record_activity(
+                "qc",
+                (
+                    f"{shot.id} · previous print {stale_from} was replaced by {expected} after {take.id} rolled; "
+                    f"re-rolling chained from its last frame (continuity refresh, attempt {retry.attempt} of {RETAKE_CAP})"
+                ),
+                level="live",
+                shot_id=shot.id,
+            )
+            retakes.append(retry)
+        else:
+            take.qc.continuity_waived = (
+                f"previous print {stale_from} was replaced by {expected} after this clip rolled; "
+                + ("retake budget spent" if live else "camera not live")
+            )
+            record_decision(
+                project,
+                stage="camera",
+                category=DecisionCategory.SETTLE,
+                subject=f"{shot.id} continuity waiver",
+                options=[
+                    DecisionOption(
+                        id="waive",
+                        label=f"keep {take.id}; chain evidence names {stale_from}",
+                        reason=take.qc.continuity_waived,
+                    ),
+                    DecisionOption(
+                        id="reroll",
+                        label=f"chain {shot.id} from {expected}",
+                        rejected_because="retake budget spent" if live else "camera not live",
+                    ),
+                ],
+                selected="waive",
+                reason=take.qc.continuity_waived,
+                confidence=0.6,
+                shot_id=shot.id,
+                take_id=take.id,
+            )
+            record_activity(
+                "qc",
+                f"{shot.id} · {take.id} keeps its print; {take.qc.continuity_waived} (continuity waived)",
+                level="warn",
+                shot_id=shot.id,
+            )
+    persist_project(project)
+    if retakes:
+        project.status = ProjectStatus.SHOOTING
+        project.production_ended_at = None
+        persist_project(project)
+        enter_farm()
+        start_farm(project, retakes)
+        return True
+    return False
+
+
+_last_lock_refusal = ""
+
+
+def _report_lock_refusal(gate: str, exc: BaseException) -> None:
+    """A refused lock is a state the feed must show, not a silent tick."""
+    global _last_lock_refusal
+    message = f"{gate} lock is waiting: {exc}"
+    if message == _last_lock_refusal:
+        return
+    _last_lock_refusal = message
+    record_activity("qc", message, level="warn")
+
+
 def farm_ready_for_finish(project: Project, *, live: bool) -> bool:
     if not rundown_ready(project):
         return False
@@ -75,6 +221,7 @@ def farm_ready_for_finish(project: Project, *, live: bool) -> bool:
         if live:
             # A stale measurement version re-measures once instead of stalling.
             refresh_take_measurement(project, take)
+            refresh_voice_measurement(project, take)
         if take.qc and take.qc.verdict == QCVerdict.FAIL:
             return False
         settled = take.qc is not None and take.qc.settled_by_policy
@@ -145,6 +292,7 @@ def apply_picture_lock(project: Project, locked_by: str = "producer") -> None:
         take = _selected_take(project, shot.id)
         if take is not None:
             refresh_take_measurement(project, take)
+            refresh_voice_measurement(project, take)
     failed = [
         (shot.id, take.id)
         for shot in project.shots
@@ -337,6 +485,8 @@ def maybe_advance_run(project: Project) -> None:
     live = live_camera()
     if signed_gpu_site() and not live:
         return
+    if refresh_stale_continuity(project, live=live):
+        return
     if not farm_ready_for_finish(project, live=live):
         finish_ready_takes_early(project, live=live)
         return
@@ -361,7 +511,8 @@ def maybe_advance_run(project: Project) -> None:
             return
         try:
             apply_picture_lock(project, "producer")
-        except ValueError:
+        except ValueError as exc:
+            _report_lock_refusal("Picture", exc)
             return
         finish = finish_status()
         if finish["busy"] or finish.get("error"):
@@ -389,5 +540,6 @@ def maybe_advance_run(project: Project) -> None:
             return
         try:
             apply_mix_lock(project, "producer")
-        except ValueError:
+        except ValueError as exc:
+            _report_lock_refusal("Mix", exc)
             return

@@ -29,6 +29,29 @@ PROMPT_CLIP_MIN_SAMPLE_RATE = 16_000
 # One Wan S2V frame at its native 16 fps. Speech that is still active inside
 # the last frame of the window was cut by the picture, not finished.
 SPEECH_TAIL_MIN_MS = 62.5
+# Voiced-speech presence is the voiced fraction of the whole picture window,
+# so its floor must follow the line: a one-word "QUACK!" in a 3.5 s window can
+# voice at most ~0.14 of it (B200 2026-08-28: measured 0.108 on four identical
+# renders against a fixed 0.20 floor, 57 minutes of futile retakes). Expected
+# speech is ~350 ms per word plus 250 ms of attack; the floor is half of that
+# share of the window, never below 0.04 (some speech must exist) and never
+# above the long-line floor of 0.20.
+SPEECH_PRESENCE_FLOOR_MAX = 0.20
+SPEECH_PRESENCE_FLOOR_MIN = 0.04
+SPEECH_MS_PER_WORD = 350.0
+SPEECH_ATTACK_MS = 250.0
+
+
+def expected_speech_ms(word_count: int) -> float:
+    return max(0, int(word_count)) * SPEECH_MS_PER_WORD + SPEECH_ATTACK_MS
+
+
+def presence_floor_for(word_count: int, window_ms: float) -> float:
+    """The voiced-presence floor for a line of ``word_count`` words in ``window_ms`` of picture."""
+    if window_ms <= 0:
+        return SPEECH_PRESENCE_FLOOR_MAX
+    share = expected_speech_ms(word_count) / float(window_ms)
+    return round(min(SPEECH_PRESENCE_FLOOR_MAX, max(SPEECH_PRESENCE_FLOOR_MIN, 0.5 * share)), 4)
 
 
 def _now() -> datetime:
@@ -173,7 +196,16 @@ class SpeechQCReceipt(BaseModel):
     duration_ms: float = Field(default=0.0, ge=0)
     window_ms: float = Field(default=0.0, ge=0)
     speech_presence_score: float | None = Field(default=None, ge=0, le=1)
-    speech_presence_min: float = Field(default=0.20, ge=0, le=1)
+    speech_presence_min: float = Field(default=SPEECH_PRESENCE_FLOOR_MAX, ge=0, le=1)
+    # The line the floor was set for (see ``presence_floor_for``).
+    line_word_count: int = Field(default=0, ge=0)
+    expected_speech_ms: float = Field(default=0.0, ge=0)
+    # Fingerprints of what was measured: the delivered dialogue audio and the
+    # speech request that produced it. Wan's native TTS is deterministic for
+    # one request, so a retake that carries the same request measures the same
+    # audio; the farm settles instead of re-rolling the picture.
+    dialogue_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    request_sha256: str = ""
     # Milliseconds between the last speech-active moment and the end of the
     # picture window. Below one S2V frame the line was cut, not finished.
     speech_tail_ms: float | None = Field(default=None, ge=0)

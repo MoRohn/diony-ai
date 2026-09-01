@@ -159,3 +159,29 @@ def test_failed_project_canary_can_only_be_rebound_to_its_immutable_retry() -> N
             failed_take_id="sh-020-t1",
             retry_take_id="sh-020-t2",
         )
+
+
+def test_unrolled_project_canary_moves_to_the_take_rolling_now() -> None:
+    from diony_wan.attention_qualification import (
+        QualificationError,
+        bind_project_canary,
+        build_operator_receipt,
+        rebind_unrolled_project_canary,
+    )
+
+    receipt = bind_project_canary(
+        build_operator_receipt(_operator_evidence(), scope_project_id="studio-current", approved_by="Diony B200 qualification"),
+        project_id="studio-current",
+        take_id="sh-010-t3",
+    )
+    rebound = rebind_unrolled_project_canary(
+        receipt, project_id="studio-current", unrolled_take_id="sh-010-t3", next_take_id="sh-050-t1"
+    )
+    assert rebound["quality_canary_take_id"] == "sh-050-t1"
+    assert rebound["previous_unrolled_canary_take_id"] == "sh-010-t3"
+    assert rebound["stage"] == "operator_passed_quality_canary_required"
+    assert rebound["operator_evidence_sha256"] == receipt["operator_evidence_sha256"]
+    with __import__("pytest").raises(QualificationError, match="owns"):
+        rebind_unrolled_project_canary(receipt, project_id="studio-current", unrolled_take_id="sh-020-t1", next_take_id="sh-050-t1")
+    with __import__("pytest").raises(QualificationError, match="differ"):
+        rebind_unrolled_project_canary(receipt, project_id="studio-current", unrolled_take_id="sh-010-t3", next_take_id="sh-010-t3")

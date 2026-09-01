@@ -318,7 +318,13 @@ async def gpu_api_proxy(request: Request, call_next):
         not path.startswith("/api/")
         or path.startswith("/api/v1/")
         or path.startswith("/api/studio-entry/")
-        or path in {"/api/run", "/api/catalog"}
+        # The cloud pivot surfaces are laptop-local by definition: Director
+        # films live in THIS vault, the engine flag describes THIS desk, and
+        # cloud production reads THIS control plane. Proxying them to a leased
+        # GPU 404s the whole cloud UI (and lets a stitch/delete act on the
+        # wrong machine's films).
+        or path.startswith("/api/director-films")
+        or path in {"/api/run", "/api/catalog", "/api/engine", "/api/cloud-production"}
     ):
         return await call_next(request)
     if not should_proxy():
@@ -565,6 +571,246 @@ def _generation_take(shot, *, attempt: int | None = None) -> Take:
     if not shot.selected_take_id:
         shot.selected_take_id = take.id
     return take
+
+
+@app.get("/api/engine")
+def engine_state() -> dict:
+    """The pivot flow: Producer is monitoring + Gallery when the engine is cloud."""
+    from diony_contracts.cluster import engine_is_cloud, read_engine_choice
+
+    cloud = engine_is_cloud()
+    return {
+        "cloud": cloud,
+        "engine_choice": read_engine_choice(),
+        "director_url": "http://director.diony.local",
+    }
+
+
+@app.get("/api/cloud-production")
+def cloud_production() -> dict:
+    """Live cloud production status: every Director run's jobs from the shared plane."""
+    from diony_producer.control_plane import ControlPlane
+
+    plane = ControlPlane()
+    context = plane.bootstrap_local()
+    sessions = []
+    for run in plane.runs(context.workspace.id):
+        if not run.id.startswith("director-"):
+            continue
+        jobs = plane.jobs(context.workspace.id, run.id)
+        if not jobs:
+            continue
+        counts: dict[str, int] = {}
+        actual = 0
+        for job in jobs:
+            counts[job.status.value] = counts.get(job.status.value, 0) + 1
+            actual += job.actual_cost_usd_micros
+        sessions.append(
+            {
+                "session": run.id.removeprefix("director-"),
+                "jobs": len(jobs),
+                "counts": counts,
+                "actual_usd_micros": actual,
+                "active": any(
+                    job.status.value in {"queued", "running", "waiting_provider", "retry_wait"}
+                    for job in jobs
+                ),
+            }
+        )
+    sessions.sort(key=lambda item: item["active"], reverse=True)
+    return {"sessions": sessions}
+
+
+@app.get("/api/director-films")
+def director_films() -> dict:
+    """Finished Director cuts from the vault, newest first."""
+    from datetime import datetime, timezone
+
+    from diony_contracts.cluster import cluster_root
+
+    root = cluster_root() / "director"
+    films = []
+    if root.is_dir():
+        # snapshot stats up front: a delete landing mid-listing drops that row
+        # instead of 500ing the whole Gallery
+        stats = []
+        for film in root.glob("*/film.mp4"):
+            try:
+                stats.append((film, film.stat()))
+            except OSError:
+                continue
+        for film, stat in sorted(stats, key=lambda item: item[1].st_mtime, reverse=True):
+            films.append(
+                {
+                    "session": film.parent.name,
+                    "bytes": stat.st_size,
+                    "modified": datetime.fromtimestamp(
+                        stat.st_mtime, tz=timezone.utc
+                    ).isoformat(),
+                    "url": f"/api/director-films/{film.parent.name}",
+                }
+            )
+    return {"films": films}
+
+
+class StitchFilmsBody(BaseModel):
+    sessions: list[str]
+    title: str = ""
+
+
+@app.post("/api/director-films/stitch")
+def stitch_director_films(body: StitchFilmsBody) -> dict:
+    """Join selected Director films into one cut.
+
+    Films all come out of the Director's assembler with one raster/rate/codec,
+    so a stream-copy concat is the fast path; a re-encode concat is the
+    fallback when copy refuses. The join lands in the vault as its own
+    `join-*` session, so it lists and serves like any film.
+    """
+    import shutil
+    import subprocess
+    import uuid as _uuid
+    from datetime import datetime, timezone
+
+    from diony_contracts.cluster import cluster_root
+
+    if len(body.sessions) < 2:
+        raise HTTPException(status_code=422, detail="select at least two films to stitch")
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise HTTPException(status_code=409, detail="ffmpeg is required for stitching")
+    root = cluster_root() / "director"
+    sources: list[Path] = []
+    for sid in body.sessions:
+        safe = "".join(ch for ch in sid if ch.isalnum() or ch in "-_")
+        path = root / safe / "film.mp4"
+        if safe != sid or not path.is_file():
+            raise HTTPException(status_code=404, detail=f"no film for session {sid}")
+        sources.append(path)
+    # Join in Gallery order — the Gallery lists newest FIRST and the selection
+    # UI carries no ordering signal, so the top-to-bottom display order is the
+    # only order the user can predict. A film deleted mid-request never 500s
+    # the join; it is refused by name instead.
+    def _mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            raise HTTPException(status_code=404, detail=f"a selected film vanished: {path.parent.name}")
+
+    sources.sort(key=_mtime, reverse=True)
+
+    join_id = f"join-{_uuid.uuid4().hex[:8]}"
+    dest = root / join_id / "film.mp4"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    listing = dest.parent / "inputs.txt"
+    listing.write_text(
+        # ffmpeg concat demuxer: single quotes inside a quoted path are '\''
+        "".join("file '" + str(src).replace("'", "'\\''") + "'\n" for src in sources),
+        encoding="utf-8",
+    )
+
+    def _cleanup_partial() -> None:
+        # never leave a truncated film.mp4 behind — it would list as real
+        dest.unlink(missing_ok=True)
+        listing.unlink(missing_ok=True)
+
+    try:
+        copy = subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+             "-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(dest)],
+            capture_output=True, timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        _cleanup_partial()
+        raise HTTPException(status_code=502, detail="stitch timed out on the copy pass")
+    if copy.returncode != 0 or not dest.is_file() or dest.stat().st_size < 1024:
+        chains = []
+        concat_inputs = []
+        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+        for src in sources:
+            cmd += ["-i", str(src)]
+        for index in range(len(sources)):
+            chains.append(
+                f"[{index}:v]scale=1280:720:force_original_aspect_ratio=decrease,"
+                f"pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24,format=yuv420p[v{index}]"
+            )
+            # per-film level match + declick before the join, loudness lock
+            # after — a re-encoded stitch must not have audible level jumps
+            chains.append(
+                f"[{index}:a]aresample=48000,aformat=channel_layouts=stereo,"
+                f"loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,"
+                f"afade=t=in:st=0:d=0.04[a{index}]"
+            )
+            concat_inputs.append(f"[v{index}][a{index}]")
+        chains.append(f"{''.join(concat_inputs)}concat=n={len(sources)}:v=1:a=1[vc][ac]")
+        chains.append("[ac]loudnorm=I=-16:TP=-1.0:LRA=11,aresample=48000[aout]")
+        cmd += [
+            "-filter_complex", ";".join(chains), "-map", "[vc]", "-map", "[aout]",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-c:a", "aac", "-b:a", "192k", str(dest),
+        ]
+        try:
+            encode = subprocess.run(cmd, capture_output=True, timeout=1800)
+        except subprocess.TimeoutExpired:
+            _cleanup_partial()
+            raise HTTPException(status_code=502, detail="stitch timed out on the re-encode pass")
+        if encode.returncode != 0 or not dest.is_file():
+            _cleanup_partial()
+            raise HTTPException(
+                status_code=502,
+                detail=f"stitch failed: {encode.stderr.decode(errors='replace')[-300:]}",
+            )
+    listing.unlink(missing_ok=True)
+    stat = dest.stat()
+    return {
+        "session": join_id,
+        "bytes": stat.st_size,
+        "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+        "url": f"/api/director-films/{join_id}",
+        "joined_from": body.sessions,
+    }
+
+
+class DeleteFilmsBody(BaseModel):
+    sessions: list[str]
+
+
+@app.post("/api/director-films/delete")
+def delete_director_films(body: DeleteFilmsBody) -> dict:
+    """Remove selected Director film sessions from the vault.
+
+    Media only: the ledger, receipts, and job records in the control plane are
+    never touched — spend history survives every delete.
+    """
+    import shutil
+
+    from diony_contracts.cluster import cluster_root
+
+    if not body.sessions:
+        raise HTTPException(status_code=422, detail="select at least one film to remove")
+    root = (cluster_root() / "director").resolve()
+    removed: list[str] = []
+    missing: list[str] = []
+    for sid in body.sessions:
+        safe = "".join(ch for ch in sid if ch.isalnum() or ch in "-_")
+        target = (root / safe).resolve()
+        if safe != sid or not target.is_relative_to(root) or not (target / "film.mp4").is_file():
+            missing.append(sid)
+            continue
+        shutil.rmtree(target, ignore_errors=True)
+        removed.append(sid)
+    return {"removed": removed, "missing": missing}
+
+
+@app.get("/api/director-films/{sid}")
+def director_film(sid: str) -> FileResponse:
+    from diony_contracts.cluster import cluster_root
+
+    safe = "".join(ch for ch in sid if ch.isalnum() or ch in "-_")
+    path = cluster_root() / "director" / safe / "film.mp4"
+    if safe != sid or not path.is_file():
+        raise HTTPException(status_code=404, detail="no such director film")
+    return FileResponse(path, media_type="video/mp4")
 
 
 @app.get("/")

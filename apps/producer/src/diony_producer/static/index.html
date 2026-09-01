@@ -13,7 +13,7 @@
       href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/app.css?v=wanvoice1" />
+    <link rel="stylesheet" href="/static/app.css?v=p2a" />
   </head>
   <body data-product-surface="producer" data-active-bay="idea">
     <header class="mast">
@@ -38,6 +38,7 @@
           <path d="M558 138Q558 124 572 124A135 199.5 0 0 1 572 523Q558 523 558 509Z" fill="currentColor" />
         </svg>
         <span class="diony-word">Diony</span>
+        <span class="surface-tag">PRODUCER</span>
         <span class="sr">AI</span>
       </p>
       <div id="site-line" class="site-line" role="status" aria-live="polite"></div>
@@ -45,6 +46,10 @@
         <button type="button" data-bay="idea" class="on">Idea</button>
         <button type="button" data-bay="production">Production</button>
         <button type="button" data-bay="gallery">Gallery</button>
+      </nav>
+      <nav class="surface-links" aria-label="Diony surfaces">
+        <a href="http://director.diony.local" id="director-link" title="Back to the Director">◂ DIRECTOR</a>
+        <a href="http://studio.diony.local" id="studio-surface-link" title="Configuration and engine selection">STUDIO ⚙</a>
       </nav>
       <button type="button" id="studio-control" class="word studio-control">Team</button>
       <button type="button" id="start-over" class="word mast-reset">Start over</button>
@@ -273,6 +278,21 @@
           <p id="gallery-meta" class="meta">Gallery</p>
           <h2 id="gallery-title">Finished clips</h2>
           <p id="gallery-note" class="hint">Screen a clip or select two or more to make a new version.</p>
+          <div id="cloud-production" class="cloud-production hidden">
+            <h3>Cloud production</h3>
+            <div class="rows" id="cloud-production-rows"></div>
+          </div>
+          <div id="director-films" class="director-films hidden">
+            <h3 class="director-films-title">Director films</h3>
+            <div class="director-films-actions">
+              <label class="film-selall"><input type="checkbox" id="film-select-all"> Select all</label>
+              <button type="button" id="film-download" class="word" disabled>Download selected</button>
+              <button type="button" id="film-stitch" class="word" disabled>Stitch selected</button>
+              <button type="button" id="film-delete" class="word film-delete" disabled>Delete selected</button>
+              <span id="film-actions-note" aria-live="polite"></span>
+            </div>
+            <div id="director-films-grid" class="director-films-grid" aria-label="Director film inventory" role="list"></div>
+          </div>
           <div id="gallery-selection" class="gallery-selection" aria-label="Clip selection">
             <button type="button" id="gallery-select-mode" class="word" aria-pressed="false">Select clips</button>
             <p id="gallery-selection-count" aria-live="polite">No clips selected</p>
@@ -561,6 +581,6 @@
         <p id="join-live" class="sr" aria-live="polite"></p>
       </div>
     </section>
-    <script src="/static/app.js?v=wanvoice1"></script>
+    <script src="/static/app.js?v=p2a"></script>
   </body>
 </html>

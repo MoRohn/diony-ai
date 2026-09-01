@@ -244,7 +244,7 @@ def test_ready_runpod_site_is_adopted_into_studio_and_starts_app(monkeypatch) ->
 
 def test_compute_ui_has_grouped_choices_confirmation_and_agent_progress() -> None:
     client = TestClient(wizard_app.app)
-    html = client.get("/").text
+    html = client.get("/classic").text
     css = client.get("/static/app.css").text
     js = client.get("/static/app.js").text
 
@@ -286,7 +286,7 @@ def test_existing_compute_progress_updates_the_active_validation_event() -> None
 
 def test_setup_agent_owns_action_area_until_validation_is_complete() -> None:
     client = TestClient(wizard_app.app)
-    html = client.get("/").text
+    html = client.get("/classic").text
     css = client.get("/static/app.css").text
     js = client.get("/static/app.js").text
 
@@ -311,7 +311,7 @@ def test_setup_agent_owns_action_area_until_validation_is_complete() -> None:
 
 def test_connect_page_reports_waiting_working_ready_and_attention_states() -> None:
     client = TestClient(wizard_app.app)
-    html = client.get("/").text
+    html = client.get("/classic").text
     css = client.get("/static/app.css").text
     js = client.get("/static/app.js").text
 
@@ -340,7 +340,7 @@ def test_connect_page_reports_waiting_working_ready_and_attention_states() -> No
 
 def test_compute_options_name_hardware_and_vendors_without_repeating_group_labels() -> None:
     client = TestClient(wizard_app.app)
-    html = client.get("/").text
+    html = client.get("/classic").text
     css = client.get("/static/app.css").text
     js = client.get("/static/app.js").text
 
@@ -571,7 +571,7 @@ def test_existing_local_quad_spark_skips_crate_steps_only_after_four_host_valida
 
 def test_connect_to_existing_compute_is_available_at_bottom_of_both_groups() -> None:
     client = TestClient(wizard_app.app)
-    html = client.get("/").text
+    html = client.get("/classic").text
     css = client.get("/static/app.css").text
     js = client.get("/static/app.js").text
 

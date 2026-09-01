@@ -15,6 +15,7 @@ from diony_producer.finish import finish_status, live_finish, selected_masters_r
 from diony_producer.gpu import (
     connect_from_lock,
     gpu_block_copy,
+    gpu_line_state,
     gpu_monitor,
     last_gpu_error,
     signed_gpu_site,
@@ -435,6 +436,20 @@ def _activity_copy(src: str, text: str, *, level: str, shot_id: str) -> tuple[st
                 else "Denoise is starting."
             )
         return f"Building {clip or 'the current clip'} at 720p", detail
+    if src == "desk":
+        if "updating gpu producer" in lower:
+            return "Desk is updating the GPU Producer", text
+        if "answered" in lower:
+            return "GPU Producer is on the line", text
+        if "ssh line" in lower and "down" in lower:
+            return "SSH line to the GPU is down", text
+        if "not answering" in lower:
+            return "GPU Producer is not answering yet", text
+        if "busy" in lower:
+            return "GPU Producer update deferred", text
+        if level == "fail":
+            return "GPU Producer update failed", text
+        return "Desk line update", text
     if level == "fail":
         return f"{clip or 'Production'} needs attention", _humanize_fail(text)
     if src == "gpu":
@@ -444,6 +459,55 @@ def _activity_copy(src: str, text: str, *, level: str, shot_id: str) -> tuple[st
     if src == "wan":
         return "Camera updated", "Wan2.2 reported a new checkpoint."
     return "Production updated", text
+
+
+_LINE_RECENT_SECONDS = 180.0
+
+
+def _line_activity(line: dict) -> list[dict]:
+    """Desk → GPU line events the bay should show: relaunch in flight, landed, failed, SSH down."""
+    if not line:
+        return []
+    launch = line.get("launch") if isinstance(line.get("launch"), dict) else {}
+    rows: list[dict] = []
+    if launch.get("active") and launch.get("label"):
+        rows.append(
+            {"src": "desk", "text": f"{launch['label']}.", "level": "info", "at": str(launch.get("since") or "")}
+        )
+    elif launch.get("outcome") and launch.get("label"):
+        age = launch.get("age_seconds")
+        if age is None or float(age) <= _LINE_RECENT_SECONDS:
+            level = "fail" if launch.get("outcome") == "failed" else "info"
+            rows.append(
+                {
+                    "src": "desk",
+                    "text": f"{launch['label']}.",
+                    "level": level,
+                    "at": str(launch.get("finished_at") or ""),
+                }
+            )
+    if line.get("ssh") == "down" and line.get("host"):
+        rows.append(
+            {
+                "src": "desk",
+                "text": f"SSH line to {line['host']}:{line.get('port') or '22'} is down. {line.get('error') or ''}",
+                "level": "fail",
+                "at": "",
+            }
+        )
+    elif line.get("producer") == "down" and line.get("ssh") == "up":
+        rows.append(
+            {
+                "src": "desk",
+                "text": (
+                    f"SSH line to {line.get('host')} is up; the GPU Producer is not answering on :8788 yet. "
+                    "The desk relaunches it."
+                ),
+                "level": "warn",
+                "at": "",
+            }
+        )
+    return rows
 
 
 def _activity_row(src: str, text: str, *, level: str = "info", shot_id: str = "", at: str = "") -> dict:
@@ -497,10 +561,12 @@ def _activity_lines(
     monitor: dict | None = None,
     *,
     mix: dict | None = None,
+    line: dict | None = None,
 ) -> list[dict]:
     """Camera report: what is rolling, what failed, what landed. Never access logs."""
     monitor = monitor or {}
     mix = mix or {}
+    line = line or {}
     lines: list[dict] = []
     seen: set[tuple[str, str]] = set()
 
@@ -527,6 +593,9 @@ def _activity_lines(
 
     failed_ids = {clip["shot_id"] for clip in clips if clip["state"] == "failed"}
     live_ids = {clip["shot_id"] for clip in clips if clip["state"] == "live"}
+
+    for row in _line_activity(line):
+        add(row["src"], row["text"], level=row["level"], at=row["at"])
     current = str(farm.get("shot_id") or "")
     finish_current = str(finish.get("current_shot_id") or "")
     busy = bool(farm.get("busy"))
@@ -645,7 +714,9 @@ def _monitoring_summary(
     progress: dict,
     master_ready: bool,
     material_label: str,
+    line: dict | None = None,
 ) -> dict:
+    line = line or {}
     counts = {
         "total": len(clips),
         "queued": sum(1 for clip in clips if clip.get("state") == "queued"),
@@ -745,6 +816,28 @@ def _monitoring_summary(
         signal_state = "ready"
         clip_id = take_id = ""
         stage = phase
+    elif phase == "gpu":
+        producer = str(line.get("producer") or "")
+        if producer == "updating":
+            title = "Desk is updating the GPU Producer"
+            eyebrow = "GPU LINE · UPDATING"
+            signal_state = "waiting"
+        elif producer == "starting":
+            title = "GPU Producer is starting"
+            eyebrow = "GPU LINE · STARTING"
+            signal_state = "waiting"
+        elif producer in {"unreachable", "unsigned"}:
+            title = "GPU line needs Studio Connect"
+            eyebrow = "GPU LINE · ATTENTION"
+            signal_state = "attention"
+        else:
+            title = "GPU Producer is not answering"
+            eyebrow = "GPU LINE · RECONNECTING"
+            signal_state = "waiting"
+        detail = now
+        signal_progress = {}
+        clip_id = take_id = ""
+        stage = phase
     else:
         title = "Production is waiting"
         detail = now
@@ -755,6 +848,13 @@ def _monitoring_summary(
         stage = phase
 
     gpu = monitor.get("gpu") if isinstance(monitor.get("gpu"), dict) else {}
+    sampled = bool(gpu.get("name")) or gpu.get("util") is not None
+    if monitor.get("heartbeat") or sampled:
+        connection = "live"
+    elif signal_state == "live" or line.get("ssh") == "up" or line.get("producer") in {"updating", "starting"}:
+        connection = "checking"
+    else:
+        connection = "idle"
     updated_at = str(monitor.get("observed_at") or "")
     if not updated_at and activity:
         updated_at = str(activity[-1].get("at") or "")
@@ -772,13 +872,23 @@ def _monitoring_summary(
         },
         "counts": counts,
         "progress": progress,
-        "connection": "live" if monitor.get("heartbeat") else "checking" if signal_state == "live" else "idle",
+        "connection": connection,
         "gpu": {
             "name": str(gpu.get("name") or ""),
             "util": gpu.get("util"),
             "used_mib": gpu.get("used_mib"),
             "total_mib": gpu.get("total_mib"),
             "heartbeat": str(monitor.get("heartbeat") or ""),
+            "observed_at": str(monitor.get("observed_at") or ""),
+            "generate": str(monitor.get("generate") or ""),
+        },
+        "line": {
+            "ssh": str(line.get("ssh") or ""),
+            "producer": str(line.get("producer") or ""),
+            "beat": str(line.get("beat") or ""),
+            "build": str(line.get("build") or ""),
+            "stage": str(line.get("stage") or ""),
+            "since": str(line.get("since") or ""),
         },
         "poll_ms": 2500,
     }
@@ -1312,7 +1422,8 @@ def run_payload(
     if stop_receipt is not None:
         farm_view.update({"busy": False, "queued": 0, "shot_id": "", "detail": ""})
         finish_view.update({"busy": False, "queued": 0, "current_take_id": "", "detail": ""})
-    activity = _activity_lines(clips, farm_view, finish_view, now, monitor, mix=mix)
+    line_state = gpu_line_state(live=bool(live)) if site_gpu or live else {}
+    activity = _activity_lines(clips, farm_view, finish_view, now, monitor, mix=mix, line=line_state)
     stage_completed = 0
     stage_partial = 0.0
     if phase == "stopped":
@@ -1381,6 +1492,12 @@ def run_payload(
             "port": str(line.get("ssh_port") or ""),
             "up": bool(live),
             "error": last_gpu_error() if site_gpu and not live else "",
+            "ssh": str(line_state.get("ssh") or ("up" if live else "")),
+            "producer": str(line_state.get("producer") or ("up" if live else "")),
+            "beat": str(line_state.get("beat") or ""),
+            "build": str(line_state.get("build") or ""),
+            "stage": str(line_state.get("stage") or ""),
+            "since": str(line_state.get("since") or ""),
         },
         "shots": shots,
         "farmed": passed_shown if farm_failed else shown,
@@ -1434,5 +1551,6 @@ def run_payload(
         progress=stage_progress,
         master_ready=bool(payload["production_standard"]["master_ready"]),
         material_label=str(payload["production_standard"]["material_label"]),
+        line=line_state,
     )
     return payload
