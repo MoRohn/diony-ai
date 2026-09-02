@@ -6,25 +6,50 @@
   const usd = (micros) => `$${(micros / 1e6).toFixed(2)}`;
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-  // Reference stills: uploaded or dropped images ride the initial shot.
-  // One-shot opens on the first; a drafted script uses them as character/
-  // scene consistency references (never a forced first frame).
-  const refUploads = []; // {id, name, url}
+  // Reference stills: uploaded or dropped images anchor the film's LOOK and
+  // identity. Every still rides as a reference; exactly one may be marked
+  // the OPENER (the first frame) — nothing opens the frame unless the user
+  // says so (Blueprint 29).
+  const refUploads = []; // {id, name, url, role}
 
   function renderRefChips() {
     const host = $("refchips");
     host.replaceChildren();
-    refUploads.forEach((u, i) => {
+    refUploads.forEach((u) => {
+      const opener = u.role === "opener";
       const chip = document.createElement("span");
-      chip.className = "refchip" + (i === 0 ? " opening" : "");
+      chip.className = "refchip" + (opener ? " opening" : "");
       const img = document.createElement("img");
       img.src = u.url;
       img.alt = u.name;
       chip.appendChild(img);
       const label = document.createElement("span");
       label.className = "refname";
-      label.textContent = (i === 0 ? "LEAD · " : "") + u.name;
+      label.textContent = (opener ? "OPENS · " : "") + u.name;
       chip.appendChild(label);
+      const role = document.createElement("button");
+      role.type = "button";
+      role.className = "refrole";
+      role.textContent = opener ? "opener" : "reference";
+      role.title = opener
+        ? "This still opens the frame — click to make it a look reference instead"
+        : "A look and identity reference — click to make it the opening frame";
+      role.addEventListener("click", async () => {
+        const next = opener ? "reference" : "opener";
+        try {
+          const body = await api(`/api/director/sessions/${sessionId}/uploads/${u.id}/role`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ role: next }),
+          });
+          const roles = new Map((body.uploads || []).map((r) => [r.id, r.role]));
+          refUploads.forEach((r) => { r.role = roles.get(r.id) || "reference"; });
+          renderRefChips();
+        } catch (err) {
+          addMsg("director", `I couldn't change that still's role: ${err.message || err}`);
+        }
+      });
+      chip.appendChild(role);
       const x = document.createElement("button");
       x.type = "button";
       x.className = "refx";
@@ -57,7 +82,10 @@
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ name: file.name, data_base64: b64 }),
             });
-            refUploads.push({ id: body.upload.id, name: file.name, url: URL.createObjectURL(file) });
+            refUploads.push({
+              id: body.upload.id, name: file.name, url: URL.createObjectURL(file),
+              role: body.upload.role || "reference",
+            });
             renderRefChips();
           } catch (err) {
             addMsg("director", `I couldn't take ${file.name}: ${err.message || err}`);
@@ -225,8 +253,10 @@
     const fields = document.createElement("dl");
     fields.className = "mfields";
     const light = master.lighting || {};
+    const look = master.look || {};
     const pairs = [
       ["style", master.visual_style],
+      ["look", [look.medium, look.palette].filter(Boolean).join(" · ")],
       ["subject", master.primary_subject],
       ["setting", master.setting],
       ["camera", master.camera],
@@ -292,6 +322,33 @@
     return details;
   }
 
+  // Blueprint 29: a chain link that cuts to a new place opens from a STYLE
+  // FRAME — a still composed in the film's look before the clip rolls. The
+  // card says so, prices it, and shows the frame once it has printed.
+  function attachStyleFrame(card, body) {
+    const frame = body && body.style_frame;
+    if (!frame) return;
+    let note = card.querySelector(".stylenote");
+    if (!note) {
+      note = document.createElement("div");
+      note.className = "stylenote";
+      const prompt = card.querySelector("details.prompt");
+      if (prompt) card.insertBefore(note, prompt); else card.appendChild(note);
+    }
+    const cost = frame.est_usd_micros ? ` · ${usd(frame.est_usd_micros)}` : "";
+    const status = frame.ready ? "printed" : frame.status;
+    note.textContent =
+      `scene change — opens from a style frame composed in the film's look (${frame.model}${cost}, ${status})`;
+    if (frame.ready && !card.querySelector(".styleframe")) {
+      const img = document.createElement("img");
+      img.className = "styleframe";
+      img.alt = "style frame — the opening frame of this clip";
+      img.title = img.alt;
+      img.src = `/api/director/ops/${body.op.id}/style_frame?t=${Date.now()}`;
+      note.after(img);
+    }
+  }
+
   // A one-shot priced while the brain derives its master prompt: the card
   // holds (Run disabled) and unlocks — prompt swapped in, artifact shown —
   // the moment the artifact lands. Nothing can roll before it.
@@ -300,6 +357,7 @@
     // hang the artifact panels, and unlock the Run button
     card.querySelectorAll(".whatrolls, details.prompt").forEach((el) => el.remove());
     attachPrompt(card, body.op);
+    attachStyleFrame(card, body);
     renderMasterFor(card, body.master, chain);
     Object.assign(op, body.op);
     const state = card.querySelector(".state");
@@ -389,10 +447,16 @@
         if (status === "completed") {
           state.textContent = `printed · ${body.clip ? body.clip.bytes + " bytes" : ""}`;
           state.className = "state done";
+          attachStyleFrame(card, body);
           const video = document.createElement("video");
           video.controls = true;
           video.src = `/api/director/clips/${opId}`;
           card.appendChild(video);
+          // a chain link's look review lands on its card, with Retake
+          attachVerdict(card, state, body.review, opId, { retake: !body.op.clip_id });
+          if (body.narration && body.review && body.review.verdict === "fail") {
+            addMsg("director", body.narration, "warn");
+          }
           refreshMeter();
           return;
         }
@@ -774,7 +838,7 @@
     host.appendChild(box);
   }
 
-  function attachVerdict(card, state, review, opId) {
+  function attachVerdict(card, state, review, opId, opts) {
     // The verdict lives on the card with its evidence; warn/fail carry the
     // Accept action so shipping a flagged take is a decision, never a default.
     if (!review || card.querySelector(".verdict")) return;
@@ -803,6 +867,30 @@
       }
     });
     card.appendChild(accept);
+    if (opts && opts.retake && review.verdict === "fail") {
+      // a chain link that printed but failed its look review rolls again —
+      // the rejected take stays on the ledger, the chain resumes from it
+      const retake = document.createElement("button");
+      retake.type = "button";
+      retake.className = "retrybtn";
+      retake.textContent = "↻ Retake";
+      retake.title = "Roll this clip again from the same opening frame — the rejected take stays on the ledger";
+      retake.addEventListener("click", async () => {
+        retake.disabled = true;
+        try {
+          await api(`/api/director/ops/${opId}/retry`, { method: "POST" });
+          card.querySelectorAll(".verdict, .verdict-issues, .acceptbtn, video").forEach((el) => el.remove());
+          retake.remove();
+          state.textContent = "retaking…";
+          state.className = "state";
+          watchRetried(opId, card, state);
+        } catch (err) {
+          state.textContent = String(err.message || err);
+          retake.disabled = false;
+        }
+      });
+      card.appendChild(retake);
+    }
   }
 
   // Failed ops are never dead ends: retry re-proposes at the locked price and
@@ -849,7 +937,8 @@
           video.src = `/api/director/clips/${opId}`;
           card.appendChild(video);
         }
-        attachVerdict(card, state, body.review, opId);
+        attachStyleFrame(card, body);
+        attachVerdict(card, state, body.review, opId, { retake: !body.op.clip_id });
         refreshMeter();
         return;
       }
@@ -1338,11 +1427,13 @@
           return;
         }
         // settle each card with its final state, then cut the film
-        for (const op of ops) {
+        const lookHeld = [];
+        for (const [index, op] of ops.entries()) {
           const c = parts(op.id);
           if (!c) continue;
           try {
             const body = await api(`/api/director/ops/${op.id}`);
+            attachStyleFrame(c.card, body);
             if (body.op.status === "completed") {
               c.state.textContent = "printed";
               c.state.className = "state done";
@@ -1352,13 +1443,27 @@
                 video.src = `/api/director/clips/${op.id}`;
                 c.card.appendChild(video);
               }
+              if (body.review && body.review.verdict === "fail") lookHeld.push(index + 1);
             } else if (body.op.status === "failed") {
               c.state.textContent = failedText(body);
               c.state.className = "state failed";
               attachRetry(c.card, op.id, c.state);
             }
-            attachVerdict(c.card, c.state, body.review, op.id);
+            attachVerdict(c.card, c.state, body.review, op.id, { retake: true });
           } catch (err) { /* card stays coarse; the film still cuts */ }
+        }
+        if (lookHeld.length) {
+          // a link that printed but failed its look review holds the chain:
+          // the next link would open from a frame the film rejects
+          progress.textContent += " — chain holding on a look review";
+          addMsg(
+            "director",
+            `Clip ${lookHeld[0]} printed but failed its look review — hit ↻ Retake on its card ` +
+              "(or Accept anyway), then Run & Assemble All again. The chain resumes from there.",
+            "warn"
+          );
+          allBtn.disabled = false;
+          return;
         }
         if (counts.failed > 0) {
           // a chain with a hole is not a film — never auto-cut over it

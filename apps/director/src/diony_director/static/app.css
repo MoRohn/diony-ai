@@ -402,6 +402,21 @@ button.armed { outline: 2px solid var(--accent) !important; outline-offset: 2px;
   transition: color .12s var(--ease);
 }
 .refchip .refx:hover { color: var(--bad); }
+.refchip .refrole {
+  background: none; border: 1px solid var(--line); border-radius: 99px; color: var(--mut);
+  cursor: pointer; font: 600 .58rem/1 var(--mono); letter-spacing: .06em; text-transform: uppercase;
+  padding: .22em .5em; transition: color .12s var(--ease), border-color .12s var(--ease);
+}
+.refchip .refrole:hover { color: var(--accent-ink); border-color: var(--accent); }
+.refchip.opening .refrole { color: var(--accent-ink); border-color: rgba(255,122,47,.55); }
+.opcard .stylenote {
+  font: 500 .68rem/1.5 var(--mono); color: var(--accent-ink); letter-spacing: .02em;
+  border-left: 2px solid rgba(255,122,47,.55); padding: .2em 0 .2em .65em; margin: .45em 0 0;
+}
+.opcard img.styleframe {
+  display: block; width: 100%; max-width: 320px; margin: .45em 0 0; border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+}
 
 /* config pills */
 .controls {

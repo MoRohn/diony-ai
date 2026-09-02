@@ -1,7 +1,8 @@
-"""Uploaded reference stills ride the initial shot.
+"""Uploaded stills anchor the film's look and identity.
 
-One-shot: the first upload becomes the opening frame (I2V start image), the
-rest ride as reference images. Draft Script: uploads anchor clip one as
+One-shot: a still marked as the OPENER becomes the opening frame (I2V start
+image); every unmarked still rides as a reference image — nothing opens the
+frame unless the user says so. Draft Script: uploads anchor clip one as
 reference images for character/scene consistency — never a forced first
 frame — and the brain is told to keep the piece consistent with them. Locks
 recomputed at submit time must not lose the uploads.
@@ -77,19 +78,73 @@ def test_delete_upload_removes_the_still() -> None:
     assert client.delete(f"/api/director/sessions/{sid}/uploads/{record['id']}").status_code == 404
 
 
-def test_one_shot_proposal_opens_on_the_uploaded_still() -> None:
-    """The first still opens the frame; extras never ride the op as identity
-    refs — every routed lane is frames-exclusive, and an op proposed with
-    both could never submit (the 2026-09-02 clip-1 refusal). Extras still
-    shape the master derivation, and the reply says exactly that."""
+def test_one_shot_proposal_opens_on_the_marked_opener() -> None:
+    """A still marked as the OPENER opens the frame; extras never ride the op
+    as identity refs — every routed lane is frames-exclusive, and an op
+    proposed with both could never submit (the 2026-09-02 clip-1 refusal).
+    Extras still shape the master derivation, and the reply says exactly that."""
     sid = session.create_session()
-    first = _upload(sid, "opener.png")
+    first = session.add_upload(sid, name="opener.png", data=PNG, role="opener")
     _upload(sid, "mood.jpg", JPG)
     proposal = session.propose(sid, "a lighthouse at dawn", duration_s=6)
     assert proposal.op.artifact_refs["start_image"] == first["path"]
     assert "references" not in proposal.op.artifact_refs
     assert "first still opens the frame" in proposal.reply
     assert "never both" in proposal.reply
+
+
+def test_unmarked_stills_ride_as_references_never_as_the_opening_frame() -> None:
+    """Nothing opens the frame unless the user says so: the 2026-09-02 film
+    opened on a flat infographic the user had attached as a structural
+    reference for clip 6 (s-e790706066). Unmarked stills ride as look and
+    identity references — legal without a frame on every lane."""
+    sid = session.create_session()
+    first = _upload(sid, "infographic.png")
+    second = _upload(sid, "portrait.jpg", JPG)
+    proposal = session.propose(sid, "a lighthouse at dawn", duration_s=6)
+    assert "start_image" not in proposal.op.artifact_refs
+    assert proposal.op.artifact_refs["references"] == [first["path"], second["path"]]
+    assert "look and identity references" in proposal.reply
+    assert "mark one as the opener" in proposal.reply
+
+
+def test_the_opener_role_is_exclusive_and_switchable() -> None:
+    sid = session.create_session()
+    a = _upload(sid, "a.png")
+    b = _upload(sid, "b.png")
+    assert session.upload_refs(sid) == ("", [a["path"], b["path"]])
+    session.set_upload_role(sid, b["id"], "opener")
+    assert session.upload_refs(sid) == (b["path"], [a["path"]])
+    session.set_upload_role(sid, a["id"], "opener")
+    assert session.upload_refs(sid) == (a["path"], [b["path"]])
+    assert [u["role"] for u in session.uploads_for(sid)] == ["opener", "reference"]
+    session.set_upload_role(sid, a["id"], "reference")
+    assert session.upload_refs(sid)[0] == ""
+    assert session.set_upload_role(sid, "img-nope", "opener") is None
+
+
+def test_the_role_endpoint_marks_the_opener() -> None:
+    client = TestClient(app)
+    sid = client.post("/api/director/sessions").json()["session_id"]
+    body = client.post(
+        f"/api/director/sessions/{sid}/uploads",
+        json={"name": "hero.png", "data_base64": base64.b64encode(PNG).decode()},
+    ).json()
+    assert body["upload"]["role"] == "reference"
+    res = client.post(
+        f"/api/director/sessions/{sid}/uploads/{body['upload']['id']}/role",
+        json={"role": "opener"},
+    )
+    assert res.status_code == 200 and res.json()["upload"]["role"] == "opener"
+    bad = client.post(
+        f"/api/director/sessions/{sid}/uploads/{body['upload']['id']}/role",
+        json={"role": "hero"},
+    )
+    assert bad.status_code == 422
+    missing = client.post(
+        f"/api/director/sessions/{sid}/uploads/img-nope/role", json={"role": "opener"}
+    )
+    assert missing.status_code == 404
 
 
 def test_proposal_without_uploads_carries_no_start_image() -> None:

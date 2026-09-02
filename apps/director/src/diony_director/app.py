@@ -352,12 +352,15 @@ def message(sid: str, body: MessageIn) -> dict:
 class UploadIn(BaseModel):
     name: str = "reference"
     data_base64: str
+    # 'reference' (look + identity, the default) or 'opener' (the first frame)
+    role: str = "reference"
 
 
 @app.post("/api/director/sessions/{sid}/uploads")
 def add_upload(sid: str, body: UploadIn) -> dict:
-    """Take a reference still into the session: the first upload opens the
-    initial shot; the rest ride as reference images."""
+    """Take a still into the session as a look-and-identity reference — or,
+    when marked, as the opener (the first frame). Nothing opens the frame
+    unless the user says so."""
     import base64
 
     _boot()  # rehydrate first — persisting over an unloaded session would erase it
@@ -367,7 +370,7 @@ def add_upload(sid: str, body: UploadIn) -> dict:
     except Exception as err:  # noqa: BLE001 - malformed payload is a client error
         raise HTTPException(status_code=422, detail="the image payload is not valid base64") from err
     try:
-        record = session.add_upload(sid, name=body.name, data=data)
+        record = session.add_upload(sid, name=body.name, data=data, role=body.role)
     except ValueError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
     return {"upload": record, "uploads": session.uploads_for(sid)}
@@ -377,6 +380,23 @@ def add_upload(sid: str, body: UploadIn) -> dict:
 def list_uploads(sid: str) -> dict:
     _boot()
     return {"uploads": session.uploads_for(sid)}
+
+
+class UploadRoleIn(BaseModel):
+    role: str
+
+
+@app.post("/api/director/sessions/{sid}/uploads/{upload_id}/role")
+def set_upload_role(sid: str, upload_id: str, body: UploadRoleIn) -> dict:
+    """Mark a still as the opener (the first frame) or back to a reference."""
+    _boot()
+    try:
+        record = session.set_upload_role(sid, upload_id, body.role)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"unknown upload {upload_id}")
+    return {"upload": record, "uploads": session.uploads_for(sid)}
 
 
 @app.delete("/api/director/sessions/{sid}/uploads/{upload_id}")
@@ -604,6 +624,14 @@ def _late_bind_chain_bridge(op: DirectorOp) -> None:
     resolved at submit time exactly like a scripted bridge, minus the bible.
     No usable predecessor frame leaves the refs untouched (the run guard has
     already refused to roll out of order)."""
+    # A link that cuts to a new place opens from its STYLE FRAME — the still
+    # composed in the film's look (Blueprint 29) — never from the previous
+    # clip's last frame, which is a different subject to morph away from.
+    style_frame = str(session.runtime(op.id).get("style_frame") or "")
+    if style_frame and Path(style_frame).is_file():
+        op.artifact_refs["start_image"] = style_frame
+        op.artifact_refs.pop("references", None)
+        return
     prev = session.previous_completed_clip_op(op.session_id, op)
     if prev is None:
         return
@@ -630,6 +658,21 @@ def _guard_chain_order(op: DirectorOp) -> None:
     if not position:
         return
     if session.previous_completed_clip_op(op.session_id, op) is None:
+        seq = session.sequence_for(op.session_id) or {}
+        chain = next(
+            (c for c in (seq.get("scenes") or {}).values() if op.id in c), []
+        )
+        pred = session._OPS.get(chain[position - 1]) if len(chain) > position - 1 >= 0 else None
+        if pred is not None and pred.status == "completed" and not session.usable_take(pred):
+            review = session.review_for(pred.id)
+            why = "; ".join((review.issues if review else [])[:2]) or "see its review"
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"clip {position} printed but failed its look review ({why}) — "
+                    f"Retake it or Accept it before clip {position + 1} can open from it"
+                ),
+            )
         raise HTTPException(
             status_code=409,
             detail=(
@@ -637,6 +680,55 @@ def _guard_chain_order(op: DirectorOp) -> None:
                 "clip first; its final frame opens this one"
             ),
         )
+
+
+def _is_chain_link(op: DirectorOp) -> bool:
+    return (
+        not op.clip_id
+        and op.op is DirectorOpType.GENERATE
+        and op.mode is not CloudGenerationMode.IMAGE
+        and session.chain_position(op.session_id, op.id) is not None
+    )
+
+
+def _roll_style_frame(op: DirectorOp) -> None:
+    """Before a chain link that cuts to a new place rolls, its style frame
+    prints — synchronously on the image lane — and becomes the link's
+    opening frame. A frame that fails holds the link loudly; a frame still
+    rendering holds it transiently (the next wave retries)."""
+    frame_op = session.style_frame_op_for(op)
+    if frame_op is None:
+        return
+    rt = session.runtime(op.id)
+    if frame_op.status == "completed" and rt.get("style_frame"):
+        return
+    position = session.chain_position(op.session_id, op.id) or 0
+    if frame_op.status in {"proposed", "approved"}:
+        _run_approved(frame_op)  # raises HTTPException with the reason
+    if frame_op.status == "submitted":
+        _advance_op(frame_op, allow_spend=False)
+    if frame_op.status == "submitted":
+        raise HTTPException(
+            status_code=503,
+            detail=f"the style frame for clip {position + 1} is still rendering",
+        )
+    if frame_op.status != "completed" or not rt.get("style_frame"):
+        why = session.runtime(frame_op.id).get("submit_error") or frame_op.status
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"the style frame for clip {position + 1} did not print ({why}) — "
+                "retry the frame before the clip can open from it"
+            ),
+        )
+
+
+def _run_link_or_op(op: DirectorOp) -> dict:
+    """Run an op; a chain link that cuts to a new place prints its style
+    frame first (its opening frame), then rolls."""
+    if _is_chain_link(op):
+        _roll_style_frame(op)
+    return _run_approved(op)
 
 
 def _kick_submitter(sid: str) -> None:
@@ -694,7 +786,7 @@ def _submit_ready(sid: str) -> tuple[list[str], list[dict]]:
             session.batch_targets(sid).discard(op.id)
             continue
         try:
-            _run_approved(op)
+            _run_link_or_op(op)
             submitted.append(op.id)
             session.runtime(op.id).pop("transient_holds", None)
         except HTTPException as err:
@@ -780,6 +872,10 @@ def _dispatch_submit(op: DirectorOp) -> provider_base.CloudJobHandle:
         package = session.package_for(op.session_id)
         if package is not None and op.artifact_refs.get("bible"):
             references = artifacts.references_for(package, op) + references
+        if op.artifact_refs.get("style_frame"):
+            references = _style_frame_references(op) + [
+                r for r in references if r not in _style_frame_references(op)
+            ]
         aspect = session.aspect_for(op.session_id)
         if op.provider.value == "grok":
             return grok.submit_image(
@@ -810,6 +906,68 @@ def _dispatch_submit(op: DirectorOp) -> provider_base.CloudJobHandle:
             source, prompt=op.prompt, duration_s=int(op.duration_s), model=op.model
         )
     return adapter.submit(op)
+
+
+def _chain_look_frame(link: DirectorOp) -> str:
+    """The frame the chain established its look with: the first frame of the
+    chain's first usable link. Every style frame references it first."""
+    seq = session.sequence_for(link.session_id)
+    if seq is None:
+        return ""
+    for chain in (seq.get("scenes") or {}).values():
+        if link.id not in chain:
+            continue
+        for op_id in chain:
+            if op_id == link.id:
+                return ""
+            candidate = session._OPS.get(op_id)
+            if candidate is None or not session.usable_take(candidate):
+                continue
+            stored = session.runtime(candidate.id).get("clip")
+            if stored is None:
+                continue
+            return _last_frame(
+                Path(stored.path),
+                cluster_root() / "director" / link.session_id / "frames" / f"look-{candidate.id}.jpg",
+                at_s=0.05,
+                sid=link.session_id,
+            )
+    return ""
+
+
+def _style_frame_references(op: DirectorOp) -> list[str]:
+    """What a style frame is composed FROM, in reference order: the frame
+    the film established its look with, the user's stills, then the previous
+    link's last frame for compositional continuity. On a one-reference image
+    lane (Grok) the look frame alone rides."""
+    info = op.artifact_refs.get("style_frame") or {}
+    link = session._OPS.get(str(info.get("for_op") or ""))
+    if link is None:
+        return []
+    refs: list[str] = []
+
+    def _add(path: str) -> None:
+        if path and Path(path).is_file() and path not in refs:
+            refs.append(path)
+
+    _add(_chain_look_frame(link))
+    master = session.master_for_op(link.id)
+    for asset in (master.look.anchor_assets if master is not None and master.look else []):
+        _add(asset)
+    for path in session.all_upload_paths(link.session_id):
+        _add(path)
+    prev = session.previous_completed_clip_op(link.session_id, link)
+    if prev is not None:
+        stored = session.runtime(prev.id).get("clip")
+        if stored is not None:
+            _add(
+                _last_frame(
+                    Path(stored.path),
+                    cluster_root() / "director" / link.session_id / "frames" / f"{prev.id}.jpg",
+                    sid=link.session_id,
+                )
+            )
+    return refs
 
 
 def _run_approved(op: DirectorOp) -> dict:
@@ -889,7 +1047,7 @@ def _run_approved(op: DirectorOp) -> dict:
 def run_op(op_id: str) -> dict:
     op = _op_or_404(op_id)
     _guard_chain_order(op)
-    return _run_approved(op)
+    return _run_link_or_op(op)
 
 
 @app.post("/api/director/ops/{op_id}/retry")
@@ -899,6 +1057,17 @@ def retry_op(op_id: str) -> dict:
     The locked estimate the user already approved still stands, and the budget
     gate in the submit wave still applies — a retry re-spends only this op."""
     op = _op_or_404(op_id)
+    if (
+        op.status == "completed"
+        and _is_chain_link(op)
+        and not session.usable_take(op)
+    ):
+        # printed, failed its look review, unaccepted: a RETAKE — the
+        # rejected take stays on the ledger, the link rolls again
+        session.retake_chain_link(op)
+        session.add_batch_target(op.session_id, op.id)
+        _kick_submitter(op.session_id)
+        return {"op": op.model_dump(mode="json")}
     if op.status != "failed":
         raise HTTPException(status_code=409, detail=f"op is {op.status}; only failed ops retry")
     op.status = "proposed"
@@ -1046,12 +1215,28 @@ def _advance_op(op: DirectorOp, *, allow_spend: bool = False) -> dict:
         "narration": rt.get("narration", ""),
         # why a submit-side failure failed — there is no provider job to ask
         "submit_error": rt.get("submit_error", ""),
+        # Blueprint 29: the still a chain link opens from, when it cuts
+        "style_frame": _style_frame_state(op),
+        "scene_change": session.chain_scene_change(op),
         # Blueprint 27: a one-shot's pre-split finalized artifact, once derived
         "master": (
             session.master_for_op(op.id).model_dump(mode="json")
             if session.master_for_op(op.id) is not None
             else None
         ),
+    }
+
+
+def _style_frame_state(op: DirectorOp) -> dict | None:
+    frame_op = session.style_frame_op_for(op)
+    if frame_op is None:
+        return None
+    return {
+        "op_id": frame_op.id,
+        "status": frame_op.status,
+        "model": frame_op.model,
+        "est_usd_micros": frame_op.estimate.total_usd_micros if frame_op.estimate else 0,
+        "ready": bool(session.runtime(op.id).get("style_frame")),
     }
 
 
@@ -1228,6 +1413,23 @@ def _review_and_maybe_revise(op: DirectorOp, rt: dict, *, allow_spend: bool = Fa
     if stored is None:
         return
     package = session.package_for(op.session_id)
+    if op.mode is CloudGenerationMode.IMAGE and op.artifact_refs.get("style_frame"):
+        # the still a chain link opens from — conformed to the program raster
+        # so it never re-shapes the clip it seeds
+        info = op.artifact_refs["style_frame"]
+        link_id = str(info.get("for_op") or "")
+        conformed = _conform_still(
+            str(stored.path),
+            cluster_root() / "director" / op.session_id / "frames" / f"style-{op.id}.jpg",
+            sid=op.session_id,
+        ) or str(stored.path)
+        if link_id:
+            session.runtime(link_id)["style_frame"] = conformed
+        rt["narration"] = (
+            f"Style frame composed for clip {int(info.get('clip_index', 0)) + 1} — "
+            "the clip opens from it, in the film's look."
+        )
+        return
     if op.mode is CloudGenerationMode.IMAGE and op.artifact_refs.get("bible"):
         from diony_director import artifacts
 
@@ -1252,6 +1454,8 @@ def _review_and_maybe_revise(op: DirectorOp, rt: dict, *, allow_spend: bool = Fa
         return
     clip_unit = session.clip_for_op(op)
     if clip_unit is None:
+        if _is_chain_link(op):
+            _review_chain_link(op, rt)
         return
     prev = session.previous_completed_clip_op(op.session_id, op)
     prev_clip = session.runtime(prev.id).get("clip") if prev is not None else None
@@ -1283,6 +1487,47 @@ def _review_and_maybe_revise(op: DirectorOp, rt: dict, *, allow_spend: bool = Fa
         if next_op is not None:
             rt["next_op"] = next_op.model_dump(mode="json")
             _maybe_autopilot_run(op.session_id, next_op, rt, allow_spend=allow_spend)
+
+
+def _review_chain_link(op: DirectorOp, rt: dict) -> None:
+    """A chained one-shot link gets reviewed like any take (Blueprint 29):
+    did it open from the frame it was given, did it hold the previous link's
+    look when it continued it, did the look wander. A fail holds the chain
+    at that link — Retake or Accept — instead of seeding the next link from
+    a frame the film rejects. The chain opener's first frame becomes a look
+    anchor for every later style frame."""
+    stored = rt.get("clip")
+    if stored is None:
+        return
+    position = session.chain_position(op.session_id, op.id) or 0
+    prev = session.previous_completed_clip_op(op.session_id, op)
+    prev_clip = session.runtime(prev.id).get("clip") if prev is not None else None
+    start = str(op.artifact_refs.get("start_image") or "")
+    result = review_mod.review_chain_link(
+        Path(stored.path),
+        op_id=op.id,
+        duration_s=int(op.duration_s),
+        start_image=Path(start) if start else None,
+        prev_clip_path=Path(prev_clip.path) if prev_clip is not None else None,
+        scene_change=session.chain_scene_change(op),
+    )
+    session.register_review(op.id, result)
+    if position == 0:
+        session.register_look_anchor(
+            op,
+            _last_frame(
+                Path(stored.path),
+                cluster_root() / "director" / op.session_id / "frames" / f"look-{op.id}.jpg",
+                at_s=0.05,
+                sid=op.session_id,
+            ),
+        )
+    if result.verdict == "fail":
+        rt["narration"] = (
+            f"Clip {position + 1} printed but failed its look review: "
+            + "; ".join(result.issues[:3])
+            + ". The chain holds here — Retake it, or Accept it to continue."
+        )
 
 
 def _revise_after_job_failure(op: DirectorOp, detail: str, *, allow_spend: bool = False) -> None:
@@ -1554,6 +1799,16 @@ def bible_media(sid: str, char_id: str, slot: str) -> FileResponse:
     if not still:
         raise HTTPException(status_code=404, detail=f"{char.name} has no {slot} still yet")
     return _vault_media(still)
+
+
+@app.get("/api/director/ops/{op_id}/style_frame")
+def style_frame_media(op_id: str) -> FileResponse:
+    """The still a chain link opens from."""
+    op = _op_or_404(op_id)
+    path = str(session.runtime(op.id).get("style_frame") or "")
+    if not path:
+        raise HTTPException(status_code=404, detail="this clip has no style frame yet")
+    return _vault_media(path)
 
 
 @app.get("/api/director/sessions/{sid}/plate/{setting_id}")

@@ -496,6 +496,67 @@
       "title": "CostEstimateLine",
       "type": "object"
     },
+    "LookBible": {
+      "description": "The film-wide look \u2014 one medium, one hand, for every shot.\n\nDerived once by the master derivation (or set by the user) and carried\nVERBATIM on every clip prompt, every setting plate, every character sheet,\nand every style frame of the production. It is the answer to a film in\nwhich every shot looked drawn by a different studio: text alone re-derived\nthe medium per clip, and nothing byte-identical tied the shots together.",
+      "properties": {
+        "schema_version": {
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "medium": {
+          "default": "",
+          "title": "Medium",
+          "type": "string"
+        },
+        "render_language": {
+          "default": "",
+          "title": "Render Language",
+          "type": "string"
+        },
+        "palette": {
+          "default": "",
+          "title": "Palette",
+          "type": "string"
+        },
+        "lens_grade": {
+          "default": "",
+          "title": "Lens Grade",
+          "type": "string"
+        },
+        "lighting_system": {
+          "default": "",
+          "title": "Lighting System",
+          "type": "string"
+        },
+        "negatives": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Negatives",
+          "type": "array"
+        },
+        "source": {
+          "default": "template",
+          "enum": [
+            "brain",
+            "template",
+            "user"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "anchor_assets": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Anchor Assets",
+          "type": "array"
+        }
+      },
+      "title": "LookBible",
+      "type": "object"
+    },
     "MasterPrompt": {
       "description": "Blueprint 27: the pre-split finalized artifact.\n\nThe Idea-to-Prompt derivation of one creative brief \u2014 WHO, WHAT, WHERE,\nhow the scene is layered, how the action develops, how the subject\nperforms, how the environment responds, how the camera observes, how the\nscene is lit, what must stay consistent, what must be prevented, and\nexactly how the clip ends \u2014 plus the generator-ready ``prompt`` those\nderivations assemble into. A one-shot ships it as the prompt body; a\nscripted production writes its screenplay FROM it and every split clip\ninherits its lighting, physics, anchors, constraints, and ending.",
       "properties": {
@@ -621,6 +682,17 @@
           },
           "title": "Constraints",
           "type": "array"
+        },
+        "look": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LookBible"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "prompt": {
           "title": "Prompt",

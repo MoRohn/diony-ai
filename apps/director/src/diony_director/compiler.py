@@ -301,6 +301,45 @@ def _master_pieces(clip: ClipUnit, package: ProductionPackage) -> dict[str, str]
     }
 
 
+def look_for(package: ProductionPackage):
+    """The film's Look Bible — on the master the package was written from."""
+    master = package.master_prompt
+    return master.look if master is not None else None
+
+
+def _look_block(package: ProductionPackage) -> str:
+    """The verbatim LOOK BIBLE clause every clip of the film carries (Blueprint
+    29). Empty for a package locked before the look existed — those prompts
+    compile byte-identical to before."""
+    look = look_for(package)
+    return look.block() if look is not None else ""
+
+
+def _realism_clause(package: ProductionPackage) -> str:
+    """Grok's photographic ground truth rides a photoreal look only. Under an
+    animated or illustrated look it is the contradiction that pulled every
+    shot back toward live-action gloss (s-e790706066)."""
+    look = look_for(package)
+    return REALISM if look is None or look.photoreal else ""
+
+
+def _flow_style_slot(package: ProductionPackage, inline_world: str) -> str:
+    """The Veo/Omni style slot beside the Look Bible: an authored world (inline
+    or a chosen session world) always rides; the BASELINE cinema clause yields
+    to a non-photoreal look — 'shot on a cinema camera, 35mm lens' over an
+    animated film is the same contradiction as REALISM."""
+    from diony_director import flow_lexicon
+
+    look = look_for(package)
+    clause = flow_lexicon.style_clause(package.session_id, override_world=inline_world)
+    if look is None or look.photoreal:
+        return clause
+    chosen = inline_world or flow_lexicon.template_for(package.session_id)["world"]
+    if chosen and chosen != flow_lexicon.BASELINE_WORLD:
+        return clause
+    return ""
+
+
 def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
     setting = package.setting(str(clip.continuity.setting_plate["setting_id"]))
     scene = package.script.scene(clip.scene_id)
@@ -309,6 +348,7 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
     action = _action_text(clip, package)
     continuity = CONTINUITY_CLAUSE if _continues_scene(clip, package) else ""
     master = _master_pieces(clip, package)
+    look_block = _look_block(package)
 
     limit = prompt_limit(clip.provider)
     if clip.provider is CloudProvider.GROK:
@@ -356,9 +396,10 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 (master["physics"], 2),
                 (f"{grok_lexicon.sentence(atmosphere)}." if atmosphere else "", 2),
                 (_setting_block(setting, scene.heading), 2),
+                (look_block, 0),
                 (master["lighting"], 2),
                 (_delivery_clause(clip), 0),
-                (REALISM, 1),
+                (_realism_clause(package), 1),
                 (_sound_clause(clip, setting, continues=bool(continuity)), 2),
                 (NO_SPEECH, 0),
                 (char_text, 3),
@@ -406,6 +447,7 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 (continuity, 1),
                 (master["anchors"], 1),
                 (_setting_block(setting, scene.heading), 2),
+                (look_block, 0),
                 (master["lighting"], 2),
                 (omni_style, 2),
                 (char_text, 3),
@@ -434,11 +476,9 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
             (f"{action or scene.emotional_job or 'a held cinematic moment'}.", 3),
             (master["physics"], 2),
             (_setting_block(setting, scene.heading), 2),
+            (look_block, 0),
             (master["lighting"], 2),
-            (
-                flow_lexicon.style_clause(package.session_id, override_world=inline_world),
-                1,
-            ),
+            (_flow_style_slot(package, inline_world), 1),
             (_delivery_clause(clip), 0),
             (_sound_clause(clip, setting, continues=bool(continuity)), 2),
             (NO_SPEECH, 0),

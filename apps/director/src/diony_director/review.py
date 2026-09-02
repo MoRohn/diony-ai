@@ -114,12 +114,18 @@ def _measure_frames(
     path: Path, clip: ClipUnit, families: dict[str, str], measured: dict[str, float], issues: list[str]
 ) -> None:
     """Sampled-frame evidence (black frames are a hard fail; exposure advisory)."""
+    _measure_frames_for(path, int(clip.duration_s), families, measured, issues)
+
+
+def _measure_frames_for(
+    path: Path, duration_s: int, families: dict[str, str], measured: dict[str, float], issues: list[str]
+) -> None:
     try:
         from diony_producer.quality import measure_frame_quality
     except ImportError:
         return
     try:
-        receipt = measure_frame_quality(path, frame_count=max(1, clip.duration_s * 24))
+        receipt = measure_frame_quality(path, frame_count=max(1, duration_s * 24))
     except Exception:  # noqa: BLE001 - optional evidence never crashes a review
         return
     if not receipt.measured:
@@ -333,4 +339,149 @@ def review_clip(
         measured=measured,
         issues=issues,
         recommended_op=recommended,
+    )
+
+
+# --- chained one-shot links ---------------------------------------------------
+#
+# A chain link has no ClipUnit and no bible, but it has evidence: the frame it
+# was told to open from, the link before it, and its own first and last frame.
+# Before Blueprint 29 no review ran on chain links at all — twelve clips in
+# eight visual languages printed and cut with nothing on record (s-e790706066).
+
+OPEN_DRIFT_FAIL = ANCHOR_DRIFT_FAIL
+INTRA_DRIFT_ADVISORY = 0.10
+
+
+def _measure_chain_continuity(
+    path: Path,
+    *,
+    start_image: Path | None,
+    prev_clip_path: Path | None,
+    scene_change: bool,
+    families: dict[str, str],
+    measured: dict[str, float],
+    issues: list[str],
+) -> None:
+    try:
+        from diony_producer.quality import chain_color_drift, frame_channel_stats
+    except ImportError:
+        return
+    verdicts: list[str] = []
+    first = frame_channel_stats(path, last=False)
+    last = frame_channel_stats(path, last=True)
+    if start_image is not None and Path(start_image).is_file() and first is not None:
+        opener = frame_channel_stats(Path(start_image), last=False)
+        if opener is not None:
+            drift = chain_color_drift(first, opener)
+            measured["open_drift"] = float(drift)
+            if drift > OPEN_DRIFT_FAIL:
+                verdicts.append("fail")
+                issues.append(
+                    f"the clip ignored its opening frame (drift {drift:.3f}) — "
+                    "it did not start where it was told to"
+                )
+            else:
+                verdicts.append("pass")
+    if (
+        not scene_change
+        and prev_clip_path is not None
+        and Path(prev_clip_path).is_file()
+        and first is not None
+    ):
+        prev_stats = frame_channel_stats(Path(prev_clip_path), last=True)
+        if prev_stats is not None:
+            drift = chain_color_drift(first, prev_stats)
+            measured["chain_color_drift"] = float(drift)
+            if drift > CHAIN_DRIFT_FAIL:
+                verdicts.append("fail")
+                issues.append(
+                    f"colour drifted {drift:.3f} from the previous clip — the look changed under the cut"
+                )
+            else:
+                verdicts.append("pass")
+                if drift > CHAIN_DRIFT_ADVISORY:
+                    issues.append(f"colour drift {drift:.3f} vs the previous clip (advisory)")
+    if first is not None and last is not None:
+        # a camera move or a lighting change legitimately shifts channel
+        # stats inside a clip — advisory only, never a fail on its own
+        intra = chain_color_drift(last, first)
+        measured["intra_clip_drift"] = float(intra)
+        if intra > INTRA_DRIFT_ADVISORY:
+            issues.append(f"the look wandered {intra:.3f} within the clip (advisory)")
+    if verdicts:
+        families["continuity"] = "fail" if "fail" in verdicts else "pass"
+
+
+def review_chain_link(
+    path: Path,
+    *,
+    op_id: str,
+    duration_s: int,
+    start_image: Path | None = None,
+    prev_clip_path: Path | None = None,
+    scene_change: bool = False,
+) -> ClipReview:
+    """Review one link of a chained one-shot: delivery, duration, frames, and
+    look continuity — did it open from the frame it was given, did it hold
+    the previous clip's colour when it was a continuation, did it wander."""
+    families: dict[str, str] = {}
+    measured: dict[str, float] = {}
+    issues: list[str] = []
+
+    if not path.is_file() or path.stat().st_size < MIN_DELIVERY_BYTES:
+        families["delivery"] = "fail"
+        issues.append("media missing or too small to be a clip")
+    else:
+        families["delivery"] = "pass"
+        measured["bytes"] = float(path.stat().st_size)
+
+    probe = _probe(path) if families["delivery"] == "pass" else None
+    if probe is None:
+        families["duration"] = "unmeasured"
+        families["audio"] = "unmeasured"
+    else:
+        measured["duration_s"] = probe["duration_s"]
+        if abs(probe["duration_s"] - duration_s) <= DURATION_TOLERANCE_S:
+            families["duration"] = "pass"
+        else:
+            families["duration"] = "fail"
+            issues.append(f"measured {probe['duration_s']:.1f}s vs booked {duration_s}s")
+        families["audio"] = "pass" if probe["has_audio"] else "unmeasured"
+
+    if families["delivery"] == "pass":
+        for family_name, measure in (
+            ("frames", lambda: _measure_frames_for(path, duration_s, families, measured, issues)),
+            (
+                "continuity",
+                lambda: _measure_chain_continuity(
+                    path,
+                    start_image=start_image,
+                    prev_clip_path=prev_clip_path,
+                    scene_change=scene_change,
+                    families=families,
+                    measured=measured,
+                    issues=issues,
+                ),
+            ),
+        ):
+            try:
+                measure()
+            except Exception as err:  # noqa: BLE001 - optional evidence never kills a review
+                families[family_name] = "unmeasured"
+                issues.append(f"{family_name} measurement crashed: {type(err).__name__}: {err}")
+
+    families.setdefault("frames", "unmeasured")
+    families.setdefault("continuity", "unmeasured")
+    families.setdefault("identity", "unmeasured")
+    verdict = "fail" if any(v == "fail" for v in families.values()) else "pass"
+    return ClipReview(
+        id=f"rev-{uuid.uuid4().hex[:10]}",
+        clip_id=op_id,
+        op_id=op_id,
+        verdict=verdict,
+        families=families,
+        measured=measured,
+        issues=issues,
+        recommended_op="" if verdict == "fail" else "accept",
     )

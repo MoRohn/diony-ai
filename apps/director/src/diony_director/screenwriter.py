@@ -376,6 +376,13 @@ _BRAIN_INSTRUCTIONS = (
     "light rain'); grade_language the palette and contrast ('warm practicals "
     "against teal shadow'); camera_kit the glass and movement grammar "
     "('32/50/85mm primes, chest height, slow arcs and push-ins').\n\n"
+    "LOOK: the brief carries the film's LOOK BIBLE — its one medium, palette, "
+    "and rendering language, which the system appends verbatim to every shot. "
+    "Every setting's grade_language and camera_kit live INSIDE that look: a "
+    "variation of the same palette and medium, never a new style, never a "
+    "different studio's hand. Never write a setting that reads as another "
+    "medium (no 'photorealistic' room in an animated film, no 'illustrated' "
+    "room in a live-action one).\n\n"
     "STRUCTURE: every scene changes something irreversible; stakes escalate "
     "scene to scene; scene shapes VARY — never the same establishing/line/"
     "reaction template twice; the film ends on an image, not a summary. "
@@ -483,6 +490,13 @@ def master_brief(master: MasterPrompt | None) -> str:
         "lands the ending exactly.",
         f"Generator-ready prompt: {master.prompt}",
     ]
+    if master.look is not None and master.look.block():
+        parts.append(
+            "LOOK BIBLE (film-wide, appended verbatim to every shot — every setting's "
+            "grade lives inside it): " + master.look.block()
+        )
+    if master.visual_style:
+        parts.append(f"Visual style: {master.visual_style}.")
     if master.primary_subject:
         parts.append(f"Subject: {master.primary_subject}.")
     if master.setting:
@@ -826,6 +840,10 @@ def _template(
     # image on screen.
     light = (master.lighting if master is not None else {}) or {}
     grade = ", ".join(x for x in (light.get("quality"), light.get("shadows")) if x)
+    look = master.look if master is not None else None
+    if look is not None and look.palette:
+        # the film's one palette, not a per-setting guess
+        grade = look.palette + (f", {grade}" if grade else "")
     primary = SettingProfile(
         setting_id="set-primary",
         name=name,
@@ -844,7 +862,11 @@ def _template(
             room_tone_id="set-road/tone",
             architecture_notes="engine drone, wind at speed",
             time_weather="Night 1, later",
-            grade_language="headlights and horizon glow",
+            grade_language=(
+                f"{look.palette}, headlights and horizon glow"
+                if look is not None and look.palette
+                else "headlights and horizon glow"
+            ),
             camera_kit="wide and long lens alternating",
         )
         settings.append(road)
@@ -1080,6 +1102,9 @@ def _template_authored(
     framing; the canned getaway template never overwrites a written film."""
     light = (master.lighting if master is not None else {}) or {}
     grade = ", ".join(x for x in (light.get("quality"), light.get("shadows")) if x)
+    look = master.look if master is not None else None
+    if look is not None and look.palette:
+        grade = look.palette + (f", {grade}" if grade else "")
     camera_shot = (
         f"The camera {master.camera[:1].lower()}{master.camera[1:].rstrip('.')}"
         if master is not None and master.camera

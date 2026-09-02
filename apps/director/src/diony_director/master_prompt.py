@@ -33,6 +33,7 @@ from __future__ import annotations
 import re
 
 from diony_contracts.production import MASTER_BEAT_STAGES, MasterPrompt
+from diony_director import look as look_mod
 
 # --------------------------------------------------------------------------
 # The template, verbatim doctrine. This is what the brain is told.
@@ -182,18 +183,19 @@ the target — say so through that number, never by silently rewriting the
 target.
 """
 
-OUTPUT_CONTRACT = """
+OUTPUT_CONTRACT = f"""
 OUTPUT CONTRACT
 
 Return ONLY a JSON object with these keys (strings unless noted):
 visual_style, primary_subject, primary_action, setting,
-beats (list of {stage, text} where stage ∈ initial_state|first_change|development|escalation|payoff|final_state, in order, only the beats you used),
-scene_depth ({background, middle_ground, foreground}),
+beats (list of {{stage, text}} where stage ∈ initial_state|first_change|development|escalation|payoff|final_state, in order, only the beats you used),
+scene_depth ({{background, middle_ground, foreground}}),
 spatial, camera, performance, micro_expressions, physics, body_mechanics,
-lighting ({source, quality, shadows, secondary}),
+lighting ({{source, quality, shadows, secondary}}),
 mood, continuity_anchors (list of short phrases), ending,
 constraints (list of 3–6 short imperatives),
 narration (the verbatim voice-over or scripted lines the finished video carries, an empty string when the idea scripts none — narration is recorded in post against the assembled film, so these words must NEVER appear inside the prompt as spoken dialogue, and the prompt must not direct anyone to speak audible words),
+{look_mod.LOOK_CONTRACT}
 estimated_duration_s (integer),
 prompt (the finished generator-ready prompt, following FINAL GENERATOR-READY PROMPT STRUCTURE, after the OPTIMIZATION PASS).
 """
@@ -232,7 +234,7 @@ CLIP DELIVERY
 
 The booked route delivers this as {count} sequential clips ({durations}; {sum(clip_plan)} seconds total). After deriving the master, split the ACTION PROGRESSION into {count} consecutive segments. Cut at natural action boundaries, never mid-gesture. When the idea itself scripts scenes, align clip boundaries with those scenes — cover every scripted scene's imagery across the clips in order — and return each scene's narration in its clip's "narration" field VERBATIM. Narration is recorded in post against the assembled film: it must NEVER appear inside a clip prompt as spoken dialogue or voiceover, and no clip prompt may direct anyone to speak audible words.
 
-In addition to every OUTPUT CONTRACT key, return clips: a list of exactly {count} objects {{"prompt", "duration_s", "narration"}} in play order, duration_s matching the booked lengths above, narration holding that segment's scripted lines verbatim (an empty string when the segment carries none). Each clip prompt is a complete generator-ready prompt for JUST its segment: it restates the subject, wardrobe, setting, camera treatment, lighting, and every continuity anchor in full — each clip generates alone and knows nothing of the others. Every clip after the first begins exactly where the previous clip's final frame left off, and every clip before the last closes on a stable, holdable frame the next clip can open from. Only the final clip carries the ending. Include the pacing sentence in each clip prompt for its own length. The master prompt still describes the WHOLE action.
+In addition to every OUTPUT CONTRACT key, return clips: a list of exactly {count} objects {{"prompt", "duration_s", "narration", "scene_change", "opening"}} in play order, duration_s matching the booked lengths above, narration holding that segment's scripted lines verbatim (an empty string when the segment carries none). Each clip prompt is a complete generator-ready prompt for JUST its segment: it restates the subject, wardrobe, setting, camera treatment, and every continuity anchor in full — each clip generates alone and knows nothing of the others. It names the scene's motivated light sources, but it NEVER restates or varies the medium, palette, grain, or rendering style: the film's LOOK BIBLE is appended verbatim to every clip prompt by the system. scene_change is true when the clip opens on a different place or subject than the previous clip's final frame (a cut, not a continuation) — such a clip opens from a still frame the system composes in the film's look; a clip that continues the previous clip's action directly is false. opening is ONE sentence describing the clip's first frame as a still image (subject, place, composition), used to compose that opening frame. Every continuing clip begins exactly where the previous clip's final frame left off, and every clip before the last closes on a stable, holdable frame the next clip can open from. Only the final clip carries the ending. Include the pacing sentence in each clip prompt for its own length. The master prompt still describes the WHOLE action.
 """
 
 
@@ -309,6 +311,12 @@ class MasterUnavailable(RuntimeError):
     configured there is NO template stand-in — the failure is a named state."""
 
 
+def _truthy(value) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "1", "cut", "new"}
+    return bool(value)
+
+
 def _parse(
     body: dict,
     *,
@@ -383,11 +391,20 @@ def _parse(
             if isinstance(entry, dict):
                 text = " ".join(str(entry.get("prompt", "") or "").split())
                 narration = " ".join(str(entry.get("narration", "") or "").split())
+                scene_change = _truthy(entry.get("scene_change"))
+                opening = " ".join(str(entry.get("opening", "") or "").split())
             else:
                 text = " ".join(str(entry).split())
                 narration = ""
+                scene_change, opening = False, ""
             if text:
-                clips.append({"prompt": text, "duration_s": 0, "narration": narration})
+                clips.append({
+                    "prompt": text,
+                    "duration_s": 0,
+                    "narration": narration,
+                    "scene_change": scene_change,
+                    "opening": opening,
+                })
         if len(clips) != len(clip_plan):
             # a chained booking without its clips is unusable — raising here
             # retries the derivation rather than shipping half a chain
@@ -398,6 +415,8 @@ def _parse(
         for index, duration in enumerate(clip_plan):
             # the BOOKED durations are law — the brain's numbers are advisory
             clips[index]["duration_s"] = int(duration)
+        if clips:
+            clips[0]["scene_change"] = False  # the opener opens the film, not a cut
 
     raw_est = body.get("estimated_duration_s", 0)
     try:
@@ -408,12 +427,17 @@ def _parse(
         estimated = int(target_duration_s)
         warnings.append("master: brain omitted estimated_duration_s — assumed the target")
 
+    visual_style = _text("visual_style", "cinematic realism")
+    look = look_mod.parse_look(
+        body.get("look"), idea=idea, visual_style=visual_style, warnings=warnings
+    )
     return MasterPrompt(
         idea=idea,
         target_duration_s=int(target_duration_s),
         estimated_duration_s=estimated,
         reference_image=has_reference,
-        visual_style=_text("visual_style", "cinematic realism"),
+        visual_style=visual_style,
+        look=look,
         primary_subject=_text("primary_subject"),
         primary_action=_text("primary_action"),
         setting=_text("setting"),
@@ -550,6 +574,12 @@ _DETERMINERS = {
 }
 
 
+def _with_article(style: str) -> str:
+    """'animation' → 'an animation', 'cinematic realism' → 'a cinematic realism'."""
+    lead = style.strip()[:1].lower()
+    return f"an {style}" if lead in "aeiou" else f"a {style}"
+
+
 def _camera_clause(camera: str) -> str:
     """'The camera holds…' / 'Camera not moving' → 'holds…' / 'not moving', so
     the assembled sentence never reads 'The camera camera not moving'."""
@@ -649,6 +679,7 @@ def _template(
     if has_reference:
         constraints.append("do not alter the reference-image composition")
     atmosphere = established.get("atmosphere", "")
+    look = look_mod.template_look(idea, style)
     master = MasterPrompt(
         idea=idea,
         target_duration_s=int(target_duration_s),
@@ -658,6 +689,7 @@ def _template(
         # appends it as the style slot on the Google route — it is NOT the
         # one-word style the anchor sentence wants ("Create a filmic video")
         visual_style=style,
+        look=look,
         primary_subject=subject,
         primary_action="",
         setting="",  # the idea already names it — never echoed after a full sentence
@@ -692,7 +724,7 @@ def assemble(master: MasterPrompt) -> str:
     Used by the template path, and as the assembly when a brain hands back
     fields without a finished prompt."""
     parts: list[str] = []
-    anchor = f"Create a {master.visual_style or 'cinematic realism'} video of {master.primary_subject or 'the subject'}"
+    anchor = f"Create {_with_article(master.visual_style or 'cinematic realism')} video of {master.primary_subject or 'the subject'}"
     if master.primary_action:
         anchor += f" {_lower_first(master.primary_action)}"
     if master.setting:
@@ -779,7 +811,7 @@ def split_clips(master: MasterPrompt, clip_plan: list[int]) -> list[dict]:
     buckets: list[list[str]] = [[] for _ in range(count)]
     for index, beat in enumerate(beats):
         buckets[min(index * count // len(beats), count - 1)].append(beat["text"])
-    anchor = f"Create a {master.visual_style or 'cinematic realism'} video of {master.primary_subject or 'the subject'}."
+    anchor = f"Create {_with_article(master.visual_style or 'cinematic realism')} video of {master.primary_subject or 'the subject'}."
     continuity = (
         "Maintain strict continuity throughout: "
         + ", ".join(master.continuity_anchors)
@@ -818,9 +850,16 @@ def split_clips(master: MasterPrompt, clip_plan: list[int]) -> list[dict]:
             parts.append("The clip closes on a stable, holdable frame the next clip opens from.")
         if constraints:
             parts.append(constraints)
-        # the template has no understanding to split narration with — a
-        # brainless chain carries none, and the derivation warning names it
-        clips.append({"prompt": " ".join(parts), "duration_s": int(duration), "narration": ""})
+        clips.append({
+            "prompt": " ".join(parts),
+            "duration_s": int(duration),
+            # the template has no understanding to split narration with — a
+            # brainless chain carries none, and the derivation warning names it
+            "narration": "",
+            # the template splits ONE continuous action — no link is a cut
+            "scene_change": False,
+            "opening": bucket[0] if bucket else "",
+        })
     return clips
 
 
@@ -1024,7 +1063,9 @@ def summary_line(master: MasterPrompt) -> str:
     return (
         f"Master prompt derived ({master.word_count} words, {len(master.beats)} beats{chain}, "
         f"{'brain' if master.source == 'brain' else 'template'}) — "
-        f"style {master.visual_style or 'unset'}; camera {master.camera or 'unset'}."
+        f"style {master.visual_style or 'unset'}; "
+        + (f"look {master.look.medium}; " if master.look is not None and master.look.medium else "")
+        + f"camera {master.camera or 'unset'}."
     )
 
 
@@ -1039,6 +1080,13 @@ def from_doc(doc: dict | None) -> MasterPrompt | None:
         return MasterPrompt.model_validate(doc)
     except Exception:  # noqa: BLE001 — a corrupt artifact must not brick rehydration
         return None
+
+
+def look_block(master: MasterPrompt | None) -> str:
+    """The verbatim LOOK BIBLE clause of a master, or nothing."""
+    if master is None or master.look is None:
+        return ""
+    return master.look.block()
 
 
 def template_text() -> str:
@@ -1063,5 +1111,6 @@ __all__ = [
     "summary_line",
     "system_prompt",
     "user_message",
+    "look_block",
 ]
 

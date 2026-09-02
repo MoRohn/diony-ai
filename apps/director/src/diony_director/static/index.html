@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="/static/app.css?v=p26">
+<link rel="stylesheet" href="/static/app.css?v=p27">
 </head>
 <body>
 
@@ -83,10 +83,10 @@
           </div>
         </div>
         <div class="refbar">
-          <button id="add-img" type="button" class="addimg" title="Attach reference stills — they anchor the film's characters and scene"><svg class="icon"><use href="#i-image-add"/></svg><span>Add stills</span></button>
+          <button id="add-img" type="button" class="addimg" title="Attach reference stills — they anchor the film's look, characters, and scene; mark one as the opener to open the frame on it"><svg class="icon"><use href="#i-image-add"/></svg><span>Add stills</span></button>
           <input id="img-file" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
           <div class="refchips" id="refchips"></div>
-          <span class="refhint" id="refhint">drop or paste stills — they anchor the film's look</span>
+          <span class="refhint" id="refhint">drop or paste stills — they anchor the film's look · click a still's role to make it the opening frame</span>
         </div>
         <div class="controls">
           <label class="pill" title="Which engine rolls the pictures">
@@ -169,6 +169,6 @@
     <div class="bpane" id="bpane"></div>
   </aside>
 </div>
-<script src="/static/app.js?v=p26"></script>
+<script src="/static/app.js?v=p27"></script>
 </body>
 </html>

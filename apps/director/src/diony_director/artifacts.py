@@ -47,13 +47,31 @@ _SLOT_DIRECTION = {
 }
 
 
-def _sheet_prompt(char: CharacterProfile, slot: str) -> str:
+def _look_of(package: ProductionPackage | None):
+    master = package.master_prompt if package is not None else None
+    return master.look if master is not None else None
+
+
+def _sheet_prompt(char: CharacterProfile, slot: str, package: ProductionPackage | None = None) -> str:
     wardrobe = next(iter(char.wardrobe.values()), "practical, lived-in wardrobe")
+    look = _look_of(package)
+    if look is not None and not look.photoreal:
+        # An animated film casts in its own medium — a photographic head
+        # shot as the identity anchor of a 2.5D character is a different
+        # studio's hand on every shot that references it.
+        return (
+            f"Character sheet of {char.name} ({char.role or 'principal cast'}) in the film's "
+            f"medium: {_SLOT_DIRECTION[slot]}. {char.age_body_notes or 'a distinct, consistent character'}. "
+            f"Wardrobe: {wardrobe}. Plain mid-grey backdrop, the character fully in focus. "
+            f"{look.block()} Same character in every frame of this set. "
+            f"{'; '.join(char.forbidden_drift)}."
+        )
+    realism = f" {look.block()}" if look is not None else ""
     return (
         f"Casting photograph of {char.name} ({char.role or 'principal cast'}): "
         f"{_SLOT_DIRECTION[slot]}. {char.age_body_notes or 'a distinct, consistent person'}. "
         f"Wardrobe: {wardrobe}. Soft neutral studio light, plain mid-grey backdrop, "
-        f"sharp focus on the face, photorealistic. Same person in every frame of this set. "
+        f"sharp focus on the face, photorealistic.{realism} Same person in every frame of this set. "
         f"{'; '.join(char.forbidden_drift)}."
     )
 
@@ -70,8 +88,16 @@ def references_for(package: ProductionPackage, op: DirectorOp) -> list[str]:
     if bible.get("setting_id"):
         from diony_director import session as _session
 
-        start, extras = _session.upload_refs(op.session_id)
-        return [r for r in [start] + extras if r][:1]
+        # The plate is the scene's style frame: every look anchor the film
+        # has — the user's stills first, then the frames the film already
+        # established its look with — so one plate can never be a
+        # different studio's room (Blueprint 29).
+        refs: list[str] = list(_session.all_upload_paths(op.session_id))
+        look = _look_of(package)
+        for asset in (look.anchor_assets if look is not None else []):
+            if asset and asset not in refs:
+                refs.append(asset)
+        return refs[:7]
     try:
         char = package.character(str(bible.get("char_id", "")))
     except KeyError:
@@ -117,7 +143,7 @@ def plan_sheet_ops(sid: str, package: ProductionPackage) -> list[DirectorOp]:
                     provider=provider,
                     model=model,
                     mode=CloudGenerationMode.IMAGE,
-                    prompt=_sheet_prompt(char, slot),
+                    prompt=_sheet_prompt(char, slot, package),
                     prompt_version="v1",
                     duration_s=1,
                     resolution=resolution,
@@ -130,6 +156,28 @@ def plan_sheet_ops(sid: str, package: ProductionPackage) -> list[DirectorOp]:
 
 
 PLATE_MODEL_FLOW = "nano-banana-2"
+
+
+def _plate_prompt(setting, look) -> str:
+    """The establishing plate in the film's look. A plate was always a
+    'photorealistic cinema still' — under an animated look that made every
+    scene's master frame a photograph the clips then had to abandon."""
+    if look is not None and not look.photoreal:
+        return (
+            f"Establishing frame of {setting.name}: wide, empty of people, "
+            f"{setting.time_weather or 'night'}. {setting.architecture_notes or ''} "
+            f"{setting.grade_language or ''} {look.block()} Composed as a still frame of the "
+            f"film, {setting.camera_kit or '35mm-equivalent framing, chest height'}. This exact "
+            "place recurs in every shot of the scene. No text."
+        )
+    look_clause = f" {look.block()}" if look is not None else ""
+    return (
+        f"Establishing plate of {setting.name}: wide, empty of people, "
+        f"{setting.time_weather or 'night'}. {setting.architecture_notes or ''} "
+        f"{setting.grade_language or ''} Photorealistic cinema still, "
+        f"{setting.camera_kit or '35mm, chest height'}.{look_clause} This exact place recurs "
+        "in every shot of the scene."
+    )
 
 
 def plan_plate_ops(sid: str, package: ProductionPackage) -> list[DirectorOp]:
@@ -147,13 +195,7 @@ def plan_plate_ops(sid: str, package: ProductionPackage) -> list[DirectorOp]:
             duration_s=1,
             resolution=resolution,
         )
-        prompt = (
-            f"Establishing plate of {setting.name}: wide, empty of people, "
-            f"{setting.time_weather or 'night'}. {setting.architecture_notes or ''} "
-            f"{setting.grade_language or ''} Photorealistic cinema still, "
-            f"{setting.camera_kit or '35mm, chest height'}. This exact place recurs "
-            "in every shot of the scene."
-        )
+        prompt = _plate_prompt(setting, _look_of(package))
         ops.append(
             DirectorOp(
                 id=f"op-{uuid.uuid4().hex[:10]}",

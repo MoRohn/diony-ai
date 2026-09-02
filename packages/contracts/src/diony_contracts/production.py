@@ -188,6 +188,110 @@ MASTER_BEAT_STAGES = (
 )
 
 
+
+# Words that place a look in photographic reality; any of the animation /
+# illustration tells below overrides them (an "animated documentary" is
+# animation). The Grok REALISM ground truth and the Flow baseline cinema
+# clause ride only a photoreal look — under any other medium they are the
+# contradiction that pulls every shot back toward live-action gloss.
+LOOK_PHOTOREAL_TELLS = (
+    "photoreal", "photo-real", "live action", "live-action", "realism", "realistic",
+    "documentary", "filmed", "footage", "cinema camera", "35mm", "16mm", "digital cinema",
+)
+LOOK_STYLIZED_TELLS = (
+    "animat", "anime", "cartoon", "illustrat", "2.5d", "2d ", "2-d", "3d render", "cgi",
+    "claymation", "clay", "stop-motion", "stop motion", "pixel", "painterly", "painted",
+    "watercolor", "watercolour", "comic", "cel ", "cel-", "isometric", "low-poly",
+    "low poly", "vector", "line art", "ink", "sketch", "paper cut", "papercut",
+    "collage", "motion graphic", "explainer", "toon", "render", "stylized", "stylised",
+    "graphic novel", "storybook", "puppet",
+)
+
+
+def look_is_photoreal(*texts: str) -> bool:
+    """Whether a described look lives in photographic reality. Stylized tells
+    win over realism tells; no tells at all reads as photoreal (the house
+    default every prompt carried before the Look Bible existed)."""
+    lowered = " ".join(t or "" for t in texts).lower()
+    if any(tell in lowered for tell in LOOK_STYLIZED_TELLS):
+        return False
+    return True
+
+
+_NEGATIVE_LEADS = ("never ", "no ", "avoid ", "not ", "without ")
+
+
+def _negative_noun(text: str) -> str:
+    """'no photoreal footage' → 'photoreal footage', so the block's
+    'Never: …' list never reads as a double negative."""
+    cleaned = " ".join(text.split()).rstrip(".")
+    lowered = cleaned.lower()
+    for lead in _NEGATIVE_LEADS:
+        if lowered.startswith(lead):
+            return cleaned[len(lead):].strip()
+    return cleaned
+
+
+class LookBible(BaseModel):
+    """The film-wide look — one medium, one hand, for every shot.
+
+    Derived once by the master derivation (or set by the user) and carried
+    VERBATIM on every clip prompt, every setting plate, every character sheet,
+    and every style frame of the production. It is the answer to a film in
+    which every shot looked drawn by a different studio: text alone re-derived
+    the medium per clip, and nothing byte-identical tied the shots together.
+    """
+
+    schema_version: int = 1
+    # "2.5D animated explainer, flat shaded with soft paper texture" /
+    # "photoreal live action" / "hand-inked animation on watercolor washes"
+    medium: str = ""
+    # how surfaces, edges, and light are drawn: shading model, outline, grain
+    render_language: str = ""
+    # the palette and its discipline: "muted navy and warm amber, low saturation"
+    palette: str = ""
+    # lens, depth of field, contrast and grade the whole film shares
+    lens_grade: str = ""
+    # the lighting PHILOSOPHY (one motivated key, cool fill…), not a scene's sources
+    lighting_system: str = ""
+    # what the look must never become: "no photoreal footage", "no 3D gloss"
+    negatives: list[str] = Field(default_factory=list)
+    source: Literal["brain", "template", "user"] = "template"
+    # the look's reference images: the user's stills and, once a chain or a
+    # plate has printed, the frames the film established its look with
+    anchor_assets: list[str] = Field(default_factory=list)
+
+    @property
+    def photoreal(self) -> bool:
+        return look_is_photoreal(self.medium, self.render_language)
+
+    def block(self) -> str:
+        """The verbatim LOOK BIBLE clause — deterministic from the fields, so
+        every prompt of the film carries byte-identical words."""
+        bits = [
+            f"medium: {self.medium.rstrip('.')}" if self.medium else "",
+            f"rendering: {self.render_language.rstrip('.')}" if self.render_language else "",
+            f"palette: {self.palette.rstrip('.')}" if self.palette else "",
+            f"lens and grade: {self.lens_grade.rstrip('.')}" if self.lens_grade else "",
+            f"lighting system: {self.lighting_system.rstrip('.')}" if self.lighting_system else "",
+        ]
+        described = "; ".join(b for b in bits if b)
+        if not described:
+            return ""
+        never = [_negative_noun(n) for n in self.negatives if n and n.strip()]
+        never = [n for n in never if n]
+        never_clause = (
+            " Never: " + "; ".join(never) + "." if never else ""
+        )
+        return (
+            f"LOOK BIBLE (holds for every shot of this film) — {described}. "
+            "Every shot is rendered by the same hand in the same medium, palette, "
+            "line, and grain — one studio, one film; never a change of medium, "
+            "never a new palette, never a different studio's hand."
+            + never_clause
+        )
+
+
 class MasterPrompt(BaseModel):
     """Blueprint 27: the pre-split finalized artifact.
 
@@ -226,6 +330,9 @@ class MasterPrompt(BaseModel):
     continuity_anchors: list[str] = Field(default_factory=list)
     ending: str = ""
     constraints: list[str] = Field(default_factory=list)
+    # The film-wide look every shot shares — appended verbatim to every
+    # clip prompt, plate, sheet, and style frame (see LookBible).
+    look: LookBible | None = None
     prompt: str
     # Chained one-shot delivery: when the booked runtime exceeds the route's
     # single-clip length, the derivation also splits the action into

@@ -20,7 +20,7 @@ from diony_contracts.director import (
     DirectorOpType,
 )
 from diony_contracts.production import ClipReview, ClipUnit, ProductionPackage
-from diony_contracts.production import MasterPrompt
+from diony_contracts.production import LookBible, MasterPrompt
 from diony_director import compiler, packagebuilder, revisions, screenwriter
 from diony_director import estimate as estimate_mod
 from diony_director import master_prompt as master_mod
@@ -247,6 +247,10 @@ def _runtime(seconds: float) -> str:
 # --- Uploaded reference stills (the user's own look anchors) ----------------
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+# A still is a LOOK/IDENTITY reference unless the user says it opens the
+# frame. First-upload-opens was the 2026-09-02 film opening on a flat
+# infographic meant as a structural reference for clip 6 (s-e790706066).
+UPLOAD_ROLES = ("reference", "opener")
 
 
 def _sniff_image(data: bytes) -> str:
@@ -259,10 +263,12 @@ def _sniff_image(data: bytes) -> str:
     return ""
 
 
-def add_upload(sid: str, *, name: str, data: bytes) -> dict[str, Any]:
-    """Persist a user-supplied reference still. One-shot: the first upload
-    opens the frame. Draft Script: uploads ride clip one as reference images
-    for character/scene consistency."""
+def add_upload(
+    sid: str, *, name: str, data: bytes, role: str = "reference"
+) -> dict[str, Any]:
+    """Persist a user-supplied still. Every upload is a look-and-identity
+    reference; exactly one may be marked the OPENER (the first frame of a
+    one-shot). Draft Script: uploads anchor plates and clip one."""
     ext = _sniff_image(data)
     if not ext:
         raise ValueError("only PNG, JPEG, or WebP stills can ride a shot")
@@ -282,11 +288,33 @@ def add_upload(sid: str, *, name: str, data: bytes) -> dict[str, Any]:
         "name": (name or "reference").strip()[:120] or "reference",
         "path": str(dest),
         "bytes": len(data),
+        "role": role if role in UPLOAD_ROLES else "reference",
     }
     _SESSIONS.setdefault(sid, SessionState(id=sid))
-    _UPLOADS.setdefault(sid, []).append(record)
+    records = _UPLOADS.setdefault(sid, [])
+    if record["role"] == "opener":
+        for other in records:
+            other["role"] = "reference"  # one opener, ever
+    records.append(record)
     persist(sid)
     return record
+
+
+def set_upload_role(sid: str, upload_id: str, role: str) -> dict[str, Any] | None:
+    """Mark a still as the opener (the first frame) or back to a reference.
+    Only one opener exists at a time."""
+    if role not in UPLOAD_ROLES:
+        raise ValueError(f"unknown still role {role!r} — expected one of {UPLOAD_ROLES}")
+    records = _UPLOADS.get(sid) or []
+    target = next((r for r in records if r["id"] == upload_id), None)
+    if target is None:
+        return None
+    if role == "opener":
+        for other in records:
+            other["role"] = "reference"
+    target["role"] = role
+    persist(sid)
+    return target
 
 
 def uploads_for(sid: str) -> list[dict[str, Any]]:
@@ -307,8 +335,18 @@ def remove_upload(sid: str, upload_id: str) -> bool:
 
 
 def upload_refs(sid: str) -> tuple[str, list[str]]:
+    """(the opener's path or '', every other still's path). Nothing opens the
+    frame unless the user marked it — every unmarked still is a reference."""
     ups = _UPLOADS.get(sid) or []
-    return (ups[0]["path"] if ups else "", [u["path"] for u in ups[1:]])
+    opener = next((u for u in ups if u.get("role") == "opener"), None)
+    return (
+        opener["path"] if opener else "",
+        [u["path"] for u in ups if u is not opener],
+    )
+
+
+def all_upload_paths(sid: str) -> list[str]:
+    return [u["path"] for u in (_UPLOADS.get(sid) or [])]
 
 
 def apply_uploads_to_refs(
@@ -320,10 +358,9 @@ def apply_uploads_to_refs(
     start_image gives way here — visibly in the refs, never silently at the
     adapter. Applied wherever refs are (re)computed, so late-binding at submit
     never loses them."""
-    start, extras = upload_refs(sid)
-    if not start or not package.clips or clip.clip_id != package.clips[0].clip_id:
+    uploads = all_upload_paths(sid)
+    if not uploads or not package.clips or clip.clip_id != package.clips[0].clip_id:
         return refs
-    uploads = [start] + extras
     merged = uploads + [r for r in (refs.get("references") or []) if r not in uploads]
     refs["references"] = merged[:3]
     refs.pop("start_image", None)
@@ -408,20 +445,25 @@ def compile_master_body(
     *,
     has_start_image: bool = False,
     narration: str = "",
+    look: LookBible | None = None,
 ) -> str:
     """Derived master prose (the whole-action prompt, or one chained clip's
-    prompt) + the route's guards → the shippable prompt. A segment whose
-    narration is recorded in post (Blueprint 28) tells the generator its
+    prompt) + the film's LOOK BIBLE, verbatim + the route's guards → the
+    shippable prompt. The look rides at priority 0: length pressure shrinks
+    the prose, never the one clause that keeps the film one film. A segment
+    whose narration is recorded in post (Blueprint 28) tells the generator its
     location track carries no speech — the words never ride the prompt."""
     from diony_director.compiler import NO_SPEECH, _fit_prompt, prompt_limit
 
     body = body.strip()
+    look_block = look.block() if look is not None else ""
     if provider is CloudProvider.GROK:
         from diony_director import grok_lexicon
 
         pieces: list[tuple[str, int]] = [(grok_lexicon.harden_camera_locks(body), 1)]
         if has_start_image:
             pieces.append((grok_lexicon.I2V_DIRECTIVE, 1))
+        pieces.append((look_block, 0))
         if narration.strip():
             pieces.append((NO_SPEECH, 0))
         pieces.append((_GROK_STYLE.strip(), 0))
@@ -431,12 +473,28 @@ def compile_master_body(
     _, inline_world, _ = flow_lexicon.expand(idea)
     pieces = [
         (body, 1),
-        (flow_lexicon.style_clause(sid, override_world=inline_world), 0),
+        (look_block, 0),
+        (_flow_style_slot(sid, inline_world, look), 0),
     ]
     if narration.strip():
         pieces.append((NO_SPEECH, 0))
     pieces.append((_VEO_GUARD, 0))
     return _fit_prompt(pieces, prompt_limit(provider))
+
+
+def _flow_style_slot(sid: str, inline_world: str, look: LookBible | None) -> str:
+    """An authored world (inline or chosen) always rides beside the look; the
+    BASELINE cinema clause yields to a non-photoreal look — 'shot on a cinema
+    camera, 35mm lens' over an animated film is a contradiction."""
+    from diony_director import flow_lexicon
+
+    clause = flow_lexicon.style_clause(sid, override_world=inline_world)
+    if look is None or look.photoreal:
+        return clause
+    chosen = inline_world or flow_lexicon.template_for(sid)["world"]
+    if chosen and chosen != flow_lexicon.BASELINE_WORLD:
+        return clause
+    return ""
 
 
 def compile_prompt(
@@ -461,6 +519,7 @@ def compile_prompt(
             sid,
             has_start_image=has_start_image,
             narration=master.narration,
+            look=master.look,
         )
 
     seed = idea.strip().rstrip(".")
@@ -580,7 +639,16 @@ def _attach_stills(op: DirectorOp, start: str, extras: list[str], opens: str) ->
     from diony_director import capabilities
 
     if not start:
-        return ""
+        if not extras:
+            return ""
+        # No opener marked: the stills ride as look-and-identity references
+        # (legal without a frame on every lane) — the model composes the
+        # shot IN their look instead of morphing away from one of them.
+        op.artifact_refs["references"] = extras[:3]
+        return (
+            f" Your {plural_stills(len(extras))} ride {opens} as look and identity "
+            "references — mark one as the opener if it should be the first frame."
+        )
     op.artifact_refs["start_image"] = start
     if not extras:
         return f" Your uploaded still opens {opens}."
@@ -765,6 +833,7 @@ def _propose_chain(
                 sid,
                 has_start_image=has_start,
                 narration=narration,
+                look=master.look,
             )
         else:
             prompt = compile_prompt(text, provider, sid, has_start_image=has_start)
@@ -791,7 +860,7 @@ def _propose_chain(
                 )
             ),
         )
-        if first and start:
+        if first and (start or extras):
             stills_note = _attach_stills(op, start, list(extras), "clip 1")
         _OPS[op.id] = op
         if master is not None:
@@ -800,6 +869,7 @@ def _propose_chain(
     state = _SESSIONS.setdefault(sid, SessionState(id=sid))
     state.op_ids.extend(op.id for op in ops)
     _register_oneshot_chain(sid, [op.id for op in ops])
+    frames = _plan_style_frames(sid, ops, master) if master is not None else []
     persist(sid)
     if async_master:
         _kick_chain_derivation(
@@ -827,16 +897,137 @@ def _propose_chain(
     if master is not None:
         reply += " " + master_mod.summary_line(master)
         reply += " " + master_mod.duration_note(master, total_s)
+        reply += _style_frames_note(frames)
     else:
         reply += (
             f" Deriving the master prompt and its {count}-clip split on {brain_model()} — "
-            "the cards unlock the moment the artifact lands; nothing can roll before it."
+            "the cards unlock the moment the artifact lands; nothing can roll before it. "
+            "Every clip carries the film's Look Bible verbatim, and a clip that cuts to a "
+            "new place opens from a style frame composed in that look (a still, priced "
+            "when the split lands)."
         )
     reply += stills_note
     if stale:
         reply += " Heads up: the rate card is stale — re-verify provider pricing before running."
     reply += _route_notes(provider, text)
     return Proposal(op=ops[0], reply=reply, ops=ops)
+
+
+def _plan_style_frames(sid: str, ops: list[DirectorOp], master: MasterPrompt) -> list[DirectorOp]:
+    """Blueprint 29: every chain link that CUTS to a new place or subject opens
+    from a STYLE FRAME — a still the image lane composes in the film's look,
+    with the look's anchors and the previous link's last frame as references
+    — instead of the previous link's last frame itself, which is something to
+    morph away from. Priced image ops, one per scene change, registered in
+    the session and tied to their link; they roll at the link's submit.
+    Idempotent: a link that already has its frame op keeps it."""
+    from diony_director import artifacts, look as look_mod
+
+    look = master.look
+    if look is None or not look.block():
+        return []
+    lane_provider, lane_model = artifacts.sheet_lane()
+    resolution = "2k" if lane_provider is CloudProvider.GROK else "image"
+    state = _SESSIONS.setdefault(sid, SessionState(id=sid))
+    created: list[DirectorOp] = []
+    for index, op in enumerate(ops):
+        if index == 0 or index >= len(master.clips):
+            continue  # the opener opens the film; it is never a cut
+        clip = master.clips[index]
+        if not clip.get("scene_change"):
+            continue
+        rt = runtime(op.id)
+        if rt.get("style_frame_op") in _OPS:
+            continue
+        est = estimate_mod.estimate_op(
+            provider=lane_provider,
+            model=lane_model,
+            mode=CloudGenerationMode.IMAGE,
+            duration_s=1,
+            resolution=resolution,
+        )
+        frame_op = DirectorOp(
+            id=f"op-{uuid.uuid4().hex[:10]}",
+            session_id=sid,
+            op=DirectorOpType.REIMAGE,
+            provider=lane_provider,
+            model=lane_model,
+            mode=CloudGenerationMode.IMAGE,
+            prompt=look_mod.style_frame_prompt(str(clip.get("opening") or ""), look),
+            prompt_version="v1",
+            duration_s=1,
+            resolution=resolution,
+            artifact_refs={"style_frame": {"for_op": op.id, "clip_index": index}},
+            estimate=est,
+            rationale=(
+                f"style frame · clip {index + 1}/{len(ops)} cuts to a new place — its "
+                "opening frame is composed in the film's look before the clip rolls"
+            ),
+        )
+        _OPS[frame_op.id] = frame_op
+        state.op_ids.append(frame_op.id)
+        rt["style_frame_op"] = frame_op.id
+        if "opens from a style frame" not in op.rationale:
+            op.rationale += " · opens from a style frame (scene change), not the previous clip's last frame"
+        created.append(frame_op)
+    return created
+
+
+def _style_frames_note(frames: list[DirectorOp]) -> str:
+    if not frames:
+        return ""
+    cost = sum(f.estimate.total_usd_micros for f in frames if f.estimate)
+    return (
+        f" {_n(len(frames), 'scene change')} open from a generated style frame "
+        f"({_n(len(frames), 'still')}, about {_usd(cost)}) so every scene is drawn by the same hand."
+    )
+
+
+def style_frame_op_for(op: DirectorOp) -> DirectorOp | None:
+    """The style-frame image op tied to a chain link, when the link cuts."""
+    frame_id = runtime(op.id).get("style_frame_op")
+    return _OPS.get(frame_id) if frame_id else None
+
+
+def chain_scene_change(op: DirectorOp) -> bool:
+    """Whether this chain link opens on a cut (a new place or subject)."""
+    master = _MASTERS.get(op.id)
+    position = chain_position(op.session_id, op.id)
+    if master is None or position is None or position >= len(master.clips):
+        return False
+    return bool(master.clips[position].get("scene_change"))
+
+
+def register_look_anchor(op: DirectorOp, frame_path: str) -> None:
+    """A frame the film established its look with — the chain opener's first
+    frame — joins the look's anchors so every later style frame and plate
+    references it."""
+    master = _MASTERS.get(op.id)
+    if master is None or master.look is None or not frame_path:
+        return
+    if frame_path not in master.look.anchor_assets:
+        master.look.anchor_assets.append(frame_path)
+        persist(op.session_id)
+
+
+def retake_chain_link(op: DirectorOp) -> None:
+    """A chain link that printed but failed its look review rolls again: back
+    to proposed with a clean runtime; the rejected take stays on the ledger
+    as a discarded take. Its style frame (which passed) is kept."""
+    op.status = "proposed"
+    op.job_id = ""
+    rt = runtime(op.id)
+    for stale in (
+        "handle", "clip", "media_generation_id", "result_url", "last_poll_state",
+        "last_progress_ts", "submit_error", "ledger_error", "transient_holds",
+        "narration", "next_op", "advance_error", "advance_failures",
+    ):
+        rt.pop(stale, None)
+    _REVIEWS.pop(op.id, None)
+    _ACCEPTED.discard(op.id)
+    if "retake after a failed look review" not in op.rationale:
+        op.rationale += " · retake after a failed look review"
+    persist(op.session_id)
 
 
 def _kick_chain_derivation(
@@ -878,14 +1069,17 @@ def _kick_chain_derivation(
                         sid,
                         has_start_image=has_start_image if index == 0 else True,
                         narration=op.narration,
+                        look=master.look,
                     )
                     op.prompt_version = "v1"
+            frames = _plan_style_frames(sid, ops, master)
             ops[0].rationale = (
                 ops[0].rationale.split(" · ")[0]
                 + " · "
                 + master_mod.summary_line(master)
                 + " "
                 + master_mod.duration_note(master, sum(plan))
+                + _style_frames_note(frames)
             )
         except Exception as err:  # noqa: BLE001 — a failed derivation is a named state
             for op in ops:
@@ -1698,7 +1892,10 @@ def set_batch_targets(sid: str, op_ids: set[str]) -> set[str]:
     """Target ops for a directed batch; pending bible ops always ride along —
     no hero pixel rolls before its plates and sheets exist."""
     seq = _SEQUENCES.get(sid) or {"bible": [], "scenes": {}}
-    targets = set(op_ids)
+    targets = {
+        op_id for op_id in op_ids
+        if not ((op := _OPS.get(op_id)) is not None and op.artifact_refs.get("style_frame"))
+    }
     for bible_id in seq["bible"]:
         op = _OPS.get(bible_id)
         if op is not None and not _terminal(op):
@@ -1819,10 +2016,19 @@ def _oneshot_broken(sid: str, seq: dict[str, Any], scene_id: str, chain: list[st
     if not scene_id.startswith("oneshot-"):
         return False
     broken_at: int | None = None
+    review_failed = False
     for index, op_id in enumerate(chain):
         op = _OPS.get(op_id)
-        if op is not None and op.status == "failed":
+        if op is None:
+            continue
+        if op.status == "failed":
             broken_at = index
+            break
+        if op.status == "completed" and not usable_take(op):
+            # printed, but its look review failed and nobody accepted it —
+            # every later link would open from a frame the film rejects
+            broken_at = index
+            review_failed = True
             break
     held: set = seq.setdefault("held_scenes", set())
     if broken_at is None:
@@ -1831,17 +2037,20 @@ def _oneshot_broken(sid: str, seq: dict[str, Any], scene_id: str, chain: list[st
     targets = batch_targets(sid)
     if scene_id not in held and any(op_id in targets for op_id in chain[broken_at + 1 :]):
         held.add(scene_id)
-        log_held(
-            sid,
-            [{
-                "op_id": chain[broken_at],
-                "reason": (
-                    f"clip {broken_at + 1} failed — the chain stops there. Retry it, "
-                    "then Run & Assemble All again; every later clip opens from its "
-                    "predecessor's final frame"
-                ),
-            }],
-        )
+        if review_failed:
+            review = _REVIEWS.get(chain[broken_at])
+            why = "; ".join((review.issues if review else [])[:2]) or "see its review"
+            reason = (
+                f"clip {broken_at + 1} printed but failed its look review ({why}) — the "
+                "chain stops there. Retake it, or Accept it, then Run & Assemble All again"
+            )
+        else:
+            reason = (
+                f"clip {broken_at + 1} failed — the chain stops there. Retry it, "
+                "then Run & Assemble All again; every later clip opens from its "
+                "predecessor's final frame"
+            )
+        log_held(sid, [{"op_id": chain[broken_at], "reason": reason}])
     for op_id in chain[broken_at + 1 :]:
         targets.discard(op_id)
     return True
@@ -1896,6 +2105,18 @@ def previous_completed_clip_op(sid: str, op: DirectorOp) -> DirectorOp | None:
 
 _REHYDRATED = False
 _PERSIST_LOCK: Any = None
+# scalar runtime facts that survive a restart (handles and clips are
+# serialized separately); style_frame_op/style_frame tie a chain link to
+# the still it opens from (Blueprint 29)
+_RUNTIME_KEYS = (
+    "media_generation_id",
+    "result_url",
+    "last_poll_state",
+    "last_progress_ts",
+    "submit_error",
+    "style_frame_op",
+    "style_frame",
+)
 
 
 def _persist_lock():
@@ -1971,13 +2192,7 @@ def persist(sid: str) -> None:
                 "media_url": clip.media_url,
                 "metadata": dict(clip.metadata),
             }
-        for key in (
-            "media_generation_id",
-            "result_url",
-            "last_poll_state",
-            "last_progress_ts",
-            "submit_error",
-        ):
+        for key in _RUNTIME_KEYS:
             if rt.get(key) is not None:
                 entry[key] = rt[key]
         if op_id in _MASTERS:
@@ -2088,13 +2303,7 @@ def _load_state(sid: str, doc: dict) -> None:
             clip_doc = dict(entry["clip"])
             clip_doc["path"] = _Path(clip_doc["path"])
             rt["clip"] = provider_base.FetchedClip(**clip_doc)
-        for key in (
-            "media_generation_id",
-            "result_url",
-            "last_poll_state",
-            "last_progress_ts",
-            "submit_error",
-        ):
+        for key in _RUNTIME_KEYS:
             if entry.get(key) is not None:
                 rt[key] = entry[key]
         restored = master_mod.from_doc(entry.get("master"))
