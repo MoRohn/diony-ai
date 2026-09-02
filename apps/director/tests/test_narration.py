@@ -53,6 +53,7 @@ class _Clip:
         class _Packet:
             script_excerpt = [{"speaker": speaker, "line": line, "parenthetical": "low"}]
             voice_ref = "voice-ana"
+            delivery = {"pace": "unhurried"}
 
         self.audio_packet = _Packet()
 
@@ -152,6 +153,57 @@ def test_locks_and_the_site_pin_outrank_casting(monkeypatch) -> None:
     )
     assert fresh.voice_ref == "sal"
     assert fresh.cast_note.startswith("cast for:")
+
+
+def test_direction_becomes_performed_speech_tags(monkeypatch) -> None:
+    monkeypatch.delenv(narration.NARRATOR_TAGS_ENV, raising=False)
+    # a whisper wraps the verbatim words; a beat and a laugh lead them
+    assert (
+        narration.perform_line("It is a secret.", "whispering")
+        == "<whisper>It is a secret.</whisper>"
+    )
+    performed = narration.perform_line("I could not believe it.", "a beat, laughing")
+    assert performed == "[pause] [laugh] I could not believe it."
+    # 'a long pause' wins over the bare 'pause' keyword
+    assert narration.perform_line("Go.", "a long pause").startswith("[long-pause]")
+    # an unmapped direction performs nothing — it already shaped the casting
+    assert narration.perform_line("We drive at dawn.", "cold; urgent") == "We drive at dawn."
+    # the map extends by env without a code change
+    monkeypatch.setenv(narration.NARRATOR_TAGS_ENV, '{"shouting": "[shout]"}')
+    assert narration.perform_line("Now!", "shouting") == "[shout] Now!"
+
+
+def test_the_performed_line_reaches_grok_and_the_words_stay_verbatim(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.delenv(narration.NARRATOR_ENV, raising=False)
+    monkeypatch.delenv(narration.BACKEND_ENV, raising=False)
+    monkeypatch.delenv(narration.NARRATOR_TAGS_ENV, raising=False)
+    monkeypatch.setenv("XAI_API_KEY", "test-xai-key")
+    seen: dict = {}
+
+    class _Response:
+        status_code = 200
+        content = b"RIFFfakewav"
+        text = ""
+        headers = {"content-type": "audio/wav"}
+
+    from diony_director.providers import base as provider_base
+
+    monkeypatch.setattr(
+        provider_base,
+        "post_with_retries",
+        lambda url, *, what, json, headers, timeout: seen.update({"json": json}) or _Response(),
+    )
+    cue = narration.NarrationCue(
+        order=0, clip_id="cl-1", speaker="ANA", line="It is a secret.",
+        direction="whispering", voice_ref="eve",
+    )
+    narration._synthesize_grok(cue, tmp_path / "cue.wav")
+    assert seen["json"]["text"] == "<whisper>It is a secret.</whisper>"
+    assert cue.performed == seen["json"]["text"]
+    assert "It is a secret." in cue.performed, "the authored words ride verbatim"
+    assert cue.line == "It is a secret.", "the line itself is never rewritten"
 
 
 def test_no_backend_is_a_named_state(monkeypatch) -> None:

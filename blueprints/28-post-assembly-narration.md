@@ -92,6 +92,32 @@ and casting reason ship in the QC packet's narration section.
   placeholders. An authored template outranks the key-derived default;
   `DIONY_NARRATOR_BACKEND` forces either.
 
+## Performed direction
+
+The authored parenthetical (plus the audio packet's delivery notes) does two
+jobs: it reads into the **casting**, and on the Grok backend it becomes
+**performed speech tags** — `perform_line()` maps direction keywords onto the
+tags verified in the live docs (`[pause]`, `[long-pause]`, `[laugh]`, `[sigh]`,
+`<whisper>…</whisper>`), inline expressions leading the words in the order the
+direction names them, one wrapping style at most. The authored words ride
+byte-identical inside the tags; subtitles always carry the clean line. An
+unmapped direction performs nothing (it already shaped the cast), and
+`DIONY_NARRATOR_TAGS` extends the map as JSON without a code change. Verified
+live 2026-09-02: a `<whisper>` wrap cut the take's RMS to a third at equal
+length, `[long-pause]` added ~1.3 s of silence — tags act, and are never
+spoken aloud. Each cue's `performed` text ships in the QC packet beside the
+raw line. The CLI backend gets the raw words and a `{direction}` placeholder —
+tag syntax is the Grok contract's, not a universal one.
+
+## Engine-agnostic
+
+Narration runs on the assembled film, so it is identical under every Studio
+engine option — `auto`, `grok`, and `google-flow` — and the full loop is
+proven per engine (`test_narration_lands_on_every_studio_engine`): routing
+honors the choice, every dialect's prompts stay speechless, and the cut gets
+the same cast, mix, deliverables, and picture-lock regardless of who shot the
+clips.
+
 ## Deliverables
 
 - `film.srt` / `film.vtt` cues now cover chained one-shots (from

@@ -78,6 +78,97 @@ DEFAULT_ROSTER: dict[str, list[str]] = {
 _FEMALE_TELLS = re.compile(r"\b(she|her|hers|woman|women|female|girl|mother|sister|queen|actress|lady)\b")
 _MALE_TELLS = re.compile(r"\b(he|him|his|man|men|male|boy|father|brother|king|actor|gentleman)\b")
 
+# Performed direction (Blueprint 28): the authored parenthetical becomes
+# Grok speech tags — [tag] inline before the words, <tag>…</tag> wrapping
+# them — so the delivery is ACTED, not just cast. Only tags confirmed in the
+# live docs are mapped; an unmapped direction still shapes the casting and
+# is otherwise left to the voice. The authored words themselves are never
+# altered — tags ride around them, byte-identical. DIONY_NARRATOR_TAGS
+# extends the map with JSON {"keyword": "[tag]" | "<tag>"} without a code
+# change.
+NARRATOR_TAGS_ENV = "DIONY_NARRATOR_TAGS"
+DIRECTION_TAGS: dict[str, str] = {
+    "whisper": "<whisper>",
+    "whispering": "<whisper>",
+    "whispered": "<whisper>",
+    "hushed": "<whisper>",
+    "under his breath": "<whisper>",
+    "under her breath": "<whisper>",
+    "under their breath": "<whisper>",
+    "sotto voce": "<whisper>",
+    "a beat": "[pause]",
+    "beat": "[pause]",
+    "after a pause": "[pause]",
+    "pausing": "[pause]",
+    "a long pause": "[long-pause]",
+    "laughing": "[laugh]",
+    "with a laugh": "[laugh]",
+    "chuckling": "[laugh]",
+    "sighing": "[sigh]",
+    "with a sigh": "[sigh]",
+    "wearily": "[sigh]",
+}
+
+
+def _direction_tags() -> dict[str, str]:
+    raw = os.environ.get(NARRATOR_TAGS_ENV, "").strip()
+    if not raw:
+        return DIRECTION_TAGS
+    try:
+        extra = {
+            str(k).strip().lower(): str(v).strip()
+            for k, v in json.loads(raw).items()
+            if str(v).strip().startswith(("[", "<"))
+        }
+    except (ValueError, AttributeError) as exc:
+        raise NarrationFailed(
+            f"{NARRATOR_TAGS_ENV} is set but is not a JSON object of "
+            '{"keyword": "[tag]" | "<tag>"} — fix it or unset it'
+        ) from exc
+    return {**DIRECTION_TAGS, **extra}
+
+
+def perform_line(line: str, direction: str) -> str:
+    """The line as the narrator should ACT it: verified Grok speech tags
+    derived from the authored direction, wrapped around the verbatim words.
+
+    One wrapping style at most (the first the direction names) and each
+    inline expression once, leading the words — 'a beat, laughing' becomes
+    '[pause] [laugh] <words>'. A direction with no mapped tag performs
+    nothing here; it already shaped the casting."""
+    text = line.strip()
+    lowered = f" {direction.strip().lower()} "
+    if not text or not lowered.strip():
+        return text
+    tags = _direction_tags()
+    placed: list[tuple[int, str]] = []
+    claimed: list[tuple[int, int]] = []
+    wrap = ""
+    # longest keyword first, so 'a long pause' claims its span before 'pause'
+    for keyword in sorted(tags, key=len, reverse=True):
+        at = lowered.find(f" {keyword}")
+        if at < 0:
+            at = lowered.find(f"{keyword} ") if lowered.startswith(f"{keyword} ") else -1
+        if at < 0:
+            continue
+        span = (at, at + len(keyword) + 1)
+        if any(span[0] < end and start < span[1] for start, end in claimed):
+            continue
+        claimed.append(span)
+        tag = tags[keyword]
+        if tag.startswith("<"):
+            wrap = wrap or tag
+        elif tag not in (t for _, t in placed):
+            placed.append((at, tag))
+    # expressions lead the words in the order the direction names them
+    inline = [tag for _, tag in sorted(placed)]
+    if wrap:
+        name = wrap.strip("<>")
+        text = f"{wrap}{text}</{name}>"
+    if inline:
+        text = " ".join(inline[:2]) + " " + text
+    return text
+
 CUE_LEAD_IN_S = 0.15  # a cue lands just after its clip's cut, never on it
 # Voice sits above the -18 LUFS clip bed; the duck keeps the location track
 # out of its way (same sidechain values the Producer program mix earned).
@@ -105,6 +196,9 @@ class NarrationCue:
     direction: str = ""
     voice_ref: str = ""
     cast_note: str = ""
+    # the line as actually performed — the verbatim words plus any speech
+    # tags the direction mapped to; set at synthesis, audited in the report
+    performed: str = ""
     start_s: float = 0.0
     window_s: float = 0.0
 
@@ -262,7 +356,14 @@ def cue_sheet(entries: list[dict]) -> list[NarrationCue]:
             excerpt = clip.audio_packet.script_excerpt[0]
             line = str(excerpt.get("line", "")).strip()
             speaker = str(excerpt.get("speaker", ""))
-            direction = str(excerpt.get("parenthetical", ""))
+            # the parenthetical plus the packet's delivery notes — both feed
+            # the casting AND the performed speech tags
+            delivery = "; ".join(
+                f"{k}: {v}" for k, v in clip.audio_packet.delivery.items()
+            )
+            direction = "; ".join(
+                x for x in (str(excerpt.get("parenthetical", "")), delivery) if x
+            )
             voice_ref = str(clip.audio_packet.voice_ref or "")
         elif getattr(op, "narration", ""):
             line = str(op.narration).strip()
@@ -314,6 +415,9 @@ def _narrator_command(cue: NarrationCue, output: Path) -> list[str]:
 
 
 def _synthesize_cli(cue: NarrationCue, output: Path) -> None:
+    # a CLI narrator gets the raw words and the direction placeholder — tag
+    # syntax is the Grok contract's, not a universal one
+    cue.performed = cue.line
     command = _narrator_command(cue, output)
     result = subprocess.run(command, capture_output=True, timeout=600)
     if result.returncode != 0 or not output.is_file():
@@ -336,8 +440,9 @@ def _synthesize_grok(cue: NarrationCue, output: Path) -> None:
     if not grok.configured():
         raise NarrationUnavailable(UNCONFIGURED)
     path = os.environ.get(GROK_VOICE_PATH_ENV, GROK_VOICE_PATH_DEFAULT)
+    cue.performed = perform_line(cue.line, cue.direction)
     payload = {
-        "text": cue.line,
+        "text": cue.performed,
         "voice_id": (cue.voice_ref or os.environ.get(GROK_VOICE_ENV, GROK_VOICE_DEFAULT)).lower(),
         "language": os.environ.get(GROK_VOICE_LANGUAGE_ENV, GROK_VOICE_LANGUAGE_DEFAULT),
         # WAV at the mix's native 48 kHz — no lossy hop before the film mix
@@ -487,6 +592,8 @@ def narrate(
                 "clip_id": cue.clip_id,
                 "speaker": cue.speaker,
                 "line": cue.line,
+                "direction": cue.direction,
+                "performed": cue.performed or cue.line,
                 "voice": cue.voice_ref,
                 "cast": cue.cast_note,
                 "start_s": cue.start_s,

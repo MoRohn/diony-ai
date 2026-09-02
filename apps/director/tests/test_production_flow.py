@@ -514,3 +514,47 @@ def test_locked_estimate_covers_clips_bible_and_allowance(monkeypatch, tmp_path)
     assert "Locked estimate" in reply
     assert "Session total becomes" not in reply  # redundant at zero session spend
     assert "clip(s)" not in reply  # real plurals, never the lazy (s)
+
+
+@pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
+@pytest.mark.parametrize("engine", ["auto", "grok", "google-flow"])
+def test_narration_lands_on_every_studio_engine(
+    engine, monkeypatch, tmp_path, fake_narrator
+) -> None:
+    """Blueprint 28 is engine-agnostic: whichever Studio option shot the
+    clips — Grok, Google Flow, or the auto mix — the assembled cut gets the
+    same post-recorded narration: cues placed, mixed, and audited, with the
+    mute picture-lock kept beside the narrated master."""
+    import json
+
+    from diony_contracts.cluster import cluster_root, write_engine_choice
+
+    client = _client()
+    _fake_adapters(monkeypatch, tmp_path)
+    write_engine_choice(engine)
+    sid = _start(client)
+    client.post(
+        f"/api/director/sessions/{sid}/produce",
+        json={"idea": "a getaway driver decides to leave town from a neon diner"},
+    )
+    locked = client.post(f"/api/director/sessions/{sid}/lock_script").json()
+    providers = {op["provider"] for op in locked["ops"]}
+    if engine in {"grok", "google-flow"}:
+        assert providers == {engine}, f"{engine} choice must route every clip there"
+    # every route's dialogue prompt carries the mute-location doctrine —
+    # the words themselves never ride any engine's prompt
+    assert any("no voice-over" in op["prompt"] for op in locked["ops"])
+
+    client.post(f"/api/director/sessions/{sid}/run_batch", json={})
+    _drive(client, sid)
+    film = client.post(f"/api/director/sessions/{sid}/assemble", json={}).json()
+    assert film["narration"]["cue_count"] >= 1, film.get("narration")
+    assert film["narration"]["overruns"] == []
+    assert "film.srt" in film["deliverables"]
+
+    root = cluster_root() / "director" / sid
+    assert (root / "film.mp4").is_file()
+    assert (root / "picture-lock.mp4").is_file(), "the mute cut survives re-narration"
+    qc = json.loads((root / "qc-packet.json").read_text())
+    assert qc["narration"]["recorded"] is True
+    assert all(c["voice"] for c in qc["narration"]["cues"]), "every cue was cast"
