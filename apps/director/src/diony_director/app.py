@@ -723,9 +723,13 @@ def _submit_ready(sid: str) -> tuple[list[str], list[dict]]:
                 continue
             held.append({"op_id": op.id, "reason": str(err.detail)})
             op.status = "failed"
+            # the reason must survive the drained held list: the card's
+            # "failed" state reads it back long after the chat scrolled
+            session.runtime(op.id)["submit_error"] = str(err.detail)
         except Exception as err:  # noqa: BLE001 - one bad op never blocks the wave
             held.append({"op_id": op.id, "reason": f"{type(err).__name__}: {err}"})
             op.status = "failed"
+            session.runtime(op.id)["submit_error"] = f"{type(err).__name__}: {err}"
     if submitted or held:
         session.persist(sid)
     return submitted, held
@@ -900,8 +904,26 @@ def retry_op(op_id: str) -> dict:
     op.status = "proposed"
     op.job_id = ""
     rt = session.runtime(op.id)
-    for stale in ("handle", "ledger_error", "transient_holds"):
+    for stale in ("handle", "ledger_error", "transient_holds", "submit_error"):
         rt.pop(stale, None)
+    # A retry must be able to succeed: riders the routed model refuses beside
+    # a start/end frame are dropped here, loudly — the opening frame wins.
+    # (Un-strands ops proposed before the frames-exclusive rule reached the
+    # proposal path; new proposals never carry the combination.)
+    refs = op.artifact_refs or {}
+    if refs.get("start_image") or refs.get("end_image"):
+        caps = capabilities.caps_for(op.provider.value if op.provider else "", op.model)
+        if caps is not None and caps.frames_exclusive_with_refs:
+            dropped = [
+                key
+                for key in ("references", "characters", "voices", "grok_voices")
+                if refs.pop(key, None)
+            ]
+            if dropped:
+                op.rationale += (
+                    f" · retry dropped {', '.join(dropped)}: {op.model} takes an "
+                    "opening frame or identity refs, never both"
+                )
     session.add_batch_target(op.session_id, op.id)
     session.persist(op.session_id)
     _kick_submitter(op.session_id)
@@ -1022,6 +1044,8 @@ def _advance_op(op: DirectorOp, *, allow_spend: bool = False) -> dict:
         "review": review.model_dump(mode="json") if review else None,
         "next_op": rt.get("next_op"),
         "narration": rt.get("narration", ""),
+        # why a submit-side failure failed — there is no provider job to ask
+        "submit_error": rt.get("submit_error", ""),
         # Blueprint 27: a one-shot's pre-split finalized artifact, once derived
         "master": (
             session.master_for_op(op.id).model_dump(mode="json")

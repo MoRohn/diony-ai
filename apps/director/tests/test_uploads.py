@@ -78,13 +78,18 @@ def test_delete_upload_removes_the_still() -> None:
 
 
 def test_one_shot_proposal_opens_on_the_uploaded_still() -> None:
+    """The first still opens the frame; extras never ride the op as identity
+    refs — every routed lane is frames-exclusive, and an op proposed with
+    both could never submit (the 2026-09-02 clip-1 refusal). Extras still
+    shape the master derivation, and the reply says exactly that."""
     sid = session.create_session()
     first = _upload(sid, "opener.png")
-    second = _upload(sid, "mood.jpg", JPG)
+    _upload(sid, "mood.jpg", JPG)
     proposal = session.propose(sid, "a lighthouse at dawn", duration_s=6)
     assert proposal.op.artifact_refs["start_image"] == first["path"]
-    assert second["path"] in proposal.op.artifact_refs["references"]
-    assert "uploaded still" in proposal.reply
+    assert "references" not in proposal.op.artifact_refs
+    assert "first still opens the frame" in proposal.reply
+    assert "never both" in proposal.reply
 
 
 def test_proposal_without_uploads_carries_no_start_image() -> None:

@@ -158,10 +158,11 @@ def test_a_short_one_shot_stays_a_single_clip() -> None:
     assert proposal.op.duration_s == 8
 
 
-def test_a_batch_holds_a_chain_link_whose_predecessor_failed() -> None:
-    """run_batch reaches links through ready_ops, where a FAILED predecessor
-    is terminal and unblocks its successor — the /run guard never ran, and
-    link 2 rolled T2V from nothing. The batch now holds it, still proposed."""
+def test_a_failed_link_stops_the_chain_once_and_loudly() -> None:
+    """A failed link BREAKS the chain at that point: later links leave the
+    batch (they could only open from the missing frame), the hold is logged
+    exactly once against the FAILED link — not once per wave per successor,
+    the 12-bubble spam of 2026-09-02 — and a retry re-arms the chain."""
     from diony_director import app as director_app
 
     sid = _sid()
@@ -171,7 +172,19 @@ def test_a_batch_holds_a_chain_link_whose_predecessor_failed() -> None:
     session.set_batch_targets(sid, {second.id})
     submitted, held = director_app._submit_ready(sid)
     assert submitted == []
-    assert [h["op_id"] for h in held] == [second.id]
-    assert "chained one-shot" in held[0]["reason"]
+    assert held == []  # never offered to the submitter at all
+    drained = session.drain_held(sid)
+    assert [h["op_id"] for h in drained] == [first.id]
+    assert "clip 1 failed" in drained[0]["reason"]
+    assert "Retry" in drained[0]["reason"]
     assert second.status == "proposed"
     assert second.id not in session.batch_targets(sid)
+    # the hold logs once — a second wave stays quiet
+    session.set_batch_targets(sid, {second.id})
+    director_app._submit_ready(sid)
+    assert session.drain_held(sid) == []
+    # retrying the broken link re-arms the chain: link 1 is offered again
+    first.status = "proposed"
+    session.set_batch_targets(sid, {first.id, second.id})
+    ready = [op.id for op in session.ready_ops(sid)]
+    assert ready == [first.id]

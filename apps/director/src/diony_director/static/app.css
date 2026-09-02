@@ -183,6 +183,15 @@ body {
   border-left: 2px solid var(--line-hi);
   border-radius: 0 var(--r-md) var(--r-md) 0;
 }
+/* A hold or failure the user must act on — visibly not a normal Director line. */
+.msg.warn {
+  border-color: rgba(232, 180, 90, .45);
+  border-left: 3px solid var(--warn);
+  background: rgba(232, 180, 90, .07);
+}
+.msg.warn .who { color: var(--warn); }
+.msg.warn .who::before { background: var(--warn); }
+.msg.warn .body { color: var(--warn); }
 .msg .body { white-space: pre-line; }
 .msg .body a { color: var(--accent-ink); text-decoration-color: rgba(255,122,47,.5); }
 .msg .body a:hover { color: var(--accent); }

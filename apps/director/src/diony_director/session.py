@@ -560,6 +560,35 @@ def _route_notes(provider: CloudProvider, text: str) -> str:
     return notes
 
 
+def _attach_stills(op: DirectorOp, start: str, extras: list[str], opens: str) -> str:
+    """Attach the session's stills legally. The first still opens the frame;
+    extras ride as identity refs ONLY on a model that accepts refs alongside a
+    frame — on every current lane frames and identity refs are exclusive, and
+    an op proposed with both could never submit (the legality gate refuses it
+    after the money was already promised in the reply). Returns the reply
+    fragment that says exactly what rode along."""
+    from diony_director import capabilities
+
+    if not start:
+        return ""
+    op.artifact_refs["start_image"] = start
+    if not extras:
+        return f" Your uploaded still opens {opens}."
+    caps = capabilities.caps_for(op.provider.value if op.provider else "", op.model)
+    if caps is not None and not caps.frames_exclusive_with_refs:
+        op.artifact_refs["references"] = extras[:3]
+        return f" Your {1 + len(extras)} uploaded stills ride along — the first opens {opens}."
+    return (
+        f" Your first still opens {opens}; the other "
+        f"{plural_stills(len(extras))} shaped the master derivation but can't ride the "
+        f"shot — {op.model} takes an opening frame or identity refs, never both."
+    )
+
+
+def plural_stills(count: int) -> str:
+    return "still" if count == 1 else f"{count} stills"
+
+
 def propose(
     sid: str,
     text: str,
@@ -629,10 +658,7 @@ def propose(
         if chosen_provider is CloudProvider.GROK
         else "single-shot draft on the requested Flow lane",
     )
-    if start:
-        op.artifact_refs["start_image"] = start
-        if extras:
-            op.artifact_refs["references"] = extras[:3]
+    stills_note = _attach_stills(op, start, list(extras), "the frame")
     if master is not None:
         _MASTERS[op.id] = master
         op.rationale += " · " + master_mod.duration_note(
@@ -663,13 +689,7 @@ def propose(
             f" Deriving the master prompt on {brain_model()} — the card unlocks the "
             "moment the artifact lands; nothing can roll before it."
         )
-    if start:
-        count = 1 + len(extras)
-        reply += (
-            " Your uploaded still opens the frame."
-            if count == 1
-            else f" Your {count} uploaded stills ride along — the first opens the frame."
-        )
+    reply += stills_note
     if est.rate_cards_stale:
         reply += " Heads up: the rate card is stale — re-verify provider pricing before running."
     reply += _route_notes(chosen_provider, text)
@@ -711,6 +731,7 @@ def _propose_chain(
     ops: list[DirectorOp] = []
     total_cost = 0
     stale = False
+    stills_note = ""
     for index, clip_s in enumerate(plan):
         est = estimate_mod.estimate_op(
             provider=provider,
@@ -752,9 +773,7 @@ def _propose_chain(
             ),
         )
         if first and start:
-            op.artifact_refs["start_image"] = start
-            if extras:
-                op.artifact_refs["references"] = extras[:3]
+            stills_note = _attach_stills(op, start, list(extras), "clip 1")
         _OPS[op.id] = op
         if master is not None:
             _MASTERS[op.id] = master
@@ -794,13 +813,7 @@ def _propose_chain(
             f" Deriving the master prompt and its {count}-clip split on {brain_model()} — "
             "the cards unlock the moment the artifact lands; nothing can roll before it."
         )
-    if start:
-        upload_count = 1 + len(extras)
-        reply += (
-            " Your uploaded still opens clip 1."
-            if upload_count == 1
-            else f" Your {upload_count} uploaded stills ride along — the first opens clip 1."
-        )
+    reply += stills_note
     if stale:
         reply += " Heads up: the rate card is stale — re-verify provider pricing before running."
     reply += _route_notes(provider, text)
@@ -1705,6 +1718,8 @@ def ready_ops(sid: str) -> list[DirectorOp]:
     for scene_id, chain in seq["scenes"].items():
         if _plate_failed(sid, seq, scene_id, chain):
             continue
+        if _oneshot_broken(sid, seq, scene_id, chain):
+            continue
         blocked = False
         for op_id in chain:
             op = _OPS.get(op_id)
@@ -1747,6 +1762,44 @@ def _plate_failed(sid: str, seq: dict[str, Any], scene_id: str, chain: list[str]
             }],
         )
     for op_id in chain:
+        targets.discard(op_id)
+    return True
+
+
+def _oneshot_broken(sid: str, seq: dict[str, Any], scene_id: str, chain: list[str]) -> bool:
+    """A chained one-shot with a failed link stops AT the break. Every later
+    link can only open from the failed link's missing frame, so offering them
+    to the submitter cascaded into one chain-order hold per wave (the 12-held
+    spam of 2026-09-02) and drained the batch into a premature assembly. The
+    later links leave the batch loudly, ONCE; retrying the failed link
+    re-arms the chain."""
+    if not scene_id.startswith("oneshot-"):
+        return False
+    broken_at: int | None = None
+    for index, op_id in enumerate(chain):
+        op = _OPS.get(op_id)
+        if op is not None and op.status == "failed":
+            broken_at = index
+            break
+    held: set = seq.setdefault("held_scenes", set())
+    if broken_at is None:
+        held.discard(scene_id)  # the failed link was retried — the chain is re-armed
+        return False
+    targets = batch_targets(sid)
+    if scene_id not in held and any(op_id in targets for op_id in chain[broken_at + 1 :]):
+        held.add(scene_id)
+        log_held(
+            sid,
+            [{
+                "op_id": chain[broken_at],
+                "reason": (
+                    f"clip {broken_at + 1} failed — the chain stops there. Retry it, "
+                    "then Run & Assemble All again; every later clip opens from its "
+                    "predecessor's final frame"
+                ),
+            }],
+        )
+    for op_id in chain[broken_at + 1 :]:
         targets.discard(op_id)
     return True
 
@@ -1875,7 +1928,13 @@ def persist(sid: str) -> None:
                 "media_url": clip.media_url,
                 "metadata": dict(clip.metadata),
             }
-        for key in ("media_generation_id", "result_url", "last_poll_state", "last_progress_ts"):
+        for key in (
+            "media_generation_id",
+            "result_url",
+            "last_poll_state",
+            "last_progress_ts",
+            "submit_error",
+        ):
             if rt.get(key) is not None:
                 entry[key] = rt[key]
         if op_id in _MASTERS:
@@ -1986,7 +2045,13 @@ def _load_state(sid: str, doc: dict) -> None:
             clip_doc = dict(entry["clip"])
             clip_doc["path"] = _Path(clip_doc["path"])
             rt["clip"] = provider_base.FetchedClip(**clip_doc)
-        for key in ("media_generation_id", "result_url", "last_poll_state", "last_progress_ts"):
+        for key in (
+            "media_generation_id",
+            "result_url",
+            "last_poll_state",
+            "last_progress_ts",
+            "submit_error",
+        ):
             if entry.get(key) is not None:
                 rt[key] = entry[key]
         restored = master_mod.from_doc(entry.get("master"))

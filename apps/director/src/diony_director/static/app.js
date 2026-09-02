@@ -120,14 +120,37 @@
     return body;
   }
 
-  function addMsg(who, text) {
+  function addMsg(who, text, kind) {
     const li = document.createElement("li");
     li.className = `msg ${who}`;
+    if (kind) li.classList.add(kind);
     li.innerHTML = `<div class="who">${who === "director" ? "Director" : "You"}</div><div class="body"></div>`;
     li.querySelector(".body").textContent = text;
     thread.appendChild(li);
     li.scrollIntoView({ block: "end" });
     return li;
+  }
+
+  // Hold/failure reasons get one loud bubble, not a wall: an identical
+  // reason repeating (the same hold across waves) bumps a counter on the
+  // bubble it already has instead of burying the room in duplicates.
+  let lastHeld = { text: "", el: null, n: 0 };
+  function addHeldMsg(reason) {
+    if (lastHeld.el && lastHeld.text === reason && lastHeld.el.isConnected) {
+      lastHeld.n += 1;
+      lastHeld.el.querySelector(".body").textContent = `Held: ${reason} (×${lastHeld.n})`;
+      lastHeld.el.scrollIntoView({ block: "end" });
+      return lastHeld.el;
+    }
+    const li = addMsg("director", `Held: ${reason}`, "warn");
+    lastHeld = { text: reason, el: li, n: 1 };
+    return li;
+  }
+
+  function failedText(body) {
+    // a submit-side failure has no provider job — its reason lives on the op
+    const fromJob = body.job && body.job.error_message;
+    return `failed — ${fromJob || body.submit_error || "see the room for the hold reason"}`;
   }
 
   function estimateTable(est) {
@@ -352,7 +375,7 @@
           return;
         }
         if (status === "failed") {
-          state.textContent = `failed — ${body.job ? body.job.error_message : ""}`;
+          state.textContent = failedText(body);
           state.className = "state failed";
           attachRetry(card, opId, state);
           refreshMeter();
@@ -812,7 +835,7 @@
         return;
       }
       if (st === "failed") {
-        state.textContent = `failed — ${body.job ? body.job.error_message || "" : ""}`;
+        state.textContent = failedText(body);
         state.className = "state failed";
         attachRetry(card, opId, state);
         refreshMeter();
@@ -843,7 +866,7 @@
             card.appendChild(video);
           } else {
             // set the text BEFORE the verdict chip lands — textContent wipes children
-            state.textContent = `failed — ${body.job ? body.job.error_message || "" : ""}`;
+            state.textContent = failedText(body);
             state.className = "state failed";
             attachRetry(card, op.id, state);
           }
@@ -935,6 +958,7 @@
       link.title = "The Gallery in Producer — watch, download, or stitch the film";
       wrap.querySelector(".body").appendChild(link);
       refreshBoard();
+      return true;
     } catch (err) {
       const text = String(err.message || err);
       const note = addMsg("director", `Assembly isn't ready: ${text}`);
@@ -955,7 +979,7 @@
             const res = await api(`/api/director/sessions/${sessionId}/run_retakes`, {
               method: "POST",
             });
-            (res.held || []).forEach((h) => addMsg("director", `Held: ${h.reason}`));
+            (res.held || []).forEach((h) => addHeldMsg(h.reason));
             if (!res.targeted.length) {
               addMsg(
                 "director",
@@ -981,7 +1005,7 @@
                 anyway.disabled = false;
                 return;
               }
-              (counts.held || []).forEach((h) => addMsg("director", `Held: ${h.reason}`));
+              (counts.held || []).forEach((h) => addHeldMsg(h.reason));
               if (counts.pending > 0 || (counts.queued || 0) > 0 || counts.submitting) {
                 setTimeout(tick, 3000);
                 return;
@@ -1005,6 +1029,7 @@
         body.appendChild(retry);
         body.appendChild(anyway);
       }
+      return false;
     }
   }
 
@@ -1118,7 +1143,7 @@
         const stalled = (counts.stalled || []).length;
         // Hold reasons are drained exactly once — a budget hold or a held
         // scene must reach the room, not vanish into an unread field.
-        (counts.held || []).forEach((h) => addMsg("director", `Held: ${h.reason}`));
+        (counts.held || []).forEach((h) => addHeldMsg(h.reason));
         progress.textContent =
           `${counts.completed} done · ${counts.failed} failed · ${counts.pending} generating` +
           (queued ? ` · ${queued} queued (chained)` : "") +
@@ -1145,7 +1170,7 @@
                 c.card.appendChild(video);
               }
             } else if (body.op.status === "failed") {
-              c.state.textContent = `failed — ${body.job ? body.job.error_message : ""}`;
+              c.state.textContent = failedText(body);
               c.state.className = "state failed";
               attachRetry(c.card, id, c.state);
               if (body.narration) addMsg("director", body.narration);
@@ -1154,8 +1179,11 @@
           } catch (err) { /* card stays coarse; the film still cuts */ }
         }
         progress.textContent += " — assembling…";
-        await assembleNow();
-        progress.textContent = progress.textContent.replace(" — assembling…", " — film delivered");
+        const delivered = await assembleNow();
+        progress.textContent = progress.textContent.replace(
+          " — assembling…",
+          delivered ? " — film delivered" : " — assembly is holding (see the room)"
+        );
         allBtn.disabled = false; refreshBatchLabels();
       };
       setTimeout(tick, 2500);
@@ -1246,7 +1274,7 @@
           if (c.btn) c.btn.disabled = true;
         }
       });
-      (batch.held || []).forEach((h) => addMsg("director", `Held: ${h.reason}`));
+      (batch.held || []).forEach((h) => addHeldMsg(h.reason));
       const tick = async () => {
         let counts;
         try {
@@ -1256,7 +1284,7 @@
           allBtn.disabled = false;
           return;
         }
-        (counts.held || []).forEach((h) => addMsg("director", `Held: ${h.reason}`));
+        (counts.held || []).forEach((h) => addHeldMsg(h.reason));
         const queued = counts.queued || 0;
         progress.textContent =
           `${counts.completed} done · ${counts.failed} failed · ${counts.pending} generating` +
@@ -1282,16 +1310,32 @@
                 c.card.appendChild(video);
               }
             } else if (body.op.status === "failed") {
-              c.state.textContent = `failed — ${body.job ? body.job.error_message || "" : ""}`;
+              c.state.textContent = failedText(body);
               c.state.className = "state failed";
               attachRetry(c.card, op.id, c.state);
             }
             attachVerdict(c.card, c.state, body.review, op.id);
           } catch (err) { /* card stays coarse; the film still cuts */ }
         }
+        if (counts.failed > 0) {
+          // a chain with a hole is not a film — never auto-cut over it
+          progress.textContent += " — chain stopped";
+          addMsg(
+            "director",
+            `${plural(counts.failed, "clip")} failed — hit ↻ Retry on the failed card ` +
+              "(its reason is printed there), then Run & Assemble All again. " +
+              "Printed clips are never re-spent; the chain resumes from the break.",
+            "warn"
+          );
+          allBtn.disabled = false;
+          return;
+        }
         progress.textContent += " — assembling…";
-        await assembleNow();
-        progress.textContent = progress.textContent.replace(" — assembling…", " — film delivered");
+        const delivered = await assembleNow();
+        progress.textContent = progress.textContent.replace(
+          " — assembling…",
+          delivered ? " — film delivered" : " — assembly is holding (see the room)"
+        );
         allBtn.disabled = false;
       };
       setTimeout(tick, 2500);
