@@ -255,6 +255,9 @@ def test_drafting_is_async_when_the_brain_is_configured(monkeypatch) -> None:
         return real_template(idea, runtime_target_s, cast_size)
 
     monkeypatch.setattr(session_mod.screenwriter, "write_script", slow_write)
+    from master_brain_fakes import fast_master_derive
+
+    monkeypatch.setattr(session_mod.master_mod, "derive", fast_master_derive)
 
     body = client.post(
         f"/api/director/sessions/{sid}/produce",
@@ -291,6 +294,9 @@ def test_a_failed_draft_is_a_named_state(monkeypatch) -> None:
         raise RuntimeError("brain melted")
 
     monkeypatch.setattr(session_mod.screenwriter, "write_script", boom)
+    from master_brain_fakes import fast_master_derive
+
+    monkeypatch.setattr(session_mod.master_mod, "derive", fast_master_derive)
     client.post(
         f"/api/director/sessions/{sid}/produce",
         json={"idea": "doomed", "runtime_s": 60},

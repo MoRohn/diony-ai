@@ -55,7 +55,7 @@ diony-finish      # :8020  (cluster FINISH; needs /models/diony/diony_sr_v1)
 diony-producer    # http://producer.diony.local (binds :8788)
 ```
 
-Tests (when present): `python -m pytest packages/contracts apps/wizard apps/wan apps/finish apps/producer apps/conductor apps/desk`. The root `conftest.py` blocks every non-loopback socket for the whole session (`DIONY_ALLOW_NETWORK=1` only for an explicitly live run).
+Tests (when present): `python -m pytest packages/contracts apps/wizard apps/wan apps/finish apps/producer apps/director apps/desk` (`apps/conductor` was deleted in the Director pivot). The root `conftest.py` blocks every non-loopback socket for the whole session (`DIONY_ALLOW_NETWORK=1` only for an explicitly live run).
 
 Laptop pytest does **not** download weights or mutate RoCE fabric. On a signed Dual-Spark, Studio App pulls the pack. Produce farms Wan2.2 720p negatives. Picture lock writes the 1080 program master.
 

@@ -178,6 +178,68 @@ class ContinuityLock(BaseModel):
     prev_frame_ptr: dict[str, Any] = Field(default_factory=dict)
 
 
+MASTER_BEAT_STAGES = (
+    "initial_state",
+    "first_change",
+    "development",
+    "escalation",
+    "payoff",
+    "final_state",
+)
+
+
+class MasterPrompt(BaseModel):
+    """Blueprint 27: the pre-split finalized artifact.
+
+    The Idea-to-Prompt derivation of one creative brief — WHO, WHAT, WHERE,
+    how the scene is layered, how the action develops, how the subject
+    performs, how the environment responds, how the camera observes, how the
+    scene is lit, what must stay consistent, what must be prevented, and
+    exactly how the clip ends — plus the generator-ready ``prompt`` those
+    derivations assemble into. A one-shot ships it as the prompt body; a
+    scripted production writes its screenplay FROM it and every split clip
+    inherits its lighting, physics, anchors, constraints, and ending.
+    """
+
+    schema_version: int = 1
+    idea: str
+    # The user's duration input drives the derivation: beats scale to it,
+    # the final prompt paces to it, and the estimate books it. The
+    # derivation reports back how long the action it wrote actually plays.
+    target_duration_s: int = Field(gt=0)
+    estimated_duration_s: int = Field(default=0, ge=0)
+    reference_image: bool = False
+    visual_style: str = ""
+    primary_subject: str = ""
+    primary_action: str = ""
+    setting: str = ""
+    beats: list[dict[str, str]] = Field(default_factory=list)  # {stage, text}
+    scene_depth: dict[str, str] = Field(default_factory=dict)  # background/middle_ground/foreground
+    spatial: str = ""
+    camera: str = ""
+    performance: str = ""
+    micro_expressions: str = ""
+    physics: str = ""
+    body_mechanics: str = ""
+    lighting: dict[str, str] = Field(default_factory=dict)  # source/quality/shadows/secondary
+    mood: str = ""
+    continuity_anchors: list[str] = Field(default_factory=list)
+    ending: str = ""
+    constraints: list[str] = Field(default_factory=list)
+    prompt: str
+    word_count: int = Field(default=0, ge=0)
+    source: Literal["brain", "template"] = "template"
+    warnings: list[str] = Field(default_factory=list)
+    brain_usage: dict[str, int] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=_utc_now)
+
+    def beat(self, stage: str) -> str:
+        for entry in self.beats:
+            if entry.get("stage") == stage:
+                return entry.get("text", "")
+        return ""
+
+
 class PromptVersion(BaseModel):
     version: str
     prompt: str
@@ -263,6 +325,8 @@ class ProductionPackage(BaseModel):
     clips: list[ClipUnit] = Field(default_factory=list)
     estimate: CostEstimate | None = None
     revision_allowance_bp: int = Field(default=4000, ge=0, le=10000)
+    # The pre-split finalized artifact this package was written from (Blueprint 27).
+    master_prompt: MasterPrompt | None = None
     created_at: datetime = Field(default_factory=_utc_now)
 
     @model_validator(mode="after")

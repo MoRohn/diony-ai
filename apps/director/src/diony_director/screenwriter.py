@@ -18,6 +18,7 @@ import httpx
 
 from diony_contracts.production import (
     CharacterProfile,
+    MasterPrompt,
     Scene,
     Script,
     ScriptLine,
@@ -55,6 +56,8 @@ class ScreenplayDraft:
     settings: list[SettingProfile]
     warnings: list[str] = field(default_factory=list)
     brain_usage: dict = field(default_factory=dict)  # token spend, surfaced honestly
+    # Blueprint 27: the pre-split finalized artifact this screenplay realizes
+    master: MasterPrompt | None = None
 
 
 XAI_BRAIN_BASE = "https://api.x.ai"
@@ -227,8 +230,54 @@ def _image_part(path: str) -> dict:
     }
 
 
+def master_brief(master: MasterPrompt | None) -> str:
+    """The master prompt as the screenplay's creative law (Blueprint 27).
+
+    The artifact already settled WHO, WHAT, WHERE, the camera philosophy, the
+    lighting system, the continuity anchors, the constraints, and the ending.
+    The screenplay REALIZES it across scenes and shots — it never
+    reinterprets it, and its last scene lands the ending exactly."""
+    if master is None:
+        return ""
+    beats = " → ".join(
+        f"{b.get('stage', '').replace('_', ' ')}: {b.get('text', '')}" for b in master.beats
+    )
+    light = master.lighting
+    lighting = ", ".join(x for x in (light.get("source"), light.get("quality"), light.get("shadows")) if x)
+    parts = [
+        "MASTER PROMPT — the pre-split finalized artifact this screenplay REALIZES. "
+        "Its subject, setting, camera philosophy, lighting system, continuity "
+        "anchors, constraints, and ending are already established: preserve them, "
+        "do not reinterpret them. Scenes follow the beats in order; the final scene "
+        "lands the ending exactly.",
+        f"Generator-ready prompt: {master.prompt}",
+    ]
+    if master.primary_subject:
+        parts.append(f"Subject: {master.primary_subject}.")
+    if master.setting:
+        parts.append(f"Setting: {master.setting}.")
+    if beats:
+        parts.append(f"Beats: {beats}.")
+    if master.camera:
+        parts.append(f"Camera philosophy: {master.camera}.")
+    if lighting:
+        parts.append(f"Lighting system: {lighting}.")
+    if master.mood:
+        parts.append(f"Mood: {master.mood}.")
+    if master.continuity_anchors:
+        parts.append("Continuity anchors: " + "; ".join(master.continuity_anchors) + ".")
+    if master.constraints:
+        parts.append("Constraints: " + "; ".join(master.constraints) + ".")
+    if master.ending:
+        parts.append(f"Ending: {master.ending}.")
+    return "\n".join(parts)
+
+
 def _from_brain(
-    idea: str, runtime_target_s: int, reference_images: list[str] | None = None
+    idea: str,
+    runtime_target_s: int,
+    reference_images: list[str] | None = None,
+    master: MasterPrompt | None = None,
 ) -> ScreenplayDraft:
     scene_target = max(2, round((runtime_target_s - 18) / 16))
     user_text = (
@@ -239,6 +288,9 @@ def _from_brain(
         "action; not every scene needs dialogue. Vary settings, escalate "
         "stakes, and author every shot."
     )
+    brief = master_brief(master)
+    if brief:
+        user_text += "\n\n" + brief
     refs = [r for r in (reference_images or []) if r]
     if refs:
         # The brain SEES the user's reference stills — wardrobe, faces, and
@@ -438,6 +490,7 @@ def _from_brain(
         characters=characters,
         settings=settings,
         warnings=warnings,
+        master=master,
         brain_usage={
             "prompt_tokens": int(usage.get("prompt_tokens") or 0),
             "completion_tokens": int(usage.get("completion_tokens") or 0),
@@ -454,20 +507,28 @@ def _snip(idea: str, cap: int) -> str:
     return text[:cap].rsplit(" ", 1)[0].rstrip(",.;:") + "…"
 
 
-def _template(idea: str, runtime_target_s: int, cast_size: int) -> ScreenplayDraft:
+def _template(
+    idea: str, runtime_target_s: int, cast_size: int, master: MasterPrompt | None = None
+) -> ScreenplayDraft:
     lowered = idea.lower()
     kind, name, tone = ("EXT", "Open Ground", "night wind, far traffic")
     for keyword, mapped in _SETTING_KEYWORDS.items():
         if keyword in lowered:
             kind, name, tone = mapped
             break
+    # The master prompt's derivations are law where the template would
+    # otherwise guess: its lighting system names the setting's light and
+    # grade, its camera philosophy the opener's frame, its ending the last
+    # image on screen.
+    light = (master.lighting if master is not None else {}) or {}
+    grade = ", ".join(x for x in (light.get("quality"), light.get("shadows")) if x)
     primary = SettingProfile(
         setting_id="set-primary",
         name=name,
         room_tone_id="set-primary/tone",
         architecture_notes=tone,
-        time_weather="Night 1, clear",
-        grade_language="warm practicals against cool night",
+        time_weather=f"Night 1, {light['source']}" if light.get("source") else "Night 1, clear",
+        grade_language=grade or "warm practicals against cool night",
         camera_kit="35-50mm, chest height, slow push-ins",
     )
     settings = [primary]
@@ -523,15 +584,24 @@ def _template(idea: str, runtime_target_s: int, cast_size: int) -> ScreenplayDra
         return line.line_id
 
     heading_1 = f"{kind}. {name.upper()} - NIGHT"
+    opener_action = f"{_snip(idea, 240)}. The place holds its breath."
+    opener_shot = (
+        f"Wide establishing frame of {name}, locked off at chest height, "
+        "one practical light carving the dark"
+    )
+    if master is not None:
+        initial = master.beat("initial_state")
+        if initial:
+            snipped = _snip(idea, 200)
+            opener_action = (
+                f"{initial[:1].upper()}{initial[1:].rstrip('.')}. "
+                f"{snipped[:1].upper()}{snipped[1:]}."
+            )
+        if master.camera:
+            opener_shot = f"The camera {master.camera[:1].lower()}{master.camera[1:].rstrip('.')}"
     sc1 = [
         _add("heading", heading_1, "sc-1"),
-        _add(
-            "action",
-            f"{_snip(idea, 240)}. The place holds its breath.",
-            "sc-1",
-            shot=f"Wide establishing frame of {name}, locked off at chest height, "
-            "one practical light carving the dark",
-        ),
+        _add("action", opener_action, "sc-1", shot=opener_shot),
         _add("sound", f"Room tone: {tone}.", "sc-1"),
     ]
     scenes.append(
@@ -656,6 +726,22 @@ def _template(idea: str, runtime_target_s: int, cast_size: int) -> ScreenplayDra
             )
         )
 
+    if master is not None and master.ending:
+        # The artifact's ending is the last image on screen — appended to the
+        # final scene as its closing beat, framed by the master camera.
+        last = scenes[-1]
+        ending_text = f"{master.ending[:1].upper()}{master.ending[1:].rstrip('.')}."
+        last.line_ids.append(
+            _add(
+                "action",
+                ending_text,
+                last.scene_id,
+                shot=f"The camera {master.camera[:1].lower()}{master.camera[1:].rstrip('.')}"
+                if master.camera
+                else "Held final frame, the composition unchanged",
+            )
+        )
+
     script = Script(
         id=f"scr-{uuid.uuid4().hex[:8]}",
         logline=f"{_snip(idea, 160)} — and tonight it ends.",
@@ -673,6 +759,7 @@ def _template(idea: str, runtime_target_s: int, cast_size: int) -> ScreenplayDra
         characters=characters,
         settings=settings,
         warnings=["screenwriter: deterministic template (Director brain not configured)"],
+        master=master,
     )
 
 
@@ -695,15 +782,18 @@ def write_script(
     cast_size: int = 2,
     *,
     reference_images: list[str] | None = None,
+    master: MasterPrompt | None = None,
 ) -> ScreenplayDraft:
+    """`master` is the pre-split finalized artifact (Blueprint 27): when given,
+    the screenplay realizes it — brain or template — and carries it forward."""
     if brain_url():
         last_error: Exception | None = None
         for _attempt in range(BRAIN_ATTEMPTS):
             try:
-                return _from_brain(idea, runtime_target_s, reference_images)
+                return _from_brain(idea, runtime_target_s, reference_images, master)
             except Exception as err:  # noqa: BLE001 — retried, then raised as a named state
                 last_error = err
         raise BrainUnavailable(
             f"{brain_model()} could not deliver after {BRAIN_ATTEMPTS} attempts: {last_error}"
         )
-    return _template(idea, runtime_target_s, cast_size)
+    return _template(idea, runtime_target_s, cast_size, master)

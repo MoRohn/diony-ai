@@ -274,6 +274,7 @@
       "default": "proposed",
       "enum": [
         "proposed",
+        "deriving",
         "approved",
         "submitting",
         "submitted",

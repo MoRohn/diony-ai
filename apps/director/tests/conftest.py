@@ -37,3 +37,4 @@ def director_isolated_vault(tmp_path, monkeypatch):
     _director_session.reset()
     yield tmp_path
     _director_session.reset()
+

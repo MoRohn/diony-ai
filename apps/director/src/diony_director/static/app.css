@@ -520,3 +520,28 @@ button.armed { outline: 2px solid var(--accent) !important; outline-offset: 2px;
   .entry { flex-direction: column; align-items: stretch; }
   .entry .actions { flex-direction: row; justify-content: flex-end; }
 }
+
+/* ------------------------------------------- master prompt (Blueprint 27) */
+.opcard details.master summary, .bmaster details.master summary {
+  font: 500 .66rem/1.6 var(--mono); color: var(--accent-ink); cursor: pointer; letter-spacing: .06em;
+}
+details.master .ptext {
+  font: 400 .8rem/1.6 Inter, sans-serif; color: var(--ink2); white-space: pre-wrap;
+  border-left: 2px solid var(--accent-ink); background: rgba(0,0,0,.28);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0; padding: .6rem .85rem; margin-top: .4rem;
+  max-height: 18rem; overflow-y: auto;
+}
+.mfields {
+  display: grid; grid-template-columns: max-content 1fr; gap: .15rem .7rem; margin: .5rem 0 0;
+  font: 400 .74rem/1.5 Inter, sans-serif; color: var(--ink2);
+}
+.mfields dt { font: 600 .62rem/1.7 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--mut); }
+.mfields dd { margin: 0; }
+.opcard .state.deriving {
+  color: var(--accent-ink); animation: draftpulse 1.2s ease-in-out infinite alternate;
+}
+@media (prefers-reduced-motion: reduce) { .opcard .state.deriving { animation: none; } }
+.bmaster { margin: .2em 0 .8em; }
+.bmaster details.master { margin: 0; }
+.msg details.master { margin-top: .5rem; }
+.msg details.master summary { font: 500 .66rem/1.6 var(--mono); color: var(--accent-ink); cursor: pointer; letter-spacing: .06em; }

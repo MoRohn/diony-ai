@@ -417,13 +417,19 @@ def test_a_broken_draft_is_refused_before_the_lock(monkeypatch) -> None:
         }],
     }
 
+    from master_brain_fakes import is_master_call, master_brain_body
+
     class _Response:
         status_code = 200
 
-        def json(self):
-            return {"choices": [{"message": {"content": _json.dumps(body)}}]}
+        def __init__(self, payload):
+            self._payload = payload
 
-    monkeypatch.setattr(screenwriter.httpx, "post", lambda *a, **k: _Response())
+        def json(self):
+            reply = master_brain_body() if is_master_call(self._payload) else body
+            return {"choices": [{"message": {"content": _json.dumps(reply)}}]}
+
+    monkeypatch.setattr(screenwriter.httpx, "post", lambda *a, **k: _Response(k.get("json")))
     client = _client()
     sid = client.post("/api/director/sessions").json()["session_id"]
     client.post(f"/api/director/sessions/{sid}/produce", json={"idea": "a keeper"})

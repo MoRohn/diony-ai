@@ -948,6 +948,12 @@ def _advance_op(op: DirectorOp, *, allow_spend: bool = False) -> dict:
         "review": review.model_dump(mode="json") if review else None,
         "next_op": rt.get("next_op"),
         "narration": rt.get("narration", ""),
+        # Blueprint 27: a one-shot's pre-split finalized artifact, once derived
+        "master": (
+            session.master_for_op(op.id).model_dump(mode="json")
+            if session.master_for_op(op.id) is not None
+            else None
+        ),
     }
 
 
@@ -1248,6 +1254,34 @@ def draft_status(sid: str) -> dict:
     return session.draft_state(sid)
 
 
+@app.get("/api/director/master/template")
+def master_template() -> dict:
+    """What the brain is told (Blueprint 27): the master template, the
+    duration amendment, and the output contract — transparency, not config."""
+    from diony_director import master_prompt as master_mod
+
+    return {
+        "template": master_mod.MASTER_TEMPLATE,
+        "duration_section": master_mod.DURATION_SECTION,
+        "output_contract": master_mod.OUTPUT_CONTRACT,
+    }
+
+
+@app.get("/api/director/sessions/{sid}/master")
+def session_master(sid: str) -> dict:
+    """The session's pre-split finalized artifact — the locked package's, or
+    the ready draft's. A one-shot's artifact rides its op (GET /ops/{id})."""
+    from diony_director import master_prompt as master_mod
+
+    _boot()
+    if not session.session_exists(sid):
+        raise HTTPException(status_code=404, detail=f"unknown session {sid}")
+    master = session.master_for_session(sid)
+    if master is None:
+        raise HTTPException(status_code=404, detail="no master prompt derived yet — draft a script")
+    return {"session_id": sid, "master": master_mod.to_doc(master)}
+
+
 class DraftLineIn(BaseModel):
     line_id: str
     text: str | None = None
@@ -1381,6 +1415,8 @@ def board(sid: str) -> dict:
     return {
         "session_id": sid,
         "draft_status": draft.get("status"),
+        "draft_stage": draft.get("stage"),
+        "master": draft.get("master"),
         "script": draft.get("script"),
         "beats": (draft.get("script") or {}).get("beats", []),
         "locked": bool((draft.get("script") or {}).get("locked")),

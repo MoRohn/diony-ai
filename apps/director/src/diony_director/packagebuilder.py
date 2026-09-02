@@ -37,6 +37,9 @@ def build_package(
         settings=draft.settings,
         script=draft.script,
         clips=clips,
+        # the pre-split finalized artifact the screenplay realized — every
+        # compiled clip inherits its lighting, physics, anchors, constraints
+        master_prompt=getattr(draft, "master", None),
     )
     if split:
         price_package(package)

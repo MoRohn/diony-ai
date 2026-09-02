@@ -180,6 +180,91 @@
     card.appendChild(details);
   }
 
+  // Blueprint 27: the pre-split finalized artifact — what the Idea-to-Prompt
+  // stage derived from the brief and the duration, before any shot was split.
+  function renderMaster(host, master, opts) {
+    if (!master || !master.prompt) return null;
+    const details = document.createElement("details");
+    details.className = "prompt master";
+    if (opts && opts.open) details.open = true;
+    const summary = document.createElement("summary");
+    const est = master.estimated_duration_s || master.target_duration_s;
+    const src = master.source === "brain" ? "brain" : "template";
+    summary.textContent =
+      `master prompt — the pre-split finalized artifact · ${master.word_count} words · ` +
+      `${(master.beats || []).length} beats · plays ~${est}s of your ${master.target_duration_s}s · ${src}`;
+    summary.title = "Derived from your idea, stills, and duration by the MASTER AI VIDEO PROMPT TEMPLATE (GET /api/director/master/template)";
+    const text = document.createElement("div");
+    text.className = "ptext";
+    text.textContent = master.prompt;
+    details.appendChild(summary);
+    details.appendChild(text);
+    const fields = document.createElement("dl");
+    fields.className = "mfields";
+    const light = master.lighting || {};
+    const pairs = [
+      ["style", master.visual_style],
+      ["subject", master.primary_subject],
+      ["setting", master.setting],
+      ["camera", master.camera],
+      ["lighting", [light.source, light.quality, light.shadows].filter(Boolean).join(" · ")],
+      ["mood", master.mood],
+      ["anchors", (master.continuity_anchors || []).join(" · ")],
+      ["constraints", (master.constraints || []).join(" · ")],
+      ["ending", master.ending],
+    ];
+    pairs.forEach(([k, v]) => {
+      if (!v) return;
+      const dt = document.createElement("dt");
+      dt.textContent = k;
+      const dd = document.createElement("dd");
+      dd.textContent = v;
+      fields.appendChild(dt);
+      fields.appendChild(dd);
+    });
+    details.appendChild(fields);
+    if (master.warnings && master.warnings.length) {
+      const warn = document.createElement("div");
+      warn.className = "draft-warn";
+      warn.textContent = master.warnings.join(" · ");
+      details.appendChild(warn);
+    }
+    host.appendChild(details);
+    return details;
+  }
+
+  // A one-shot priced while the brain derives its master prompt: the card
+  // holds (Run disabled) and unlocks — prompt swapped in, artifact shown —
+  // the moment the artifact lands. Nothing can roll before it.
+  function watchDeriving(op, card, btn, state) {
+    state.textContent = "deriving master prompt…";
+    state.className = "state deriving";
+    btn.disabled = true;
+    const started = Date.now();
+    const tick = async () => {
+      let body;
+      try {
+        body = await api(`/api/director/ops/${op.id}`);
+      } catch (err) {
+        setTimeout(tick, 3000);
+        return;
+      }
+      if (body.op.status === "deriving") {
+        state.textContent = `deriving master prompt… ${Math.round((Date.now() - started) / 1000)}s`;
+        setTimeout(tick, 3000);
+        return;
+      }
+      card.querySelectorAll(".whatrolls, details.prompt").forEach((el) => el.remove());
+      attachPrompt(card, body.op);
+      if (body.master) renderMaster(card, body.master);
+      Object.assign(op, body.op);
+      state.textContent = body.op.status;
+      state.className = "state";
+      if (body.op.status === "proposed") btn.disabled = false;
+    };
+    setTimeout(tick, 2500);
+  }
+
   function addOpCard(host, op) {
     const card = document.createElement("div");
     card.className = "opcard";
@@ -189,13 +274,15 @@
         <span class="chip">${esc(op.duration_s)}s · ${esc(op.resolution)}</span>
         <span class="est">est ${usd(op.estimate.total_usd_micros)}</span>
         <button type="button">Run — ${usd(op.estimate.total_usd_micros)}</button>
-        <span class="state">proposed</span>
+        <span class="state">${esc(op.status || "proposed")}</span>
       </div>
       ${estimateTable(op.estimate)}`;
     attachPrompt(card, op);
     host.appendChild(card);
     const btn = card.querySelector("button");
     const state = card.querySelector(".state");
+    if (op.status === "deriving") watchDeriving(op, card, btn, state);
+    else if (op.master) renderMaster(card, op.master);
     btn.addEventListener("click", async () => {
       btn.disabled = true;
       state.textContent = "submitting…";
@@ -565,6 +652,16 @@
       });
       const li = addMsg("director", body.reply);
       addOpCard(li, body.op);
+      if (body.op.status === "proposed") {
+        // the artifact rides the op state; show it under the priced card
+        try {
+          const state = await api(`/api/director/ops/${body.op.id}`);
+          const card = li.querySelector(".opcard");
+          if (card && state.master && !card.querySelector("details.master")) renderMaster(card, state.master);
+        } catch (err) {
+          /* the card stands without the artifact panel */
+        }
+      }
     } catch (err) {
       addMsg("director", `I couldn't price that: ${err.message || err}`);
     }
@@ -1044,6 +1141,7 @@
       warn.textContent = state.warnings.join(" · ");
       li.appendChild(warn);
     }
+    if (state.master) renderMaster(li, state.master);
     renderScript(li, state.script);
     attachLockButton(li);
   }
@@ -1075,9 +1173,13 @@
         const status = document.createElement("div");
         status.className = "draft-status";
         li.appendChild(status);
+        let stage = "deriving";
         const tick = async () => {
           const elapsed = Math.round((Date.now() - started) / 1000);
-          status.textContent = `writing… ${elapsed}s`;
+          status.textContent =
+            stage === "writing"
+              ? `master prompt derived · writing the screenplay from it… ${elapsed}s`
+              : `deriving the master prompt… ${elapsed}s`;
           let state;
           try {
             state = await api(`/api/director/sessions/${sessionId}/draft`);
@@ -1085,6 +1187,7 @@
             setTimeout(tick, 3000);
             return;
           }
+          if (state.stage) stage = state.stage;
           if (state.status === "ready") {
             status.remove();
             renderDraft(li, state);
@@ -1172,6 +1275,16 @@
         "<div class='bhead'>BEATS</div>" +
         b.beats.map((x) => `<div class="bbeat">${esc(x.beat)} <span class="bt">${esc(x.story_time || "")}</span></div>`).join("");
       pane.appendChild(beats);
+    }
+    if (b.master) {
+      const head = document.createElement("div");
+      head.className = "bhead";
+      head.textContent = "MASTER PROMPT";
+      pane.appendChild(head);
+      const box = document.createElement("div");
+      box.className = "bmaster";
+      renderMaster(box, b.master, { open: false });
+      pane.appendChild(box);
     }
     const note = document.createElement("div");
     note.className = "bnote";

@@ -218,6 +218,53 @@ def _blocking_locks(
     return f"Blocking lock: {'; '.join(locks)}." if locks else ""
 
 
+def _master_pieces(clip: ClipUnit, package: ProductionPackage) -> dict[str, str]:
+    """What every split clip inherits from the pre-split finalized artifact
+    (Blueprint 27): the one lighting system, the physics grounding, the
+    continuity anchors, the scene-specific constraints — and, on the last
+    clip of the package only, the exact ending. Empty strings when the
+    package was locked without a master prompt."""
+    master = package.master_prompt
+    if master is None:
+        return {"lighting": "", "physics": "", "anchors": "", "constraints": "", "ending": ""}
+    light = master.lighting
+    lighting = ""
+    # One lighting system is the template's promise for ONE world. A film that
+    # moves between settings lights each scene from its own setting block —
+    # the artifact's system rides only when every scene shares a setting.
+    one_world = len({s.setting_ref for s in package.script.scenes}) <= 1
+    if light.get("source") and one_world:
+        quality = ", ".join(x for x in (light.get("quality"), light.get("shadows")) if x)
+        lighting = f"Lighting comes from {light['source']}"
+        if quality:
+            lighting += f", producing {quality}"
+        lighting += "."
+    physics = ""
+    if master.physics or master.body_mechanics:
+        mech = "; ".join(x for x in (master.body_mechanics, master.physics) if x)
+        physics = f"Movement follows believable body mechanics with {mech[:1].lower()}{mech[1:].rstrip('.')}."
+    anchors = ""
+    if master.continuity_anchors:
+        anchors = (
+            "Maintain strict continuity throughout: "
+            + ", ".join(master.continuity_anchors)
+            + " remain unchanged."
+        )
+    constraints = ""
+    if master.constraints:
+        constraints = "Constraints: " + "; ".join(master.constraints) + "."
+    ending = ""
+    if master.ending and package.clips and clip.clip_id == package.clips[-1].clip_id:
+        ending = f"The clip ends with {master.ending[:1].lower()}{master.ending[1:].rstrip('.')}."
+    return {
+        "lighting": lighting,
+        "physics": physics,
+        "anchors": anchors,
+        "constraints": constraints,
+        "ending": ending,
+    }
+
+
 def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
     setting = package.setting(str(clip.continuity.setting_plate["setting_id"]))
     scene = package.script.scene(clip.scene_id)
@@ -225,6 +272,7 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
     char_text = " ".join(_character_block(c, scene.story_time) for c in chars)
     action = _action_text(clip, package)
     continuity = CONTINUITY_CLAUSE if _continues_scene(clip, package) else ""
+    master = _master_pieces(clip, package)
 
     limit = prompt_limit(clip.provider)
     if clip.provider is CloudProvider.GROK:
@@ -273,17 +321,22 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 (f"{camera_text}." if camera_text else "", 0),
                 (_blocking_locks(clip, char_text, action, camera_text=camera_text), 0),
                 (continuity, 1),
+                (master["anchors"], 1),
                 (
                     action
                     or "The action continues truthfully; no reset, no new business.",
                     3,
                 ),
+                (master["physics"], 2),
                 (f"{grok_lexicon.sentence(atmosphere)}." if atmosphere else "", 2),
                 (_setting_block(setting, scene.heading), 2),
+                (master["lighting"], 2),
                 (spoken, 0),
                 (REALISM, 1),
                 (_sound_clause(clip, setting, continues=bool(continuity)), 2),
                 (char_text, 3),
+                (master["ending"], 1),
+                (master["constraints"], 1),
                 (ANTI_ARTIFACT, 0),
             ],
             limit,
@@ -334,12 +387,17 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 # doesn't care which lane the clip rides
                 (_blocking_locks(clip, char_text, action, camera_text=camera_text), 0),
                 (continuity, 1),
+                (master["anchors"], 1),
                 (_setting_block(setting, scene.heading), 2),
+                (master["lighting"], 2),
                 (omni_style, 2),
                 (char_text, 3),
                 (spoken, 0),
                 (_sound_clause(clip, setting, continues=bool(continuity)), 2),
                 ("Performance is grounded and unhurried.", 1),
+                (master["physics"], 2),
+                (master["ending"], 1),
+                (master["constraints"], 1),
                 (ANTI_ARTIFACT, 0),
             ],
             limit,
@@ -354,14 +412,19 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
             (f"{camera_text}." if camera_text else "", 0),
             (_blocking_locks(clip, char_text, action, camera_text=camera_text), 0),
             (continuity, 1),
+            (master["anchors"], 1),
             (f"{action or scene.emotional_job or 'a held cinematic moment'}.", 3),
+            (master["physics"], 2),
             (_setting_block(setting, scene.heading), 2),
+            (master["lighting"], 2),
             (
                 flow_lexicon.style_clause(package.session_id, override_world=inline_world),
                 1,
             ),
             (_sound_clause(clip, setting, continues=bool(continuity)), 2),
             (char_text, 3),
+            (master["ending"], 1),
+            (master["constraints"], 1),
             (ANTI_ARTIFACT, 0),
         ],
         limit,

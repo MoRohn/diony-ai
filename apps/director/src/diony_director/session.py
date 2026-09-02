@@ -19,8 +19,10 @@ from diony_contracts.director import (
     DirectorOpType,
 )
 from diony_contracts.production import ClipReview, ClipUnit, ProductionPackage
+from diony_contracts.production import MasterPrompt
 from diony_director import compiler, packagebuilder, revisions, screenwriter
 from diony_director import estimate as estimate_mod
+from diony_director import master_prompt as master_mod
 from diony_director.screenwriter import ScreenplayDraft
 
 DEFAULT_MODELS = {
@@ -69,6 +71,8 @@ _BATCH_TARGETS: dict[str, set[str]] = {}
 _SUBMITTER_ACTIVE: dict[str, bool] = {}
 _HELD_LOG: dict[str, list[dict[str, str]]] = {}
 _UPLOADS: dict[str, list[dict[str, Any]]] = {}
+# Blueprint 27: the pre-split finalized artifact behind each one-shot op
+_MASTERS: dict[str, MasterPrompt] = {}
 _ACCEPTED: set[str] = set()
 
 DEFAULT_BUDGET = {"max_usd_micros": 0, "max_revisions_per_clip": 3, "autopilot": False}
@@ -100,6 +104,7 @@ def reset() -> None:
         _SUBMITTER_ACTIVE,
         _HELD_LOG,
         _UPLOADS,
+        _MASTERS,
         _ACCEPTED,
         _ASPECTS,
     ):
@@ -334,10 +339,83 @@ def resolve_provider(requested: str) -> CloudProvider:
     return CloudProvider(normalized)
 
 
+def authored_elements(sid: str, idea: str, provider: CloudProvider) -> tuple[str, dict[str, str]]:
+    """What the user established outside the prose, in the route's dialect —
+    the idea with its inline /shorthand expanded, and the session template
+    clauses (camera, atmosphere, world) the master derivation must preserve
+    rather than reinterpret. A token the route's lexicon doesn't know rides
+    literally, exactly as it would in the compiled prompt."""
+    seed = idea.strip()
+    authored: dict[str, str] = {}
+    if provider is CloudProvider.GROK:
+        from diony_director import grok_lexicon
+
+        expanded, camera_seen, atmo_seen = grok_lexicon.expand(seed)
+        expanded = grok_lexicon.harden_camera_locks(expanded).strip()
+        if not expanded and not (camera_seen or atmo_seen):
+            expanded = seed
+        if not camera_seen and not grok_lexicon.mentions_camera(expanded):
+            camera = grok_lexicon.session_camera_clause(sid)
+            if camera:
+                authored["camera"] = grok_lexicon.sentence(camera)
+        if not atmo_seen:
+            atmosphere = grok_lexicon.session_atmosphere_clause(sid)
+            if atmosphere:
+                authored["atmosphere"] = grok_lexicon.sentence(atmosphere)
+        return expanded or seed, authored
+    from diony_director import flow_lexicon
+
+    expanded, inline_world, has_camera = flow_lexicon.expand(seed)
+    expanded = expanded.strip()
+    if not expanded and not (inline_world or has_camera):
+        expanded = seed
+    if not has_camera and not flow_lexicon.mentions_camera(expanded):
+        camera = flow_lexicon.session_camera_clause(sid)
+        if camera:
+            authored["camera"] = camera
+    world = inline_world or flow_lexicon.template_for(sid)["world"]
+    if world and world != flow_lexicon.BASELINE_WORLD:
+        clause = flow_lexicon.worlds().get(world, {}).get("clause", "")
+        if clause:
+            authored["world"] = clause
+    return expanded or seed, authored
+
+
 def compile_prompt(
-    idea: str, provider: CloudProvider, sid: str = "", *, has_start_image: bool = False
+    idea: str,
+    provider: CloudProvider,
+    sid: str = "",
+    *,
+    has_start_image: bool = False,
+    master: MasterPrompt | None = None,
 ) -> str:
     from diony_director.compiler import _fit_prompt, prompt_limit
+
+    if master is not None:
+        # The master prompt IS the body (Blueprint 27): provider-neutral prose
+        # already carrying camera, lighting, physics, continuity, and ending.
+        # Only the route's guards ride on top — the Grok lock hardening and
+        # i2v directive, or the Flow world clause and anatomy guard.
+        body = master.prompt.strip()
+        if provider is CloudProvider.GROK:
+            from diony_director import grok_lexicon
+
+            pieces: list[tuple[str, int]] = [(grok_lexicon.harden_camera_locks(body), 1)]
+            if has_start_image:
+                pieces.append((grok_lexicon.I2V_DIRECTIVE, 1))
+            pieces.append((_GROK_STYLE.strip(), 0))
+            return _fit_prompt(pieces, prompt_limit(provider))
+        from diony_director import flow_lexicon
+
+        _, inline_world, _ = flow_lexicon.expand(idea)
+        return _fit_prompt(
+            [
+                (body, 1),
+                (flow_lexicon.style_clause(sid, override_world=inline_world), 0),
+                (_VEO_GUARD, 0),
+            ],
+            prompt_limit(provider),
+        )
 
     seed = idea.strip().rstrip(".")
     if provider is CloudProvider.GROK:
@@ -414,6 +492,22 @@ def propose(
     # Uploads resolve BEFORE the prompt compiles: a Grok shot opening from a
     # still carries the i2v directive — the model sees the frame already.
     start, extras = upload_refs(sid)
+    refs = ([start] if start else []) + list(extras)
+    from diony_director.screenwriter import brain_model, brain_url
+
+    # Blueprint 27: the idea never ships raw. The master prompt — the pre-
+    # split finalized artifact — is derived from the idea, the stills, and
+    # the user's DURATION, and becomes the prompt body. Brain off: inline,
+    # deterministic. Brain on: the op is priced now and holds as "deriving"
+    # (not runnable) until the artifact lands — a reasoning brain must never
+    # ride a request through the name router.
+    expanded, authored = authored_elements(sid, text, chosen_provider)
+    async_master = bool(brain_url())
+    master: MasterPrompt | None = None
+    if not async_master:
+        master = master_mod.derive(
+            expanded, target_duration_s=duration, reference_images=refs, authored=authored
+        )
     op = DirectorOp(
         id=f"op-{uuid.uuid4().hex[:10]}",
         session_id=sid,
@@ -421,8 +515,11 @@ def propose(
         provider=chosen_provider,
         model=chosen_model,
         mode=CloudGenerationMode.T2V,
-        prompt=compile_prompt(text, chosen_provider, sid, has_start_image=bool(start)),
-        prompt_version="v1",
+        prompt=compile_prompt(
+            text, chosen_provider, sid, has_start_image=bool(start), master=master
+        ),
+        prompt_version="v1" if master is not None else "v0-provisional",
+        status="deriving" if async_master else "proposed",
         duration_s=duration,
         resolution=resolution,
         estimate=est,
@@ -434,9 +531,18 @@ def propose(
         op.artifact_refs["start_image"] = start
         if extras:
             op.artifact_refs["references"] = extras[:3]
+    if master is not None:
+        _MASTERS[op.id] = master
+        op.rationale += " · " + master_mod.duration_note(
+            master, int(duration), cap_s=estimate_mod.GROK_MAX_S if chosen_provider is CloudProvider.GROK else 0
+        )
     _OPS[op.id] = op
     _SESSIONS.setdefault(sid, SessionState(id=sid)).op_ids.append(op.id)
     persist(sid)
+    if async_master:
+        _kick_master_derivation(
+            op.id, sid, text, expanded, chosen_provider, int(duration), refs, authored, bool(start)
+        )
 
     total_after = spent_usd_micros + committed_usd_micros(sid) + est.total_usd_micros
     reply = (
@@ -445,6 +551,16 @@ def propose(
         f"This pass adds about {_usd(est.total_usd_micros)}; "
         f"session total becomes {_usd(total_after)}."
     )
+    if master is not None:
+        reply += " " + master_mod.summary_line(master)
+        reply += " " + master_mod.duration_note(
+            master, int(duration), cap_s=estimate_mod.GROK_MAX_S if chosen_provider is CloudProvider.GROK else 0
+        )
+    else:
+        reply += (
+            f" Deriving the master prompt on {brain_model()} — the card unlocks the "
+            "moment the artifact lands; nothing can roll before it."
+        )
     if start:
         count = 1 + len(extras)
         reply += (
@@ -477,6 +593,65 @@ def propose(
         for note in grok_lexicon.advisories(text):
             reply += f" Note: {note}"
     return Proposal(op=op, reply=reply)
+
+
+def master_for_op(op_id: str) -> MasterPrompt | None:
+    return _MASTERS.get(op_id)
+
+
+def _kick_master_derivation(
+    op_id: str,
+    sid: str,
+    idea: str,
+    expanded: str,
+    provider: CloudProvider,
+    duration: int,
+    refs: list[str],
+    authored: dict[str, str],
+    has_start_image: bool,
+) -> None:
+    """Derive the master prompt off-request and land it on the priced op.
+    Success: prompt v1 from the artifact, status back to proposed. Failure:
+    the op is released as proposed with its provisional raw-idea prompt —
+    labeled v0-provisional and named in the rationale, never silently."""
+    import threading
+
+    def _worker() -> None:
+        op = _OPS.get(op_id)
+        if op is None:
+            return
+        try:
+            master = master_mod.derive(
+                expanded, target_duration_s=duration, reference_images=refs, authored=authored
+            )
+            _MASTERS[op_id] = master
+            op.prompt = compile_prompt(
+                idea, provider, sid, has_start_image=has_start_image, master=master
+            )
+            op.prompt_version = "v1"
+            op.rationale = (
+                op.rationale.split(" · ")[0]
+                + " · "
+                + master_mod.summary_line(master)
+                + " "
+                + master_mod.duration_note(
+                    master,
+                    duration,
+                    cap_s=estimate_mod.GROK_MAX_S if provider is CloudProvider.GROK else 0,
+                )
+            )
+        except Exception as err:  # noqa: BLE001 — a failed derivation is a named state
+            op.rationale = (
+                op.rationale.split(" · ")[0]
+                + f" · master derivation failed ({type(err).__name__}: {str(err)[:160]}) — "
+                "this is the provisional raw-idea prompt; send the idea again to retry"
+            )
+        finally:
+            if op.status == "deriving":
+                op.status = "proposed"
+            persist(sid)
+
+    threading.Thread(target=_worker, name=f"diony-master-{op_id}", daemon=True).start()
 
 
 # --- Scripted production flow (M2–M5) --------------------------------------
@@ -582,6 +757,14 @@ def _draft_reply(draft: ScreenplayDraft, runtime_s: int) -> str:
     reply = ""
     if draft.warnings:
         reply += "⚠ Template draft (no brain configured). "
+    master = getattr(draft, "master", None)
+    if master is not None:
+        reply += master_mod.summary_line(master) + " "
+        if abs(master.estimated_duration_s - runtime_s) > max(2, runtime_s // 10):
+            reply += (
+                f"The master action as derived plays about {_runtime(master.estimated_duration_s)}; "
+                f"the screenplay fills your {_runtime(runtime_s)} target from it. "
+            )
     reply += (
         f"Script drafted: {_n(scenes, 'scene')}, {_n(speaking, 'spoken line')}, "
         f"targeting {_runtime(runtime_s)}. Review it — lock the script and I'll "
@@ -598,15 +781,31 @@ def _draft_reply(draft: ScreenplayDraft, runtime_s: int) -> str:
     return reply
 
 
+def _derive_master_for_draft(sid: str, idea: str, runtime_s: int) -> MasterPrompt:
+    """Stage one of a draft (Blueprint 27): the whole film's master prompt,
+    derived from the idea, the stills, and the runtime target, in the dialect
+    of the engine the session will roll on."""
+    refs = [u["path"] for u in (_UPLOADS.get(sid) or [])]
+    expanded, authored = authored_elements(sid, idea, resolve_provider("auto"))
+    return master_mod.derive(
+        expanded, target_duration_s=runtime_s, reference_images=refs, authored=authored
+    )
+
+
 def start_production(sid: str, idea: str, runtime_s: int) -> tuple[ScreenplayDraft, str]:
     """Synchronous draft (template path and tests). Stores ready state."""
+    master = _derive_master_for_draft(sid, idea, runtime_s)
     draft = screenwriter.write_script(
         _idea_with_uploads(sid, idea),
         runtime_target_s=runtime_s,
         reference_images=[u["path"] for u in (_UPLOADS.get(sid) or [])],
+        master=master,
     )
     reply = _draft_reply(draft, runtime_s)
-    _DRAFTS[sid] = {"status": "ready", "draft": draft, "reply": reply, "error": ""}
+    _DRAFTS[sid] = {
+        "status": "ready", "stage": "ready", "draft": draft, "reply": reply, "error": "",
+        "master": master,
+    }
     _SESSIONS.setdefault(sid, SessionState(id=sid))
     persist(sid)
     return draft, reply
@@ -624,35 +823,51 @@ def begin_draft(sid: str, idea: str, runtime_s: int) -> dict[str, Any]:
 
     import threading
 
-    _DRAFTS[sid] = {"status": "drafting", "draft": None, "reply": "", "error": ""}
+    _DRAFTS[sid] = {
+        "status": "drafting", "stage": "deriving", "draft": None, "reply": "", "error": "",
+        "master": None,
+    }
 
     def _worker() -> None:
         try:
+            # Stage one: the master prompt. Stage two: the screenplay that
+            # realizes it. Both on the brain, both off-request.
+            master = _derive_master_for_draft(sid, idea, runtime_s)
+            record = _DRAFTS.get(sid)
+            if isinstance(record, dict) and record.get("status") == "drafting":
+                record["master"] = master
+                record["stage"] = "writing"
             draft = screenwriter.write_script(
                 _idea_with_uploads(sid, idea),
                 runtime_target_s=runtime_s,
                 reference_images=[u["path"] for u in (_UPLOADS.get(sid) or [])],
+                master=master,
             )
             _DRAFTS[sid] = {
                 "status": "ready",
+                "stage": "ready",
                 "draft": draft,
                 "reply": _draft_reply(draft, runtime_s),
                 "error": "",
+                "master": master,
             }
             persist(sid)
         except Exception as err:  # noqa: BLE001 - a failed draft is a named state
             _DRAFTS[sid] = {
                 "status": "failed",
+                "stage": "failed",
                 "draft": None,
                 "reply": "",
                 "error": f"{type(err).__name__}: {err}",
+                "master": None,
             }
 
     threading.Thread(target=_worker, name=f"diony-draft-{sid}", daemon=True).start()
     state = draft_state(sid)
     state["reply"] = (
-        f"Writing the screenplay on {brain_model()} — a reasoning model takes a "
-        "minute or two. I'll put it up the moment it lands."
+        f"Deriving the master prompt, then writing the screenplay from it, on "
+        f"{brain_model()} — a reasoning model takes a minute or two per stage. "
+        "I'll put it up the moment it lands."
     )
     return state
 
@@ -660,18 +875,44 @@ def begin_draft(sid: str, idea: str, runtime_s: int) -> dict[str, Any]:
 def draft_state(sid: str) -> dict[str, Any]:
     record = _DRAFTS.get(sid)
     if not isinstance(record, dict):
-        return {"status": "none", "reply": "", "error": "", "script": None,
-                "characters": [], "settings": [], "warnings": []}
+        return {"status": "none", "stage": "none", "reply": "", "error": "", "script": None,
+                "characters": [], "settings": [], "warnings": [], "master": None}
     draft = record.get("draft")
+    master = record.get("master") or (getattr(draft, "master", None) if draft else None)
     return {
         "status": record["status"],
+        "stage": record.get("stage", record["status"]),
         "reply": record.get("reply", ""),
         "error": record.get("error", ""),
         "script": draft.script.model_dump(mode="json") if draft else None,
         "characters": [c.model_dump(mode="json") for c in draft.characters] if draft else [],
         "settings": [x.model_dump(mode="json") for x in draft.settings] if draft else [],
         "warnings": draft.warnings if draft else [],
+        "master": master_mod.to_doc(master),
     }
+
+
+def master_for_session(sid: str) -> MasterPrompt | None:
+    """The session's pre-split finalized artifact: the locked package's when
+    there is one, else the ready draft's."""
+    package = _PACKAGES.get(sid)
+    if package is not None and package.master_prompt is not None:
+        return package.master_prompt
+    record = _DRAFTS.get(sid)
+    if isinstance(record, dict):
+        master = record.get("master")
+        if master is not None:
+            return master
+        draft = record.get("draft")
+        if draft is not None and getattr(draft, "master", None) is not None:
+            return draft.master
+    # a one-shot room: the newest priced shot's artifact is the session's
+    state = _SESSIONS.get(sid)
+    if state is not None:
+        for op_id in reversed(state.op_ids):
+            if op_id in _MASTERS:
+                return _MASTERS[op_id]
+    return None
 
 
 def _op_from_clip(sid: str, clip: ClipUnit, package: ProductionPackage) -> DirectorOp:
@@ -1304,6 +1545,9 @@ def persist(sid: str) -> None:
             "warnings": list(draft.warnings),
             "brain_usage": dict(getattr(draft, "brain_usage", {}) or {}),
             "reply": draft_record.get("reply", ""),
+            "master": master_mod.to_doc(
+                draft_record.get("master") or getattr(draft, "master", None)
+            ),
         }
     runtime_doc: dict[str, dict] = {}
     for op_id in state.op_ids:
@@ -1336,6 +1580,8 @@ def persist(sid: str) -> None:
         for key in ("media_generation_id", "result_url", "last_poll_state", "last_progress_ts"):
             if rt.get(key) is not None:
                 entry[key] = rt[key]
+        if op_id in _MASTERS:
+            entry["master"] = master_mod.to_doc(_MASTERS[op_id])
         if entry:
             runtime_doc[op_id] = entry
     seq = _SEQUENCES.get(sid)
@@ -1392,6 +1638,15 @@ def _load_state(sid: str, doc: dict) -> None:
         # a restart killed any in-flight submit thread; the claim is stale
         if op.status == "submitting":
             op.status = "proposed"
+        # …and any in-flight master derivation: the op is released with its
+        # provisional prompt, and says so — never a silent raw-idea roll
+        if op.status == "deriving":
+            op.status = "proposed"
+            if "provisional" not in op.rationale:
+                op.rationale += (
+                    " · master derivation interrupted by a restart — this is the "
+                    "provisional raw-idea prompt; send the idea again to re-derive"
+                )
     if doc.get("package"):
         _PACKAGES[sid] = ProductionPackage.model_validate(doc["package"])
     for op_id, raw in (doc.get("reviews") or {}).items():
@@ -1431,6 +1686,9 @@ def _load_state(sid: str, doc: dict) -> None:
         for key in ("media_generation_id", "result_url", "last_poll_state", "last_progress_ts"):
             if entry.get(key) is not None:
                 rt[key] = entry[key]
+        restored = master_mod.from_doc(entry.get("master"))
+        if restored is not None:
+            _MASTERS[op_id] = restored
     if doc.get("draft"):
         draft_doc = doc["draft"]
         draft = ScreenplayDraft(
@@ -1439,14 +1697,17 @@ def _load_state(sid: str, doc: dict) -> None:
             settings=[SettingProfile.model_validate(s) for s in draft_doc["settings"]],
             warnings=list(draft_doc.get("warnings") or []),
             brain_usage=dict(draft_doc.get("brain_usage") or {}),
+            master=master_mod.from_doc(draft_doc.get("master")),
         )
         # A rehydrated draft whose script was already locked keeps working:
         # lock_script re-locks idempotently and the package doc is authoritative.
         _DRAFTS[sid] = {
             "status": "ready",
+            "stage": "ready",
             "draft": draft,
             "reply": draft_doc.get("reply", ""),
             "error": "",
+            "master": draft.master,
         }
 
 

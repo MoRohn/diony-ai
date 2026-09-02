@@ -130,8 +130,12 @@ class DirectorOp(BaseModel):
     # "submitting" is the transient double-spend claim: held only while the
     # provider call is in flight; a persisted snapshot releases it back to
     # "proposed" on rehydrate (the claiming thread died with the process).
+    # "deriving" is the Idea-to-Prompt hold (Blueprint 27): the brain is still
+    # deriving the master prompt for a one-shot; the op is priced but not yet
+    # runnable, and it carries a provisional prompt until the artifact lands.
     status: Literal[
-        "proposed", "approved", "submitting", "submitted", "completed", "failed", "discarded"
+        "proposed", "deriving", "approved", "submitting", "submitted", "completed",
+        "failed", "discarded",
     ] = "proposed"
     job_id: str = ""
     created_at: datetime = Field(default_factory=_utc_now)

@@ -1,0 +1,173 @@
+{
+  "description": "Blueprint 27: the pre-split finalized artifact.\n\nThe Idea-to-Prompt derivation of one creative brief \u2014 WHO, WHAT, WHERE,\nhow the scene is layered, how the action develops, how the subject\nperforms, how the environment responds, how the camera observes, how the\nscene is lit, what must stay consistent, what must be prevented, and\nexactly how the clip ends \u2014 plus the generator-ready ``prompt`` those\nderivations assemble into. A one-shot ships it as the prompt body; a\nscripted production writes its screenplay FROM it and every split clip\ninherits its lighting, physics, anchors, constraints, and ending.",
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "idea": {
+      "title": "Idea",
+      "type": "string"
+    },
+    "target_duration_s": {
+      "exclusiveMinimum": 0,
+      "title": "Target Duration S",
+      "type": "integer"
+    },
+    "estimated_duration_s": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Estimated Duration S",
+      "type": "integer"
+    },
+    "reference_image": {
+      "default": false,
+      "title": "Reference Image",
+      "type": "boolean"
+    },
+    "visual_style": {
+      "default": "",
+      "title": "Visual Style",
+      "type": "string"
+    },
+    "primary_subject": {
+      "default": "",
+      "title": "Primary Subject",
+      "type": "string"
+    },
+    "primary_action": {
+      "default": "",
+      "title": "Primary Action",
+      "type": "string"
+    },
+    "setting": {
+      "default": "",
+      "title": "Setting",
+      "type": "string"
+    },
+    "beats": {
+      "items": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "title": "Beats",
+      "type": "array"
+    },
+    "scene_depth": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Scene Depth",
+      "type": "object"
+    },
+    "spatial": {
+      "default": "",
+      "title": "Spatial",
+      "type": "string"
+    },
+    "camera": {
+      "default": "",
+      "title": "Camera",
+      "type": "string"
+    },
+    "performance": {
+      "default": "",
+      "title": "Performance",
+      "type": "string"
+    },
+    "micro_expressions": {
+      "default": "",
+      "title": "Micro Expressions",
+      "type": "string"
+    },
+    "physics": {
+      "default": "",
+      "title": "Physics",
+      "type": "string"
+    },
+    "body_mechanics": {
+      "default": "",
+      "title": "Body Mechanics",
+      "type": "string"
+    },
+    "lighting": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Lighting",
+      "type": "object"
+    },
+    "mood": {
+      "default": "",
+      "title": "Mood",
+      "type": "string"
+    },
+    "continuity_anchors": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Continuity Anchors",
+      "type": "array"
+    },
+    "ending": {
+      "default": "",
+      "title": "Ending",
+      "type": "string"
+    },
+    "constraints": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Constraints",
+      "type": "array"
+    },
+    "prompt": {
+      "title": "Prompt",
+      "type": "string"
+    },
+    "word_count": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Word Count",
+      "type": "integer"
+    },
+    "source": {
+      "default": "template",
+      "enum": [
+        "brain",
+        "template"
+      ],
+      "title": "Source",
+      "type": "string"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    },
+    "brain_usage": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Brain Usage",
+      "type": "object"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "idea",
+    "target_duration_s",
+    "prompt"
+  ],
+  "title": "MasterPrompt",
+  "type": "object"
+}
