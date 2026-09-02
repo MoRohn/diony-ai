@@ -2078,6 +2078,10 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
                 master.performance,
                 str(master.lighting.get("quality", "")),
             ]
+            if master.look is not None:
+                # the Look Bible's medium reads into the cast too — an
+                # animated explainer and photoreal noir want different voices
+                tone_bits.append(master.look.medium)
         package = session.package_for(sid)
         notes = (
             {c.name: c.age_body_notes for c in package.characters}

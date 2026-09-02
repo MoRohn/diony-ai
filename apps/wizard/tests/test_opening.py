@@ -44,7 +44,10 @@ def test_unknown_engines_are_refused() -> None:
     assert res.status_code == 422
 
 
-def test_opening_state_reports_provider_readiness(monkeypatch) -> None:
+def test_opening_state_reports_provider_readiness(monkeypatch, tmp_path) -> None:
+    # the opening reloads ~/.diony/keys.env — on a box holding the live
+    # USEAPI token that re-injects what delenv removed; isolate the file
+    monkeypatch.setenv("DIONY_KEYS_FILE", str(tmp_path / "keys.env"))
     monkeypatch.setenv("XAI_API_KEY", "k")
     monkeypatch.delenv("USEAPI_TOKEN", raising=False)
     state = _client().get("/api/opening").json()
