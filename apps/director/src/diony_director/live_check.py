@@ -182,12 +182,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--live", action="store_true", help="run $0 auth probes against both providers")
     parser.add_argument("--roll-one", choices=["grok", "flow"], help="submit ONE minimal paid generation")
     parser.add_argument("--yes", action="store_true", help="confirm the paid --roll-one")
+    parser.add_argument(
+        "--reconnect",
+        action="store_true",
+        help="re-link the Google Flow account from a live browser session ($0) — "
+        "only acts if the account is currently signed out",
+    )
+    parser.add_argument("--cdp", default="", help="--reconnect: browser CDP port or ws URL")
+    parser.add_argument("--profile", default="", help="--reconnect: Chrome profile name/path")
     args = parser.parse_args(argv)
 
     report = readiness_report()
     print(json.dumps(report, indent=2))
     if args.live:
         print(json.dumps({"live": live_probe()}, indent=2))
+    if args.reconnect:
+        from diony_director import flow_reconnect
+
+        result = flow_reconnect.ensure_connected(cdp=args.cdp, profile=args.profile)
+        print(json.dumps({"reconnect": result}, indent=2, default=str))
+        return 0 if result.get("ok") else 1
     if args.roll_one:
         if not args.yes:
             print("--roll-one spends real money; add --yes to confirm", file=sys.stderr)
