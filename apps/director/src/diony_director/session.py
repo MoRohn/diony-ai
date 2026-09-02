@@ -53,6 +53,10 @@ class Proposal:
     # chained one-shot: every link in play order (op is the first); a
     # single-clip proposal leaves this empty
     ops: list[DirectorOp] = field(default_factory=list)
+    # structured facts behind the reply — the room renders these as a plan
+    # card (headline, stat tiles, notes) instead of a wall of prose; the
+    # prose reply stays the canonical record and the fallback
+    plan: dict[str, Any] | None = None
 
 
 @dataclass
@@ -601,32 +605,56 @@ def _clip_plan(provider: CloudProvider, model: str, requested_s: float) -> list[
     return plan
 
 
-def _route_notes(provider: CloudProvider, text: str) -> str:
+def _route_note_list(provider: CloudProvider, text: str) -> list[str]:
     """The lexicon advisories every proposal reply carries for its route."""
-    notes = ""
+    notes: list[str] = []
     if provider is CloudProvider.GOOGLE_FLOW:
         from diony_director import flow_lexicon
 
         unknown = flow_lexicon.unknown_tokens(text)
         if unknown:
-            notes += (
-                f" Note: {', '.join(unknown)} isn't Flow shorthand I know — "
+            notes.append(
+                f"Note: {', '.join(unknown)} isn't Flow shorthand I know — "
                 "it rides the prompt as literal text."
             )
-        for note in flow_lexicon.advisories(text):
-            notes += f" Note: {note}"
+        notes.extend(f"Note: {note}" for note in flow_lexicon.advisories(text))
     elif provider is CloudProvider.GROK:
         from diony_director import grok_lexicon
 
         unknown = grok_lexicon.unknown_tokens(text)
         if unknown:
-            notes += (
-                f" Note: {', '.join(unknown)} isn't Grok shorthand I know — "
+            notes.append(
+                f"Note: {', '.join(unknown)} isn't Grok shorthand I know — "
                 "it rides the prompt as literal text."
             )
-        for note in grok_lexicon.advisories(text):
-            notes += f" Note: {note}"
+        notes.extend(f"Note: {note}" for note in grok_lexicon.advisories(text))
     return notes
+
+
+def _plan_summary(
+    *,
+    headline: str,
+    provider: CloudProvider,
+    model: str,
+    resolution: str,
+    clip_seconds: list[int],
+    pass_usd_micros: int,
+    session_after_usd_micros: int,
+    notes: list[str],
+) -> dict[str, Any]:
+    """The structured facts behind a proposal reply. The room renders these
+    as a plan card — headline, stat tiles, note lines — so the numbers read
+    at a glance; the prose reply remains the canonical record."""
+    return {
+        "headline": headline,
+        "provider_label": PROVIDER_LABELS[provider],
+        "model": model,
+        "resolution": resolution,
+        "clip_seconds": clip_seconds,
+        "pass_usd_micros": pass_usd_micros,
+        "session_after_usd_micros": session_after_usd_micros,
+        "notes": notes,
+    }
 
 
 def _attach_stills(op: DirectorOp, start: str, extras: list[str], opens: str) -> str:
@@ -752,27 +780,46 @@ def propose(
         )
 
     total_after = spent_usd_micros + committed_usd_micros(sid) + est.total_usd_micros
-    reply = (
-        f"Reading that as one {duration}s {chosen_model} shot on "
-        f"{PROVIDER_LABELS[chosen_provider]} at {resolution}. "
-        f"This pass adds about {_usd(est.total_usd_micros)}; "
-        f"session total becomes {_usd(total_after)}."
-    )
+    notes: list[str] = []
     if master is not None:
-        reply += " " + master_mod.summary_line(master)
-        reply += " " + master_mod.duration_note(
-            master, int(duration), cap_s=estimate_mod.GROK_MAX_S if chosen_provider is CloudProvider.GROK else 0
+        notes.append(master_mod.summary_line(master))
+        notes.append(
+            master_mod.duration_note(
+                master,
+                int(duration),
+                cap_s=estimate_mod.GROK_MAX_S if chosen_provider is CloudProvider.GROK else 0,
+            )
         )
     else:
-        reply += (
-            f" Deriving the master prompt on {brain_model()} — the card unlocks the "
+        notes.append(
+            f"Deriving the master prompt on {brain_model()} — the card unlocks the "
             "moment the artifact lands; nothing can roll before it."
         )
-    reply += stills_note
+    if stills_note:
+        notes.append(stills_note.strip())
     if est.rate_cards_stale:
-        reply += " Heads up: the rate card is stale — re-verify provider pricing before running."
-    reply += _route_notes(chosen_provider, text)
-    return Proposal(op=op, reply=reply)
+        notes.append("Heads up: the rate card is stale — re-verify provider pricing before running.")
+    notes.extend(_route_note_list(chosen_provider, text))
+    reply = " ".join(
+        [
+            f"Reading that as one {duration}s {chosen_model} shot on "
+            f"{PROVIDER_LABELS[chosen_provider]} at {resolution}. "
+            f"This pass adds about {_usd(est.total_usd_micros)}; "
+            f"session total becomes {_usd(total_after)}.",
+            *notes,
+        ]
+    )
+    plan = _plan_summary(
+        headline=f"Reading that as a single {duration}s take — one shot, priced before anything rolls.",
+        provider=chosen_provider,
+        model=chosen_model,
+        resolution=resolution,
+        clip_seconds=[int(duration)],
+        pass_usd_micros=est.total_usd_micros,
+        session_after_usd_micros=total_after,
+        notes=notes,
+    )
+    return Proposal(op=op, reply=reply, plan=plan)
 
 
 def _propose_chain(
@@ -886,31 +933,52 @@ def _propose_chain(
 
     total_after = spent_usd_micros + committed_usd_micros(sid) + total_cost
     plan_words = " + ".join(f"{d}s" for d in plan)
-    reply = (
-        f"That plays past a single clip on this route — reading it as a chained "
-        f"one-shot: {count} sequential {model} clips on {PROVIDER_LABELS[provider]} "
-        f"({plan_words} = {total_s}s) at {resolution}, each clip opening from the "
-        f"previous clip's final frame. This pass adds about {_usd(total_cost)}; "
-        f"session total becomes {_usd(total_after)}. Run the clips in order — "
-        "each unlocks when the one before it lands."
-    )
+    notes: list[str] = []
     if master is not None:
-        reply += " " + master_mod.summary_line(master)
-        reply += " " + master_mod.duration_note(master, total_s)
-        reply += _style_frames_note(frames)
+        notes.append(master_mod.summary_line(master))
+        notes.append(master_mod.duration_note(master, total_s))
+        frames_note = _style_frames_note(frames).strip()
+        if frames_note:
+            notes.append(frames_note)
     else:
-        reply += (
-            f" Deriving the master prompt and its {count}-clip split on {brain_model()} — "
+        notes.append(
+            f"Deriving the master prompt and its {count}-clip split on {brain_model()} — "
             "the cards unlock the moment the artifact lands; nothing can roll before it. "
             "Every clip carries the film's Look Bible verbatim, and a clip that cuts to a "
             "new place opens from a style frame composed in that look (a still, priced "
             "when the split lands)."
         )
-    reply += stills_note
+    if stills_note:
+        notes.append(stills_note.strip())
     if stale:
-        reply += " Heads up: the rate card is stale — re-verify provider pricing before running."
-    reply += _route_notes(provider, text)
-    return Proposal(op=ops[0], reply=reply, ops=ops)
+        notes.append("Heads up: the rate card is stale — re-verify provider pricing before running.")
+    notes.extend(_route_note_list(provider, text))
+    reply = " ".join(
+        [
+            f"That plays past a single clip on this route — reading it as a chained "
+            f"one-shot: {count} sequential {model} clips on {PROVIDER_LABELS[provider]} "
+            f"({plan_words} = {total_s}s) at {resolution}, each clip opening from the "
+            f"previous clip's final frame. This pass adds about {_usd(total_cost)}; "
+            f"session total becomes {_usd(total_after)}. Run the clips in order — "
+            "each unlocks when the one before it lands.",
+            *notes,
+        ]
+    )
+    plan_card = _plan_summary(
+        headline=(
+            "That plays past a single clip — reading it as a chained one-shot, each "
+            "clip opening from the previous clip's final frame. Run them in order; "
+            "each unlocks when the one before it lands."
+        ),
+        provider=provider,
+        model=model,
+        resolution=resolution,
+        clip_seconds=[int(s) for s in plan],
+        pass_usd_micros=total_cost,
+        session_after_usd_micros=total_after,
+        notes=notes,
+    )
+    return Proposal(op=ops[0], reply=reply, ops=ops, plan=plan_card)
 
 
 def _plan_style_frames(sid: str, ops: list[DirectorOp], master: MasterPrompt) -> list[DirectorOp]:

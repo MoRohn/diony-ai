@@ -343,6 +343,9 @@ def message(sid: str, body: MessageIn) -> dict:
         raise HTTPException(status_code=422, detail=str(err)) from err
     return {
         "reply": proposal.reply,
+        # structured facts behind the reply — the room renders the plan card
+        # from these; the prose reply is the fallback when absent
+        "plan": proposal.plan,
         "op": proposal.op.model_dump(mode="json"),
         # chained one-shot: every link in play order (empty for a single clip)
         "ops": [op.model_dump(mode="json") for op in proposal.ops],
@@ -1374,6 +1377,12 @@ def advance_session(sid: str) -> dict:
     counts["submitting"] = session.submitter_active(sid)
     counts["held"] = held
     counts["stalled"] = stalled
+    # per-op status so the room can show LIVE progress for a targeted set
+    # (the retake watch) instead of a silent wait on aggregate counts
+    counts["ops"] = [
+        {"op_id": op.id, "clip_id": op.clip_id, "status": op.status}
+        for op in session.ops_for(sid)
+    ]
     return counts
 
 

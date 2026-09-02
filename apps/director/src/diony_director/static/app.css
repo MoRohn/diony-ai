@@ -207,6 +207,46 @@ body {
 }
 .msg .body a.linkbtn:hover { color: #fff; background: var(--brand-gradient); border-color: transparent; }
 
+/* ------------------------------------------------- proposal plan card */
+/* The priced read of an idea: headline prose, a strip of stat tiles for
+   the numbers, and quiet note lines — never one wall of paragraph. */
+.msg.plan .planlead { margin: 0; font-size: .92rem; line-height: 1.6; color: var(--ink); }
+.planfacts {
+  display: flex; flex-wrap: wrap; gap: 1px;
+  margin-top: .75rem;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--line); overflow: hidden;
+}
+.fact {
+  flex: 1 1 auto; min-width: 7rem;
+  display: flex; flex-direction: column; gap: .22rem;
+  padding: .55rem .8rem;
+  background: var(--panel);
+}
+.fact .flabel {
+  font: 600 .56rem/1 var(--mono); letter-spacing: .14em;
+  text-transform: uppercase; color: var(--mut);
+}
+.fact .fval {
+  font: 600 .88rem/1.2 Inter, sans-serif; color: var(--ink);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.fact.cost .fval { color: var(--accent-ink); }
+.fact .fsub { font: 500 .62rem/1.35 var(--mono); color: var(--mut); }
+.plannotes {
+  list-style: none; margin: .75rem 0 0; padding: 0;
+  display: flex; flex-direction: column; gap: .4rem;
+}
+.plannotes li {
+  position: relative; padding-left: 1.05rem;
+  font-size: .8rem; line-height: 1.55; color: var(--ink2);
+}
+.plannotes li::before {
+  content: ""; position: absolute; left: 0; top: .56em;
+  width: .5em; height: .2em; border-radius: 2px;
+  background: var(--brand-gradient-x); opacity: .85;
+}
+
 .msg .verdict { font: 600 .68rem/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
 .msg .verdict.pass { color: var(--ok); }
 .msg .verdict.warn { color: var(--warn); }
@@ -322,6 +362,7 @@ button.armed { outline: 2px solid var(--accent) !important; outline-offset: 2px;
 @keyframes draftpulse { from { opacity: .5; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .draft-status { animation: none; } }
 .draft-status.failed { color: var(--bad); animation: none; }
+.draft-status.done { color: var(--ok); animation: none; }
 
 .draft-warn {
   font: 500 .72rem/1.6 var(--mono); color: var(--warn);

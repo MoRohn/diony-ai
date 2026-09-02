@@ -159,6 +159,75 @@
     return li;
   }
 
+  // A proposal reply arrives with structured facts (plan) beside the prose.
+  // The room renders those as a plan card — headline, stat tiles, note
+  // lines — so the numbers read at a glance; without a plan the prose
+  // reply stands as before.
+  function addPlanMsg(plan, fallbackText) {
+    if (!plan) return addMsg("director", fallbackText);
+    const li = document.createElement("li");
+    li.className = "msg director plan";
+    li.innerHTML = `<div class="who">Director</div><div class="body"></div>`;
+    const body = li.querySelector(".body");
+
+    const lead = document.createElement("p");
+    lead.className = "planlead";
+    lead.textContent = plan.headline;
+    body.appendChild(lead);
+
+    const facts = document.createElement("div");
+    facts.className = "planfacts";
+    const fact = (label, value, sub, cls) => {
+      const f = document.createElement("div");
+      f.className = "fact" + (cls ? ` ${cls}` : "");
+      const l = document.createElement("span");
+      l.className = "flabel";
+      l.textContent = label;
+      const v = document.createElement("span");
+      v.className = "fval";
+      v.textContent = value;
+      f.appendChild(l);
+      f.appendChild(v);
+      if (sub) {
+        const s = document.createElement("span");
+        s.className = "fsub";
+        s.textContent = sub;
+        f.appendChild(s);
+      }
+      facts.appendChild(f);
+    };
+    const secs = plan.clip_seconds || [];
+    const totalS = secs.reduce((a, b) => a + b, 0);
+    const uniform = secs.length > 1 && secs.every((s) => s === secs[0]);
+    fact("Route", plan.model, plan.provider_label);
+    if (secs.length > 1) {
+      fact(
+        "Clips",
+        uniform ? `${secs.length} × ${secs[0]}s` : `${secs.length}`,
+        uniform ? "sequential chain" : secs.map((s) => `${s}s`).join(" + ")
+      );
+    }
+    fact("Runtime", `${totalS}s`, plan.resolution);
+    fact("This pass", `+${usd(plan.pass_usd_micros)}`, "adds to session", "cost");
+    fact("Session", usd(plan.session_after_usd_micros), "after this pass", "cost");
+    body.appendChild(facts);
+
+    if ((plan.notes || []).length) {
+      const ul = document.createElement("ul");
+      ul.className = "plannotes";
+      plan.notes.forEach((n) => {
+        const item = document.createElement("li");
+        item.textContent = n;
+        ul.appendChild(item);
+      });
+      body.appendChild(ul);
+    }
+
+    thread.appendChild(li);
+    li.scrollIntoView({ block: "end" });
+    return li;
+  }
+
   // Hold/failure reasons get one loud bubble, not a wall: an identical
   // reason repeating (the same hold across waves) bumps a counter on the
   // bubble it already has instead of burying the room in duplicates.
@@ -788,7 +857,7 @@
           ...lexiconTemplates(),
         }),
       });
-      const li = addMsg("director", body.reply);
+      const li = addPlanMsg(body.plan, body.reply);
       const isChain = body.ops && body.ops.length > 1;
       const chain = isChain ? body.ops : [body.op];
       const cardEls = new Map(); // op_id -> card element
@@ -1099,24 +1168,59 @@
               anyway.disabled = false;
               return;
             }
-            addMsg(
+            const rolling = addMsg(
               "director",
               `Rolling ${plural(res.missing.length, "missing shot")} (${res.missing.join(", ")}) — I'll cut the film when they print.`
             );
+            // The retake watch is real work the user can't otherwise see:
+            // a live line on the bubble tracks the targeted set every tick
+            // so "Retry missing shots" never reads as a dead button.
+            const targeted = new Set(res.targeted);
+            const progress = document.createElement("div");
+            progress.className = "draft-status";
+            progress.textContent = `retakes rolling — 0/${targeted.size} printed`;
+            rolling.querySelector(".body").appendChild(progress);
+            let lastPrinted = -1;
             const tick = async () => {
               let counts;
               try {
                 counts = await api(`/api/director/sessions/${sessionId}/advance`, { method: "POST" });
               } catch (e2) {
-                addMsg("director", `Retake watch lost the room: ${e2.message || e2}`);
+                progress.textContent = `retake watch lost the room: ${e2.message || e2} — hit Retry again`;
+                progress.className = "draft-status failed";
                 retry.disabled = false;
                 anyway.disabled = false;
                 return;
               }
               (counts.held || []).forEach((h) => addHeldMsg(h.reason));
+              const mine = (counts.ops || []).filter((o) => targeted.has(o.op_id));
+              const printed = mine.filter((o) => o.status === "completed").length;
+              const failed = mine.filter((o) => o.status === "failed").length;
+              const inFlight = mine.filter((o) =>
+                o.status === "submitted" || o.status === "submitting"
+              ).length;
+              const waiting = targeted.size - printed - failed - inFlight;
+              const parts = [`${printed}/${targeted.size} printed`];
+              if (inFlight) parts.push(`${inFlight} rolling`);
+              if (waiting > 0) parts.push(`${waiting} queued`);
+              if (failed) parts.push(`${failed} failed`);
+              progress.textContent = `retakes — ${parts.join(" · ")}`;
+              if (printed !== lastPrinted) {
+                lastPrinted = printed;
+                refreshBoard(); // the SHOTS tab tracks each print as it lands
+              }
               if (counts.pending > 0 || (counts.queued || 0) > 0 || counts.submitting) {
                 setTimeout(tick, 3000);
                 return;
+              }
+              if (failed) {
+                progress.textContent =
+                  `retakes settled — ${printed}/${targeted.size} printed, ${failed} failed ` +
+                  "(reasons on the cards)";
+                progress.className = "draft-status failed";
+              } else {
+                progress.textContent = `all ${targeted.size} printed — cutting the film`;
+                progress.classList.add("done");
               }
               refreshMeter();
               refreshBoard();
