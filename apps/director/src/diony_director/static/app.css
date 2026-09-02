@@ -477,6 +477,18 @@ button.armed { outline: 2px solid var(--accent) !important; outline-offset: 2px;
 .bline.editable { cursor: text; border-left: 2px solid transparent; padding-left: .45em; border-radius: 0 4px 4px 0; transition: background .12s var(--ease), border-color .12s var(--ease); }
 .bline.editable:hover { border-left-color: var(--accent); background: rgba(255,122,47,.07); }
 .blineedit { width: 100%; background: var(--panel); color: inherit; border: 1px solid var(--accent); border-radius: 6px; font: inherit; padding: .2em .35em; }
+.lexchip { font-size: .66rem; color: var(--accent-ink); border: 1px solid rgba(255,122,47,.35); border-radius: 999px; padding: .18em .65em; background: var(--glass); white-space: nowrap; }
+.lexhint { font-size: .68rem; color: var(--warn); }
+.pairrow { display: flex; gap: .35em; flex-wrap: wrap; margin-top: .35em; }
+.pairlabel { font-size: .64rem; color: var(--mut); letter-spacing: .14em; align-self: center; }
+.pairchip { font: inherit; font-size: .66rem; color: var(--mut); background: var(--glass); border: 1px solid var(--line); border-radius: 999px; padding: .18em .65em; cursor: pointer; transition: color .12s var(--ease), border-color .12s var(--ease); }
+.pairchip:hover { color: var(--accent-ink); border-color: rgba(255,122,47,.35); }
+.blineedit.lintwarn { border-color: var(--bad); }
+.bshotline { color: var(--mut); font-size: .68rem; padding-left: 1.1em; opacity: .85; }
+.flowpill.dim, .grokpill.dim { opacity: .4; }
+.flowpill.dim select, .grokpill.dim select { pointer-events: auto; }
+.bshotline.editable { cursor: text; border-left: 2px solid transparent; border-radius: 0 4px 4px 0; transition: background .12s var(--ease), border-color .12s var(--ease); }
+.bshotline.editable:hover { border-left-color: var(--accent); background: rgba(255,122,47,.07); color: var(--ink); }
 .bcard { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--glass); padding: .6em .7em; margin-bottom: .6em; }
 .bward { font-size: .76rem; margin: .25em 0; }
 .bstills { display: flex; gap: .35em; flex-wrap: wrap; margin-top: .35em; }

@@ -201,8 +201,12 @@ _BEHIND_TRIGGERS = ("back to camera", "from behind", "from directly behind", "se
 _CONCEAL_TRIGGERS = ("concealed", "faceless", "face hidden", "never seen", "hood drawn", "hooded")
 
 
-def _blocking_locks(clip: ClipUnit, char_text: str, action: str) -> str:
-    haystack = f"{clip.camera_idea} {action} {char_text}".lower()
+def _blocking_locks(
+    clip: ClipUnit, char_text: str, action: str, *, camera_text: str = ""
+) -> str:
+    # Scan the camera text that will actually ship — a lexicon clause that
+    # expands to "seen from behind" must arm the lock like authored prose.
+    haystack = f"{camera_text or clip.camera_idea} {action} {char_text}".lower()
     locks: list[str] = []
     if any(t in haystack for t in _BEHIND_TRIGGERS):
         locks.append(
@@ -224,6 +228,36 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
 
     limit = prompt_limit(clip.provider)
     if clip.provider is CloudProvider.GROK:
+        # The Grok dialect alone speaks the Grok lexicon: /shorthand in the
+        # authored shot expands with the guide's reliable phrasings, unreliable
+        # camera-lock wording is hardened ("steady shot" drifts; "camera not
+        # moving" holds), and the session's atmosphere — an environmental
+        # signature, like scene-wide weather — rides every picture unless the
+        # shot already carries its own. Flow tokens stay literal here.
+        from diony_director import grok_lexicon
+
+        camera_text, _, atmo_seen = grok_lexicon.expand(clip.camera_idea)
+        camera_text = grok_lexicon.harden_camera_locks(camera_text).strip().rstrip(".")
+        if not camera_text:
+            camera_text = clip.camera_idea.strip().rstrip(".")
+        # The session atmosphere rides only when the whole package rolls on
+        # Grok: under a mixed package (auto policy — dialogue on omni), an
+        # atmosphere the Flow lane can never carry would make the spoken
+        # shots mismatch the pictures around them — the same one-look
+        # doctrine that keeps the Flow world off mixed-package dialogue.
+        # An inline /atmosphere token stays authored law for its own clip.
+        # …and never against the scripted weather: "Rain falls" over a
+        # setting that reads "Night 1, clear" makes the picture fight the
+        # script — the setting is law, the atmosphere yields.
+        mixed = any(c.provider is not CloudProvider.GROK for c in package.clips)
+        atmosphere = (
+            ""
+            if (atmo_seen or mixed)
+            else grok_lexicon.session_atmosphere_clause(
+                package.session_id,
+                weather=str(getattr(setting, "time_weather", "") or ""),
+            )
+        )
         spoken = ""
         excerpt = clip.audio_packet.script_excerpt
         if excerpt:
@@ -236,14 +270,15 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
             )
         return _fit_prompt(
             [
-                (f"{clip.camera_idea}.", 0),
-                (_blocking_locks(clip, char_text, action), 0),
+                (f"{camera_text}." if camera_text else "", 0),
+                (_blocking_locks(clip, char_text, action, camera_text=camera_text), 0),
                 (continuity, 1),
                 (
                     action
                     or "The action continues truthfully; no reset, no new business.",
                     3,
                 ),
+                (f"{grok_lexicon.sentence(atmosphere)}." if atmosphere else "", 2),
                 (_setting_block(setting, scene.heading), 2),
                 (spoken, 0),
                 (REALISM, 1),
@@ -253,6 +288,20 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
             ],
             limit,
         )
+
+    # Both Google lanes speak the Flow lexicon — /shorthand in the authored
+    # shot expands, and a chosen world rides dialogue clips too, so spoken
+    # shots hold the same look as the pictures around them. The baseline
+    # world adds nothing here: the omni dialect stays exactly itself.
+    from diony_director import flow_lexicon
+
+    camera_text, inline_world, _ = flow_lexicon.expand(clip.camera_idea)
+    camera_text = camera_text.strip().rstrip(".")
+    if not camera_text and not inline_world:
+        # nothing was shorthand — the authored prose stands as written
+        camera_text = clip.camera_idea.strip().rstrip(".")
+    # a shot that was ONLY a /world token leaves the camera slot empty; the
+    # world moved to the style slot — never resurrect the literal token
 
     if clip.model == "omni-flash":
         excerpt = clip.audio_packet.script_excerpt
@@ -265,11 +314,28 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
             who = entry.get("speaker", "")
             role = "says, on camera" if clip.audio_packet.on_camera else "in voice-over"
             spoken = f'{who} {role}: "{entry.get("line", "")}" ({direction}). '
+        # The session world rides dialogue only when the whole package rolls
+        # on Flow: under a mixed package (auto policy — pictures on Grok),
+        # styling the spoken shots away from the Grok pictures would break
+        # the scene's one-look doctrine. An inline /world is authored law
+        # for its own clip either way.
+        mixed = any(c.provider is CloudProvider.GROK for c in package.clips)
+        world = inline_world or (
+            "" if mixed else flow_lexicon.template_for(package.session_id)["world"]
+        )
+        omni_style = ""
+        if world and world != flow_lexicon.BASELINE_WORLD:
+            omni_style = flow_lexicon.worlds().get(world, {}).get("clause", "")
         return _fit_prompt(
             [
-                (f"{clip.camera_idea}.", 0),
+                (f"{camera_text}." if camera_text else "", 0),
+                # a "back to camera" / concealment cue arms the same hard
+                # lock on every dialect — the s-2e0a74644b regression class
+                # doesn't care which lane the clip rides
+                (_blocking_locks(clip, char_text, action, camera_text=camera_text), 0),
                 (continuity, 1),
                 (_setting_block(setting, scene.heading), 2),
+                (omni_style, 2),
                 (char_text, 3),
                 (spoken, 0),
                 (_sound_clause(clip, setting, continues=bool(continuity)), 2),
@@ -281,15 +347,17 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
 
     # Veo generates native audio: it gets the same explicit sound direction as
     # every other dialect — an undirected soundtrack is an invented soundtrack.
+    # The session's world template fills the style slot; an inline /world on
+    # the shot beats the template — authorship wins.
     return _fit_prompt(
         [
-            (f"{clip.camera_idea}.", 0),
+            (f"{camera_text}." if camera_text else "", 0),
+            (_blocking_locks(clip, char_text, action, camera_text=camera_text), 0),
             (continuity, 1),
             (f"{action or scene.emotional_job or 'a held cinematic moment'}.", 3),
             (_setting_block(setting, scene.heading), 2),
             (
-                "Shot on a cinema camera, shallow depth of field, motivated practical "
-                "light, natural color, restrained movement.",
+                flow_lexicon.style_clause(package.session_id, override_world=inline_world),
                 1,
             ),
             (_sound_clause(clip, setting, continues=bool(continuity)), 2),
@@ -399,7 +467,14 @@ def provider_artifact_refs(clip: ClipUnit, package: ProductionPackage) -> dict:
         refs["voices"] = voices[:5] or ["Achird"]
     plate_asset = _live_plate_asset(clip, package)
     if plate_asset:
-        if clip.continuity.lock_recipe == "still":
+        # Frames are exclusive with refs/characters/voices on Flow: a
+        # still-recipe opener may only lead FROM the plate frame when the
+        # clip carries no identity refs. With cast present the plate rides
+        # as a reference instead — the model composes the figures into the
+        # master room, the same doctrine as the Grok still-recipe branch —
+        # so the compiler never hands the capability gate an illegal combo.
+        has_identity = bool(refs.get("characters") or refs.get("voices"))
+        if clip.continuity.lock_recipe == "still" and not has_identity:
             refs["start_image"] = plate_asset
         elif max_refs:
             refs.setdefault("references", []).append(plate_asset)

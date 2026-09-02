@@ -38,11 +38,9 @@ _GROK_STYLE = (
     "filmic light, ambient sound that belongs to the scene. "
     "No morphing, no floating motion, no extra limbs, no text overlays."
 )
-_VEO_STYLE = (
-    " Shot on a cinema camera, 35mm lens, shallow depth of field, motivated practical "
-    "light, natural color, restrained camera movement. No morphing, no warped anatomy, "
-    "no on-screen text."
-)
+# The Veo style slot is filled by the Flow lexicon (world template or inline
+# /world token); this guard rides every Flow chat proposal regardless of world.
+_VEO_GUARD = "No morphing, no warped anatomy, no on-screen text."
 
 
 @dataclass
@@ -106,12 +104,23 @@ def reset() -> None:
         _ASPECTS,
     ):
         store.clear()
+    from diony_director import flow_lexicon, grok_lexicon
+
+    flow_lexicon.reset_templates()
+    grok_lexicon.reset_templates()
 
 
 def create_session() -> str:
     sid = f"s-{uuid.uuid4().hex[:10]}"
     _SESSIONS[sid] = SessionState(id=sid)
     return sid
+
+
+def session_exists(sid: str) -> bool:
+    """Whether the sid names a live or rehydrated session — rehydration runs
+    at boot, so an unknown sid here is a typo or a deleted room, not a
+    not-yet-loaded one."""
+    return sid in _SESSIONS
 
 
 def get_session(sid: str) -> SessionState:
@@ -325,12 +334,61 @@ def resolve_provider(requested: str) -> CloudProvider:
     return CloudProvider(normalized)
 
 
-def compile_prompt(idea: str, provider: CloudProvider) -> str:
+def compile_prompt(
+    idea: str, provider: CloudProvider, sid: str = "", *, has_start_image: bool = False
+) -> str:
     from diony_director.compiler import _fit_prompt, prompt_limit
 
     seed = idea.strip().rstrip(".")
-    style = _GROK_STYLE if provider is CloudProvider.GROK else _VEO_STYLE
-    return _fit_prompt([(f"{seed}.", 1), (style.strip(), 0)], prompt_limit(provider))
+    if provider is CloudProvider.GROK:
+        # Grok speaks the Grok lexicon (never the Flow one — a Flow token
+        # stays literal here). Motion/camera lead the prompt: the model
+        # weighs the earliest words most. An opening still adds the i2v
+        # directive — the model sees the frame; redescription is drift.
+        from diony_director import grok_lexicon
+
+        expanded, camera_seen, atmo_seen = grok_lexicon.expand(seed)
+        expanded = grok_lexicon.harden_camera_locks(expanded).strip().rstrip(".")
+        if not expanded and not (camera_seen or atmo_seen):
+            expanded = seed  # nothing was shorthand — the idea stands as written
+        pieces: list[tuple[str, int]] = []
+        if expanded:
+            pieces.append((f"{expanded}.", 1))
+        if not camera_seen and not grok_lexicon.mentions_camera(expanded):
+            # authored camera prose rules — a template camera stacked over
+            # "camera pans across the harbor" is two moves in one prompt
+            camera = grok_lexicon.session_camera_clause(sid)
+            if camera:
+                pieces.append((f"{grok_lexicon.sentence(camera)}.", 1))
+        if not atmo_seen:
+            atmosphere = grok_lexicon.session_atmosphere_clause(sid)
+            if atmosphere:
+                pieces.append((f"{grok_lexicon.sentence(atmosphere)}.", 1))
+        if has_start_image:
+            pieces.append((grok_lexicon.I2V_DIRECTIVE, 1))
+        pieces.append((_GROK_STYLE.strip(), 0))
+        return _fit_prompt(pieces, prompt_limit(provider))
+    from diony_director import flow_lexicon
+
+    expanded, inline_world, has_camera = flow_lexicon.expand(seed)
+    expanded = expanded.strip().rstrip(".")
+    if not expanded and not (inline_world or has_camera):
+        expanded = seed  # nothing was shorthand — the idea stands as written
+    pieces: list[tuple[str, int]] = []
+    if expanded:
+        # an idea that was ONLY tokens leaves this slot to the clauses below
+        pieces.append((f"{expanded}.", 1))
+    if not has_camera and not flow_lexicon.mentions_camera(expanded):
+        # authored camera prose rules — same doctrine as the Grok lane
+        camera = flow_lexicon.session_camera_clause(sid)
+        if camera:
+            pieces.append((f"{camera}.", 1))
+    # The world/style clause is as inviolable as the old _VEO_STYLE was:
+    # priority 0 so length pressure shrinks the idea, never ships a
+    # half-truncated cinematography clause or drops the look entirely.
+    pieces.append((flow_lexicon.style_clause(sid, override_world=inline_world), 0))
+    pieces.append((_VEO_GUARD, 0))
+    return _fit_prompt(pieces, prompt_limit(provider))
 
 
 def propose(
@@ -353,6 +411,9 @@ def propose(
         duration_s=duration,
         resolution=resolution,
     )
+    # Uploads resolve BEFORE the prompt compiles: a Grok shot opening from a
+    # still carries the i2v directive — the model sees the frame already.
+    start, extras = upload_refs(sid)
     op = DirectorOp(
         id=f"op-{uuid.uuid4().hex[:10]}",
         session_id=sid,
@@ -360,7 +421,7 @@ def propose(
         provider=chosen_provider,
         model=chosen_model,
         mode=CloudGenerationMode.T2V,
-        prompt=compile_prompt(text, chosen_provider),
+        prompt=compile_prompt(text, chosen_provider, sid, has_start_image=bool(start)),
         prompt_version="v1",
         duration_s=duration,
         resolution=resolution,
@@ -369,7 +430,6 @@ def propose(
         if chosen_provider is CloudProvider.GROK
         else "single-shot draft on the requested Flow lane",
     )
-    start, extras = upload_refs(sid)
     if start:
         op.artifact_refs["start_image"] = start
         if extras:
@@ -394,6 +454,28 @@ def propose(
         )
     if est.rate_cards_stale:
         reply += " Heads up: the rate card is stale — re-verify provider pricing before running."
+    if chosen_provider is CloudProvider.GOOGLE_FLOW:
+        from diony_director import flow_lexicon
+
+        unknown = flow_lexicon.unknown_tokens(text)
+        if unknown:
+            reply += (
+                f" Note: {', '.join(unknown)} isn't Flow shorthand I know — "
+                "it rides the prompt as literal text."
+            )
+        for note in flow_lexicon.advisories(text):
+            reply += f" Note: {note}"
+    elif chosen_provider is CloudProvider.GROK:
+        from diony_director import grok_lexicon
+
+        unknown = grok_lexicon.unknown_tokens(text)
+        if unknown:
+            reply += (
+                f" Note: {', '.join(unknown)} isn't Grok shorthand I know — "
+                "it rides the prompt as literal text."
+            )
+        for note in grok_lexicon.advisories(text):
+            reply += f" Note: {note}"
     return Proposal(op=op, reply=reply)
 
 
@@ -420,6 +502,56 @@ def set_aspect(sid: str, aspect: str) -> None:
     _ASPECTS[sid] = aspect
     if sid in _SESSIONS:
         persist(sid)
+
+
+def flow_template_for(sid: str) -> dict[str, str]:
+    from diony_director import flow_lexicon
+
+    return flow_lexicon.template_for(sid)
+
+
+def _flow_template_raw(sid: str) -> dict[str, str] | None:
+    """The persisted form: only a non-default template earns a state.json key."""
+    from diony_director import flow_lexicon
+
+    template = flow_lexicon.template_for(sid)
+    if template["world"] == flow_lexicon.BASELINE_WORLD and not template["camera"]:
+        return None
+    return template
+
+
+def set_flow_template(sid: str, *, world: str = "", camera: str = "") -> dict[str, str]:
+    from diony_director import flow_lexicon
+
+    template = flow_lexicon.set_template(sid, world=world, camera=camera)
+    if sid in _SESSIONS:
+        persist(sid)
+    return template
+
+
+def grok_template_for(sid: str) -> dict[str, str]:
+    from diony_director import grok_lexicon
+
+    return grok_lexicon.template_for(sid)
+
+
+def _grok_template_raw(sid: str) -> dict[str, str] | None:
+    """The persisted form: only a non-default template earns a state.json key."""
+    from diony_director import grok_lexicon
+
+    template = grok_lexicon.template_for(sid)
+    if not template["camera"] and not template["atmosphere"]:
+        return None
+    return template
+
+
+def set_grok_template(sid: str, *, camera: str = "", atmosphere: str = "") -> dict[str, str]:
+    from diony_director import grok_lexicon
+
+    template = grok_lexicon.set_template(sid, camera=camera, atmosphere=atmosphere)
+    if sid in _SESSIONS:
+        persist(sid)
+    return template
 
 
 def set_budget(sid: str, *, max_usd_micros: int, max_revisions_per_clip: int, autopilot: bool) -> None:
@@ -611,11 +743,17 @@ def _validate_draft(draft: ScreenplayDraft) -> None:
 
 
 EDITABLE_LINE_KINDS = {"action", "dialogue", "vo", "parenthetical"}
+SHOT_LINE_KINDS = {"action", "dialogue", "vo"}
 
 
-def edit_draft_line(sid: str, line_id: str, text: str) -> dict[str, Any]:
+def edit_draft_line(
+    sid: str, line_id: str, text: str | None = None, *, shot: str | None = None
+) -> dict[str, Any]:
     """Change one line of a READY, UNLOCKED draft — the writer's pass before
-    the money pass. Headings and cues hold the structure and stay fixed."""
+    the money pass. Headings and cues hold the structure and stay fixed.
+    `shot` rewrites the authored frame for the beat (empty hands the beat
+    back to the coverage rotation); /shorthand in it expands on the Veo
+    lane at compile time and stays literal everywhere else."""
     record = _DRAFTS.get(sid)
     if not isinstance(record, dict) or record.get("status") != "ready" or not record.get("draft"):
         raise DraftNotReady("no ready draft to edit — draft a script first")
@@ -623,12 +761,19 @@ def edit_draft_line(sid: str, line_id: str, text: str) -> dict[str, Any]:
     if draft.script.locked:
         raise DraftLocked("the script is locked — nothing changes after the lock")
     line = draft.script.line(line_id)  # KeyError → 404 upstream
-    if line.kind not in EDITABLE_LINE_KINDS:
-        raise ValueError(f"a {line.kind} line holds the structure and cannot be edited")
-    cleaned = " ".join(text.split())[:500]
-    if not cleaned:
-        raise ValueError("an empty line is a deletion, and deletions need a redraft")
-    line.text = cleaned
+    if text is None and shot is None:
+        raise ValueError("nothing to edit — send text, shot, or both")
+    if text is not None:
+        if line.kind not in EDITABLE_LINE_KINDS:
+            raise ValueError(f"a {line.kind} line holds the structure and cannot be edited")
+        cleaned = " ".join(text.split())[:500]
+        if not cleaned:
+            raise ValueError("an empty line is a deletion, and deletions need a redraft")
+        line.text = cleaned
+    if shot is not None:
+        if line.kind not in SHOT_LINE_KINDS:
+            raise ValueError(f"a {line.kind} line carries no shot — direct an action or spoken beat")
+        line.shot = " ".join(shot.split())[:300]
     persist(sid)
     return draft_state(sid)
 
@@ -789,6 +934,19 @@ def register_op(sid: str, op: DirectorOp) -> DirectorOp:
 
 def package_for(sid: str) -> ProductionPackage | None:
     return _PACKAGES.get(sid)
+
+
+def script_locked(sid: str) -> bool:
+    """Whether THIS session's CURRENT draft is locked (its prompts compiled).
+    A stale package from a finished film is not a lock: a re-produce writes a
+    fresh, unlocked draft over _DRAFTS[sid] while the old package lingers
+    until the next lock, and that fresh draft may still be restyled."""
+    record = _DRAFTS.get(sid)
+    if isinstance(record, dict) and record.get("status") == "ready":
+        draft = record.get("draft")
+        if draft is not None:
+            return bool(draft.script.locked)
+    return False
 
 
 def clip_for_op(op: DirectorOp) -> ClipUnit | None:
@@ -1175,8 +1333,8 @@ def persist(sid: str) -> None:
                 "media_url": clip.media_url,
                 "metadata": dict(clip.metadata),
             }
-        for key in ("media_generation_id", "result_url"):
-            if rt.get(key):
+        for key in ("media_generation_id", "result_url", "last_poll_state", "last_progress_ts"):
+            if rt.get(key) is not None:
                 entry[key] = rt[key]
         if entry:
             runtime_doc[op_id] = entry
@@ -1198,6 +1356,8 @@ def persist(sid: str) -> None:
         "batch_targets": sorted(_BATCH_TARGETS.get(sid, set())),
         "budget": _BUDGETS.get(sid),
         "aspect": _ASPECTS.get(sid),
+        "flow_template": _flow_template_raw(sid),
+        "grok_template": _grok_template_raw(sid),
         "uploads": list(_UPLOADS.get(sid) or []),
         "runtime": runtime_doc,
         "draft": draft_doc,
@@ -1250,6 +1410,14 @@ def _load_state(sid: str, doc: dict) -> None:
         _BUDGETS[sid] = dict(doc["budget"])
     if doc.get("aspect") in PROGRAM_ASPECTS:
         _ASPECTS[sid] = str(doc["aspect"])
+    if doc.get("flow_template"):
+        from diony_director import flow_lexicon
+
+        flow_lexicon.restore_template(sid, doc["flow_template"])
+    if doc.get("grok_template"):
+        from diony_director import grok_lexicon
+
+        grok_lexicon.restore_template(sid, doc["grok_template"])
     if doc.get("uploads"):
         _UPLOADS[sid] = list(doc["uploads"])
     for op_id, entry in (doc.get("runtime") or {}).items():
@@ -1260,8 +1428,8 @@ def _load_state(sid: str, doc: dict) -> None:
             clip_doc = dict(entry["clip"])
             clip_doc["path"] = _Path(clip_doc["path"])
             rt["clip"] = provider_base.FetchedClip(**clip_doc)
-        for key in ("media_generation_id", "result_url"):
-            if entry.get(key):
+        for key in ("media_generation_id", "result_url", "last_poll_state", "last_progress_ts"):
+            if entry.get(key) is not None:
                 rt[key] = entry[key]
     if doc.get("draft"):
         draft_doc = doc["draft"]

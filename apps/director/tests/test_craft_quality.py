@@ -354,7 +354,7 @@ def test_flow_picture_lane_rides_fast_and_quality_refs_stay_legal() -> None:
         from diony_director import capabilities
 
         from diony_contracts.director import CloudGenerationMode, DirectorOpType
-        from tests.test_continuity_music import _gen_op
+        from test_continuity_music import _gen_op
 
         op = _gen_op(
             "op-q", "s-veo-q", clip.clip_id,
@@ -369,7 +369,7 @@ def test_quality_re_anchor_opens_from_the_scene_master_frame(monkeypatch, tmp_pa
 
     from diony_contracts.director import CloudProvider
     from diony_director import app as app_module, session
-    from tests.test_continuity_music import _gen_op
+    from test_continuity_music import _gen_op
 
     package = packagebuilder.build_package(
         "s-veo-anchor", "a getaway", _draft(), provider_policy="google-flow"
@@ -405,3 +405,46 @@ def test_quality_re_anchor_opens_from_the_scene_master_frame(monkeypatch, tmp_pa
         "a no-reference model re-anchors from the scene's master frame"
     )
     assert "references" not in op.artifact_refs
+
+
+def test_flow_still_opener_with_cast_builds_a_gate_legal_payload() -> None:
+    """The P0 regression: a Flow still-recipe opener in a scene with cast used
+    to set start_image AND characters together — an illegal combo the new
+    frames-exclusive gate rejects, stalling the paid batch. The compiler must
+    route the plate to references (cast composed into the master room), the
+    same doctrine as the Grok branch, so the gate passes."""
+    from diony_director import capabilities, compiler, packagebuilder
+
+    from diony_contracts.director import CloudProvider
+    from test_continuity_music import _gen_op
+
+    package = packagebuilder.build_package(
+        "s-flow-open", "a getaway", _draft(), provider_policy="google-flow"
+    )
+    opener = None
+    for clip in package.clips:
+        if (
+            clip.continuity.lock_recipe == "still"
+            and clip.continuity.character_packs
+            and clip.model.startswith("veo")
+        ):
+            opener = clip
+            break
+    assert opener is not None, "the draft opens on a still-recipe shot with cast"
+    setting = package.setting(str(opener.continuity.setting_plate["setting_id"]))
+    setting.plate_asset_id = "/vault/plates/diner.jpg"
+    for pack in opener.continuity.character_packs:
+        try:
+            package.character(str(pack["char_id"])).flow_character_ref = "char-entity-1"
+        except KeyError:
+            pass
+    refs = compiler.provider_artifact_refs(opener, package)
+    assert "start_image" not in refs, "cast present → the frame slot must stay empty"
+    if refs.get("characters"):
+        assert "/vault/plates/diner.jpg" in (refs.get("references") or []), "plate rides as a ref"
+    op = _gen_op(
+        "op-open", "s-flow-open", opener.clip_id,
+        provider=CloudProvider.GOOGLE_FLOW, model=opener.model, duration_s=opener.duration_s,
+    )
+    op.artifact_refs = dict(refs)
+    assert capabilities.violations(op) == [], "the compiler never hands the gate an illegal combo"

@@ -383,3 +383,59 @@ def test_autopilot_never_spends_on_a_get(monkeypatch) -> None:
     assert "queued" in rt["narration"]
     app_module._maybe_autopilot_run(sid, op, rt, allow_spend=True)
     assert calls == [op.id]
+
+
+def test_frames_are_exclusive_with_identity_refs() -> None:
+    """The matrix declares frames_exclusive_with_refs on every model — the
+    gate must actually refuse the combination, not discover it as a provider
+    400 after money is committed."""
+    framed = _flow_op(
+        mode=CloudGenerationMode.I2V,
+        artifact_refs={
+            "start_image": "user:still",
+            "references": ["user:img1"],
+            "voices": ["v-1"],
+        },
+    )
+    problems = capabilities.violations(framed)
+    assert any("exclusive" in p for p in problems)
+
+    frame_only = _flow_op(
+        mode=CloudGenerationMode.I2V, artifact_refs={"start_image": "user:still"}
+    )
+    assert capabilities.violations(frame_only) == []
+
+
+def test_mode_matrix_is_enforced() -> None:
+    first_last_on_grok = _flow_op(
+        provider=CloudProvider.GROK,
+        model="grok-imagine-video-1.5",
+        mode=CloudGenerationMode.FIRST_LAST,
+        duration_s=6,
+        resolution="720p",
+    )
+    assert any("first_last" in p for p in capabilities.violations(first_last_on_grok))
+
+    first_last_on_veo = _flow_op(mode=CloudGenerationMode.FIRST_LAST)
+    assert capabilities.violations(first_last_on_veo) == []
+
+
+def test_none_mode_never_crashes_the_gate() -> None:
+    """DirectorOp.mode is Optional; a rehydrated op without one must not
+    AttributeError on the money path — it's simply out of mode-matrix scope."""
+    op = _flow_op(mode=None)
+    assert capabilities.violations(op) == []
+
+
+def test_grok_edit_mode_matrix_agrees_with_supports_edit() -> None:
+    """grok-imagine-video advertises supports_edit=True, so its mode matrix
+    must accept v2v_edit — the gate can't refuse an edit the record allows."""
+    edit = _flow_op(
+        provider=CloudProvider.GROK,
+        model="grok-imagine-video",
+        mode=CloudGenerationMode.V2V_EDIT,
+        op=DirectorOpType.EDIT,
+        resolution="720p",
+        artifact_refs={"source_video": "/vault/takes/x.mp4"},
+    )
+    assert not any("v2v_edit lane" in p for p in capabilities.violations(edit))

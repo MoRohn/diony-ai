@@ -513,3 +513,57 @@ def test_a_held_bible_op_still_gates_its_scenes() -> None:
     ready = session.ready_ops(sid)
     clip_ids = {o["id"] for o in locked["ops"]}
     assert not any(op.id in clip_ids for op in ready), "no clip rolls while a plate is held"
+
+
+def test_watchdog_surfaces_a_job_stuck_without_progress() -> None:
+    """A job that polls "running" forever looks healthy to every tick — only
+    the timestamp of its last state change exposes it. Half an hour without
+    progress lands it in the advance report's stalled list, where the room
+    already narrates it."""
+    import time
+
+    from test_continuity_music import _gen_op
+
+    client = TestClient(app_module.app)
+    sid = client.post("/api/director/sessions").json()["session_id"]
+    op = _gen_op("op-stuck", sid, "cl-stuck", status="submitted")
+    session._OPS[op.id] = op
+    session._SESSIONS[sid].op_ids.append(op.id)
+    rt = session.runtime(op.id)
+    rt["last_poll_state"] = "running"
+    rt["last_progress_ts"] = time.time() - app_module.STALL_WATCHDOG_S - 120
+
+    counts = client.post(f"/api/director/sessions/{sid}/advance").json()
+    assert any(
+        s["op_id"] == op.id and "may be lost" in s["reason"] for s in counts["stalled"]
+    )
+    assert counts["pending"] == 1, "surfaced, never auto-failed — the job may still land"
+
+    rt["last_progress_ts"] = time.time()  # fresh progress → the watchdog is quiet
+    counts = client.post(f"/api/director/sessions/{sid}/advance").json()
+    assert counts["stalled"] == []
+
+
+def test_watchdog_starts_a_clock_for_a_pre_watchdog_submitted_op() -> None:
+    """An op submitted before the watchdog landed (rehydrated old state) has
+    no last_progress_ts. It must be stamped at first sighting and counted
+    pending — never treated as healthy forever."""
+    import time
+
+    from test_continuity_music import _gen_op
+
+    client = TestClient(app_module.app)
+    sid = client.post("/api/director/sessions").json()["session_id"]
+    op = _gen_op("op-nots", sid, "cl-nots", status="submitted")
+    session._OPS[op.id] = op
+    session._SESSIONS[sid].op_ids.append(op.id)
+    session.runtime(op.id).clear()  # no last_progress_ts at all
+
+    counts = client.post(f"/api/director/sessions/{sid}/advance").json()
+    assert counts["stalled"] == [], "a freshly-stamped clock is not yet stalled"
+    assert counts["pending"] == 1
+    assert session.runtime(op.id).get("last_progress_ts") is not None, "the clock started"
+    # push the stamped clock past the window → it now surfaces
+    session.runtime(op.id)["last_progress_ts"] = time.time() - app_module.STALL_WATCHDOG_S - 60
+    counts = client.post(f"/api/director/sessions/{sid}/advance").json()
+    assert any(s["op_id"] == op.id for s in counts["stalled"])

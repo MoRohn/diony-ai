@@ -132,7 +132,7 @@
 
   function estimateTable(est) {
     const rows = est.lines
-      .map((l) => `<tr><td>${l.label}</td><td>${usd(l.usd_micros)}</td></tr>`)
+      .map((l) => `<tr><td>${esc(l.label)}</td><td>${usd(l.usd_micros)}</td></tr>`)
       .join("");
     return `<details class="lines"><summary>estimate breakdown</summary><table>${rows}</table></details>`;
   }
@@ -185,8 +185,8 @@
     card.className = "opcard";
     card.innerHTML = `
       <div class="row">
-        <span class="chip">${op.provider} · ${op.model}</span>
-        <span class="chip">${op.duration_s}s · ${op.resolution}</span>
+        <span class="chip">${esc(op.provider)} · ${esc(op.model)}</span>
+        <span class="chip">${esc(op.duration_s)}s · ${esc(op.resolution)}</span>
         <span class="est">est ${usd(op.estimate.total_usd_micros)}</span>
         <button type="button">Run — ${usd(op.estimate.total_usd_micros)}</button>
         <span class="state">proposed</span>
@@ -273,6 +273,28 @@
       if (status.engine_choice === "grok" || status.engine_choice === "google-flow") {
         $("provider").value = status.engine_choice;
       }
+      // The Flow lexicon (Google route only): worlds fill the style slot,
+      // cameras direct one-shot drafts. Custom entries in flow_lexicon.json
+      // arrive through the same catalog.
+      try {
+        const lex = await api("/api/director/flow/lexicon");
+        flowLex = lex;
+        fillLexSelect($("flow-world"), lex.worlds, lex.default_world || "baseline");
+        fillLexSelect($("flow-camera"), lex.cameras, "", "Authored");
+      } catch (err) {
+        /* static fallbacks in the HTML keep the pills usable */
+      }
+      try {
+        const glex = await api("/api/director/grok/lexicon");
+        grokLex = glex;
+        fillLexSelect($("grok-camera"), glex.cameras, "", "Authored");
+        fillLexSelect($("grok-atmosphere"), glex.atmospheres, "", "None");
+      } catch (err) {
+        /* static fallbacks in the HTML keep the pills usable */
+      }
+      updateLexiconPillState();
+      renderPairings();
+      updateTemplateChip();
       // A rehydrated session with unfinished business gets the room back —
       // failed clips carry a Retry, and the printed ones are never re-spent.
       let resume = null;
@@ -285,6 +307,7 @@
       if (resume) {
         sessionId = resume.session_id;
         refreshMeter();
+        await syncSessionSettings();
         const bits = [`${resume.completed} printed`];
         if (resume.failed) bits.push(`${resume.failed} failed — each has a Retry on the SHOTS tab`);
         if (resume.in_flight) bits.push(`${resume.in_flight} still rolling`);
@@ -311,6 +334,217 @@
     }
   }
 
+  let flowLex = null;
+  let grokLex = null;
+  // The None-means-keep contract lives here: the client asserts a program
+  // setting ONLY when the user actually chose it this session. A control at
+  // its untouched default sends null (keep) — so a resume where the settings
+  // sync silently failed can never revert a stored template or 409 a locked
+  // session by posting the static default over it.
+  const dirtyControls = new Set();
+  function markDirty(id) {
+    dirtyControls.add(id);
+  }
+
+  async function syncSessionSettings() {
+    // A resumed room MUST adopt the session's stored settings before it
+    // speaks: the console sends explicit select values, and defaults sent
+    // over a stored template would silently clear it — or 409 an innocent
+    // message after the lock. (A stored key whose custom lexicon entry has
+    // since vanished simply leaves that select where it is.)
+    try {
+      const s = await api(`/api/director/sessions/${sessionId}/settings`);
+      const set = (id, value) => {
+        const el = $(id);
+        if (el && [...el.options].some((o) => o.value === value)) el.value = value;
+      };
+      if (s.aspect) set("aspect", s.aspect);
+      if (s.flow_template) {
+        set("flow-world", s.flow_template.world || "baseline");
+        set("flow-camera", s.flow_template.camera || "");
+      }
+      if (s.grok_template) {
+        set("grok-camera", s.grok_template.camera || "");
+        set("grok-atmosphere", s.grok_template.atmosphere || "");
+      }
+    } catch (err) {
+      /* settings unavailable — the selects keep their defaults */
+    }
+    updateTemplateChip();
+  }
+
+  function updateLexiconPillState() {
+    // Each lexicon shapes its own route only — on the other route's explicit
+    // lane the pills go quiet so nobody reads them as active controls.
+    const provider = $("provider").value;
+    document.querySelectorAll(".flowpill").forEach((p) => p.classList.toggle("dim", provider === "grok"));
+    document.querySelectorAll(".grokpill").forEach((p) => p.classList.toggle("dim", provider === "google-flow"));
+  }
+
+  function fillLexSelect(select, entries, selectedKey, noneLabel) {
+    if (!select || !Array.isArray(entries) || !entries.length) return;
+    select.replaceChildren();
+    if (noneLabel != null) {
+      const none = document.createElement("option");
+      none.value = "";
+      none.textContent = noneLabel;
+      select.appendChild(none);
+    }
+    entries.forEach((e) => {
+      const opt = document.createElement("option");
+      opt.value = e.key;
+      opt.textContent = e.label;
+      opt.title = [e.hint, e.clause].filter(Boolean).join(" — ");
+      select.appendChild(opt);
+    });
+    select.value = selectedKey;
+  }
+
+  function fieldOrKeep(id) {
+    // an untouched control asserts nothing — null tells the server to keep
+    // whatever it has stored (None-means-keep)
+    const el = $(id);
+    if (!el || !dirtyControls.has(id)) return null;
+    return el.value;
+  }
+
+  function lexiconTemplates() {
+    return {
+      flow_world: fieldOrKeep("flow-world"),
+      flow_camera: fieldOrKeep("flow-camera"),
+      grok_camera: fieldOrKeep("grok-camera"),
+      grok_atmosphere: fieldOrKeep("grok-atmosphere"),
+    };
+  }
+
+  function lexTokensIn(text) {
+    // same token grammar as the server: a /word at the start or after
+    // whitespace/"("/"+" — never mid-word, so "day/night" prose is safe
+    const re = /(?:^|[\s(+])\/([A-Za-z][A-Za-z0-9_-]*)/g;
+    const out = [];
+    let m;
+    while ((m = re.exec(text))) {
+      const key = m[1].toLowerCase();
+      if (!out.includes(key)) out.push(key);
+    }
+    return out;
+  }
+
+  function lexKnown(lex, families) {
+    const known = new Set();
+    if (lex) families.forEach((f) => (lex[f] || []).forEach((e) => known.add(e.key)));
+    return known;
+  }
+
+  function unknownLexTokens(text, route) {
+    // route "grok"/"google-flow" checks that route's lexicon; anything else
+    // (auto, shot lines) warns only when NEITHER route knows the token —
+    // mirroring the server's shot-edit rule. A lexicon that failed to load
+    // is never used to judge tokens: with grokLex missing we must not
+    // red-flag a valid /pushin the server would happily expand.
+    if (!text.includes("/")) return [];
+    if (route === "grok") {
+      if (!grokLex) return [];
+      const grokKnown = lexKnown(grokLex, ["cameras", "atmospheres"]);
+      return lexTokensIn(text).filter((t) => !grokKnown.has(t));
+    }
+    if (route === "google-flow") {
+      if (!flowLex) return [];
+      const flowKnown = lexKnown(flowLex, ["worlds", "cameras"]);
+      return lexTokensIn(text).filter((t) => !flowKnown.has(t));
+    }
+    // auto / shot-line: flag only tokens unknown to every LOADED lexicon
+    if (!flowLex && !grokLex) return [];
+    const flowKnown = lexKnown(flowLex, ["worlds", "cameras"]);
+    const grokKnown = lexKnown(grokLex, ["cameras", "atmospheres"]);
+    return lexTokensIn(text).filter(
+      (t) => !(flowLex && flowKnown.has(t)) && !(grokLex && grokKnown.has(t))
+    );
+  }
+
+  function lintComposer() {
+    // catch a /typo BEFORE it rides a paid round-trip as literal text
+    const el = $("lexhint");
+    if (!el) return;
+    const unknown = unknownLexTokens($("idea").value, $("provider").value);
+    if (unknown.length) {
+      el.textContent = `⚠ ${unknown.map((t) => "/" + t).join(" ")} isn't shorthand on this route — it would ride the prompt as literal text`;
+      el.hidden = false;
+    } else {
+      el.hidden = true;
+    }
+  }
+
+  function lexLabel(lex, family, key) {
+    const entry = lex && (lex[family] || []).find((e) => e.key === key);
+    return entry ? entry.label : key;
+  }
+
+  function updateTemplateChip() {
+    // the session's look, visible without scrollback
+    const el = $("lexchip");
+    if (!el) return;
+    const parts = [];
+    const fw = ($("flow-world") && $("flow-world").value) || "";
+    const fc = ($("flow-camera") && $("flow-camera").value) || "";
+    if ((fw && fw !== "baseline") || fc) {
+      const bits = [];
+      if (fw && fw !== "baseline") bits.push(lexLabel(flowLex, "worlds", fw));
+      if (fc) bits.push(lexLabel(flowLex, "cameras", fc));
+      parts.push("Flow: " + bits.join(" · "));
+    }
+    const gc = ($("grok-camera") && $("grok-camera").value) || "";
+    const ga = ($("grok-atmosphere") && $("grok-atmosphere").value) || "";
+    if (gc || ga) {
+      const bits = [];
+      if (gc) bits.push(lexLabel(grokLex, "cameras", gc));
+      if (ga) bits.push(lexLabel(grokLex, "atmospheres", ga));
+      parts.push("Grok: " + bits.join(" · "));
+    }
+    el.textContent = parts.join("  —  ");
+    el.hidden = !parts.length;
+  }
+
+  function renderPairings() {
+    // the cheat sheet's curated world+camera stacks — one tap sets both
+    // Flow pills; never auto-applied
+    const row = $("pairrow");
+    if (!row || !flowLex || !Array.isArray(flowLex.pairings)) return;
+    row.replaceChildren();
+    const tag = document.createElement("span");
+    tag.className = "pairlabel";
+    tag.textContent = "PAIRINGS";
+    row.appendChild(tag);
+    flowLex.pairings.forEach((p) => {
+      const worldOk = [...$("flow-world").options].some((o) => o.value === p.world);
+      const camOk = [...$("flow-camera").options].some((o) => o.value === p.camera);
+      if (!worldOk || !camOk) return; // a pairing naming a vanished key renders nothing
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "pairchip";
+      chip.textContent = `${lexLabel(flowLex, "worlds", p.world)} + ${lexLabel(flowLex, "cameras", p.camera)}`;
+      chip.title = `${p.why} — one tap sets both Flow pills`;
+      chip.addEventListener("click", () => {
+        $("flow-world").value = p.world;
+        $("flow-camera").value = p.camera;
+        markDirty("flow-world"); // a tapped pairing is a user choice
+        markDirty("flow-camera");
+        updateTemplateChip();
+      });
+      row.appendChild(chip);
+    });
+    row.hidden = row.children.length <= 1;
+  }
+
+  function clampedOneShotSeconds() {
+    const asked = durationSeconds() || 8;
+    if (asked > 15) {
+      addMsg("director", `A one-shot draft caps at 15s — booking 15s (you asked for ${asked}s; use Produce for a full runtime).`);
+      return 15;
+    }
+    return asked;
+  }
+
   async function send() {
     const idea = $("idea").value.trim();
     if (!idea || !sessionId) return;
@@ -323,9 +557,10 @@
         body: JSON.stringify({
           text: idea,
           provider: $("provider").value,
-          duration_s: Math.min(15, durationSeconds() || 8),
+          duration_s: clampedOneShotSeconds(),
           resolution: $("resolution").value,
-          aspect: ($("aspect") && $("aspect").value) || "16:9",
+          aspect: fieldOrKeep("aspect"),
+          ...lexiconTemplates(),
         }),
       });
       const li = addMsg("director", body.reply);
@@ -452,6 +687,9 @@
         if (status === "completed" || status === "failed") {
           refreshMeter();
           if (status === "completed") {
+            // set the text BEFORE the verdict chip lands — textContent wipes
+            // children; without this the card reads "generating…" forever
+            state.textContent = "printed";
             state.className = "state done";
             const video = document.createElement("video");
             video.controls = true;
@@ -484,8 +722,8 @@
     card.className = "opcard";
     card.innerHTML = `
       <div class="row">
-        <span class="chip">${op.clip_id || op.op} · ${op.provider} · ${op.model}</span>
-        <span class="chip">${op.duration_s}s</span>
+        <span class="chip">${esc(op.clip_id || op.op)} · ${esc(op.provider)} · ${esc(op.model)}</span>
+        <span class="chip">${esc(op.duration_s)}s</span>
         <span class="est">est ${usd(op.estimate.total_usd_micros)}</span>
         <button type="button">Run — ${usd(op.estimate.total_usd_micros)}</button>
         <span class="state">${op.status}</span>
@@ -826,7 +1064,8 @@
           idea: idea,
           runtime_s: durationSeconds() || 60,
           max_usd: maxUsd,
-          aspect: ($("aspect") && $("aspect").value) || "16:9",
+          aspect: fieldOrKeep("aspect"),
+          ...lexiconTemplates(),
         }),
       });
       if (maxUsd > 0) addMsg("director", `Budget ceiling set: $${maxUsd.toFixed(2)} for this session — anything past it holds.`);
@@ -905,6 +1144,8 @@
 
   async function refreshBoard() {
     if ($("board").hidden || !sessionId) return;
+    // Never repaint over an open line/shot editor — the poll would eat the edit.
+    if ($("bpane").querySelector("input")) return;
     let b;
     try {
       b = await api(`/api/director/sessions/${sessionId}/board`);
@@ -938,9 +1179,30 @@
       ? "Script is locked — the money pass runs from it."
       : "Click a line to rewrite it. Headings hold the structure.";
     pane.appendChild(note);
+    if (!b.locked && flowLex) {
+      const legend = document.createElement("div");
+      legend.className = "bnote";
+      legend.textContent =
+        "⌖ shot shorthand (Google route) — cameras: " +
+        flowLex.cameras.map((c) => "/" + c.key).join(" ") +
+        " · styles: " +
+        flowLex.worlds.filter((w) => w.key !== "baseline").map((w) => "/" + w.key).join(" ");
+      pane.appendChild(legend);
+    }
+    if (!b.locked && grokLex) {
+      const legend = document.createElement("div");
+      legend.className = "bnote";
+      legend.textContent =
+        "⌖ shot shorthand (Grok route) — cameras: " +
+        grokLex.cameras.map((c) => "/" + c.key).join(" ") +
+        " · atmosphere: " +
+        grokLex.atmospheres.map((a) => "/" + a.key).join(" ");
+      pane.appendChild(legend);
+    }
     const list = document.createElement("div");
     list.className = "blines";
     const editable = new Set(["action", "dialogue", "vo", "parenthetical"]);
+    const shotKinds = new Set(["action", "dialogue", "vo"]);
     b.script.lines.forEach((l) => {
       const row = document.createElement("div");
       row.className = `bline ${l.kind}`;
@@ -951,8 +1213,71 @@
         row.addEventListener("click", () => editLine(row, l));
       }
       list.appendChild(row);
+      // The authored frame for the beat. Directable until the lock; on the
+      // Google route /shorthand (/closeup, /orbit, /filmic…) expands at
+      // compile time — Grok keeps it literal.
+      if (shotKinds.has(l.kind) && (l.shot || !b.locked)) {
+        const shotRow = document.createElement("div");
+        shotRow.className = "bshotline"; // NOT .bshot — that's the SHOTS-tab row
+        shotRow.textContent = l.shot ? `⌖ ${l.shot}` : "⌖ auto coverage — click to direct";
+        if (!b.locked) {
+          shotRow.classList.add("editable");
+          shotRow.title = "click to direct the camera — /shorthand expands on the Google route";
+          shotRow.addEventListener("click", () => editShot(shotRow, l));
+        }
+        list.appendChild(shotRow);
+      }
     });
     pane.appendChild(list);
+  }
+
+  function editShot(row, l) {
+    if (row.querySelector("input")) return;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = l.shot || "";
+    input.placeholder = "/closeup: on her hands — or full camera prose; empty = auto coverage";
+    input.className = "blineedit";
+    row.replaceChildren(input);
+    input.focus();
+    input.select();
+    // live lint: red border while a token neither route knows sits in the shot
+    input.addEventListener("input", () => {
+      input.classList.toggle("lintwarn", unknownLexTokens(input.value, "").length > 0);
+    });
+    const restore = () => {
+      row.textContent = l.shot ? `⌖ ${l.shot}` : "⌖ auto coverage — click to direct";
+    };
+    const commit = async () => {
+      const shot = input.value.trim();
+      if (shot === (l.shot || "")) {
+        restore();
+        return;
+      }
+      try {
+        const res = await api(`/api/director/sessions/${sessionId}/draft/line`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ line_id: l.line_id, shot }),
+        });
+        l.shot = shot;
+        restore();
+        if (res && res.shot_warnings && res.shot_warnings.length) {
+          addMsg(
+            "director",
+            `Shot saved — but ${res.shot_warnings.join(", ")} isn't shorthand on either route; it rides the prompt as literal text.`
+          );
+        }
+      } catch (err) {
+        restore();
+        addMsg("director", `Couldn't direct that shot: ${err.message || err}`);
+      }
+    };
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") { ev.preventDefault(); input.blur(); }
+      if (ev.key === "Escape") { input.value = l.shot || ""; input.blur(); }
+    });
+    input.addEventListener("blur", commit);
   }
 
   function editLine(row, l) {
@@ -1172,6 +1497,7 @@
     $("board").hidden = !opening;
     document.body.classList.toggle("board-open", opening);
     if (opening) {
+      if (boardTimer) clearInterval(boardTimer); // re-open must not leak a poll
       refreshBoard();
       boardTimer = setInterval(refreshBoard, 5000);
     } else if (boardTimer) {
@@ -1254,6 +1580,20 @@
 
   $("send").addEventListener("click", send);
   $("produce").addEventListener("click", produce);
+  $("provider").addEventListener("change", () => {
+    updateLexiconPillState();
+    lintComposer(); // the known-token set depends on the route
+  });
+  $("idea").addEventListener("input", lintComposer);
+  ["flow-world", "flow-camera", "grok-camera", "grok-atmosphere"].forEach((id) => {
+    const el = $(id);
+    if (el)
+      el.addEventListener("change", () => {
+        markDirty(id); // a user choice is an intent to assert this setting
+        updateTemplateChip();
+      });
+  });
+  { const a = $("aspect"); if (a) a.addEventListener("change", () => markDirty("aspect")); }
   $("idea").addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" && !ev.shiftKey) {
       ev.preventDefault();

@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="/static/app.css?v=p10">
+<link rel="stylesheet" href="/static/app.css?v=p17">
 </head>
 <body>
 
@@ -122,12 +122,39 @@
               <option value="9:16">9:16</option>
             </select>
           </label>
+          <label class="pill grokpill" title="Grok camera move for one-shot drafts — scripted shots keep their authored camera. Grok route only; Flow never sees it. Type /pushin, /locked… inline for per-shot control.">
+            <span class="plabel">Grok cam</span>
+            <select id="grok-camera">
+              <option value="" selected>Authored</option>
+            </select>
+          </label>
+          <label class="pill grokpill" title="Grok atmosphere — an environmental signature riding every Grok picture (dust, rain, fog…). Grok route only. Type /dust, /wind… inline per shot.">
+            <span class="plabel">Grok atmo</span>
+            <select id="grok-atmosphere">
+              <option value="" selected>None</option>
+            </select>
+          </label>
+          <label class="pill flowpill" title="Google Flow visual world — the style clause every Veo shot carries. Google route only; Grok never sees it. Type /filmic, /cyberpunk… inline for per-shot control.">
+            <span class="plabel">Flow style</span>
+            <select id="flow-world">
+              <option value="baseline" selected>Baseline</option>
+            </select>
+          </label>
+          <label class="pill flowpill" title="Google Flow camera behavior for one-shot drafts — scripted shots keep their authored camera. Type /orbit, /dollyin… inline for per-shot control.">
+            <span class="plabel">Flow cam</span>
+            <select id="flow-camera">
+              <option value="" selected>Authored</option>
+            </select>
+          </label>
           <label class="pill" title="Ceiling for this session's scripted production — holds anything that would breach it. Empty = no ceiling.">
             <span class="plabel">Budget $</span>
             <input id="budget" type="number" min="0" step="1" inputmode="numeric" placeholder="∞">
           </label>
           <span class="durhint" id="durhint">one shot ≤ 15s · scripts run longer</span>
+          <span class="lexchip" id="lexchip" hidden title="The session's active look — it rides every prompt it can legally reach"></span>
+          <span class="lexhint" id="lexhint" hidden></span>
         </div>
+        <div class="pairrow flowpill" id="pairrow" hidden></div>
       </div>
     </footer>
   </div>
@@ -143,6 +170,6 @@
     <div class="bpane" id="bpane"></div>
   </aside>
 </div>
-<script src="/static/app.js?v=p10"></script>
+<script src="/static/app.js?v=p17"></script>
 </body>
 </html>

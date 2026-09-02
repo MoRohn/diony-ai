@@ -124,7 +124,7 @@ def submit(op: DirectorOp) -> base.CloudJobHandle:
     external_id = str(body.get("request_id") or body.get("id") or "")
     if not external_id:
         raise base.CloudAdapterError(f"Grok returned no request id: {body}")
-    return base.CloudJobHandle(
+    handle = base.CloudJobHandle(
         provider_id=PROVIDER_ID,
         external_id=external_id,
         model=op.model,
@@ -132,6 +132,11 @@ def submit(op: DirectorOp) -> base.CloudJobHandle:
         resolution=op.resolution,
         duration_s=int(op.duration_s),
     )
+    if start_image and references:
+        # The still-lock won and the identity refs were dropped — that
+        # degradation must live in the record, not vanish silently.
+        handle.metadata["references_dropped"] = len(references)
+    return handle
 
 
 def _submit_operation(path: str, payload: dict, *, model: str, duration_s: int, kind: str) -> base.CloudJobHandle:

@@ -10,6 +10,7 @@ speaks from.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -153,14 +154,34 @@ class MessageIn(BaseModel):
     model: str = ""
     duration_s: float = Field(default=6.0, gt=0)
     resolution: str = "720p"
-    aspect: str = Field(default="16:9", pattern="^(16:9|9:16)$")
+    # None = keep the session's current aspect — a client that omits the
+    # field must never flip a 9:16 session back to the default, or 409 an
+    # innocent message once footage locks the shape.
+    aspect: str | None = Field(default=None, pattern="^(16:9|9:16)$")
+    # Lexicon templates — flow_* shapes the Google/Veo route only, grok_*
+    # the Grok route only; each is invisible to the other. None = keep the
+    # session's current template (a client that doesn't speak these fields
+    # must never clear a chosen template or 409 a locked session); an
+    # explicit value sets it ("" = none/authored only).
+    flow_world: str | None = None
+    flow_camera: str | None = None
+    grok_camera: str | None = None
+    grok_atmosphere: str | None = None
 
 
-def _apply_aspect(sid: str, aspect: str) -> None:
-    """Adopt the requested program aspect — unless footage already exists at
-    another shape. A film never changes raster halfway through."""
-    if aspect == session.aspect_for(sid):
-        return
+# Each program-setting change is PLANNED (validated, never mutating) before
+# any is COMMITTED — a message that carries several settings where a later
+# one is refused must not leave an earlier one silently persisted. A planner
+# returns a zero-arg committer, or None when nothing changes; it raises the
+# HTTPException here, before any sibling has touched state.
+from typing import Callable
+
+
+def _plan_aspect(sid: str, aspect: str | None) -> Callable[[], None] | None:
+    """Validate a program-aspect change — footage already at another shape
+    locks it. None keeps the current aspect; only an explicit value asks."""
+    if aspect is None or aspect == session.aspect_for(sid):
+        return None
     if any(op.status == "completed" and op.clip_id for op in session.ops_for(sid)):
         raise HTTPException(
             status_code=409,
@@ -170,14 +191,131 @@ def _apply_aspect(sid: str, aspect: str) -> None:
                 f"a {aspect} production"
             ),
         )
-    session.set_aspect(sid, aspect)
+    return lambda: session.set_aspect(sid, aspect)
+
+
+def _plan_flow_template(
+    sid: str, world: str | None, camera: str | None
+) -> Callable[[], None] | None:
+    """Validate a Flow lexicon change — refused only while THIS session's
+    current draft is locked (prompts compiled), never merely because a stale
+    package from a finished film lingers. None keeps, explicit sets."""
+    from diony_director import flow_lexicon
+
+    current = session.flow_template_for(sid)
+    requested_world = (
+        current["world"] if world is None else (world.strip().lower() or flow_lexicon.BASELINE_WORLD)
+    )
+    requested_camera = current["camera"] if camera is None else camera.strip().lower()
+    if requested_world == current["world"] and requested_camera == current["camera"]:
+        return None
+    if session.script_locked(sid):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "the script is locked and every prompt is compiled — the Flow "
+                "template cannot change mid-production; start a new session to restyle"
+            ),
+        )
+    if requested_world not in flow_lexicon.worlds():
+        raise HTTPException(status_code=422, detail=f"unknown Flow world {requested_world!r}")
+    if requested_camera and requested_camera not in flow_lexicon.cameras():
+        raise HTTPException(status_code=422, detail=f"unknown Flow camera {requested_camera!r}")
+    return lambda: session.set_flow_template(sid, world=requested_world, camera=requested_camera)
+
+
+def _plan_grok_template(
+    sid: str, camera: str | None, atmosphere: str | None
+) -> Callable[[], None] | None:
+    """Validate a Grok lexicon change — same lock contract as the Flow one."""
+    from diony_director import grok_lexicon
+
+    current = session.grok_template_for(sid)
+    requested_camera = current["camera"] if camera is None else camera.strip().lower()
+    requested_atmosphere = (
+        current["atmosphere"] if atmosphere is None else atmosphere.strip().lower()
+    )
+    if requested_camera == current["camera"] and requested_atmosphere == current["atmosphere"]:
+        return None
+    if session.script_locked(sid):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "the script is locked and every prompt is compiled — the Grok "
+                "template cannot change mid-production; start a new session to restyle"
+            ),
+        )
+    if requested_camera and requested_camera not in grok_lexicon.cameras():
+        raise HTTPException(status_code=422, detail=f"unknown Grok camera {requested_camera!r}")
+    if requested_atmosphere and requested_atmosphere not in grok_lexicon.atmospheres():
+        raise HTTPException(status_code=422, detail=f"unknown Grok atmosphere {requested_atmosphere!r}")
+    return lambda: session.set_grok_template(
+        sid, camera=requested_camera, atmosphere=requested_atmosphere
+    )
+
+
+def _apply_program_settings(sid: str, body: "MessageIn | ProduceIn") -> None:
+    """Validate every program-setting change, then commit them together — so
+    a request the caller sees rejected never half-mutates the session."""
+    committers = [
+        _plan_aspect(sid, body.aspect),
+        _plan_flow_template(sid, body.flow_world, body.flow_camera),
+        _plan_grok_template(sid, body.grok_camera, body.grok_atmosphere),
+    ]
+    for commit in committers:  # every planner validated first; none raise here
+        if commit is not None:
+            commit()
+
+
+def _apply_aspect(sid: str, aspect: str | None) -> None:
+    """Standalone aspect apply for the aspect endpoint and tests."""
+    commit = _plan_aspect(sid, aspect)
+    if commit is not None:
+        commit()
+
+
+@app.get("/api/director/flow/lexicon")
+def flow_lexicon_catalog() -> dict:
+    """The Flow templating catalog: worlds, cameras, pairings, and the custom
+    lexicon path. Google route only — the Grok dialect never uses it."""
+    from diony_director import flow_lexicon
+
+    return flow_lexicon.catalog()
+
+
+@app.get("/api/director/grok/lexicon")
+def grok_lexicon_catalog() -> dict:
+    """The Grok templating catalog: cameras, atmospheres, and the custom
+    lexicon path. Grok route only — the Flow dialects never use it."""
+    from diony_director import grok_lexicon
+
+    return grok_lexicon.catalog()
+
+
+@app.get("/api/director/sessions/{sid}/settings")
+def session_settings(sid: str) -> dict:
+    """The session's stored program settings — the aspect and both lexicon
+    templates. A resumed room MUST sync its controls from this before it
+    speaks: the console sends explicit values, and defaults sent over a
+    stored template would silently clear it (or 409 an innocent message
+    after the lock)."""
+    _boot()
+    if not session.session_exists(sid):
+        # a typo'd or deleted sid must not masquerade as a fresh session —
+        # the resumed room would sync its controls from nothing
+        raise HTTPException(status_code=404, detail=f"unknown session {sid}")
+    return {
+        "aspect": session.aspect_for(sid),
+        "flow_template": session.flow_template_for(sid),
+        "grok_template": session.grok_template_for(sid),
+    }
 
 
 @app.post("/api/director/sessions/{sid}/message")
 def message(sid: str, body: MessageIn) -> dict:
     plane, ctx = _boot()
     spent = _session_spent(plane, ctx, sid)  # the reply talks about THIS session
-    _apply_aspect(sid, body.aspect)
+    _apply_program_settings(sid, body)
     try:
         proposal = session.propose(
             sid,
@@ -652,6 +790,13 @@ def _run_approved(op: DirectorOp) -> dict:
     op.status = "submitted"
     rt = session.runtime(op.id)
     rt["handle"] = handle
+    # Start the watchdog clock at submit, not at first poll: an op whose
+    # ledger commit fails every tick never reaches the poll block, and
+    # without this its progress timestamp would stay unset and the stall
+    # would never surface. Persisted with the handle so a restart doesn't
+    # reset the grace window on a job already stuck for hours.
+    rt["last_poll_state"] = "submitted"
+    rt["last_progress_ts"] = time.time()
     session.persist(op.session_id)
     try:
         job = ledger.commit_job(plane, ctx.workspace.id, ctx.user.id, op, handle.external_id)
@@ -721,6 +866,12 @@ def _advance_op(op: DirectorOp, *, allow_spend: bool = False) -> dict:
         handle = rt.get("handle")
         adapter = _ADAPTERS[op.provider.value]
         poll = adapter.poll(handle)
+        # The watchdog's clock: progress is a CHANGE of observed state. A job
+        # answering "running" forever looks healthy to every poll — only the
+        # timestamp of its last transition exposes that it's going nowhere.
+        if poll.state != rt.get("last_poll_state"):
+            rt["last_poll_state"] = poll.state
+            rt["last_progress_ts"] = time.time()
         if poll.state == "done":
             clip = adapter.fetch(handle, poll, _clip_dest(op))
             job = ledger.reconcile_completion(
@@ -850,6 +1001,12 @@ def run_batch(sid: str, body: RunBatchIn) -> dict:
     }
 
 
+# A submitted op whose observed provider state hasn't changed in this long is
+# surfaced as stalled — it still polls "running", but a job going nowhere for
+# half an hour is a job someone should wonder about before the film is due.
+STALL_WATCHDOG_S = 30 * 60
+
+
 @app.post("/api/director/sessions/{sid}/advance")
 def advance_session(sid: str) -> dict:
     """One tick: poll every submitted op in the session, advancing completions."""
@@ -891,7 +1048,29 @@ def advance_session(sid: str) -> dict:
                     session.persist(sid)
     _kick_submitter(sid)
     held = session.drain_held(sid)
+    now = time.time()
     for op in session.ops_for(sid):
+        if op.status == "submitted" and not any(s["op_id"] == op.id for s in stalled):
+            rt = session.runtime(op.id)
+            ts = rt.get("last_progress_ts")
+            if ts is None:
+                # an op submitted before the watchdog landed (rehydrated old
+                # state) has no clock — start it now rather than count it
+                # healthy forever; it will surface a stall a window later
+                rt["last_progress_ts"] = now
+                rt.setdefault("last_poll_state", "submitted")
+                ts = now
+            if now - ts > STALL_WATCHDOG_S:
+                state = rt.get("last_poll_state") or "submitted"
+                stalled.append(
+                    {
+                        "op_id": op.id,
+                        "reason": (
+                            f"{op.clip_id or op.id} has sat at '{state}' for "
+                            f"{int((now - ts) // 60)}m — the provider job may be lost"
+                        ),
+                    }
+                )
         if op.status in {"submitted", "submitting"}:
             counts["pending"] += 1
         elif op.status == "completed":
@@ -1032,7 +1211,14 @@ class ProduceIn(BaseModel):
     autopilot: bool = False
     max_usd: float = Field(default=0, ge=0)
     max_revisions_per_clip: int = Field(default=3, ge=0, le=10)
-    aspect: str = Field(default="16:9", pattern="^(16:9|9:16)$")
+    # None = keep — same contract as MessageIn.aspect
+    aspect: str | None = Field(default=None, pattern="^(16:9|9:16)$")
+    # Lexicon templates — flow_* Google/Veo route only, grok_* Grok route
+    # only; None = keep current.
+    flow_world: str | None = None
+    flow_camera: str | None = None
+    grok_camera: str | None = None
+    grok_atmosphere: str | None = None
 
 
 @app.post("/api/director/sessions/{sid}/produce")
@@ -1051,7 +1237,7 @@ def produce(sid: str, body: ProduceIn) -> dict:
         max_revisions_per_clip=body.max_revisions_per_clip,
         autopilot=body.autopilot,
     )
-    _apply_aspect(sid, body.aspect)
+    _apply_program_settings(sid, body)
     state = session.begin_draft(sid, body.idea, body.runtime_s)
     return state
 
@@ -1064,14 +1250,37 @@ def draft_status(sid: str) -> dict:
 
 class DraftLineIn(BaseModel):
     line_id: str
-    text: str
+    text: str | None = None
+    shot: str | None = None
 
 
 @app.post("/api/director/sessions/{sid}/draft/line")
 def edit_draft_line(sid: str, body: DraftLineIn) -> dict:
     _boot()
     try:
-        return session.edit_draft_line(sid, body.line_id, body.text)
+        state = session.edit_draft_line(sid, body.line_id, body.text, shot=body.shot)
+        if body.shot:
+            from diony_contracts.cluster import read_engine_choice
+            from diony_director import flow_lexicon, grok_lexicon
+
+            # A token NEITHER lexicon knows is almost surely a typo about to
+            # ride a paid prompt as literal text — warned regardless of route.
+            grok_unknown = set(grok_lexicon.unknown_tokens(body.shot))
+            flow_unknown = set(flow_lexicon.unknown_tokens(body.shot))
+            unknown = sorted(grok_unknown & flow_unknown)
+            # When the session rolls on ONE provider, a token that is shorthand
+            # only on the OTHER route (known there, unknown on the chosen route)
+            # will definitely ride literal — a high-confidence, no-false-
+            # positive warning. Under auto the route is genuinely undecided,
+            # so a route-specific token stays quiet.
+            choice = read_engine_choice()
+            if choice == "grok":
+                unknown += sorted(grok_unknown - flow_unknown)  # Flow-only tokens
+            elif choice == "google-flow":
+                unknown += sorted(flow_unknown - grok_unknown)  # Grok-only tokens
+            if unknown:
+                state = {**state, "shot_warnings": unknown}
+        return state
     except KeyError as err:
         raise HTTPException(status_code=404, detail=f"unknown line {body.line_id}") from err
     except (session.DraftNotReady, session.DraftLocked) as err:

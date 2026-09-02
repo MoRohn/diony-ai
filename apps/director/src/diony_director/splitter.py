@@ -149,7 +149,7 @@ def split_script(
                 # fights its own opening image.
                 wide_ish = not authored or any(
                     w in authored.lower()
-                    for w in ("wide", "establish", "master", "aerial", "overhead", "top-")
+                    for w in ("wide", "establish", "master", "aerial", "overhead", "top-", "drone")
                 )
                 recipe = "still" if wide_ish else "ref"
             elif prev_was_dialogue:

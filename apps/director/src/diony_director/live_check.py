@@ -80,12 +80,35 @@ def live_probe() -> dict:
             )
             response.raise_for_status()
             body = response.json()
-            accounts = body if isinstance(body, list) else body.get("accounts", [])
+            if isinstance(body, dict) and "accounts" not in body:
+                # live wire shape (verified 2026-09-02): a dict keyed by
+                # account email — {"user@gmail.com": {..., "error": ...}}.
+                # Parsing it as an empty list reported "0 accounts" over a
+                # connected-but-signed-out account.
+                accounts = [
+                    dict(entry, email=email)
+                    for email, entry in body.items()
+                    if isinstance(entry, dict)
+                ]
+            else:
+                accounts = body if isinstance(body, list) else body.get("accounts", [])
+            problems = [
+                f"{a.get('email', '(unknown)')}: {a['error']}"
+                for a in accounts
+                if isinstance(a, dict) and a.get("error")
+            ]
             detail = f"auth OK; {len(accounts)} Flow account(s) connected"
             credits = [a.get("credits") for a in accounts if isinstance(a, dict) and "credits" in a]
             if credits:
                 detail += f"; credits: {credits}"
-            out["google-flow"] = {"ok": True, "detail": detail, "accounts": len(accounts)}
+            if problems:
+                # the token works but the account can't roll — that is NOT ok
+                detail += "; UNHEALTHY — " + "; ".join(problems)
+            out["google-flow"] = {
+                "ok": not problems,
+                "detail": detail,
+                "accounts": len(accounts),
+            }
         except Exception as err:  # noqa: BLE001
             out["google-flow"] = {"ok": False, "detail": f"auth failed: {err}"}
 

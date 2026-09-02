@@ -199,3 +199,20 @@ def test_i2v_image_is_a_typed_url_object(monkeypatch, tmp_path) -> None:
     image = seen["json"]["image"]
     assert isinstance(image, dict)
     assert image["url"].startswith("data:image/jpg;base64,")
+
+
+def test_dropped_reference_images_are_recorded_not_silent(monkeypatch, tmp_path) -> None:
+    """Image and reference_images are exclusive on the wire; when the
+    still-lock wins, the degradation must live in the handle's record."""
+    monkeypatch.setattr(grok.httpx, "post", lambda url, **kw: _Response({"request_id": "req-d"}))
+    still = tmp_path / "plate.jpg"
+    still.write_bytes(b"jpegbytes")
+    handle = grok.submit(
+        _op(
+            mode=CloudGenerationMode.I2V,
+            artifact_refs={"start_image": str(still), "references": ["u1", "u2"]},
+        )
+    )
+    assert handle.metadata["references_dropped"] == 2
+    clean = grok.submit(_op(mode=CloudGenerationMode.I2V, artifact_refs={"start_image": str(still)}))
+    assert "references_dropped" not in clean.metadata

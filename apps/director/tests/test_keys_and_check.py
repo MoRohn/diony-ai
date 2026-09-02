@@ -88,3 +88,27 @@ def test_live_probe_reports_auth_failures_honestly(monkeypatch) -> None:
     report = live_check.live_probe()
     assert report["grok"]["ok"] is False
     assert report["google-flow"]["ok"] is False
+
+
+def test_live_probe_parses_the_dict_keyed_account_shape(monkeypatch) -> None:
+    """Verified live 2026-09-02: /accounts returns a dict keyed by email, and
+    a signed-out account carries an "error" field — the probe must call that
+    unhealthy, never "0 accounts connected" with ok=true."""
+    monkeypatch.setattr(
+        live_check.httpx,
+        "get",
+        lambda url, **kw: _Response(
+            {"data": [{"id": "grok-imagine-video"}]}
+            if "x.ai" in url
+            else {
+                "studio@example.com": {
+                    "created": "2026-09-01T17:37:19Z",
+                    "error": "Google has signed your account out. Reconnect at https://useapi.net/docs",
+                }
+            }
+        ),
+    )
+    report = live_check.live_probe()
+    assert report["google-flow"]["ok"] is False
+    assert report["google-flow"]["accounts"] == 1
+    assert "signed your account out" in report["google-flow"]["detail"]

@@ -106,3 +106,34 @@ def test_poll_maps_a_failed_job_with_its_error(monkeypatch) -> None:
     status = flow.poll(handle)
     assert status.state == "failed"
     assert "captcha" in status.detail
+
+
+def test_poll_lands_off_vocabulary_terminal_states_as_terminal(monkeypatch) -> None:
+    """A moderated/cancelled Flow job must never poll as "running" forever —
+    an unmapped terminal status wedges the whole paid batch behind it."""
+    handle = flow.submit_handle("j-174", model="veo-3.1-fast", duration_s=8)
+    expectations = {
+        "moderated": "moderated",
+        "blocked": "moderated",
+        "rejected": "moderated",
+        "content_violation": "moderated",
+        "cancelled": "failed",
+        "canceled": "failed",
+        "timeout": "failed",
+        "expired": "expired",
+    }
+    for raw, expected in expectations.items():
+        body = {"status": raw}
+        monkeypatch.setattr(
+            flow.httpx, "get", lambda url, _body=body, **kw: _Response(_body, status_code=200)
+        )
+        status = flow.poll(handle)
+        assert status.state == expected, raw
+        assert status.terminal, raw
+    # a genuinely unknown transient word still polls as running
+    monkeypatch.setattr(
+        flow.httpx,
+        "get",
+        lambda url, **kw: _Response({"status": "warming_up"}, status_code=200),
+    )
+    assert flow.poll(handle).state == "running"

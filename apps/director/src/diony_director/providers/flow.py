@@ -414,6 +414,17 @@ def poll(handle: base.CloudJobHandle) -> base.CloudJobStatus:
         return base.CloudJobStatus(state="done", result_url=url, metadata=metadata)
     if raw_state in {"failed", "error"}:
         return base.CloudJobStatus(state="failed", detail=detail or "generation failed", metadata=metadata)
+    # Terminal states outside the happy vocabulary must land terminal — an
+    # unmapped "moderated"/"cancelled" would poll as "running" forever and
+    # wedge the whole batch behind a job that already died.
+    if raw_state in {"moderated", "blocked", "rejected", "content_violation"}:
+        return base.CloudJobStatus(
+            state="moderated", detail=detail or raw_state, metadata=metadata
+        )
+    if raw_state in {"cancelled", "canceled", "aborted", "timeout", "timed_out"}:
+        return base.CloudJobStatus(state="failed", detail=detail or raw_state, metadata=metadata)
+    if raw_state == "expired":
+        return base.CloudJobStatus(state="expired", detail=detail or raw_state, metadata=metadata)
     if raw_state in {"queued", "pending"}:
         return base.CloudJobStatus(state="queued", metadata=metadata)
     return base.CloudJobStatus(state="running", detail=raw_state, metadata=metadata)

@@ -52,7 +52,9 @@ CAPS: dict[tuple[str, str], ModelCaps] = {
         frames_exclusive_with_refs=True,  # image and reference_images are exclusive
     ),
     ("grok", "grok-imagine-video"): ModelCaps(
-        modes=frozenset({"t2v", "i2v", "extension"}),
+        # supports_edit is True, so v2v_edit is a legal mode — the two must
+        # agree or the mode gate refuses the edit the record advertises
+        modes=frozenset({"t2v", "i2v", "extension", "v2v_edit"}),
         durations=None,
         resolutions=frozenset({"480p", "720p"}),
         max_reference_images=0,
@@ -158,6 +160,14 @@ def violations(op: DirectorOp) -> list[str]:
             problems.append(f"{op.model} cannot perform an extension — use grok-imagine-video")
     if op.op is not None and op.op.value == "edit" and not caps.supports_edit:
         problems.append(f"{op.model} has no edit lane")
+    if (
+        op.mode is not None
+        and op.mode is not CloudGenerationMode.EXTENSION
+        and op.mode.value not in caps.modes
+    ):
+        # extension legality is judged above on the lane flags; a None mode
+        # (a rehydrated op that never carried one) is out of scope here
+        problems.append(f"{op.model} has no {op.mode.value} lane")
 
     if op.mode in {CloudGenerationMode.EXTENSION, CloudGenerationMode.UPSCALE}:
         # Extensions and upscales transmit only their source video — reference
@@ -178,6 +188,16 @@ def violations(op: DirectorOp) -> list[str]:
                     f"characters on {op.model} require a duration in {caps.character_durations}, "
                     f"not {int(op.duration_s)}s"
                 )
+    frames = [key for key in ("start_image", "end_image") if refs.get(key)]
+    if frames and caps.frames_exclusive_with_refs:
+        riders = [name for name in ("references", "characters") if refs.get(name)]
+        if refs.get("voices") or refs.get("grok_voices"):
+            riders.append("voices")
+        if riders:
+            problems.append(
+                f"{op.model} rejects {' and '.join(riders)} alongside a "
+                f"start/end frame — frames and identity refs are exclusive"
+            )
     references = list(refs.get("references") or [])
     if len(references) > caps.max_reference_images:
         problems.append(
