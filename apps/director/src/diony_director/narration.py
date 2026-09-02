@@ -35,7 +35,10 @@ silently mute film.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import re
 import shlex
 import subprocess
 from dataclasses import dataclass, field
@@ -51,7 +54,24 @@ GROK_VOICE_ENV = "DIONY_GROK_VOICE"
 GROK_VOICE_PATH_DEFAULT = "/v1/audio/speech"
 GROK_VOICE_MODEL_DEFAULT = "grok-voice"
 GROK_VOICE_DEFAULT = "Ara"
+GROK_VOICE_ROSTER_ENV = "DIONY_GROK_VOICE_ROSTER"
 GROK_CALL_TIMEOUT_S = 120.0
+
+# The Grok voice options and how each one reads — the material cast_voice()
+# matches against the master prompt's tone and the character speaking. The
+# names ride the same re-verify-against-live-docs doctrine as the endpoint
+# shape; DIONY_GROK_VOICE_ROSTER overrides with JSON {name: [tags]} when the
+# live roster differs, without a code change.
+DEFAULT_ROSTER: dict[str, list[str]] = {
+    "Ara": ["female", "warm", "bright", "upbeat", "playful", "energetic", "friendly"],
+    "Eve": ["female", "soothing", "calm", "intimate", "elegant", "soft", "romantic"],
+    "Rex": ["male", "calm", "confident", "grounded", "documentary", "realistic", "steady"],
+    "Sal": ["male", "smooth", "measured", "noir", "tense", "mysterious", "narrator"],
+    "Gork": ["male", "deadpan", "dry", "comedic", "lazy", "sarcastic"],
+}
+
+_FEMALE_TELLS = re.compile(r"\b(she|her|hers|woman|women|female|girl|mother|sister|queen|actress|lady)\b")
+_MALE_TELLS = re.compile(r"\b(he|him|his|man|men|male|boy|father|brother|king|actor|gentleman)\b")
 
 CUE_LEAD_IN_S = 0.15  # a cue lands just after its clip's cut, never on it
 # Voice sits above the -18 LUFS clip bed; the duck keeps the location track
@@ -79,8 +99,95 @@ class NarrationCue:
     line: str
     direction: str = ""
     voice_ref: str = ""
+    cast_note: str = ""
     start_s: float = 0.0
     window_s: float = 0.0
+
+
+def _roster() -> dict[str, list[str]]:
+    raw = os.environ.get(GROK_VOICE_ROSTER_ENV, "").strip()
+    if not raw:
+        return DEFAULT_ROSTER
+    try:
+        parsed = json.loads(raw)
+        roster = {
+            str(name): [str(t).lower() for t in tags]
+            for name, tags in parsed.items()
+            if isinstance(tags, (list, tuple)) and tags
+        }
+        if roster:
+            return roster
+    except (ValueError, AttributeError):
+        pass
+    raise NarrationFailed(
+        f"{GROK_VOICE_ROSTER_ENV} is set but is not a JSON object of "
+        '{"Voice": ["tag", ...]} — fix it or unset it for the built-in roster'
+    )
+
+
+def cast_voice(*, speaker: str = "", tone_text: str = "", character_notes: str = "") -> tuple[str, str]:
+    """Pick the roster voice that reads like this production.
+
+    Tone text (the master prompt's mood, visual style, and performance, plus
+    the cue's own direction) scores against each voice's tags; a character
+    whose notes read a gender strongly prefers a matching voice. Ties break
+    on a stable hash of the speaker, so one production casts each character
+    to the same voice on every assemble — and different characters spread
+    across the roster instead of piling onto one name."""
+    roster = _roster()
+    tone = f" {tone_text.strip().lower()} "
+    notes = f" {character_notes.strip().lower()} "
+    gender = ""
+    if _FEMALE_TELLS.search(notes) and not _MALE_TELLS.search(notes):
+        gender = "female"
+    elif _MALE_TELLS.search(notes) and not _FEMALE_TELLS.search(notes):
+        gender = "male"
+    scores: dict[str, int] = {}
+    hits: dict[str, list[str]] = {}
+    for name, tags in roster.items():
+        matched = [t for t in tags if t not in {"male", "female"} and (t in tone or t in notes)]
+        score = len(matched)
+        if gender:
+            if gender in tags:
+                score += 3
+            elif "male" in tags or "female" in tags:
+                score -= 3
+        scores[name] = score
+        hits[name] = matched
+    best = max(scores.values())
+    top = sorted(name for name, score in scores.items() if score == best)
+    spread = int(hashlib.md5((speaker or "narrator").encode()).hexdigest(), 16)
+    pick = top[spread % len(top)]
+    why = ", ".join(hits[pick][:3]) or "roster default for this tone"
+    if gender:
+        why = f"{gender} read; {why}"
+    return pick, f"cast for: {why}"
+
+
+def cast_cues(
+    cues: list[NarrationCue],
+    *,
+    tone_text: str = "",
+    character_notes: dict[str, str] | None = None,
+) -> None:
+    """Resolve every cue's voice, in authored order of authority: a clip's
+    voice lock; the site-pinned DIONY_GROK_VOICE; else a cast from the
+    roster against the master's tone and the speaking character."""
+    pinned = os.environ.get(GROK_VOICE_ENV, "").strip()
+    notes = {str(k).strip().lower(): str(v) for k, v in (character_notes or {}).items()}
+    for cue in cues:
+        if cue.voice_ref:
+            cue.cast_note = "authored voice lock"
+            continue
+        if pinned:
+            cue.voice_ref = pinned
+            cue.cast_note = f"site-pinned {GROK_VOICE_ENV}"
+            continue
+        cue.voice_ref, cue.cast_note = cast_voice(
+            speaker=cue.speaker,
+            tone_text=f"{tone_text} {cue.direction}",
+            character_notes=notes.get(cue.speaker.strip().lower(), ""),
+        )
 
 
 @dataclass
@@ -364,6 +471,8 @@ def narrate(
                 "clip_id": cue.clip_id,
                 "speaker": cue.speaker,
                 "line": cue.line,
+                "voice": cue.voice_ref,
+                "cast": cue.cast_note,
                 "start_s": cue.start_s,
                 "duration_s": round(durations[index], 3),
             }

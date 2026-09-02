@@ -69,10 +69,22 @@ Resolved by `narration.backend()`:
   `DIONY_XAI_BASE` the picture lane rides (`XAI_API_KEY` alone selects it).
   OpenAI-compatible speech contract (`model`/`input`/`voice`/`response_format`),
   path `DIONY_GROK_VOICE_PATH` (default `/v1/audio/speech`), model
-  `DIONY_GROK_VOICE_MODEL` (default `grok-voice`), default voice
-  `DIONY_GROK_VOICE` (default `Ara`); a clip's `voice_ref` overrides per cue.
+  `DIONY_GROK_VOICE_MODEL` (default `grok-voice`).
   Endpoint shape is re-verified against live docs before any billable rollout,
   the same doctrine as `providers/grok.py`.
+
+## Voice casting
+
+The narrator voice is **cast, never defaulted**. `narration.cast_voice()` scores
+the Grok voice roster (Ara/Eve/Rex/Sal/Gork, each carrying read tags; the live
+roster is overridable as JSON via `DIONY_GROK_VOICE_ROSTER`) against the master
+prompt's tone — mood, visual style, performance, light quality — plus the cue's
+own delivery direction, and reads the speaking character's notes for a gender
+preference. Ties break on a stable hash of the speaker, so one production casts
+each character to the same voice on every assemble, and different characters
+spread across the roster. Order of authority: a clip's authored `voice_ref`
+lock → the site-pinned `DIONY_GROK_VOICE` → the cast. Every cue's chosen voice
+and casting reason ship in the QC packet's narration section.
 - **`cli`.** An on-host command template, the audiogen contract:
   `DIONY_NARRATOR_CLI` with `{text} {output} {voice} {speaker} {direction}`
   placeholders. An authored template outranks the key-derived default;

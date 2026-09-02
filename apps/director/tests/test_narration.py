@@ -100,6 +100,60 @@ def test_build_filter_ducks_the_location_track_under_the_voice() -> None:
     assert "amix=inputs=2:duration=first:normalize=0" in graph
 
 
+def test_the_narrator_is_cast_from_tone_and_character(monkeypatch) -> None:
+    monkeypatch.delenv(narration.GROK_VOICE_ENV, raising=False)
+    monkeypatch.delenv(narration.GROK_VOICE_ROSTER_ENV, raising=False)
+    # a tense noir production spoken by a man reads as Sal, not the old
+    # hardcoded default
+    voice, why = narration.cast_voice(
+        speaker="ELIAS",
+        tone_text="tense noir, night streets, cinematic realism",
+        character_notes="a weathered man in his fifties",
+    )
+    assert voice == "Sal"
+    assert "male read" in why and "noir" in why
+    # a warm playful piece with a female lead reads as Ara
+    voice, why = narration.cast_voice(
+        speaker="MARA",
+        tone_text="playful upbeat morning energy",
+        character_notes="a young woman, quick to smile",
+    )
+    assert voice == "Ara"
+    assert "female read" in why
+
+
+def test_casting_is_stable_per_speaker_and_respects_the_roster(monkeypatch) -> None:
+    monkeypatch.delenv(narration.GROK_VOICE_ROSTER_ENV, raising=False)
+    first, _ = narration.cast_voice(speaker="NARRATOR", tone_text="", character_notes="")
+    second, _ = narration.cast_voice(speaker="NARRATOR", tone_text="", character_notes="")
+    assert first == second, "one production casts one voice per speaker"
+    assert first in narration.DEFAULT_ROSTER
+    # the live roster is env-overridable without a code change
+    monkeypatch.setenv(narration.GROK_VOICE_ROSTER_ENV, '{"Nova": ["calm"]}')
+    voice, _ = narration.cast_voice(speaker="NARRATOR", tone_text="calm", character_notes="")
+    assert voice == "Nova"
+
+
+def test_locks_and_the_site_pin_outrank_casting(monkeypatch) -> None:
+    monkeypatch.delenv(narration.GROK_VOICE_ROSTER_ENV, raising=False)
+    locked = narration.NarrationCue(
+        order=0, clip_id="cl-1", speaker="ANA", line="hello", voice_ref="voice-ana"
+    )
+    open_cue = narration.NarrationCue(order=1, clip_id="cl-2", speaker="BEN", line="hi")
+    monkeypatch.setenv(narration.GROK_VOICE_ENV, "Rex")
+    narration.cast_cues([locked, open_cue], tone_text="tense")
+    assert locked.voice_ref == "voice-ana" and locked.cast_note == "authored voice lock"
+    assert open_cue.voice_ref == "Rex" and "site-pinned" in open_cue.cast_note
+
+    monkeypatch.delenv(narration.GROK_VOICE_ENV, raising=False)
+    fresh = narration.NarrationCue(order=2, clip_id="cl-3", speaker="BEN", line="hi")
+    narration.cast_cues(
+        [fresh], tone_text="tense noir", character_notes={"Ben": "a quiet man"}
+    )
+    assert fresh.voice_ref == "Sal"
+    assert fresh.cast_note.startswith("cast for:")
+
+
 def test_no_backend_is_a_named_state(monkeypatch) -> None:
     monkeypatch.delenv(narration.NARRATOR_ENV, raising=False)
     monkeypatch.delenv(narration.BACKEND_ENV, raising=False)

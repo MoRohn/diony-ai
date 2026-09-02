@@ -1812,6 +1812,28 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
     narration_report = None
     if wants_narration:
         cues = narration_mod.cue_sheet(entries)
+        # the narrator is CAST, not defaulted: the master prompt's tone and
+        # the speaking character pick the voice from the Grok roster
+        master = session.master_for_session(sid)
+        tone_bits = []
+        if master is not None:
+            tone_bits = [
+                master.mood,
+                master.visual_style,
+                master.performance,
+                str(master.lighting.get("quality", "")),
+            ]
+        package = session.package_for(sid)
+        notes = (
+            {c.name: c.age_body_notes for c in package.characters}
+            if package is not None
+            else {}
+        )
+        narration_mod.cast_cues(
+            cues,
+            tone_text=" ".join(b for b in tone_bits if b),
+            character_notes=notes,
+        )
         picture_lock = dest.with_name("picture-lock.mp4")
         narrated = dest.with_name("film-narrated.tmp.mp4")
         try:
