@@ -327,8 +327,12 @@
   function addOpCard(host, op, chain) {
     const card = document.createElement("div");
     card.className = "opcard";
+    const clipChip = chain
+      ? `<span class="chip clipnum">clip ${chain.index + 1} / ${chain.count}</span>`
+      : "";
     card.innerHTML = `
       <div class="row">
+        ${clipChip}
         <span class="chip">${esc(op.provider)} · ${esc(op.model)}</span>
         <span class="chip">${esc(op.duration_s)}s · ${esc(op.resolution)}</span>
         <span class="est">est ${usd(op.estimate.total_usd_micros)}</span>
@@ -708,12 +712,9 @@
       const cardEls = new Map(); // op_id -> card element
       if (isChain) setupChainBar(li, chain, cardEls);
       chain.forEach((one, index) => {
-        if (isChain) {
-          const tag = document.createElement("div");
-          tag.className = "chaintag";
-          tag.textContent = `clip ${index + 1} / ${chain.length}`;
-          li.appendChild(tag);
-        }
+        // the clip number lives INSIDE the card (addOpCard renders it as the
+        // leading chip) — a floating label between cards read as a caption
+        // for the card above it, off by one to every eye that saw it
         const card = addOpCard(li, one, isChain ? { index, count: chain.length } : null);
         cardEls.set(one.id, card);
       });

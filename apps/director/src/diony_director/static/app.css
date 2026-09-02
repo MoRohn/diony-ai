@@ -121,9 +121,12 @@ body {
 
 /* status meter */
 .meter { display: flex; gap: .4rem; flex-wrap: wrap; margin-left: auto; justify-content: flex-end; align-items: center; }
-.chaintag {
-  font: 500 .64rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
-  color: var(--mut); margin: .8em 0 .3em;
+/* The chain card's own number — the leading chip, never a floating label. */
+.chip.clipnum {
+  color: var(--accent-ink);
+  border-color: rgba(255, 122, 47, .45);
+  text-transform: uppercase;
+  letter-spacing: .1em;
 }
 .chip {
   display: inline-flex; align-items: center; gap: .5em;
