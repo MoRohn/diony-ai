@@ -136,6 +136,11 @@
       "title": "Clips",
       "type": "array"
     },
+    "narration": {
+      "default": "",
+      "title": "Narration",
+      "type": "string"
+    },
     "word_count": {
       "default": 0,
       "minimum": 0,

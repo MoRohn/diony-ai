@@ -26,12 +26,18 @@ def test_v1_prompts_compile_for_every_clip_and_carry_the_bible() -> None:
                 assert taboo in version.prompt
 
 
-def test_omni_dialogue_prompts_carry_the_exact_scripted_words() -> None:
+def test_dialogue_prompts_never_carry_the_scripted_words() -> None:
+    # Blueprint 28: the words are recorded in post — a prompt that quotes the
+    # line asks the provider to invent a voice, and every clip gets a
+    # different one. The prompt acts the delivery and mutes the track.
     package = _package()
     dialogue = next(c for c in package.clips if c.clip_class == "sync-dialogue")
     version = compiler.compile_clip_prompt(dialogue, package)
     line = dialogue.audio_packet.script_excerpt[0]["line"]
-    assert f'"{line}"' in version.prompt
+    assert f'"{line}"' not in version.prompt
+    assert "no voice-over" in version.prompt
+    if dialogue.audio_packet.on_camera:
+        assert "is speaking mid-conversation" in version.prompt
 
 
 def test_grok_prompts_weave_sound_inline_and_never_carry_dialogue() -> None:
@@ -41,14 +47,18 @@ def test_grok_prompts_weave_sound_inline_and_never_carry_dialogue() -> None:
     assert "sound:" in version.prompt.lower() or "ambien" in version.prompt.lower()
 
 
-def test_a_voice_lock_cannot_compile_onto_grok() -> None:
+def test_a_voice_lock_compiles_on_any_route() -> None:
+    # Blueprint 28: a voice lock binds the POST narrator, not the provider —
+    # so it no longer constrains routing, even onto Grok.
     package = _package()
     dialogue = next(c for c in package.clips if c.clip_class == "sync-dialogue")
-    broken = dialogue.model_copy(deep=True)
-    broken.provider = CloudProvider.GROK
-    broken.model = "grok-imagine-video"
-    with pytest.raises(compiler.CompileError):
-        compiler.compile_clip_prompt(broken, package)
+    rerouted = dialogue.model_copy(deep=True)
+    rerouted.provider = CloudProvider.GROK
+    rerouted.model = "grok-imagine-video"
+    rerouted.duration_s = 6
+    version = compiler.compile_clip_prompt(rerouted, package)
+    assert version.version == "v1"
+    assert "no voice-over" in version.prompt
 
 
 def test_revision_appends_a_new_version_never_overwrites() -> None:
@@ -63,8 +73,10 @@ def test_revision_appends_a_new_version_never_overwrites() -> None:
     assert clip.latest_prompt().version == "v2-fix-face"
 
 
-def test_artifact_refs_map_locks_to_provider_parameters() -> None:
+def test_artifact_refs_never_register_provider_voices() -> None:
+    # Blueprint 28: the provider never speaks — registering a voice with it
+    # would invite an invented performance the narrator then fights.
     package = _package()
     dialogue = next(c for c in package.clips if c.clip_class == "sync-dialogue")
     refs = compiler.provider_artifact_refs(dialogue, package)
-    assert refs.get("voices"), "omni dialogue must request its locked voice"
+    assert "voices" not in refs

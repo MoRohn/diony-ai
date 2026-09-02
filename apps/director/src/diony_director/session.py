@@ -407,10 +407,13 @@ def compile_master_body(
     sid: str = "",
     *,
     has_start_image: bool = False,
+    narration: str = "",
 ) -> str:
     """Derived master prose (the whole-action prompt, or one chained clip's
-    prompt) + the route's guards → the shippable prompt."""
-    from diony_director.compiler import _fit_prompt, prompt_limit
+    prompt) + the route's guards → the shippable prompt. A segment whose
+    narration is recorded in post (Blueprint 28) tells the generator its
+    location track carries no speech — the words never ride the prompt."""
+    from diony_director.compiler import NO_SPEECH, _fit_prompt, prompt_limit
 
     body = body.strip()
     if provider is CloudProvider.GROK:
@@ -419,19 +422,21 @@ def compile_master_body(
         pieces: list[tuple[str, int]] = [(grok_lexicon.harden_camera_locks(body), 1)]
         if has_start_image:
             pieces.append((grok_lexicon.I2V_DIRECTIVE, 1))
+        if narration.strip():
+            pieces.append((NO_SPEECH, 0))
         pieces.append((_GROK_STYLE.strip(), 0))
         return _fit_prompt(pieces, prompt_limit(provider))
     from diony_director import flow_lexicon
 
     _, inline_world, _ = flow_lexicon.expand(idea)
-    return _fit_prompt(
-        [
-            (body, 1),
-            (flow_lexicon.style_clause(sid, override_world=inline_world), 0),
-            (_VEO_GUARD, 0),
-        ],
-        prompt_limit(provider),
-    )
+    pieces = [
+        (body, 1),
+        (flow_lexicon.style_clause(sid, override_world=inline_world), 0),
+    ]
+    if narration.strip():
+        pieces.append((NO_SPEECH, 0))
+    pieces.append((_VEO_GUARD, 0))
+    return _fit_prompt(pieces, prompt_limit(provider))
 
 
 def compile_prompt(
@@ -450,7 +455,12 @@ def compile_prompt(
         # Only the route's guards ride on top — the Grok lock hardening and
         # i2v directive, or the Flow world clause and anatomy guard.
         return compile_master_body(
-            master.prompt, idea, provider, sid, has_start_image=has_start_image
+            master.prompt,
+            idea,
+            provider,
+            sid,
+            has_start_image=has_start_image,
+            narration=master.narration,
         )
 
     seed = idea.strip().rstrip(".")
@@ -661,6 +671,7 @@ def propose(
     stills_note = _attach_stills(op, start, list(extras), "the frame")
     if master is not None:
         _MASTERS[op.id] = master
+        op.narration = master.narration
         op.rationale += " · " + master_mod.duration_note(
             master, int(duration), cap_s=estimate_mod.GROK_MAX_S if chosen_provider is CloudProvider.GROK else 0
         )
@@ -744,9 +755,16 @@ def _propose_chain(
         stale = stale or est.rate_cards_stale
         first = index == 0
         has_start = bool(start) if first else True
+        narration = ""
         if master is not None:
+            narration = str(master.clips[index].get("narration", "") or "")
             prompt = compile_master_body(
-                master.clips[index]["prompt"], text, provider, sid, has_start_image=has_start
+                master.clips[index]["prompt"],
+                text,
+                provider,
+                sid,
+                has_start_image=has_start,
+                narration=narration,
             )
         else:
             prompt = compile_prompt(text, provider, sid, has_start_image=has_start)
@@ -758,6 +776,7 @@ def _propose_chain(
             model=model,
             mode=CloudGenerationMode.T2V,
             prompt=prompt,
+            narration=narration,
             prompt_version="v1" if master is not None else "v0-provisional",
             status="deriving" if async_master else "proposed",
             duration_s=clip_s,
@@ -851,12 +870,14 @@ def _kick_chain_derivation(
             for index, op in enumerate(ops):
                 _MASTERS[op.id] = master
                 if index < len(master.clips):
+                    op.narration = str(master.clips[index].get("narration", "") or "")
                     op.prompt = compile_master_body(
                         master.clips[index]["prompt"],
                         idea,
                         provider,
                         sid,
                         has_start_image=has_start_image if index == 0 else True,
+                        narration=op.narration,
                     )
                     op.prompt_version = "v1"
             ops[0].rationale = (
@@ -915,6 +936,7 @@ def _kick_master_derivation(
             op.prompt = compile_prompt(
                 idea, provider, sid, has_start_image=has_start_image, master=master
             )
+            op.narration = master.narration
             op.prompt_version = "v1"
             op.rationale = (
                 op.rationale.split(" · ")[0]

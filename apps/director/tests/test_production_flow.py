@@ -179,7 +179,7 @@ def test_autopilot_submits_within_budget_and_holds_at_the_ceiling(monkeypatch, t
 
 
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
-def test_full_loop_generate_review_assemble_receipt(monkeypatch, tmp_path) -> None:
+def test_full_loop_generate_review_assemble_receipt(monkeypatch, tmp_path, fake_narrator) -> None:
     client = _client()
     _fake_adapters(monkeypatch, tmp_path)
     sid = _start(client)
@@ -217,7 +217,7 @@ def test_full_loop_generate_review_assemble_receipt(monkeypatch, tmp_path) -> No
 
 
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
-def test_retry_missing_shots_fills_the_gaps_and_cuts_clean(monkeypatch, tmp_path) -> None:
+def test_retry_missing_shots_fills_the_gaps_and_cuts_clean(monkeypatch, tmp_path, fake_narrator) -> None:
     """The functional 'Retry' beside 'Assemble anyway': run_retakes rolls the
     drafted ops for every missing shot, and the default cut then succeeds."""
     client = _client()
@@ -299,7 +299,7 @@ def test_upscale_refuses_an_incomplete_op(monkeypatch, tmp_path) -> None:
 
 
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
-def test_run_batch_advance_and_assemble_all(monkeypatch, tmp_path) -> None:
+def test_run_batch_advance_and_assemble_all(monkeypatch, tmp_path, fake_narrator) -> None:
     client = _client()
     _fake_adapters(monkeypatch, tmp_path)
     sid = _start(client)

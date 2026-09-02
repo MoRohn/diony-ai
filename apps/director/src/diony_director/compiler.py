@@ -22,6 +22,17 @@ ANTI_ARTIFACT = (
     "no on-screen text, no plastic skin, no uncanny stare, no CGI sheen."
 )
 
+# Blueprint 28: the voice track is a POST instrument. Scripted words never
+# ride a generator prompt as spoken dialogue — a provider-invented voice has
+# the wrong timbre in every clip and stretches the clip to fit its own
+# delivery. Every dialect tells the generator the location track is speechless;
+# the narrator records the authored words against the assembled cut instead.
+NO_SPEECH = (
+    "The location sound carries no spoken words: no dialogue, no narration, "
+    "no voice-over, no crowd chatter reading as speech — the voice track is "
+    "recorded and mixed in post."
+)
+
 # Every Grok picture carries the same photographic ground truth — without it
 # the model drifts toward game-engine gloss and stock-footage lighting.
 REALISM = (
@@ -36,8 +47,9 @@ REVISION_DIRECTIVES = {
         "same hair, same eyes; no jewelry changes."
     ),
     "fix-audio": (
-        "The scripted words must be spoken exactly as written, clearly, in sync "
-        "with the mouth; keep the same voice throughout."
+        "The location track must carry no spoken words at all — remove any "
+        "dialogue, narration, or voice-like sound; natural ambience only. "
+        "The voice track is recorded in post."
     ),
     "fix-light": "Keep the established light direction and color; do not relight the scene.",
     "fix-continuity": (
@@ -152,6 +164,30 @@ def _setting_block(setting: SettingProfile, heading: str) -> str:
 def _continues_scene(clip: ClipUnit, package: ProductionPackage) -> bool:
     orders = [c.order for c in package.clips if c.scene_id == clip.scene_id]
     return bool(orders) and clip.order != min(orders)
+
+
+def _delivery_clause(clip: ClipUnit) -> str:
+    """The PERFORMANCE of a scripted line, without its words (Blueprint 28).
+
+    An on-camera speaker still acts the delivery — posture, breath, mouth
+    moving mid-conversation — so the post-recorded narration lands on a body
+    that is visibly speaking. The authored words themselves never enter the
+    prompt: a provider voice is the wrong voice, and its own pacing fights
+    the booked clip length. A voice-over clip needs no performance at all."""
+    excerpt = clip.audio_packet.script_excerpt
+    if not excerpt or not clip.audio_packet.on_camera:
+        return ""
+    entry = excerpt[0]
+    parenthetical = entry.get("parenthetical", "")
+    delivery = ", ".join(f"{k}: {v}" for k, v in clip.audio_packet.delivery.items())
+    direction = "; ".join(x for x in (parenthetical, delivery) if x)
+    who = entry.get("speaker", "") or "The speaker"
+    return (
+        f"{who} is speaking mid-conversation"
+        + (f" ({direction})" if direction else "")
+        + ", natural mouth movement and gesture, unhurried — their voice is "
+        "recorded separately and is not heard on this track."
+    )
 
 
 def _sound_clause(clip: ClipUnit, setting: SettingProfile, *, continues: bool = True) -> str:
@@ -306,16 +342,6 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 weather=str(getattr(setting, "time_weather", "") or ""),
             )
         )
-        spoken = ""
-        excerpt = clip.audio_packet.script_excerpt
-        if excerpt:
-            entry = excerpt[0]
-            direction = entry.get("parenthetical", "")
-            spoken = (
-                f'{entry.get("speaker", "")} says'
-                + (f" ({direction})" if direction else "")
-                + f': "{entry.get("line", "")}".'
-            )
         return _fit_prompt(
             [
                 (f"{camera_text}." if camera_text else "", 0),
@@ -331,9 +357,10 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 (f"{grok_lexicon.sentence(atmosphere)}." if atmosphere else "", 2),
                 (_setting_block(setting, scene.heading), 2),
                 (master["lighting"], 2),
-                (spoken, 0),
+                (_delivery_clause(clip), 0),
                 (REALISM, 1),
                 (_sound_clause(clip, setting, continues=bool(continuity)), 2),
+                (NO_SPEECH, 0),
                 (char_text, 3),
                 (master["ending"], 1),
                 (master["constraints"], 1),
@@ -357,16 +384,6 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
     # world moved to the style slot — never resurrect the literal token
 
     if clip.model == "omni-flash":
-        excerpt = clip.audio_packet.script_excerpt
-        spoken = ""
-        if excerpt:
-            entry = excerpt[0]
-            parenthetical = entry.get("parenthetical", "")
-            delivery = ", ".join(f"{k}: {v}" for k, v in clip.audio_packet.delivery.items())
-            direction = "; ".join(x for x in (parenthetical, delivery) if x)
-            who = entry.get("speaker", "")
-            role = "says, on camera" if clip.audio_packet.on_camera else "in voice-over"
-            spoken = f'{who} {role}: "{entry.get("line", "")}" ({direction}). '
         # The session world rides dialogue only when the whole package rolls
         # on Flow: under a mixed package (auto policy — pictures on Grok),
         # styling the spoken shots away from the Grok pictures would break
@@ -392,8 +409,9 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 (master["lighting"], 2),
                 (omni_style, 2),
                 (char_text, 3),
-                (spoken, 0),
+                (_delivery_clause(clip), 0),
                 (_sound_clause(clip, setting, continues=bool(continuity)), 2),
+                (NO_SPEECH, 0),
                 ("Performance is grounded and unhurried.", 1),
                 (master["physics"], 2),
                 (master["ending"], 1),
@@ -421,7 +439,9 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 flow_lexicon.style_clause(package.session_id, override_world=inline_world),
                 1,
             ),
+            (_delivery_clause(clip), 0),
             (_sound_clause(clip, setting, continues=bool(continuity)), 2),
+            (NO_SPEECH, 0),
             (char_text, 3),
             (master["ending"], 1),
             (master["constraints"], 1),
@@ -436,21 +456,13 @@ def compile_clip_prompt(clip: ClipUnit, package: ProductionPackage) -> PromptVer
 
     if clip.provider is None or not clip.model:
         raise CompileError(f"clip {clip.clip_id} has no provider/model routing")
-    if clip.audio_packet.voice_ref and clip.provider is CloudProvider.GROK:
-        raise CompileError(
-            f"clip {clip.clip_id} carries a voice lock ({clip.audio_packet.voice_ref}) "
-            "that cannot be expressed on Grok — re-route the clip, do not drop the lock"
-        )
     caps = capabilities.caps_for(clip.provider.value, clip.model)
     if caps is None:
         raise CompileError(
             f"clip {clip.clip_id} routes to unknown model {clip.model!r} on {clip.provider.value}"
         )
-    if clip.audio_packet.voice_ref and caps.max_voices == 0:
-        raise CompileError(
-            f"clip {clip.clip_id} carries a voice lock but {clip.model} has no voice lane — "
-            "re-route the clip, do not drop the lock"
-        )
+    # A voice lock no longer constrains routing: the narrator honors it in
+    # post (Blueprint 28), so it is expressible on every route.
     if not capabilities.duration_legal(caps, clip.duration_s):
         raise CompileError(
             f"clip {clip.clip_id} books {clip.duration_s}s, which is not on the "
@@ -521,13 +533,8 @@ def provider_artifact_refs(clip: ClipUnit, package: ProductionPackage) -> dict:
     character_refs = [c.flow_character_ref for c in chars if c.flow_character_ref]
     if character_refs and max_chars:
         refs["characters"] = character_refs[:max_chars]
-    if clip.audio_packet.voice_ref:
-        voices = [
-            c.voice.engine_ref
-            for c in chars
-            if c.voice is not None and c.voice.engine_ref
-        ]
-        refs["voices"] = voices[:5] or ["Achird"]
+    # Provider voices are never registered: the clip carries no spoken words
+    # (Blueprint 28) — a voice lock binds the post narrator instead.
     plate_asset = _live_plate_asset(clip, package)
     if plate_asset:
         # Frames are exclusive with refs/characters/voices on Flow: a
@@ -536,7 +543,7 @@ def provider_artifact_refs(clip: ClipUnit, package: ProductionPackage) -> dict:
         # as a reference instead — the model composes the figures into the
         # master room, the same doctrine as the Grok still-recipe branch —
         # so the compiler never hands the capability gate an illegal combo.
-        has_identity = bool(refs.get("characters") or refs.get("voices"))
+        has_identity = bool(refs.get("characters"))
         if clip.continuity.lock_recipe == "still" and not has_identity:
             refs["start_image"] = plate_asset
         elif max_refs:

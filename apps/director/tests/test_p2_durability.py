@@ -305,7 +305,7 @@ def test_the_board_feeds_script_bibles_and_shots() -> None:
 
 
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
-def test_the_film_ships_with_subtitles_edl_and_qc_packet(monkeypatch) -> None:
+def test_the_film_ships_with_subtitles_edl_and_qc_packet(monkeypatch, fake_narrator) -> None:
     from diony_contracts.cluster import cluster_root
 
     client = _client()

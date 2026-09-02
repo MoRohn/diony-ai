@@ -40,7 +40,9 @@ def test_grok_policy_routes_dialogue_to_grok_with_the_voice_unlocked() -> None:
         assert clip.audio_packet.script_excerpt  # the words still travel
 
 
-def test_grok_policy_dialogue_compiles_and_speaks_the_line() -> None:
+def test_grok_policy_dialogue_compiles_with_a_mute_location_track() -> None:
+    # Blueprint 28: the line is recorded in post — the Grok prompt acts the
+    # delivery and declares the location track speechless, never the words.
     draft = _draft()
     package = packagebuilder.build_package("s-gp", "a getaway", draft, split=False)
     package.clips = splitter.split_script(
@@ -49,7 +51,8 @@ def test_grok_policy_dialogue_compiles_and_speaks_the_line() -> None:
     dialogue = next(c for c in package.clips if c.clip_class == "sync-dialogue")
     version = compiler.compile_clip_prompt(dialogue, package)
     line = dialogue.audio_packet.script_excerpt[0]["line"]
-    assert f'"{line}"' in version.prompt
+    assert f'"{line}"' not in version.prompt
+    assert "no voice-over" in version.prompt
 
 
 def test_flow_policy_routes_picture_to_veo() -> None:

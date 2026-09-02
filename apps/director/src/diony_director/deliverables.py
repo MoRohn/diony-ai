@@ -52,9 +52,18 @@ def build_deliverables(
     film_duration_s: float,
     look: str,
     loudness_target: str,
+    narration: Any = None,
 ) -> dict[str, Any]:
     """Write the sidecar set. Each entry: {op, clip, window: (in_s, duration_s),
-    review, accepted}. Returns the names written plus the final master check."""
+    review, accepted}. `narration` is the post-recorded NarrationReport when
+    the master carries a voice track (Blueprint 28) — its measured cue lengths
+    time the subtitles instead of the clip windows. Returns the names written
+    plus the final master check."""
+
+    measured: dict[str, float] = {}
+    if narration is not None:
+        for cue in narration.cues:
+            measured[str(cue.get("clip_id", ""))] = float(cue.get("duration_s", 0))
 
     cues: list[SubtitleCue] = []
     edl_events: list[dict[str, Any]] = []
@@ -66,21 +75,38 @@ def build_deliverables(
         op = entry["op"]
         review = entry.get("review")
         source_in, duration = entry["window"]
+        speaker = ""
+        line = ""
+        cue_key = ""
         if (
             clip is not None
             and clip.clip_class in {"sync-dialogue", "vo-over"}
             and clip.audio_packet.script_excerpt
         ):
             excerpt = clip.audio_packet.script_excerpt[0]
+            speaker = str(excerpt.get("speaker", ""))
+            line = str(excerpt.get("line", "")).strip()
+            cue_key = clip.clip_id
+        elif str(getattr(op, "narration", "") or "").strip():
+            # a chained one-shot's split narration (Blueprint 28) — spoken by
+            # the narrator in post, subtitled the same as scripted dialogue
+            line = str(op.narration).strip()
+            cue_key = op.id
+        if line:
             start = timeline_s + CUE_LEAD_IN_S
-            end = max(start + 0.4, timeline_s + duration - 0.1)
+            if measured.get(cue_key, 0) > 0:
+                # the narrator's real take times the cue — a line may breathe
+                # past its clip's cut, and the subtitle follows the voice
+                end = start + measured[cue_key]
+            else:
+                end = max(start + 0.4, timeline_s + duration - 0.1)
             cues.append(
                 SubtitleCue(
                     index=len(cues) + 1,
                     start_seconds=round(start, 3),
                     end_seconds=round(end, 3),
-                    speaker=str(excerpt.get("speaker", "")),
-                    text=str(excerpt.get("line", "")),
+                    speaker=speaker,
+                    text=line,
                 )
             )
         edl_events.append(
@@ -141,12 +167,17 @@ def build_deliverables(
     (dest_dir / "assembly-map.json").write_text(
         assembly_map.model_dump_json(indent=1), encoding="utf-8"
     )
+    qc_narration: dict[str, Any] = {"recorded": narration is not None}
+    if narration is not None:
+        qc_narration["cues"] = list(narration.cues)
+        qc_narration["overruns"] = list(narration.overruns)
     (dest_dir / "qc-packet.json").write_text(
         json.dumps(
             {
                 "session_id": session_id,
                 "master": final_check,
                 "clips": qc_clips,
+                "narration": qc_narration,
                 "look": look,
                 "loudness_target": loudness_target,
             },

@@ -32,12 +32,16 @@ def test_every_compiled_prompt_fits_the_provider_limit() -> None:
         assert len(version.prompt) <= limit, f"{clip.clip_id}: {len(version.prompt)} > {limit}"
 
 
-def test_dialogue_and_anti_artifact_survive_the_trim() -> None:
+def test_speechless_track_and_anti_artifact_survive_the_trim() -> None:
+    # Blueprint 28: what must survive a hard trim is no longer the quoted
+    # line (it never rides the prompt) but the mute-location doctrine that
+    # keeps the provider from inventing a voice the narrator then fights.
     package = _bloated_package()
     dialogue = next(c for c in package.clips if c.clip_class in {"sync-dialogue", "vo-over"})
     version = compiler.compile_clip_prompt(dialogue, package)
     line = dialogue.audio_packet.script_excerpt[0]["line"]
-    assert f'"{line}"' in version.prompt
+    assert f'"{line}"' not in version.prompt
+    assert "no voice-over" in version.prompt
     assert "No morphing" in version.prompt
     assert dialogue.camera_idea.split("—")[0].strip()[:20] in version.prompt
 

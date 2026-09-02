@@ -249,6 +249,11 @@
       "title": "Artifact Refs",
       "type": "object"
     },
+    "narration": {
+      "default": "",
+      "title": "Narration",
+      "type": "string"
+    },
     "estimate": {
       "anyOf": [
         {

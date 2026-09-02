@@ -124,6 +124,11 @@ class DirectorOp(BaseModel):
     duration_s: float = Field(default=0, ge=0)
     resolution: str = "720p"
     artifact_refs: dict[str, Any] = Field(default_factory=dict)
+    # The verbatim voice-over this clip's segment carries in the finished
+    # film. Narration is a POST instrument (Blueprint 28): these words never
+    # ride the generator prompt as spoken dialogue — the narrator records
+    # them against the assembled cut, placed at this clip's timeline start.
+    narration: str = ""
     estimate: CostEstimate | None = None
     rationale: str = ""
     requires_confirmation: bool = True

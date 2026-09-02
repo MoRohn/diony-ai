@@ -38,3 +38,21 @@ def director_isolated_vault(tmp_path, monkeypatch):
     yield tmp_path
     _director_session.reset()
 
+
+@pytest.fixture
+def fake_narrator(monkeypatch):
+    """A Blueprint 28 narrator backend for tests: ffmpeg speaks a sine tone
+    through the same DIONY_NARRATOR_CLI contract a real narrator uses."""
+    import shutil
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("ffmpeg not installed")
+    # the vault-wide XAI test key would auto-select the grok voice backend;
+    # tests speak through the CLI contract explicitly
+    monkeypatch.setenv("DIONY_NARRATOR_BACKEND", "cli")
+    monkeypatch.setenv(
+        "DIONY_NARRATOR_CLI",
+        f"{ffmpeg} -y -f lavfi -i sine=frequency=520:duration=1.2 -ar 48000 -ac 1 {{output}}",
+    )
+

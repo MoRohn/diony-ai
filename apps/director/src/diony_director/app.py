@@ -1621,6 +1621,11 @@ class AssembleIn(BaseModel):
     # default: a silently missing story beat (s-1b80548c4d shipped without
     # cl-2-5) is a defect, not a preference.
     allow_gaps: bool = False
+    # Blueprint 28: scripted/narrated lines are recorded in post, against the
+    # assembled cut. Off cuts a mute picture (no voice track) deliberately;
+    # a cut that carries lines but has no narrator backend is a loud stop,
+    # never a film that silently shipped without its words.
+    narrate: bool = True
 
 
 def _cut_gaps(sid: str) -> tuple[list[str], list[DirectorOp], list[str]]:
@@ -1718,6 +1723,7 @@ def _assembly_spec(op: DirectorOp) -> dict:
 @app.post("/api/director/sessions/{sid}/assemble")
 def assemble_session(sid: str, body: AssembleIn) -> dict:
     from diony_director import deliverables as deliverables_mod
+    from diony_director import narration as narration_mod
 
     _boot()
     ops = session.completed_clip_ops(sid)
@@ -1754,6 +1760,26 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
                     + ", or assemble with allow_gaps to ship without them"
                 ),
             )
+    # Blueprint 28: lines are recorded in post. A cut that carries lines but
+    # has no narrator backend fails BEFORE ffmpeg spends a render on it.
+    def _carries_line(op) -> bool:
+        clip = session.clip_for_op(op)
+        if (
+            clip is not None
+            and clip.clip_class in {"sync-dialogue", "vo-over"}
+            and clip.audio_packet.script_excerpt
+            and str(clip.audio_packet.script_excerpt[0].get("line", "")).strip()
+        ):
+            return True
+        return bool(str(getattr(op, "narration", "") or "").strip())
+
+    wants_narration = body.narrate and any(_carries_line(op) for op in used_ops)
+    if wants_narration and not narration_mod.narrator_configured():
+        raise HTTPException(
+            status_code=409,
+            detail=f"this cut carries scripted lines and {narration_mod.UNCONFIGURED}",
+        )
+
     dest = cluster_root() / "director" / sid / "film.mp4"
     raster_w, raster_h = session.program_raster(sid)
     try:
@@ -1772,18 +1798,41 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
     except assembly.AssemblyFailed as err:
         raise HTTPException(status_code=502, detail=str(err)) from err
 
+    entries = [
+        {
+            "op": op,
+            "clip": session.clip_for_op(op),
+            "window": result.windows[index],
+            "review": session.review_for(op.id),
+            "accepted": session.is_accepted(op.id),
+        }
+        for index, op in enumerate(used_ops)
+    ]
+
+    narration_report = None
+    if wants_narration:
+        cues = narration_mod.cue_sheet(entries)
+        picture_lock = dest.with_name("picture-lock.mp4")
+        narrated = dest.with_name("film-narrated.tmp.mp4")
+        try:
+            narration_report = narration_mod.narrate(
+                dest, cues, narrated, loudness_target=body.loudness
+            )
+        except narration_mod.NarrationUnavailable as err:
+            raise HTTPException(status_code=409, detail=str(err)) from err
+        except narration_mod.NarrationFailed as err:
+            raise HTTPException(
+                status_code=502,
+                detail=f"the cut is assembled but its narration failed — {err}",
+            ) from err
+        # the mute cut survives beside the master: re-narration reads it
+        # instead of re-rendering the whole assembly
+        dest.replace(picture_lock)
+        narrated.replace(dest)
+        narration_report.path = dest
+
     delivered: dict = {}
     try:
-        entries = [
-            {
-                "op": op,
-                "clip": session.clip_for_op(op),
-                "window": result.windows[index],
-                "review": session.review_for(op.id),
-                "accepted": session.is_accepted(op.id),
-            }
-            for index, op in enumerate(used_ops)
-        ]
         delivered = deliverables_mod.build_deliverables(
             dest.parent,
             session_id=sid,
@@ -1792,6 +1841,7 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
             film_duration_s=result.duration_s,
             look=result.look,
             loudness_target=result.loudness_target,
+            narration=narration_report,
         )
     except Exception as err:  # noqa: BLE001 - sidecars never block the film
         delivered = {"names": [], "error": f"{type(err).__name__}: {err}"}
@@ -1801,6 +1851,14 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
         "clip_count": result.clip_count,
         "look": result.look,
         "loudness_target": result.loudness_target,
+        "narration": (
+            {
+                "cue_count": len(narration_report.cues),
+                "overruns": narration_report.overruns,
+            }
+            if narration_report is not None
+            else {"cue_count": 0, "skipped": "no lines" if body.narrate else "narrate off"}
+        ),
         "deliverables": delivered.get("names", []),
         "final_check": delivered.get("final_check"),
         "cue_count": delivered.get("cue_count", 0),

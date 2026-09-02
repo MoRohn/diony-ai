@@ -229,9 +229,15 @@ class MasterPrompt(BaseModel):
     prompt: str
     # Chained one-shot delivery: when the booked runtime exceeds the route's
     # single-clip length, the derivation also splits the action into
-    # sequential clips — each entry {prompt, duration_s}, in play order; clip
-    # k+1 opens from clip k's final frame. Empty for a single-clip booking.
+    # sequential clips — each entry {prompt, duration_s, narration}, in play
+    # order; clip k+1 opens from clip k's final frame. Empty for a
+    # single-clip booking.
     clips: list[dict[str, Any]] = Field(default_factory=list)
+    # The verbatim voice-over the finished video carries, when the idea
+    # scripts one. Narration is a POST instrument: it is never written into
+    # the generator prompt as spoken dialogue — the narrator records it
+    # against the assembled cut (Blueprint 28).
+    narration: str = ""
     word_count: int = Field(default=0, ge=0)
     source: Literal["brain", "template"] = "template"
     warnings: list[str] = Field(default_factory=list)

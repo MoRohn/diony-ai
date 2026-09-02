@@ -193,6 +193,7 @@ spatial, camera, performance, micro_expressions, physics, body_mechanics,
 lighting ({source, quality, shadows, secondary}),
 mood, continuity_anchors (list of short phrases), ending,
 constraints (list of 3–6 short imperatives),
+narration (the verbatim voice-over or scripted lines the finished video carries, an empty string when the idea scripts none — narration is recorded in post against the assembled film, so these words must NEVER appear inside the prompt as spoken dialogue, and the prompt must not direct anyone to speak audible words),
 estimated_duration_s (integer),
 prompt (the finished generator-ready prompt, following FINAL GENERATOR-READY PROMPT STRUCTURE, after the OPTIMIZATION PASS).
 """
@@ -229,9 +230,9 @@ def split_section(clip_plan: list[int]) -> str:
     return f"""
 CLIP DELIVERY
 
-The booked route delivers this as {count} sequential clips ({durations}; {sum(clip_plan)} seconds total). After deriving the master, split the ACTION PROGRESSION into {count} consecutive segments. Cut at natural action boundaries, never mid-gesture. When the idea itself scripts scenes, align clip boundaries with those scenes — cover every scripted scene's imagery across the clips in order — and carry each scene's narration into its clip VERBATIM as spoken voiceover.
+The booked route delivers this as {count} sequential clips ({durations}; {sum(clip_plan)} seconds total). After deriving the master, split the ACTION PROGRESSION into {count} consecutive segments. Cut at natural action boundaries, never mid-gesture. When the idea itself scripts scenes, align clip boundaries with those scenes — cover every scripted scene's imagery across the clips in order — and return each scene's narration in its clip's "narration" field VERBATIM. Narration is recorded in post against the assembled film: it must NEVER appear inside a clip prompt as spoken dialogue or voiceover, and no clip prompt may direct anyone to speak audible words.
 
-In addition to every OUTPUT CONTRACT key, return clips: a list of exactly {count} objects {{"prompt", "duration_s"}} in play order, duration_s matching the booked lengths above. Each clip prompt is a complete generator-ready prompt for JUST its segment: it restates the subject, wardrobe, setting, camera treatment, lighting, and every continuity anchor in full — each clip generates alone and knows nothing of the others. Every clip after the first begins exactly where the previous clip's final frame left off, and every clip before the last closes on a stable, holdable frame the next clip can open from. Only the final clip carries the ending. Include the pacing sentence in each clip prompt for its own length. The master prompt still describes the WHOLE action.
+In addition to every OUTPUT CONTRACT key, return clips: a list of exactly {count} objects {{"prompt", "duration_s", "narration"}} in play order, duration_s matching the booked lengths above, narration holding that segment's scripted lines verbatim (an empty string when the segment carries none). Each clip prompt is a complete generator-ready prompt for JUST its segment: it restates the subject, wardrobe, setting, camera treatment, lighting, and every continuity anchor in full — each clip generates alone and knows nothing of the others. Every clip after the first begins exactly where the previous clip's final frame left off, and every clip before the last closes on a stable, holdable frame the next clip can open from. Only the final clip carries the ending. Include the pacing sentence in each clip prompt for its own length. The master prompt still describes the WHOLE action.
 """
 
 
@@ -381,10 +382,12 @@ def _parse(
         for entry in body.get("clips") or []:
             if isinstance(entry, dict):
                 text = " ".join(str(entry.get("prompt", "") or "").split())
+                narration = " ".join(str(entry.get("narration", "") or "").split())
             else:
                 text = " ".join(str(entry).split())
+                narration = ""
             if text:
-                clips.append({"prompt": text, "duration_s": 0})
+                clips.append({"prompt": text, "duration_s": 0, "narration": narration})
         if len(clips) != len(clip_plan):
             # a chained booking without its clips is unusable — raising here
             # retries the derivation rather than shipping half a chain
@@ -427,6 +430,7 @@ def _parse(
         continuity_anchors=_list("continuity_anchors"),
         ending=ending,
         constraints=_list("constraints"),
+        narration=" ".join(str(body.get("narration", "") or "").split()),
         prompt=prompt,
         clips=clips,
         source="brain",
@@ -814,7 +818,9 @@ def split_clips(master: MasterPrompt, clip_plan: list[int]) -> list[dict]:
             parts.append("The clip closes on a stable, holdable frame the next clip opens from.")
         if constraints:
             parts.append(constraints)
-        clips.append({"prompt": " ".join(parts), "duration_s": int(duration)})
+        # the template has no understanding to split narration with — a
+        # brainless chain carries none, and the derivation warning names it
+        clips.append({"prompt": " ".join(parts), "duration_s": int(duration), "narration": ""})
     return clips
 
 
