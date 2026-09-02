@@ -188,3 +188,53 @@ def test_a_failed_link_stops_the_chain_once_and_loudly() -> None:
     session.set_batch_targets(sid, {first.id, second.id})
     ready = [op.id for op in session.ready_ops(sid)]
     assert ready == [first.id]
+
+
+def _print_link(op, tmp_path) -> None:
+    from diony_director.providers import base
+
+    op.status = "completed"
+    clip_file = tmp_path / f"{op.id}.mp4"
+    clip_file.write_bytes(b"clip" * 64)
+    session.runtime(op.id)["clip"] = base.FetchedClip(
+        path=clip_file, sha256="x", bytes=clip_file.stat().st_size
+    )
+
+
+def test_a_finished_chain_is_the_cut_list(tmp_path) -> None:
+    """Every link printed → the chain IS the cut list, in play order, with a
+    clean gap check. Assembly of a chained one-shot needs no locked script —
+    the 2026-09-02 chain printed all 12 links and assemble still said 'no
+    completed clips to assemble yet' (the cut list only knew scripted
+    clip_ids)."""
+    from diony_director import app as director_app
+
+    sid = _sid()
+    proposal = session.propose(sid, "a city splits in two", duration_s=40)
+    assert len(proposal.ops) > 1
+    for op in proposal.ops:
+        _print_link(op, tmp_path)
+    cut = session.completed_clip_ops(sid)
+    assert [o.id for o in cut] == [o.id for o in proposal.ops]
+    missing, drafts, rolling = director_app._cut_gaps(sid)
+    assert (missing, drafts, rolling) == ([], [], [])
+
+
+def test_a_chain_with_a_hole_refuses_the_cut(tmp_path) -> None:
+    """A link with no usable take is a named gap — assemble must 409 loudly,
+    never silently ship the film one clip short."""
+    from diony_director import app as director_app
+
+    sid = _sid()
+    proposal = session.propose(sid, "a city splits in two", duration_s=40)
+    count = len(proposal.ops)
+    for index, op in enumerate(proposal.ops):
+        if index == 1:
+            op.status = "failed"
+        else:
+            _print_link(op, tmp_path)
+    cut = session.completed_clip_ops(sid)
+    assert len(cut) == count - 1  # the hole is not in the cut list
+    missing, drafts, rolling = director_app._cut_gaps(sid)
+    assert missing == [f"clip 2/{count}"]
+    assert drafts == [] and rolling == []

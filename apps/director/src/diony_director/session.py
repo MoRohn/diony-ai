@@ -1580,12 +1580,33 @@ def next_revision(sid: str, failed_op: DirectorOp, review: ClipReview) -> tuple[
     return op, narration
 
 
+def oneshot_chain_ops(sid: str) -> list[list[DirectorOp]]:
+    """Every chained one-shot's links, in play order, per chain."""
+    seq = _SEQUENCES.get(sid)
+    if seq is None:
+        return []
+    chains: list[list[DirectorOp]] = []
+    for scene_id, chain in (seq.get("scenes") or {}).items():
+        if not scene_id.startswith("oneshot-"):
+            continue
+        ops = [op for op_id in chain if (op := _OPS.get(op_id)) is not None]
+        if ops:
+            chains.append(ops)
+    return chains
+
+
 def completed_clip_ops(sid: str) -> list[DirectorOp]:
-    """Latest completed op per clip, in package clip order — the cut list."""
+    """The cut list. A scripted production cuts the latest usable take per
+    clip in package order; a session without a locked script cuts its chained
+    one-shot links in play order (the 2026-09-02 chain printed all 12 links
+    and assembly still said "no completed clips" — the cut list only knew
+    scripted clip_ids)."""
 
     package = _PACKAGES.get(sid)
     if package is None:
-        return []
+        return [
+            op for chain in oneshot_chain_ops(sid) for op in chain if usable_take(op)
+        ]
     latest: dict[str, DirectorOp] = {}
     for op in ops_for(sid):
         if op.clip_id and usable_take(op):

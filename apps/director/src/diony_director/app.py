@@ -1629,7 +1629,7 @@ def _cut_gaps(sid: str) -> tuple[list[str], list[DirectorOp], list[str]]:
     and the clips whose fill is already rolling (submitting/submitted)."""
     package = session.package_for(sid)
     if package is None:
-        return [], [], []
+        return _oneshot_gaps(sid)
     have: set[str] = set()
     for op in session.completed_clip_ops(sid):
         stored = session.runtime(op.id).get("clip")
@@ -1647,6 +1647,27 @@ def _cut_gaps(sid: str) -> tuple[list[str], list[DirectorOp], list[str]]:
             if o.clip_id in gaps and o.status in {"submitting", "submitted"}
         }
     )
+    return missing, drafts, rolling
+
+
+def _oneshot_gaps(sid: str) -> tuple[list[str], list[DirectorOp], list[str]]:
+    """A chained one-shot's holes: links with no usable take on disk. Without
+    this, a chain missing link 7 would silently cut an 11-clip film."""
+    missing: list[str] = []
+    drafts: list[DirectorOp] = []
+    rolling: list[str] = []
+    for chain in session.oneshot_chain_ops(sid):
+        for index, op in enumerate(chain):
+            if session.usable_take(op):
+                stored = session.runtime(op.id).get("clip")
+                if stored is not None and Path(stored.path).is_file():
+                    continue
+            label = f"clip {index + 1}/{len(chain)}"
+            missing.append(label)
+            if op.status == "proposed":
+                drafts.append(op)
+            elif op.status in {"submitting", "submitted"}:
+                rolling.append(label)
     return missing, drafts, rolling
 
 
@@ -1714,7 +1735,10 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
     if not body.allow_gaps:
         missing, drafts, rolling = _cut_gaps(sid)
         if missing:
-            pending = sorted({o.clip_id for o in drafts})
+            pending = sorted({o.clip_id for o in drafts if o.clip_id})
+            if not pending and drafts:
+                # one-shot chain links carry no clip_id — name the count
+                pending = [f"{len(drafts)} chain links"]
             if pending:
                 why = f" — retakes are drafted for {', '.join(pending)}; run them first"
             elif rolling:
