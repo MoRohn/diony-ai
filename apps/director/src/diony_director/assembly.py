@@ -217,7 +217,12 @@ def assemble(
     silent_index: dict[int, int] = {}
     next_input = len(clip_paths)
     for index, probe in enumerate(probes):
-        if not probe["has_audio"]:
+        # A spec-muted clip is cut with a silent bed even though it delivered
+        # audio: the speech guard's kill switch for a location track that
+        # carries a talking voice (Blueprint 28 — the voice track is post,
+        # and a provider-invented voice must never reach the mix).
+        muted = bool(((specs[index] if specs and index < len(specs) else {}) or {}).get("mute"))
+        if muted or not probe["has_audio"]:
             cmd += [
                 "-f", "lavfi", "-t", f"{max(windows[index][1], 0.1):.3f}",
                 "-i", "anullsrc=r=48000:cl=stereo",

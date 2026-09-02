@@ -25,6 +25,9 @@ DEFAULT_MAX_REVISIONS_PER_CLIP = 3
 _NOTE_BY_FAMILY = (
     ("identity", "fix-face"),
     ("audio", "fix-audio"),
+    # a talking voice on the speechless-by-law location track (Blueprint 28)
+    ("speech", "fix-audio"),
+    # legacy family name from pre-28 persisted reviews
     ("script_conformance", "fix-audio"),
     ("continuity", "fix-continuity"),
     ("frames", "fix-frames"),

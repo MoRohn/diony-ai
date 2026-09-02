@@ -1948,6 +1948,11 @@ class AssembleIn(BaseModel):
     # a cut that carries lines but has no narrator backend is a loud stop,
     # never a film that silently shipped without its words.
     narrate: bool = True
+    # The last line of defense against a provider-invented talking voice
+    # reaching the mix: location tracks that measure dirty — or line-carrying
+    # clips this host cannot measure — are cut with a silent bed. Off ships
+    # the location tracks exactly as delivered.
+    speech_guard: bool = True
 
 
 def _cut_gaps(sid: str) -> tuple[list[str], list[DirectorOp], list[str]]:
@@ -2042,6 +2047,52 @@ def _assembly_spec(op: DirectorOp) -> dict:
     return spec
 
 
+def _speech_guard(
+    paths: list[Path], labels: list[str], carries_line: list[bool], specs: list[dict]
+) -> dict:
+    """Blueprint 28's guarantee at the cut: no talking voice on any location
+    track that reaches the mix. A track that MEASURES a voice is muted
+    (whatever the clip class); a line-carrying clip whose track this host
+    cannot measure is presumed dirty and muted too — the narrator is about to
+    speak over it, and an unverified provider voice under the narration is the
+    one defect this lane may never ship. Measured-clean tracks keep their
+    ambience and score untouched. Mutes are receipts in the response, never a
+    silent adjustment; staging DIONY_WHISPER_MODEL turns the presumption into
+    a measurement."""
+    from diony_director.review import SPEECH_SECONDS_FAIL, SPEECH_WORDS_FAIL
+
+    muted: list[dict] = []
+    checked = 0
+    for index, path in enumerate(paths):
+        detection = review_mod.location_speech(path)
+        if detection is None:
+            if carries_line[index]:
+                specs[index]["mute"] = True
+                muted.append(
+                    {
+                        "clip": labels[index],
+                        "why": "carries a narrated line and its location track "
+                        "cannot be verified speechless on this host — muted; "
+                        "stage DIONY_WHISPER_MODEL to measure instead",
+                    }
+                )
+            continue
+        checked += 1
+        if (
+            detection.word_count >= SPEECH_WORDS_FAIL
+            or detection.speech_s >= SPEECH_SECONDS_FAIL
+        ):
+            specs[index]["mute"] = True
+            muted.append(
+                {
+                    "clip": labels[index],
+                    "why": f"a talking voice measured on the location track "
+                    f"(heard: “{detection.transcript[:80]}”) — muted",
+                }
+            )
+    return {"muted": muted, "measured": checked, "clips": len(paths)}
+
+
 @app.post("/api/director/sessions/{sid}/assemble")
 def assemble_session(sid: str, body: AssembleIn) -> dict:
     from diony_director import deliverables as deliverables_mod
@@ -2100,6 +2151,15 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
         raise HTTPException(
             status_code=409,
             detail=f"this cut carries scripted lines and {narration_mod.UNCONFIGURED}",
+        )
+
+    speech_report: dict = {"muted": [], "measured": 0, "clips": len(paths)}
+    if body.speech_guard:
+        speech_report = _speech_guard(
+            paths,
+            [op.clip_id or op.id for op in used_ops],
+            [_carries_line(op) for op in used_ops],
+            specs,
         )
 
     dest = cluster_root() / "director" / sid / "film.mp4"
@@ -2203,10 +2263,12 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
             {
                 "cue_count": len(narration_report.cues),
                 "overruns": narration_report.overruns,
+                "shifts": narration_report.shifts,
             }
             if narration_report is not None
             else {"cue_count": 0, "skipped": "no lines" if body.narrate else "narrate off"}
         ),
+        "speech_guard": speech_report,
         "deliverables": delivered.get("names", []),
         "final_check": delivered.get("final_check"),
         "cue_count": delivered.get("cue_count", 0),

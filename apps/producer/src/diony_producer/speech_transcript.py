@@ -34,6 +34,18 @@ _CONTRACTIONS = {
 
 
 @dataclass(frozen=True)
+class SpeechDetection:
+    """Is there a talking voice on this track at all? (Blueprint 28: the
+    director lane's location tracks are speechless by doctrine — any heard
+    words are a defect, whatever they say.)"""
+
+    transcript: str
+    word_count: int
+    speech_s: float
+    model: str
+
+
+@dataclass(frozen=True)
 class TranscriptMeasurement:
     transcript: str
     word_accuracy: float
@@ -140,6 +152,36 @@ def _load_model(model_dir: str):
         return WhisperModel(model_dir, device="cpu", compute_type="int8")
 
 
+def detect_speech(audio: Path) -> SpeechDetection | None:
+    """Whether a voice speaks on this track, measured locally; None when
+    unmeasurable (no staged model, unreadable media). The VAD filter keeps
+    instrumental score and ambience from reading as words."""
+    model_dir = whisper_model_path()
+    if model_dir is None or not Path(audio).is_file():
+        return None
+    try:
+        model = _load_model(str(model_dir))
+        segments, _info = model.transcribe(
+            str(audio), beam_size=1, vad_filter=True, word_timestamps=False
+        )
+        heard: list[str] = []
+        speech_s = 0.0
+        for segment in segments:
+            text = segment.text.strip()
+            if text:
+                heard.append(text)
+                speech_s += max(0.0, float(segment.end) - float(segment.start))
+    except Exception:  # noqa: BLE001 - an unmeasurable track never fails a take
+        return None
+    transcript = " ".join(heard).strip()
+    return SpeechDetection(
+        transcript=transcript[:600],
+        word_count=len(normalize_words(transcript)),
+        speech_s=round(speech_s, 2),
+        model=model_dir.name,
+    )
+
+
 def transcribe_line(audio: Path, authored_line: str) -> TranscriptMeasurement | None:
     """Transcribe the stem locally and score it against the authored line; None when unmeasurable."""
     model_dir = whisper_model_path()
@@ -161,4 +203,4 @@ def transcribe_line(audio: Path, authored_line: str) -> TranscriptMeasurement | 
     )
 
 
-__all__ = ["TranscriptMeasurement", "normalize_words", "number_words", "score_transcript", "transcribe_line", "whisper_model_path", "word_accuracy"]
+__all__ = ["SpeechDetection", "TranscriptMeasurement", "detect_speech", "normalize_words", "number_words", "score_transcript", "transcribe_line", "whisper_model_path", "word_accuracy"]

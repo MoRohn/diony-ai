@@ -35,6 +35,22 @@ def test_audio_failure_on_a_flow_clip_plans_an_edit_in_place() -> None:
     assert "$" in narration
 
 
+def test_a_talking_voice_plans_a_fix_audio_retake() -> None:
+    package = _package()
+    clip = next(c for c in package.clips if c.provider is CloudProvider.GROK)
+    rev = _review(
+        clip.clip_id,
+        {"speech": "fail"},
+        ["a talking voice is on the location track — the voice track is post"],
+    )
+    op, _ = revisions.plan_revision(
+        rev, clip, package, session_id="s-x", revision_count=0, failure_memory=set()
+    )
+    assert op is not None
+    assert op.prompt_version.endswith("fix-audio")
+    assert "no spoken words" in op.prompt
+
+
 def test_short_duration_on_a_grok_clip_plans_an_extension() -> None:
     package = _package()
     clip = next(c for c in package.clips if c.provider is CloudProvider.GROK)

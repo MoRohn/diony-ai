@@ -33,6 +33,37 @@ def test_mixed_audio_clips_assemble_into_one_film(tmp_path) -> None:
     assert result.look == "diony-default"
 
 
+def _mean_volume_db(path, start: float, duration: float) -> float:
+    out = subprocess.run(
+        [
+            "ffmpeg", "-ss", str(start), "-t", str(duration), "-i", str(path),
+            "-af", "volumedetect", "-f", "null", "-",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    for line in out.stderr.splitlines():
+        if "mean_volume:" in line:
+            return float(line.split("mean_volume:")[1].split("dB")[0])
+    raise AssertionError(f"no mean_volume in volumedetect output for {path}")
+
+
+def test_a_muted_spec_silences_a_clip_that_has_audio(tmp_path) -> None:
+    # the speech guard's kill switch: a clip whose location track carries a
+    # talking voice is cut with a silent bed — the voice can never reach the mix
+    a = tmp_path / "a.mp4"
+    b = tmp_path / "b.mp4"
+    _make_clip(a, 1.5, audio=True)
+    _make_clip(b, 1.5, audio=True)
+    result = assembly.assemble(
+        [a, b], tmp_path / "film.mp4", specs=[{}, {"mute": True}]
+    )
+    loud = _mean_volume_db(result.path, 0.2, 1.0)
+    muted = _mean_volume_db(result.path, 1.7, 1.0)
+    assert muted < loud - 12
+    assert muted < -30
+
+
 def test_empty_assembly_is_refused() -> None:
     with pytest.raises(assembly.AssemblyFailed):
         assembly.assemble([], __import__("pathlib").Path("/tmp/never.mp4"))

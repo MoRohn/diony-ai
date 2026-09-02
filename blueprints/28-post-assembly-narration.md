@@ -135,3 +135,34 @@ animates the mouth *from* the audio it is given, so its voice physically cannot 
 post-recorded. Blueprint 22's "no post-picture TTS" doctrine remains true there
 and only there; on the Director lane this Blueprint supersedes the old
 prompt-quoted dialogue entirely.
+
+## One voice at a time (2026-09-02 hardening)
+
+A production shipped shots with **multiple talking voices**: the `NO_SPEECH`
+clause is a request, not a guarantee — providers voiced the on-camera speaker
+anyway (the delivery clause shows a moving mouth, and a model voices what it
+sees), review only ever checked that audio *existed*, and the post narrator then
+stacked on top of the invented voice. Separately, the narrator rail itself could
+overlap: a line that overran its clip played straight into the next cue's mark —
+two cast voices at once. Three layered guarantees now stand:
+
+1. **The location track is measured speechless.** Review carries a `speech`
+   family on every clip and every chain link. With a whisper model staged
+   (`DIONY_WHISPER_MODEL`), `detect_speech()` transcribes the track
+   (VAD-filtered so instrumental score and ambience never read as words); three
+   or more heard words, or 1.5s of speech, fail the take with the words named,
+   planning a `fix-audio` retake through the ladder. No model → an honest
+   `unmeasured`. The pre-28 `script_conformance` check — which demanded the
+   provider *speak* the scripted line, the defect backwards — is deleted.
+2. **The cut is guarded even when review couldn't measure.** Assembly accepts a
+   per-clip `mute` spec (the clip is cut with a silent bed; the room-tone floor
+   keeps the join alive). Before the cut, `assemble` runs a speech guard: a
+   track that measures a talking voice is muted whatever the clip class, and a
+   line-carrying clip whose track cannot be verified on this host is presumed
+   dirty and muted — the narrator is about to speak over it. Every mute is a
+   named receipt in the response (`speech_guard`); `speech_guard: false` ships
+   the tracks as delivered.
+3. **Narration cues can never overlap.** `layout_cues()` starts each cue no
+   earlier than the previous line's end plus a breath (`MIN_CUE_GAP_S`).
+   Shifts are receipts on the narration report (`shifts`); overruns stay named
+   with the lasting fix — book a longer clip. The words are never trimmed.

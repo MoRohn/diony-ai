@@ -107,7 +107,15 @@ CHAIN_DRIFT_ADVISORY = 0.03
 # therefore also measured against the scene's MASTER look.
 ANCHOR_DRIFT_FAIL = 0.06
 ANCHOR_DRIFT_ADVISORY = 0.03
-TRANSCRIPT_ACCURACY_FLOOR = 0.85
+
+# Blueprint 28: every director-lane location track is speechless — the voice
+# is recorded in post against the cut. Heard words on a delivered take are a
+# provider-invented voice that would stack under the narrator as a second
+# talking voice. The floors keep an ASR mirage (a breath, a sung syllable of
+# score the VAD let through) from spending a retake; a real voice clears
+# both easily.
+SPEECH_WORDS_FAIL = 3
+SPEECH_SECONDS_FAIL = 1.5
 
 
 def _measure_frames(
@@ -196,34 +204,40 @@ def _measure_continuity(
         families["continuity"] = "fail" if "fail" in verdicts else "pass"
 
 
-def _measure_transcript(
-    path: Path, clip: ClipUnit, families: dict[str, str], measured: dict[str, float], issues: list[str]
-) -> None:
-    """Did it say the scripted words? Whisper conformance when the model is staged."""
-    if clip.clip_class != "sync-dialogue" or not clip.audio_packet.script_excerpt:
-        return
+def location_speech(path: Path):
+    """The producer's speech-presence receipt for this track, or None when the
+    host cannot measure it (no staged whisper model, unreadable media)."""
     try:
-        from diony_producer.speech_transcript import transcribe_line, whisper_model_path
+        from diony_producer.speech_transcript import detect_speech
     except ImportError:
+        return None
+    try:
+        return detect_speech(path)
+    except Exception:  # noqa: BLE001 - optional evidence never crashes a review
+        return None
+
+
+def _measure_speech(
+    path: Path, families: dict[str, str], measured: dict[str, float], issues: list[str]
+) -> None:
+    """Is a voice TALKING on the location track? (Blueprint 28: it must not be
+    — the narrator records every authored word in post, so heard words here
+    are a provider-invented voice that would play under the narration.)"""
+    detection = location_speech(path)
+    if detection is None:
         return
-    if whisper_model_path() is None:
-        return
-    authored = str(clip.audio_packet.script_excerpt[0].get("line", ""))
-    measurement = transcribe_line(path, authored)
-    if measurement is None:
-        return
-    measured["transcript_accuracy"] = float(measurement.word_accuracy)
-    if measurement.word_accuracy < TRANSCRIPT_ACCURACY_FLOOR or not measurement.last_word_ok:
-        families["script_conformance"] = "fail"
-        missing = ", ".join(measurement.missed_words[:6])
+    measured["speech_words"] = float(detection.word_count)
+    measured["speech_s"] = float(detection.speech_s)
+    if detection.word_count >= SPEECH_WORDS_FAIL or detection.speech_s >= SPEECH_SECONDS_FAIL:
+        families["speech"] = "fail"
+        heard = detection.transcript[:120]
         issues.append(
-            f"the spoken line diverges from the script "
-            f"(accuracy {measurement.word_accuracy:.2f}"
-            + (f"; not heard: {missing}" if missing else "")
-            + ")"
+            "a talking voice is on the location track "
+            f"(heard: “{heard}”) — the voice track is recorded in post; "
+            "the location sound must carry no spoken words"
         )
     else:
-        families["script_conformance"] = "pass"
+        families["speech"] = "pass"
 
 
 def _measure_adherence(
@@ -302,7 +316,7 @@ def review_clip(
             ("identity", lambda: _measure_identity(path, clip, package, families, measured, issues)),
             ("frames", lambda: _measure_frames(path, clip, families, measured, issues)),
             ("continuity", lambda: _measure_continuity(path, prev_clip_path, families, measured, issues, anchor_path)),
-            ("script_conformance", lambda: _measure_transcript(path, clip, families, measured, issues)),
+            ("speech", lambda: _measure_speech(path, families, measured, issues)),
             ("adherence", lambda: _measure_adherence(path, clip, families, measured, issues)),
         ):
             try:
@@ -316,7 +330,7 @@ def review_clip(
     families.setdefault("identity", "unmeasured")
     families.setdefault("frames", "unmeasured")
     families.setdefault("continuity", "unmeasured")
-    families.setdefault("script_conformance", "unmeasured")
+    families.setdefault("speech", "unmeasured")
     families.setdefault("adherence", "unmeasured")
 
     if any(v == "fail" for v in families.values()):
@@ -452,6 +466,9 @@ def review_chain_link(
     if families["delivery"] == "pass":
         for family_name, measure in (
             ("frames", lambda: _measure_frames_for(path, duration_s, families, measured, issues)),
+            # a chain link's narration rides its op (Blueprint 28) — its
+            # location track is as speechless-by-law as any scripted clip's
+            ("speech", lambda: _measure_speech(path, families, measured, issues)),
             (
                 "continuity",
                 lambda: _measure_chain_continuity(
@@ -474,6 +491,7 @@ def review_chain_link(
     families.setdefault("frames", "unmeasured")
     families.setdefault("continuity", "unmeasured")
     families.setdefault("identity", "unmeasured")
+    families.setdefault("speech", "unmeasured")
     verdict = "fail" if any(v == "fail" for v in families.values()) else "pass"
     return ClipReview(
         id=f"rev-{uuid.uuid4().hex[:10]}",

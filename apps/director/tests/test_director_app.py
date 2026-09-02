@@ -378,3 +378,38 @@ def test_a_failed_draft_is_a_named_state(monkeypatch) -> None:
         time.sleep(0.1)
     assert state["status"] == "failed"
     assert "brain melted" in state["error"]
+
+
+def test_the_speech_guard_mutes_dirty_and_unverifiable_spoken_clips(monkeypatch) -> None:
+    """Blueprint 28's hard guarantee at the cut: a location track that carries
+    a talking voice — or a line-carrying clip whose track cannot be verified —
+    is muted before assembly, so a provider-invented voice can never stack
+    under the post narrator."""
+    from pathlib import Path
+
+    from diony_director import review as review_mod
+
+    class _Speech:
+        def __init__(self, transcript, word_count, speech_s):
+            self.transcript = transcript
+            self.word_count = word_count
+            self.speech_s = speech_s
+
+    detections = {
+        "dirty.mp4": _Speech("get out of here now", 5, 2.0),
+        "clean.mp4": _Speech("", 0, 0.0),
+        "spoken-unchecked.mp4": None,
+        "picture-unchecked.mp4": None,
+    }
+    monkeypatch.setattr(review_mod, "location_speech", lambda p: detections[p.name])
+    paths = [Path(name) for name in detections]
+    labels = ["cl-1", "cl-2", "cl-3", "cl-4"]
+    carries_line = [False, True, True, False]
+    specs: list[dict] = [{}, {}, {}, {}]
+    report = app_module._speech_guard(paths, labels, carries_line, specs)
+    assert specs[0].get("mute") is True, "a measured voice is muted even on a picture clip"
+    assert "mute" not in specs[1], "a measured-clean location track survives"
+    assert specs[2].get("mute") is True, "an unverifiable spoken clip is presumed dirty"
+    assert "mute" not in specs[3], "an unverifiable picture-only clip is left alone"
+    muted = {entry["clip"] for entry in report["muted"]}
+    assert muted == {"cl-1", "cl-3"}

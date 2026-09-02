@@ -170,6 +170,11 @@ def perform_line(line: str, direction: str) -> str:
     return text
 
 CUE_LEAD_IN_S = 0.15  # a cue lands just after its clip's cut, never on it
+# One narrator rail means ONE voice at a time: a line that overruns its clip
+# must finish (plus a breath) before the next cue may start. Without this
+# layout an overrun played straight into the next cue's mark — two cast
+# voices talking at once, the exact defect Blueprint 28 exists to prevent.
+MIN_CUE_GAP_S = 0.25
 # Voice sits above the -18 LUFS clip bed; the duck keeps the location track
 # out of its way (same sidechain values the Producer program mix earned).
 NARRATION_LOUDNESS = "-15"
@@ -295,6 +300,33 @@ class NarrationReport:
     loudness_target: str
     cues: list = field(default_factory=list)  # {clip_id, speaker, line, start_s, duration_s}
     overruns: list = field(default_factory=list)
+    # cues pushed off their clip's mark so an overrunning predecessor could
+    # finish — the no-overlap layout's receipts, never a silent adjustment
+    shifts: list = field(default_factory=list)
+
+
+def layout_cues(cues: list[NarrationCue], durations: list[float]) -> list[str]:
+    """Guarantee the narrator rail speaks one cue at a time.
+
+    Cues are scheduled at their clip's timeline start; a line that runs past
+    the next cue's mark would otherwise play UNDER it — two voices at once.
+    Each cue therefore starts no earlier than the previous cue's end plus a
+    breath. The shift is applied in place and named in the returned receipts;
+    the words themselves are never trimmed or sped up — the lasting fix for a
+    chronic overrun is a longer clip, and overruns stay reported."""
+    shifts: list[str] = []
+    previous_end: float | None = None
+    for cue, duration in zip(cues, durations):
+        scheduled = cue.start_s
+        earliest = scheduled if previous_end is None else max(scheduled, previous_end + MIN_CUE_GAP_S)
+        if earliest > scheduled:
+            cue.start_s = round(earliest, 3)
+            shifts.append(
+                f"{cue.clip_id}: cue pushed {earliest - scheduled:.2f}s late so the "
+                "previous line could finish — one voice at a time"
+            )
+        previous_end = cue.start_s + duration
+    return shifts
 
 
 def backend() -> str:
@@ -565,6 +597,9 @@ def narrate(
                 f"{cue.window_s:.1f}s clip ({surplus:.1f}s over) — book a longer clip"
             )
 
+    # one voice at a time: an overrunning line finishes before the next
+    # cue may start — cue marks shift late rather than ever overlapping
+    shifts = layout_cues(cues, durations)
     delays_ms = [max(0, int(round(cue.start_s * 1000))) for cue in cues]
     chains = build_filter(
         len(cues), delays_ms, film_duration_s=film_s, loudness_target=loudness_target
@@ -602,4 +637,5 @@ def narrate(
             for index, cue in enumerate(cues)
         ],
         overruns=overruns,
+        shifts=shifts,
     )

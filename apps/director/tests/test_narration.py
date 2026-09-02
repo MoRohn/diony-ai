@@ -302,6 +302,59 @@ def test_narrate_mixes_the_voice_into_the_master(tmp_path, monkeypatch, fake_nar
     assert probe["duration_s"] == pytest.approx(3.0, abs=0.4)
 
 
+def test_an_overrunning_cue_never_overlaps_the_next_one() -> None:
+    # cl-1's line speaks for 4.0s inside a 2.0s clip — without a layout pass
+    # cl-2's cue starts while cl-1's is still talking: two voices at once
+    cues = [
+        narration.NarrationCue(order=0, clip_id="cl-1", speaker="ANA", line="a", start_s=0.15, window_s=2.0),
+        narration.NarrationCue(order=1, clip_id="cl-2", speaker="BEN", line="b", start_s=2.15, window_s=2.0),
+        narration.NarrationCue(order=2, clip_id="cl-3", speaker="ANA", line="c", start_s=4.15, window_s=2.0),
+    ]
+    shifts = narration.layout_cues(cues, [4.0, 1.0, 0.5])
+    assert cues[0].start_s == pytest.approx(0.15)
+    assert cues[1].start_s == pytest.approx(0.15 + 4.0 + narration.MIN_CUE_GAP_S)
+    # the push cascades: cl-3 also waits for the shifted cl-2 to finish
+    assert cues[2].start_s == pytest.approx(cues[1].start_s + 1.0 + narration.MIN_CUE_GAP_S)
+    assert len(shifts) == 2
+    assert "cl-2" in shifts[0] and "cl-3" in shifts[1]
+
+
+def test_cues_that_fit_their_clips_hold_their_marks() -> None:
+    cues = [
+        narration.NarrationCue(order=0, clip_id="cl-1", speaker="ANA", line="a", start_s=0.15, window_s=3.0),
+        narration.NarrationCue(order=1, clip_id="cl-2", speaker="BEN", line="b", start_s=3.15, window_s=3.0),
+    ]
+    shifts = narration.layout_cues(cues, [2.0, 2.0])
+    assert [c.start_s for c in cues] == [0.15, 3.15]
+    assert shifts == []
+
+
+@pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
+def test_narrate_applies_the_no_overlap_layout(tmp_path, monkeypatch, fake_narrator) -> None:
+    ffmpeg = shutil.which("ffmpeg")
+    film = tmp_path / "film.mp4"
+    subprocess.run(
+        [
+            ffmpeg, "-y",
+            "-f", "lavfi", "-i", "testsrc2=size=320x180:duration=4",
+            "-f", "lavfi", "-i", "sine=frequency=110:duration=4",
+            "-c:v", "libx264", "-c:a", "aac", "-shortest", str(film),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    # the fake narrator speaks 1.2s per cue; the second cue is scheduled only
+    # 0.35s after the first — it must wait, never talk over it
+    cues = [
+        narration.NarrationCue(order=0, clip_id="cl-1", speaker="ANA", line="one", start_s=0.15, window_s=0.35),
+        narration.NarrationCue(order=1, clip_id="cl-2", speaker="BEN", line="two", start_s=0.5, window_s=3.5),
+    ]
+    report = narration.narrate(film, cues, tmp_path / "out.mp4", loudness_target="streaming")
+    first, second = report.cues
+    assert second["start_s"] >= first["start_s"] + first["duration_s"]
+    assert report.shifts and "cl-2" in report.shifts[0]
+
+
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
 def test_a_line_too_long_for_its_clip_is_named_never_trimmed(
     tmp_path, monkeypatch, fake_narrator
