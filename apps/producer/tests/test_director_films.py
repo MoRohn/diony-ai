@@ -86,6 +86,62 @@ def test_cloud_production_reports_director_runs() -> None:
     assert item["active"] is True
     assert item["actual_usd_micros"] == 1_680_000
 
+    # the same receipt rides the session's film card in the Gallery
+    film_dir = cluster_root() / "director" / "s-test77"
+    film_dir.mkdir(parents=True, exist_ok=True)
+    (film_dir / "film.mp4").write_bytes(b"mp4" * 64)
+    films = _client().get("/api/director-films").json()["films"]
+    receipt = next(row for row in films if row["session"] == "s-test77")
+    assert receipt["spent_usd_micros"] == 1_680_000
+    assert receipt["printed"] == 2
+    assert receipt["failed"] == 1
+    assert receipt["generating"] == 1
+    assert receipt["active"] is True
+
+
+def test_a_film_without_plane_history_carries_a_zero_receipt() -> None:
+    film_dir = cluster_root() / "director" / "s-orphan"
+    film_dir.mkdir(parents=True, exist_ok=True)
+    (film_dir / "film.mp4").write_bytes(b"mp4" * 64)
+    films = _client().get("/api/director-films").json()["films"]
+    row = next(item for item in films if item["session"] == "s-orphan")
+    assert row["spent_usd_micros"] == 0
+    assert row["active"] is False
+
+
+def test_gallery_items_carry_their_project_cost() -> None:
+    from diony_contracts.launch import (
+        GenerationJob,
+        JobStatus,
+        ProviderCapability,
+        WorkflowRun,
+        WorkflowStage,
+    )
+    from diony_producer.app import _project_costs_usd_micros
+    from diony_producer.control_plane import ControlPlane
+
+    plane = ControlPlane()
+    ctx = plane.bootstrap_local()
+    run = WorkflowRun.production_default(
+        id="run-local-1", workspace_id=ctx.workspace.id,
+        project_id="proj-a", created_by=ctx.user.id,
+    )
+    plane.save_run(run)
+    for i, micros in enumerate([250_000, 750_000]):
+        plane.save_job(GenerationJob(
+            id=f"job-c{i}", run_id=run.id, workspace_id=ctx.workspace.id,
+            project_id="proj-a", stage=WorkflowStage.VIDEO,
+            capability=ProviderCapability.VIDEO, provider_id="wan",
+            model="wan2.2", status=JobStatus.SUCCEEDED,
+            idempotency_key=f"cost-{i}", actual_cost_usd_micros=micros,
+        ))
+    costs = _project_costs_usd_micros()
+    assert costs["proj-a"] == 1_000_000
+    # …and the gallery payload attaches the receipt to every listed item
+    payload = _client().get("/api/gallery").json()
+    for item in payload.get("items", []):
+        assert "cost_usd_micros" in item
+
 
 def _make_film(session: str, duration: float = 1.0) -> Path:
     import subprocess

@@ -153,7 +153,6 @@ function showBay(name) {
   if (name === "gallery") {
     loadGallery();
     loadDirectorFilms();
-    loadCloudProduction();
   }
   paintFloors();
   triggerBayTransition(previousBay, name);
@@ -993,7 +992,7 @@ function openGalleryViewer(item) {
   watchGalleryId = item.id;
   document.getElementById("gallery-viewer-title").textContent = item.title;
   document.getElementById("gallery-viewer-meta").textContent =
-    `${item.plate} · ${secondsLabel(item.duration_frames, item.fps)} · ${Number(item.fps).toFixed(3)} fps`;
+    `${item.plate} · ${secondsLabel(item.duration_frames, item.fps)} · ${Number(item.fps).toFixed(3)} fps · ${costLabel(item.cost_usd_micros)}`;
   const download = document.getElementById("gallery-viewer-download");
   download.href = item.download_url;
   download.setAttribute("download", "");
@@ -1300,7 +1299,7 @@ function renderGallery() {
     setTextNode(
       copy,
       "small",
-      `${secondsLabel(item.duration_frames, item.fps)} · ${item.width}×${item.height} · ${item.source_count} source${item.source_count === 1 ? "" : "s"}`,
+      `${secondsLabel(item.duration_frames, item.fps)} · ${item.width}×${item.height} · ${item.source_count} source${item.source_count === 1 ? "" : "s"} · ${costLabel(item.cost_usd_micros)}`,
     );
     watch.appendChild(copy);
     watch.addEventListener("click", (event) => {
@@ -1373,46 +1372,15 @@ function renderGallery() {
   renderGallerySelection();
 }
 
-let cloudProductionTimer = null;
-
-async function loadCloudProduction() {
-  const host = document.getElementById("cloud-production");
-  const rows = document.getElementById("cloud-production-rows");
-  if (!host || !rows || !engineCloud) return;
-  try {
-    const res = await fetch("/api/cloud-production");
-    const payload = await res.json();
-    const sessions = payload.sessions || [];
-    host.classList.toggle("hidden", sessions.length === 0);
-    rows.replaceChildren();
-    let anyActive = false;
-    sessions.forEach((item) => {
-      anyActive = anyActive || item.active;
-      const row = document.createElement("div");
-      row.className = "row";
-      const done = item.counts.succeeded || 0;
-      const failed = item.counts.failed || 0;
-      const pending = item.jobs - done - failed;
-      row.innerHTML =
-        `<span class="sid"></span>` +
-        `<span class="ok">${done} printed</span>` +
-        (failed ? `<span class="bad">${failed} failed</span>` : "") +
-        (pending ? `<span class="live">${pending} generating</span>` : "") +
-        `<span>$${(item.actual_usd_micros / 1e6).toFixed(2)} spent</span>`;
-      row.querySelector(".sid").textContent = item.session;
-      rows.appendChild(row);
-    });
-    if (anyActive && !cloudProductionTimer) {
-      cloudProductionTimer = setInterval(loadCloudProduction, 5000);
-    } else if (!anyActive && cloudProductionTimer) {
-      clearInterval(cloudProductionTimer);
-      cloudProductionTimer = null;
-      loadDirectorFilms();
-    }
-  } catch (error) {
-    /* strip stays as-is */
-  }
+// The cost receipt every finished clip carries.
+function costLabel(micros) {
+  return `$${((micros || 0) / 1e6).toFixed(2)}`;
 }
+
+// While any Director session is still generating, its film card re-polls so
+// the receipt (spend, printed/generating counts) stays live on the card —
+// the old Cloud production strip's data, now on each element.
+let directorFilmsTimer = null;
 
 const filmSelection = new Map(); // session -> url
 
@@ -1498,14 +1466,61 @@ async function loadDirectorFilms() {
       caption.className = "hint";
       const when = new Date(film.modified);
       caption.textContent = `${film.session} · ${when.toLocaleString()} · ${(film.bytes / 1048576).toFixed(1)} MB`;
+      const receipt = document.createElement("p");
+      receipt.className = "hint film-receipt";
+      receipt.dataset.session = film.session;
+      receipt.textContent = filmReceiptLine(film);
       card.appendChild(pick);
       card.appendChild(video);
       card.appendChild(caption);
+      card.appendChild(receipt);
       grid.appendChild(card);
     });
     refreshFilmActions();
+    watchActiveFilms(films.some((film) => film.active));
   } catch (error) {
     host.classList.add("hidden");
+  }
+}
+
+function filmReceiptLine(film) {
+  const parts = [`${costLabel(film.spent_usd_micros)} spent`];
+  if (film.printed) parts.push(`${film.printed} printed`);
+  if (film.failed) parts.push(`${film.failed} failed`);
+  if (film.generating) parts.push(`${film.generating} generating`);
+  return parts.join(" · ");
+}
+
+function watchActiveFilms(anyActive) {
+  if (anyActive && !directorFilmsTimer) {
+    directorFilmsTimer = setInterval(refreshFilmReceipts, 5000);
+  } else if (!anyActive && directorFilmsTimer) {
+    clearInterval(directorFilmsTimer);
+    directorFilmsTimer = null;
+  }
+}
+
+async function refreshFilmReceipts() {
+  // in-place caption refresh: a poll must never wipe the user's selection
+  // or restart the preview videos mid-scrub
+  try {
+    const res = await fetch("/api/director-films");
+    const payload = await res.json();
+    const films = payload.films || [];
+    let anyActive = false;
+    films.forEach((film) => {
+      anyActive = anyActive || film.active;
+      const receipt = document.querySelector(
+        `.film-receipt[data-session="${CSS.escape(film.session)}"]`,
+      );
+      if (receipt) receipt.textContent = filmReceiptLine(film);
+    });
+    if (!anyActive) {
+      watchActiveFilms(false);
+      loadDirectorFilms(); // the finished cut may have just landed
+    }
+  } catch (error) {
+    /* receipts stay as-is until the next tick */
   }
 }
 

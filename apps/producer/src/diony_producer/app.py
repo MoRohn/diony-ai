@@ -586,9 +586,9 @@ def engine_state() -> dict:
     }
 
 
-@app.get("/api/cloud-production")
-def cloud_production() -> dict:
-    """Live cloud production status: every Director run's jobs from the shared plane."""
+def _director_session_stats() -> list[dict]:
+    """Every Director run's job counts and spend from the shared plane —
+    the receipt data each finished film card carries."""
     from diony_producer.control_plane import ControlPlane
 
     plane = ControlPlane()
@@ -618,7 +618,33 @@ def cloud_production() -> dict:
             }
         )
     sessions.sort(key=lambda item: item["active"], reverse=True)
-    return {"sessions": sessions}
+    return sessions
+
+
+def _project_costs_usd_micros() -> dict[str, int]:
+    """Actual plane spend per producer project — the receipt each finished
+    Gallery clip carries. Director runs are excluded (their spend belongs to
+    the film cards, keyed by session)."""
+    from diony_producer.control_plane import ControlPlane
+
+    plane = ControlPlane()
+    context = plane.bootstrap_local()
+    totals: dict[str, int] = {}
+    for run in plane.runs(context.workspace.id):
+        if run.id.startswith("director-"):
+            continue
+        for job in plane.jobs(context.workspace.id, run.id):
+            if job.project_id:
+                totals[job.project_id] = (
+                    totals.get(job.project_id, 0) + job.actual_cost_usd_micros
+                )
+    return totals
+
+
+@app.get("/api/cloud-production")
+def cloud_production() -> dict:
+    """Live cloud production status: every Director run's jobs from the shared plane."""
+    return {"sessions": _director_session_stats()}
 
 
 @app.get("/api/director-films")
@@ -630,6 +656,12 @@ def director_films() -> dict:
 
     root = cluster_root() / "director"
     films = []
+    # each film carries its session's receipt: spend and job status from the
+    # shared plane (a plane hiccup leaves the film list standing, costless)
+    try:
+        by_session = {row["session"]: row for row in _director_session_stats()}
+    except Exception:  # noqa: BLE001
+        by_session = {}
     if root.is_dir():
         # snapshot stats up front: a delete landing mid-listing drops that row
         # instead of 500ing the whole Gallery
@@ -640,14 +672,25 @@ def director_films() -> dict:
             except OSError:
                 continue
         for film, stat in sorted(stats, key=lambda item: item[1].st_mtime, reverse=True):
+            session = film.parent.name
+            plane_row = by_session.get(session, {})
+            counts = plane_row.get("counts", {})
+            jobs = int(plane_row.get("jobs", 0))
+            printed = int(counts.get("succeeded", 0))
+            failed = int(counts.get("failed", 0))
             films.append(
                 {
-                    "session": film.parent.name,
+                    "session": session,
                     "bytes": stat.st_size,
                     "modified": datetime.fromtimestamp(
                         stat.st_mtime, tz=timezone.utc
                     ).isoformat(),
-                    "url": f"/api/director-films/{film.parent.name}",
+                    "url": f"/api/director-films/{session}",
+                    "spent_usd_micros": int(plane_row.get("actual_usd_micros", 0)),
+                    "printed": printed,
+                    "failed": failed,
+                    "generating": max(0, jobs - printed - failed),
+                    "active": bool(plane_row.get("active", False)),
                 }
             )
     return {"films": films}
@@ -1471,7 +1514,16 @@ def project_program_preview(project_id: str) -> FileResponse:
 @app.get("/api/gallery")
 def get_gallery() -> dict:
     materialize_project(_project)
-    return gallery_payload(_project)
+    payload = gallery_payload(_project)
+    # every finished clip carries its receipt: the project's actual plane
+    # spend (a plane hiccup leaves the gallery standing, costless)
+    try:
+        costs = _project_costs_usd_micros()
+    except Exception:  # noqa: BLE001
+        costs = {}
+    for item in payload.get("items", []):
+        item["cost_usd_micros"] = costs.get(str(item.get("project_id", "")), 0)
+    return payload
 
 
 @app.get("/api/gallery/items/{clip_id}/thumbnail")

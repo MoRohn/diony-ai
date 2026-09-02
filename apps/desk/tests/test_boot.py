@@ -733,7 +733,7 @@ def test_producer_state_ok_accepts_a_large_project_payload(monkeypatch) -> None:
 
 def test_producer_ui_stamp_matches_html() -> None:
     stamp = producer_ui_stamp()
-    assert stamp == "p2a"
+    assert stamp == "p4"
     html = repo_root() / "apps" / "producer" / "src" / "diony_producer" / "static" / "index.html"
     assert f"app.js?v={stamp}" in html.read_text(encoding="utf-8")
     assert f"app.css?v={stamp}" in html.read_text(encoding="utf-8")
