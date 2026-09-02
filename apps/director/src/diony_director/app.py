@@ -764,6 +764,35 @@ def _kick_submitter(sid: str) -> None:
 
 TRANSIENT_HOLD_LIMIT = 3  # waves a single op may be network-held before it needs a manual Run
 
+# A provider quota hold (429) is time-gated, not wave-counted: the run pauses
+# until the provider's own retryAfter passes, then resumes on the next tick.
+QUOTA_HOLD_DEFAULT_S = 5 * 60  # the provider named no reset time
+QUOTA_HOLD_MIN_S = 60
+QUOTA_HOLD_MAX_S = 6 * 3600  # a reset time absurdly far out never wedges a run for days
+
+
+def _quota_wait_s(retry_at: float | None) -> int:
+    if not retry_at:
+        return QUOTA_HOLD_DEFAULT_S
+    return int(min(max(retry_at - time.time(), QUOTA_HOLD_MIN_S), QUOTA_HOLD_MAX_S))
+
+
+def _hold_for_quota(op: DirectorOp, detail: str, wait_s: int, held: list[dict]) -> None:
+    """Pause one op for the provider's quota window: still targeted, still
+    proposed, retried automatically once the window passes — never failed."""
+    resume_at = time.time() + wait_s
+    session.runtime(op.id)["quota_hold_until"] = resume_at
+    resume_clock = time.strftime("%H:%M", time.localtime(resume_at))
+    held.append(
+        {
+            "op_id": op.id,
+            "reason": (
+                f"{detail} — provider quota reached; the run pauses and resumes "
+                f"automatically around {resume_clock}"
+            ),
+        }
+    )
+
 
 def _submit_ready(sid: str) -> tuple[list[str], list[dict]]:
     """Submit every op the sequence says is safe now; hold the rest with reasons."""
@@ -771,6 +800,11 @@ def _submit_ready(sid: str) -> tuple[list[str], list[dict]]:
     held: list[dict] = []
     enforce_budget = bool(session.budget_for(sid).get("max_usd_micros"))
     for op in session.ready_ops(sid):
+        hold_until = float(session.runtime(op.id).get("quota_hold_until") or 0)
+        if hold_until > time.time():
+            # quota pause already on record (logged when it was set): skip
+            # quietly until the provider's window passes, then retry
+            continue
         if enforce_budget:
             cost = op.estimate.total_usd_micros if op.estimate else 0
             allowed, reason = session.budget_allows(sid, cost, _spent_and_committed(sid))
@@ -792,7 +826,14 @@ def _submit_ready(sid: str) -> tuple[list[str], list[dict]]:
             _run_link_or_op(op)
             submitted.append(op.id)
             session.runtime(op.id).pop("transient_holds", None)
+            session.runtime(op.id).pop("quota_hold_until", None)
         except HTTPException as err:
+            retry_after = str((err.headers or {}).get("Retry-After") or "")
+            if err.status_code == 503 and retry_after.isdigit():
+                # provider quota (429 upstream): time-gated, never counted
+                # against the network-hold limit and never failed
+                _hold_for_quota(op, str(err.detail), int(retry_after), held)
+                continue
             if err.status_code == 503:
                 # transient network failure: nothing was submitted, the op is
                 # still proposed. Leave it targeted so the next wave retries,
@@ -821,6 +862,10 @@ def _submit_ready(sid: str) -> tuple[list[str], list[dict]]:
             # the reason must survive the drained held list: the card's
             # "failed" state reads it back long after the chat scrolled
             session.runtime(op.id)["submit_error"] = str(err.detail)
+        except provider_base.CloudAdapterQuotaError as err:
+            # a 429 that surfaced raw (e.g. while polling a style frame
+            # mid-roll): the same time-gated pause, never a failed op
+            _hold_for_quota(op, str(err), _quota_wait_s(err.retry_at), held)
         except Exception as err:  # noqa: BLE001 - one bad op never blocks the wave
             held.append({"op_id": op.id, "reason": f"{type(err).__name__}: {err}"})
             op.status = "failed"
@@ -1012,6 +1057,16 @@ def _run_approved(op: DirectorOp) -> dict:
         plane, ctx = _boot()
         try:
             handle = _dispatch_submit(op)
+        except provider_base.CloudAdapterQuotaError as err:
+            # 429 = the provider's quota, not the op or the network: nothing
+            # was spent, the op stays proposed, and the wave resumes on its
+            # own once the window resets. The Retry-After header carries the
+            # wait so _submit_ready can time-gate the hold.
+            raise HTTPException(
+                status_code=503,
+                detail=str(err),
+                headers={"Retry-After": str(_quota_wait_s(err.retry_at))},
+            ) from err
         except provider_base.CloudAdapterTransientError as err:
             # 503 = the network failed, not the op: it stays proposed and a
             # later wave (or a manual Run) retries without redrafting anything
@@ -1076,7 +1131,7 @@ def retry_op(op_id: str) -> dict:
     op.status = "proposed"
     op.job_id = ""
     rt = session.runtime(op.id)
-    for stale in ("handle", "ledger_error", "transient_holds", "submit_error"):
+    for stale in ("handle", "ledger_error", "transient_holds", "quota_hold_until", "submit_error"):
         rt.pop(stale, None)
     # A retry must be able to succeed: riders the routed model refuses beside
     # a start/end frame are dropped here, loudly — the opening frame wins.
@@ -1316,9 +1371,12 @@ def advance_session(sid: str) -> dict:
                 detail = f"{type(err).__name__}: {err}"
                 rt = session.runtime(op.id)
                 rt["advance_error"] = detail
-                rt["advance_failures"] = int(rt.get("advance_failures") or 0) + 1
+                if not isinstance(err, provider_base.CloudAdapterQuotaError):
+                    # a 429 while polling is the provider's quota, not a dead
+                    # job — it never counts toward giving up on the op
+                    rt["advance_failures"] = int(rt.get("advance_failures") or 0) + 1
                 stalled.append({"op_id": op.id, "reason": detail[:200]})
-                if rt["advance_failures"] >= 5:
+                if int(rt.get("advance_failures") or 0) >= 5:
                     # An op that cannot be polled or fetched five ticks running
                     # (expired URL, lost handle) will never finish on its own:
                     # fail it, close its plane row, and let the ladder re-shoot

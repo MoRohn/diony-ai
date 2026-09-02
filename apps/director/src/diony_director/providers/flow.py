@@ -37,6 +37,14 @@ _ASSET_CONTENT_TYPES = {
 
 def _guard(response: httpx.Response, what: str = "request") -> None:
     """Convert HTTP failures into CloudAdapterError carrying the provider's own words."""
+    if response.status_code == 429:
+        # quota, not failure: nothing was spent and the op is fine — raise the
+        # transient flavor so the wave holds and resumes instead of failing
+        # (a Flow style-frame 429 once killed a whole chained Grok run)
+        raise base.CloudAdapterQuotaError(
+            f"Flow {what} rejected (429): {response.text[:300]}",
+            retry_at=base.quota_retry_at(response),
+        )
     if response.status_code >= 400:
         raise base.CloudAdapterError(
             f"Flow {what} rejected ({response.status_code}): {response.text[:300]}"

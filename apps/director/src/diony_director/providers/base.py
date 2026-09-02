@@ -55,6 +55,47 @@ class CloudAdapterTransientError(CloudAdapterError):
     """The network failed before the provider answered; the op stays runnable."""
 
 
+class CloudAdapterQuotaError(CloudAdapterTransientError):
+    """The provider's quota refused the request (HTTP 429). Nothing was spent
+    and nothing is wrong with the op: it stays runnable and the wave resumes
+    once the quota window resets — a quota pause must never fail a run."""
+
+    def __init__(self, message: str, *, retry_at: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_at = retry_at  # epoch seconds when the provider says to retry
+
+
+def quota_retry_at(response: httpx.Response) -> float | None:
+    """The reset time a 429 names, when it names one: an ISO `retryAfter` in
+    the JSON body (useapi's Flow shape, top-level or nested under `response`)
+    or a seconds-valued Retry-After header."""
+    import time as time_mod
+    from datetime import datetime, timezone
+
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    raw = ""
+    if isinstance(body, dict):
+        raw = str(body.get("retryAfter") or "")
+        nested = body.get("response")
+        if not raw and isinstance(nested, dict):
+            raw = str(nested.get("retryAfter") or "")
+    if raw:
+        try:
+            stamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            return stamp.timestamp()
+        except ValueError:
+            pass
+    header = response.headers.get("retry-after", "").strip()
+    if header.isdigit():
+        return time_mod.time() + int(header)
+    return None
+
+
 # Transport-level failures (SSL bad_record_mac, resets, timeouts) are retried
 # in place with backoff. POSTs too: a mid-body TLS abort means the provider
 # never parsed the request, and the bounded worst case of one duplicate clip

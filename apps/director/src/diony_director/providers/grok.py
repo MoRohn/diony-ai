@@ -23,6 +23,12 @@ CALL_TIMEOUT_S = 60.0
 
 def _guard(response: httpx.Response, what: str = "request") -> None:
     """Convert HTTP failures into CloudAdapterError carrying the provider's own words."""
+    if response.status_code == 429:
+        # rate/quota limit: transient by nature — hold and resume, never fail
+        raise base.CloudAdapterQuotaError(
+            f"xAI {what} rejected (429): {response.text[:300]}",
+            retry_at=base.quota_retry_at(response),
+        )
     if response.status_code >= 400:
         raise base.CloudAdapterError(
             f"xAI {what} rejected ({response.status_code}): {response.text[:300]}"

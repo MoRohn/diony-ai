@@ -8,7 +8,7 @@ from diony_contracts.director import (
     DirectorOp,
     DirectorOpType,
 )
-from diony_director.providers import flow
+from diony_director.providers import base, flow
 
 
 def _op(**overrides) -> DirectorOp:
@@ -75,6 +75,31 @@ def test_submit_posts_async_and_returns_the_job_id(monkeypatch) -> None:
     assert seen["json"]["duration"] == 8
     assert seen["json"]["async"] is True
     assert "test-useapi-token" in seen["headers"]["Authorization"]
+
+
+def test_quota_429_raises_the_quota_error_with_the_providers_reset_time(monkeypatch) -> None:
+    """The live 2026-09-02 shape: PUBLIC_ERROR_USER_QUOTA_REACHED with an ISO
+    retryAfter — must surface as the transient quota flavor, never the fatal one."""
+    from datetime import datetime, timezone
+
+    body = {
+        "error": "PUBLIC_ERROR_USER_QUOTA_REACHED (HTTP 429)",
+        "code": 429,
+        "retryAfter": "2026-09-02T22:33:11.316Z",
+    }
+
+    class _QuotaResponse(_Response):
+        text = "PUBLIC_ERROR_USER_QUOTA_REACHED"
+        headers: dict = {}
+
+    monkeypatch.setattr(flow.httpx, "post", lambda url, **kw: _QuotaResponse(body, status_code=429))
+    try:
+        flow.submit(_op())
+        raise AssertionError("expected CloudAdapterQuotaError")
+    except base.CloudAdapterQuotaError as err:
+        expected = datetime(2026, 9, 2, 22, 33, 11, 316000, tzinfo=timezone.utc).timestamp()
+        assert err.retry_at == expected
+        assert "429" in str(err)
 
 
 def test_poll_completed_extracts_video_url_and_credits(monkeypatch) -> None:

@@ -1088,7 +1088,7 @@ def retake_chain_link(op: DirectorOp) -> None:
     for stale in (
         "handle", "clip", "media_generation_id", "result_url", "last_poll_state",
         "last_progress_ts", "submit_error", "ledger_error", "transient_holds",
-        "narration", "next_op", "advance_error", "advance_failures",
+        "quota_hold_until", "narration", "next_op", "advance_error", "advance_failures",
     ):
         rt.pop(stale, None)
     _REVIEWS.pop(op.id, None)
@@ -2184,6 +2184,7 @@ _RUNTIME_KEYS = (
     "submit_error",
     "style_frame_op",
     "style_frame",
+    "quota_hold_until",
 )
 
 

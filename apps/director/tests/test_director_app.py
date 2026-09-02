@@ -166,6 +166,74 @@ def test_transient_network_error_keeps_the_op_runnable(monkeypatch) -> None:
     assert state["op"]["status"] == "proposed"  # nothing spent, still runnable
 
 
+def test_provider_quota_429_pauses_the_wave_and_resumes_after_the_window(monkeypatch) -> None:
+    """The 2026-09-02 live failure: one Flow quota 429 must never fail an op or
+    stop the run — it pauses, stays targeted, and retries once the window passes."""
+    import time as time_mod
+
+    client = _client()
+    monkeypatch.setattr(app_module, "_kick_submitter", lambda sid: None)
+    sid = client.post("/api/director/sessions").json()["session_id"]
+    op_id = client.post(
+        f"/api/director/sessions/{sid}/message", json={"text": "a truck", "duration_s": 6}
+    ).json()["op"]["id"]
+
+    calls = {"n": 0}
+
+    def quota(_op):
+        calls["n"] += 1
+        raise base.CloudAdapterQuotaError(
+            "Flow request rejected (429): PUBLIC_ERROR_USER_QUOTA_REACHED",
+            retry_at=time_mod.time() + 1200,
+        )
+
+    monkeypatch.setattr(grok, "submit", quota)
+    client.post(f"/api/director/sessions/{sid}/run_batch", json={})
+
+    from diony_director import session as session_mod
+
+    submitted, held = app_module._submit_ready(sid)
+    op = session_mod.get_op(op_id)
+    assert submitted == []
+    assert op.status == "proposed"  # a quota pause is never a failure
+    assert held and "resumes automatically" in held[0]["reason"]
+    assert session_mod.runtime(op_id)["quota_hold_until"] > time_mod.time() + 600
+    assert op_id in session_mod.batch_targets(sid)  # still queued for the run
+
+    # while the window is open the wave skips it quietly — no resubmit attempt
+    submitted, held = app_module._submit_ready(sid)
+    assert calls["n"] == 1
+    assert submitted == [] and held == []
+
+    # window over: the next wave retries on its own and the hold clears
+    session_mod.runtime(op_id)["quota_hold_until"] = time_mod.time() - 1
+    handle = base.CloudJobHandle(
+        provider_id="grok", external_id="req-q", model="grok-imagine-video-1.5", duration_s=6
+    )
+    monkeypatch.setattr(grok, "submit", lambda _op: handle)
+    submitted, _ = app_module._submit_ready(sid)
+    assert submitted == [op_id]
+    assert "quota_hold_until" not in session_mod.runtime(op_id)
+
+
+def test_manual_run_maps_quota_429_to_503_with_retry_after(monkeypatch) -> None:
+    client = _client()
+    sid = client.post("/api/director/sessions").json()["session_id"]
+    op_id = client.post(
+        f"/api/director/sessions/{sid}/message", json={"text": "a truck", "duration_s": 6}
+    ).json()["op"]["id"]
+
+    def quota(_op):
+        raise base.CloudAdapterQuotaError("xAI video submit rejected (429): rate limited")
+
+    monkeypatch.setattr(grok, "submit", quota)
+    run = client.post(f"/api/director/ops/{op_id}/run")
+    assert run.status_code == 503
+    assert run.headers.get("retry-after") == str(app_module.QUOTA_HOLD_DEFAULT_S)
+    state = client.get(f"/api/director/ops/{op_id}").json()
+    assert state["op"]["status"] == "proposed"  # nothing spent, still runnable
+
+
 def test_failed_op_retries_at_its_locked_price(monkeypatch) -> None:
     client = _client()
     # keep the retry synchronous-deterministic: no background submit wave
