@@ -295,6 +295,20 @@
   // A one-shot priced while the brain derives its master prompt: the card
   // holds (Run disabled) and unlocks — prompt swapped in, artifact shown —
   // the moment the artifact lands. Nothing can roll before it.
+  function landDerivedCard(op, card, body, chain) {
+    // the artifact landed: swap the provisional prompt for the derived one,
+    // hang the artifact panels, and unlock the Run button
+    card.querySelectorAll(".whatrolls, details.prompt").forEach((el) => el.remove());
+    attachPrompt(card, body.op);
+    renderMasterFor(card, body.master, chain);
+    Object.assign(op, body.op);
+    const state = card.querySelector(".state");
+    const btn = card.querySelector("button");
+    state.textContent = body.op.status;
+    state.className = "state";
+    if (btn && body.op.status === "proposed") btn.disabled = false;
+  }
+
   function watchDeriving(op, card, btn, state, chain) {
     state.textContent = "deriving master prompt…";
     state.className = "state deriving";
@@ -313,13 +327,7 @@
         setTimeout(tick, 3000);
         return;
       }
-      card.querySelectorAll(".whatrolls, details.prompt").forEach((el) => el.remove());
-      attachPrompt(card, body.op);
-      renderMasterFor(card, body.master, chain);
-      Object.assign(op, body.op);
-      state.textContent = body.op.status;
-      state.className = "state";
-      if (body.op.status === "proposed") btn.disabled = false;
+      landDerivedCard(op, card, body, chain);
     };
     setTimeout(tick, 2500);
   }
@@ -344,8 +352,18 @@
     host.appendChild(card);
     const btn = card.querySelector("button");
     const state = card.querySelector(".state");
-    if (op.status === "deriving") watchDeriving(op, card, btn, state, chain);
-    else if (op.master) renderMasterFor(card, op.master, chain);
+    if (op.status === "deriving") {
+      if (chain) {
+        // one derivation covers the whole chain — the chain bar carries the
+        // ticking status once, and unlocks every card when it lands; the
+        // card itself just says it's waiting
+        state.textContent = "deriving";
+        state.className = "state deriving";
+        btn.disabled = true;
+      } else {
+        watchDeriving(op, card, btn, state, chain);
+      }
+    } else if (op.master) renderMasterFor(card, op.master, chain);
     btn.addEventListener("click", async () => {
       btn.disabled = true;
       state.textContent = "submitting…";
@@ -1229,19 +1247,43 @@
     const progress = bar.querySelector("#chain-progress");
     asmBtn.addEventListener("click", assembleNow);
 
-    // nothing can roll before the master's split lands on every link
+    // Nothing can roll before the master's split lands on every link. ONE
+    // derivation covers the chain, so ONE ticker lives here on the bar —
+    // never duplicated per card — and unlocks every card when it lands.
     if (ops[0].status === "deriving") {
       allBtn.disabled = true;
-      progress.textContent = "deriving master prompt…";
+      const started = Date.now();
+      progress.textContent = `deriving the master prompt + ${ops.length}-clip split…`;
       const gate = async () => {
+        let body;
         try {
-          const body = await api(`/api/director/ops/${ops[0].id}`);
-          if (body.op.status === "deriving") { setTimeout(gate, 3000); return; }
-          allBtn.disabled = false;
-          progress.textContent = "";
+          body = await api(`/api/director/ops/${ops[0].id}`);
         } catch (err) {
           setTimeout(gate, 3000);
+          return;
         }
+        if (body.op.status === "deriving") {
+          progress.textContent =
+            `deriving the master prompt + ${ops.length}-clip split… ` +
+            `${Math.round((Date.now() - started) / 1000)}s`;
+          setTimeout(gate, 3000);
+          return;
+        }
+        for (const [index, op] of ops.entries()) {
+          const card = cardEls.get(op.id);
+          if (!card) continue;
+          let one = body;
+          if (index > 0) {
+            try {
+              one = await api(`/api/director/ops/${op.id}`);
+            } catch (err) {
+              continue; // this card unlocks on its next interaction
+            }
+          }
+          landDerivedCard(op, card, one, { index, count: ops.length });
+        }
+        allBtn.disabled = false;
+        progress.textContent = "";
       };
       setTimeout(gate, 2500);
     }
