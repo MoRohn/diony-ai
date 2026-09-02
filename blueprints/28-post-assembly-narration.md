@@ -65,19 +65,21 @@ One voice, exact words, measured placement.
 
 Resolved by `narration.backend()`:
 
-- **`grok` — the default.** The Grok voice API on the same xAI account and
+- **`grok` — the default.** The Grok TTS API on the same xAI account and
   `DIONY_XAI_BASE` the picture lane rides (`XAI_API_KEY` alone selects it).
-  OpenAI-compatible speech contract (`model`/`input`/`voice`/`response_format`),
-  path `DIONY_GROK_VOICE_PATH` (default `/v1/audio/speech`), model
-  `DIONY_GROK_VOICE_MODEL` (default `grok-voice`).
-  Endpoint shape is re-verified against live docs before any billable rollout,
-  the same doctrine as `providers/grok.py`.
+  Contract **verified live 2026-09-02** (docs.x.ai + this account):
+  `POST /v1/tts` with `{text, voice_id, language, output_format}` returning raw
+  audio bytes — requested as WAV at 48 kHz, the mix's native rate; the voice
+  roster comes from `GET /v1/tts/voices`. Path `DIONY_GROK_VOICE_PATH`
+  (default `/v1/tts`), language `DIONY_GROK_VOICE_LANGUAGE` (default `en`).
 
 ## Voice casting
 
 The narrator voice is **cast, never defaulted**. `narration.cast_voice()` scores
-the Grok voice roster (Ara/Eve/Rex/Sal/Gork, each carrying read tags; the live
-roster is overridable as JSON via `DIONY_GROK_VOICE_ROSTER`) against the master
+the casting roster — a curated slice of the live Grok voice list
+(ara/eve/luna/celeste/rex/sal/leo/atlas; voice ids and genders verified against
+`GET /v1/tts/voices`, tone tags are Diony's own casting reads; overridable as
+JSON via `DIONY_GROK_VOICE_ROSTER`) against the master
 prompt's tone — mood, visual style, performance, light quality — plus the cue's
 own delivery direction, and reads the speaking character's notes for a gender
 preference. Ties break on a stable hash of the speaker, so one production casts

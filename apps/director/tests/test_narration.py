@@ -110,7 +110,7 @@ def test_the_narrator_is_cast_from_tone_and_character(monkeypatch) -> None:
         tone_text="tense noir, night streets, cinematic realism",
         character_notes="a weathered man in his fifties",
     )
-    assert voice == "Sal"
+    assert voice == "sal"
     assert "male read" in why and "noir" in why
     # a warm playful piece with a female lead reads as Ara
     voice, why = narration.cast_voice(
@@ -118,7 +118,7 @@ def test_the_narrator_is_cast_from_tone_and_character(monkeypatch) -> None:
         tone_text="playful upbeat morning energy",
         character_notes="a young woman, quick to smile",
     )
-    assert voice == "Ara"
+    assert voice == "ara"
     assert "female read" in why
 
 
@@ -150,7 +150,7 @@ def test_locks_and_the_site_pin_outrank_casting(monkeypatch) -> None:
     narration.cast_cues(
         [fresh], tone_text="tense noir", character_notes={"Ben": "a quiet man"}
     )
-    assert fresh.voice_ref == "Sal"
+    assert fresh.voice_ref == "sal"
     assert fresh.cast_note.startswith("cast for:")
 
 
@@ -183,6 +183,7 @@ def test_grok_voice_is_the_default_backend_and_speaks_the_exact_words(
         status_code = 200
         content = b"RIFFfakewav"
         text = ""
+        headers = {"content-type": "audio/wav"}
 
     from diony_director.providers import base as provider_base
 
@@ -193,15 +194,18 @@ def test_grok_voice_is_the_default_backend_and_speaks_the_exact_words(
     monkeypatch.setattr(provider_base, "post_with_retries", _post)
     cue = narration.NarrationCue(
         order=0, clip_id="cl-1", speaker="ANA", line="We finish this tonight.",
-        direction="low", voice_ref="voice-ana",
+        direction="low", voice_ref="Sal",
     )
     out = tmp_path / "cue-00.wav"
     narration._synthesize_grok(cue, out)
     assert out.read_bytes() == b"RIFFfakewav"
+    # the live /v1/tts contract, verified 2026-09-02: text + lowercase
+    # voice_id + language + a WAV output_format at the mix's 48 kHz
     assert seen["url"].endswith(narration.GROK_VOICE_PATH_DEFAULT)
-    assert seen["json"]["input"] == "We finish this tonight."
-    assert seen["json"]["voice"] == "voice-ana"
-    assert seen["json"]["response_format"] == "wav"
+    assert seen["json"]["text"] == "We finish this tonight."
+    assert seen["json"]["voice_id"] == "sal"
+    assert seen["json"]["language"] == narration.GROK_VOICE_LANGUAGE_DEFAULT
+    assert seen["json"]["output_format"] == {"codec": "wav", "sample_rate": 48000}
     assert seen["headers"]["Authorization"] == "Bearer test-xai-key"
 
 

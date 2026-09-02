@@ -11,14 +11,15 @@ a provider's own pacing.
 
 Synthesis backends, resolved by ``backend()``:
 
-- ``grok`` (the default whenever XAI_API_KEY is set): the Grok voice API on
+- ``grok`` (the default whenever XAI_API_KEY is set): the Grok TTS API on
   the same xAI account the picture lane already uses — one consistent voice
-  per production, no local model. Endpoint shape is configurable via
-  DIONY_XAI_BASE + DIONY_GROK_VOICE_PATH (OpenAI-compatible speech contract:
-  model/input/voice/response_format) and re-verified against live docs
-  before any billable rollout, the same doctrine as providers/grok.py.
-  DIONY_GROK_VOICE_MODEL picks the model, DIONY_GROK_VOICE the default
-  voice; a clip's voice lock overrides the voice per cue.
+  per production, no local model. Contract VERIFIED LIVE 2026-09-02 against
+  docs.x.ai and this account: ``POST {DIONY_XAI_BASE}/v1/tts`` with
+  ``{text, voice_id, language, output_format:{codec, sample_rate}}`` returns
+  raw audio bytes (WAV at 48 kHz requested here — the mix's native rate);
+  ``GET /v1/tts/voices`` lists the roster. DIONY_GROK_VOICE_PATH overrides
+  the path, DIONY_GROK_VOICE pins one voice, DIONY_GROK_VOICE_LANGUAGE sets
+  the language (default en); a clip's voice lock overrides per cue.
 - ``cli``: an on-host command template, the same contract the audiogen
   generators use:
 
@@ -49,25 +50,29 @@ from diony_director.assembly import LOUDNESS, _ffmpeg, _probe
 NARRATOR_ENV = "DIONY_NARRATOR_CLI"
 BACKEND_ENV = "DIONY_NARRATOR_BACKEND"
 GROK_VOICE_PATH_ENV = "DIONY_GROK_VOICE_PATH"
-GROK_VOICE_MODEL_ENV = "DIONY_GROK_VOICE_MODEL"
 GROK_VOICE_ENV = "DIONY_GROK_VOICE"
-GROK_VOICE_PATH_DEFAULT = "/v1/audio/speech"
-GROK_VOICE_MODEL_DEFAULT = "grok-voice"
-GROK_VOICE_DEFAULT = "Ara"
+GROK_VOICE_PATH_DEFAULT = "/v1/tts"
+GROK_VOICE_DEFAULT = "eve"  # the API's own default
+GROK_VOICE_LANGUAGE_ENV = "DIONY_GROK_VOICE_LANGUAGE"
+GROK_VOICE_LANGUAGE_DEFAULT = "en"
 GROK_VOICE_ROSTER_ENV = "DIONY_GROK_VOICE_ROSTER"
 GROK_CALL_TIMEOUT_S = 120.0
 
-# The Grok voice options and how each one reads — the material cast_voice()
-# matches against the master prompt's tone and the character speaking. The
-# names ride the same re-verify-against-live-docs doctrine as the endpoint
-# shape; DIONY_GROK_VOICE_ROSTER overrides with JSON {name: [tags]} when the
-# live roster differs, without a code change.
+# The casting roster: a curated slice of the live Grok TTS voice list
+# (voice_id and gender VERIFIED against GET /v1/tts/voices on this account,
+# 2026-09-02; the full list holds 28). The tone tags are Diony's own casting
+# reads — the material cast_voice() matches against the master prompt's tone
+# and the speaking character. DIONY_GROK_VOICE_ROSTER overrides with JSON
+# {voice_id: [tags]} without a code change.
 DEFAULT_ROSTER: dict[str, list[str]] = {
-    "Ara": ["female", "warm", "bright", "upbeat", "playful", "energetic", "friendly"],
-    "Eve": ["female", "soothing", "calm", "intimate", "elegant", "soft", "romantic"],
-    "Rex": ["male", "calm", "confident", "grounded", "documentary", "realistic", "steady"],
-    "Sal": ["male", "smooth", "measured", "noir", "tense", "mysterious", "narrator"],
-    "Gork": ["male", "deadpan", "dry", "comedic", "lazy", "sarcastic"],
+    "ara": ["female", "warm", "bright", "upbeat", "playful", "energetic", "friendly"],
+    "eve": ["female", "soothing", "calm", "intimate", "elegant", "soft", "romantic"],
+    "luna": ["female", "gentle", "dreamy", "night", "soft", "wistful"],
+    "celeste": ["female", "poised", "refined", "serene", "documentary", "measured"],
+    "rex": ["male", "calm", "confident", "grounded", "documentary", "realistic", "steady"],
+    "sal": ["male", "smooth", "measured", "noir", "tense", "mysterious", "narrator"],
+    "leo": ["male", "authoritative", "epic", "dramatic", "intense", "energetic"],
+    "atlas": ["male", "deep", "solemn", "grave", "monumental", "slow"],
 }
 
 _FEMALE_TELLS = re.compile(r"\b(she|her|hers|woman|women|female|girl|mother|sister|queen|actress|lady)\b")
@@ -319,8 +324,12 @@ def _synthesize_cli(cue: NarrationCue, output: Path) -> None:
 
 
 def _synthesize_grok(cue: NarrationCue, output: Path) -> None:
-    """One line through the Grok voice API — the same xAI account and base
-    URL the picture lane rides; a voice lock on the cue picks the voice."""
+    """One line through the Grok TTS API — the same xAI account and base
+    URL the picture lane rides; a voice lock on the cue picks the voice.
+
+    Contract verified live (docs.x.ai + this account, 2026-09-02):
+    POST /v1/tts {text, voice_id, language, output_format} → raw audio
+    bytes; a JSON envelope (the with_timestamps shape) is handled too."""
     from diony_director.providers import base as provider_base
     from diony_director.providers import grok
 
@@ -328,15 +337,12 @@ def _synthesize_grok(cue: NarrationCue, output: Path) -> None:
         raise NarrationUnavailable(UNCONFIGURED)
     path = os.environ.get(GROK_VOICE_PATH_ENV, GROK_VOICE_PATH_DEFAULT)
     payload = {
-        "model": os.environ.get(GROK_VOICE_MODEL_ENV, GROK_VOICE_MODEL_DEFAULT),
-        "input": cue.line,
-        "voice": cue.voice_ref or os.environ.get(GROK_VOICE_ENV, GROK_VOICE_DEFAULT),
-        "response_format": "wav",
+        "text": cue.line,
+        "voice_id": (cue.voice_ref or os.environ.get(GROK_VOICE_ENV, GROK_VOICE_DEFAULT)).lower(),
+        "language": os.environ.get(GROK_VOICE_LANGUAGE_ENV, GROK_VOICE_LANGUAGE_DEFAULT),
+        # WAV at the mix's native 48 kHz — no lossy hop before the film mix
+        "output_format": {"codec": "wav", "sample_rate": 48000},
     }
-    if cue.direction:
-        # delivery direction rides as instructions where the API accepts it;
-        # a backend that ignores the field still speaks the exact words
-        payload["instructions"] = cue.direction
     response = provider_base.post_with_retries(
         f"{grok.api_base()}{path}",
         what="Grok voice synthesis",
@@ -349,7 +355,17 @@ def _synthesize_grok(cue: NarrationCue, output: Path) -> None:
             f"Grok voice rejected {cue.clip_id} ({response.status_code}): "
             f"{response.text[:300]}"
         )
-    output.write_bytes(response.content)
+    body = response.content
+    if response.headers.get("content-type", "").startswith("application/json"):
+        import base64
+
+        try:
+            body = base64.b64decode(response.json()["audio"])
+        except (KeyError, ValueError) as exc:
+            raise NarrationFailed(
+                f"Grok voice returned JSON without decodable audio for {cue.clip_id}"
+            ) from exc
+    output.write_bytes(body)
 
 
 def synthesize(cue: NarrationCue, output: Path) -> float:
