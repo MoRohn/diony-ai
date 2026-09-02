@@ -233,10 +233,46 @@
     return details;
   }
 
+  // Chain-aware artifact display: a chained one-shot card carries ITS OWN
+  // post-split clip prompt from the master's CLIP DELIVERY split — never the
+  // whole pre-split master duplicated per link. The pre-split master rides
+  // the chain opener once; a single-clip one-shot keeps it as before.
+  function renderMasterFor(card, master, chain) {
+    if (!master) return;
+    if (chain && Array.isArray(master.clips) && master.clips.length > chain.index) {
+      if (chain.index === 0) renderMaster(card, master);
+      renderClipMaster(card, master, chain.index, chain.count);
+      return;
+    }
+    renderMaster(card, master);
+  }
+
+  function renderClipMaster(host, master, index, count) {
+    const clip = master.clips[index];
+    if (!clip || !clip.prompt) return null;
+    const details = document.createElement("details");
+    details.className = "prompt master clipm";
+    const summary = document.createElement("summary");
+    const words = String(clip.prompt).trim().split(/\s+/).length;
+    const dur = clip.duration_s ? ` · plays ${clip.duration_s}s` : "";
+    summary.textContent =
+      `clip ${index + 1}/${count} prompt — the post-split artifact · ${words} words${dur} · ` +
+      (master.source === "brain" ? "brain" : "template");
+    summary.title =
+      "This clip's own segment of the master's CLIP DELIVERY split — the prose this card actually rolls, plus the route's guards";
+    const text = document.createElement("div");
+    text.className = "ptext";
+    text.textContent = clip.prompt;
+    details.appendChild(summary);
+    details.appendChild(text);
+    host.appendChild(details);
+    return details;
+  }
+
   // A one-shot priced while the brain derives its master prompt: the card
   // holds (Run disabled) and unlocks — prompt swapped in, artifact shown —
   // the moment the artifact lands. Nothing can roll before it.
-  function watchDeriving(op, card, btn, state) {
+  function watchDeriving(op, card, btn, state, chain) {
     state.textContent = "deriving master prompt…";
     state.className = "state deriving";
     btn.disabled = true;
@@ -256,7 +292,7 @@
       }
       card.querySelectorAll(".whatrolls, details.prompt").forEach((el) => el.remove());
       attachPrompt(card, body.op);
-      if (body.master) renderMaster(card, body.master);
+      renderMasterFor(card, body.master, chain);
       Object.assign(op, body.op);
       state.textContent = body.op.status;
       state.className = "state";
@@ -265,7 +301,7 @@
     setTimeout(tick, 2500);
   }
 
-  function addOpCard(host, op) {
+  function addOpCard(host, op, chain) {
     const card = document.createElement("div");
     card.className = "opcard";
     card.innerHTML = `
@@ -281,8 +317,8 @@
     host.appendChild(card);
     const btn = card.querySelector("button");
     const state = card.querySelector(".state");
-    if (op.status === "deriving") watchDeriving(op, card, btn, state);
-    else if (op.master) renderMaster(card, op.master);
+    if (op.status === "deriving") watchDeriving(op, card, btn, state, chain);
+    else if (op.master) renderMasterFor(card, op.master, chain);
     btn.addEventListener("click", async () => {
       btn.disabled = true;
       state.textContent = "submitting…";
@@ -297,6 +333,7 @@
       }
       refreshMeter();
     });
+    return card;
   }
 
   function poll(opId, card, state) {
@@ -643,22 +680,33 @@
         }),
       });
       const li = addMsg("director", body.reply);
-      const chain = body.ops && body.ops.length > 1 ? body.ops : [body.op];
+      const isChain = body.ops && body.ops.length > 1;
+      const chain = isChain ? body.ops : [body.op];
+      const cardEls = new Map(); // op_id -> card element
+      if (isChain) setupChainBar(li, chain, cardEls);
       chain.forEach((one, index) => {
-        if (chain.length > 1) {
+        if (isChain) {
           const tag = document.createElement("div");
           tag.className = "chaintag";
           tag.textContent = `clip ${index + 1} / ${chain.length}`;
           li.appendChild(tag);
         }
-        addOpCard(li, one);
+        const card = addOpCard(li, one, isChain ? { index, count: chain.length } : null);
+        cardEls.set(one.id, card);
       });
       if (body.op.status === "proposed") {
-        // the artifact rides the op state; show it under the priced card
+        // the artifact rides the op state; show it under the priced card —
+        // one fetch covers the chain, each card gets its own split segment
         try {
           const state = await api(`/api/director/ops/${body.op.id}`);
-          const card = li.querySelector(".opcard");
-          if (card && state.master && !card.querySelector("details.master")) renderMaster(card, state.master);
+          if (state.master) {
+            chain.forEach((one, index) => {
+              const card = cardEls.get(one.id);
+              if (card && !card.querySelector("details.master")) {
+                renderMasterFor(card, state.master, isChain ? { index, count: chain.length } : null);
+              }
+            });
+          }
         } catch (err) {
           /* the card stands without the artifact panel */
         }
@@ -1131,6 +1179,131 @@
       );
     });
     asmBtn.addEventListener("click", assembleNow);
+  }
+
+  // The chained one-shot's batch bar: one button rolls every link in order —
+  // the submitter waves bridge each link from its predecessor's final frame —
+  // and cuts the film when the last one prints. Cards keep their individual
+  // Run buttons for link-by-link control.
+  function setupChainBar(host, ops, cardEls) {
+    const bar = document.createElement("div");
+    bar.className = "batchbar";
+    const total = ops.reduce(
+      (sum, op) => sum + (op.estimate ? op.estimate.total_usd_micros : 0), 0);
+    bar.innerHTML = `
+      <button type="button" class="batch primary" id="chain-run-all">Run &amp; Assemble All (${ops.length}) — ${usd(total)}</button>
+      <button type="button" class="batch ghost" id="chain-assemble">Assemble completed</button>
+      <span class="progress" id="chain-progress"></span>`;
+    host.appendChild(bar);
+    const allBtn = bar.querySelector("#chain-run-all");
+    const asmBtn = bar.querySelector("#chain-assemble");
+    const progress = bar.querySelector("#chain-progress");
+    asmBtn.addEventListener("click", assembleNow);
+
+    // nothing can roll before the master's split lands on every link
+    if (ops[0].status === "deriving") {
+      allBtn.disabled = true;
+      progress.textContent = "deriving master prompt…";
+      const gate = async () => {
+        try {
+          const body = await api(`/api/director/ops/${ops[0].id}`);
+          if (body.op.status === "deriving") { setTimeout(gate, 3000); return; }
+          allBtn.disabled = false;
+          progress.textContent = "";
+        } catch (err) {
+          setTimeout(gate, 3000);
+        }
+      };
+      setTimeout(gate, 2500);
+    }
+
+    const parts = (id) => {
+      const card = cardEls.get(id);
+      return card
+        ? { card, state: card.querySelector(".state"), btn: card.querySelector("button") }
+        : null;
+    };
+
+    async function runAll() {
+      allBtn.disabled = true;
+      progress.textContent = "submitting…";
+      let batch;
+      try {
+        batch = await api(`/api/director/sessions/${sessionId}/run_batch`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ op_ids: ops.map((op) => op.id) }),
+        });
+      } catch (err) {
+        progress.textContent = `batch failed: ${err.message || err}`;
+        allBtn.disabled = false;
+        return;
+      }
+      ops.forEach((op) => {
+        const c = parts(op.id);
+        if (c && !c.card.querySelector("video")) {
+          c.state.textContent = "queued…";
+          if (c.btn) c.btn.disabled = true;
+        }
+      });
+      (batch.held || []).forEach((h) => addMsg("director", `Held: ${h.reason}`));
+      const tick = async () => {
+        let counts;
+        try {
+          counts = await api(`/api/director/sessions/${sessionId}/advance`, { method: "POST" });
+        } catch (err) {
+          progress.textContent = `lost the room: ${err.message || err}`;
+          allBtn.disabled = false;
+          return;
+        }
+        (counts.held || []).forEach((h) => addMsg("director", `Held: ${h.reason}`));
+        const queued = counts.queued || 0;
+        progress.textContent =
+          `${counts.completed} done · ${counts.failed} failed · ${counts.pending} generating` +
+          (queued ? ` · ${queued} queued (chained)` : "");
+        refreshMeter();
+        if (counts.pending > 0 || queued > 0 || counts.submitting) {
+          setTimeout(tick, 3000);
+          return;
+        }
+        // settle each card with its final state, then cut the film
+        for (const op of ops) {
+          const c = parts(op.id);
+          if (!c) continue;
+          try {
+            const body = await api(`/api/director/ops/${op.id}`);
+            if (body.op.status === "completed") {
+              c.state.textContent = "printed";
+              c.state.className = "state done";
+              if (!c.card.querySelector("video")) {
+                const video = document.createElement("video");
+                video.controls = true;
+                video.src = `/api/director/clips/${op.id}`;
+                c.card.appendChild(video);
+              }
+            } else if (body.op.status === "failed") {
+              c.state.textContent = `failed — ${body.job ? body.job.error_message || "" : ""}`;
+              c.state.className = "state failed";
+              attachRetry(c.card, op.id, c.state);
+            }
+            attachVerdict(c.card, c.state, body.review, op.id);
+          } catch (err) { /* card stays coarse; the film still cuts */ }
+        }
+        progress.textContent += " — assembling…";
+        await assembleNow();
+        progress.textContent = progress.textContent.replace(" — assembling…", " — film delivered");
+        allBtn.disabled = false;
+      };
+      setTimeout(tick, 2500);
+    }
+
+    allBtn.addEventListener("click", () => {
+      armConfirm(
+        allBtn,
+        `Confirm — roll ${plural(ops.length, "clip")} in order, ${usd(total)} total`,
+        runAll
+      );
+    });
   }
 
   function renderDraft(li, state) {
