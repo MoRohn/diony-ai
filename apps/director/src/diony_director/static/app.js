@@ -105,10 +105,10 @@
     const hint = $("durhint");
     const total = durationSeconds();
     if (total > 15) {
-      hint.textContent = `${Math.floor(total / 60)}m ${total % 60}s — script runtime (a single shot caps at 15s)`;
-      hint.className = "durhint warn";
+      hint.textContent = `${Math.floor(total / 60)}m ${total % 60}s — a one-shot this long rolls as chained clips`;
+      hint.className = "durhint";
     } else {
-      hint.textContent = "one shot ≤ 15s · scripts run longer";
+      hint.textContent = "any length · long one-shots chain into sequential clips";
       hint.className = "durhint";
     }
   }
@@ -343,8 +343,6 @@
   async function boot() {
     try {
       const status = await api("/api/director/status");
-      $("engine-chip").textContent = `engine ${status.engine}`;
-      $("engine-chip").className = `chip ${status.engine === "cloud" ? "on" : "off"}`;
       $("grok-chip").textContent = `grok ${status.providers.grok ? "ready" : "no key"}`;
       $("grok-chip").className = `chip ${status.providers.grok ? "on" : "off"}`;
       $("flow-chip").textContent = `flow ${status.providers["google-flow"] ? "ready" : "no token"}`;
@@ -623,14 +621,8 @@
     row.hidden = row.children.length <= 1;
   }
 
-  function clampedOneShotSeconds() {
-    const asked = durationSeconds() || 8;
-    if (asked > 15) {
-      addMsg("director", `A one-shot draft caps at 15s — booking 15s (you asked for ${asked}s; use Produce for a full runtime).`);
-      return 15;
-    }
-    return asked;
-  }
+  // No one-shot cap: a runtime past the route's single-clip length comes back
+  // as a chained one-shot — the server splits it and prices every link.
 
   async function send() {
     const idea = $("idea").value.trim();
@@ -644,14 +636,23 @@
         body: JSON.stringify({
           text: idea,
           provider: $("provider").value,
-          duration_s: clampedOneShotSeconds(),
+          duration_s: durationSeconds() || 8,
           resolution: $("resolution").value,
           aspect: fieldOrKeep("aspect"),
           ...lexiconTemplates(),
         }),
       });
       const li = addMsg("director", body.reply);
-      addOpCard(li, body.op);
+      const chain = body.ops && body.ops.length > 1 ? body.ops : [body.op];
+      chain.forEach((one, index) => {
+        if (chain.length > 1) {
+          const tag = document.createElement("div");
+          tag.className = "chaintag";
+          tag.textContent = `clip ${index + 1} / ${chain.length}`;
+          li.appendChild(tag);
+        }
+        addOpCard(li, one);
+      });
       if (body.op.status === "proposed") {
         // the artifact rides the op state; show it under the priced card
         try {
@@ -1636,6 +1637,15 @@
 
   async function resetSession() {
     try {
+      // Retire the room we're leaving, or its failed clips reclaim the
+      // resume slot on every launch. Ledger and media stay untouched.
+      if (sessionId) {
+        try {
+          await api(`/api/director/sessions/${sessionId}/dismiss`, { method: "POST" });
+        } catch (err) {
+          /* a failed dismiss must not block the fresh room */
+        }
+      }
       const created = await api("/api/director/sessions", { method: "POST" });
       sessionId = created.session_id;
       thread.replaceChildren();

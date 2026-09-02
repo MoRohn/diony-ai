@@ -148,6 +148,19 @@ def resumable() -> dict:
     return {"sessions": session.resumable_sessions()}
 
 
+@app.post("/api/director/sessions/{sid}/dismiss")
+def dismiss(sid: str) -> dict:
+    """Retire the room from the resume slot. Failed clips never expire, so a
+    session with dead takes would otherwise reclaim the room on every launch —
+    ＋ NEW SESSION dismisses the room it is leaving. The ledger, media, and
+    any still-rolling polls are untouched."""
+    _boot()
+    if not session.session_exists(sid):
+        raise HTTPException(status_code=404, detail=f"unknown session {sid}")
+    session.dismiss_session(sid)
+    return {"session_id": sid, "dismissed": True}
+
+
 class MessageIn(BaseModel):
     text: str
     provider: str = "auto"
@@ -328,7 +341,12 @@ def message(sid: str, body: MessageIn) -> dict:
         )
     except (KeyError, ValueError) as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
-    return {"reply": proposal.reply, "op": proposal.op.model_dump(mode="json")}
+    return {
+        "reply": proposal.reply,
+        "op": proposal.op.model_dump(mode="json"),
+        # chained one-shot: every link in play order (empty for a single clip)
+        "ops": [op.model_dump(mode="json") for op in proposal.ops],
+    }
 
 
 class UploadIn(BaseModel):
@@ -581,6 +599,46 @@ def _late_bind_locks(op: DirectorOp) -> None:
     op.artifact_refs = refs
 
 
+def _late_bind_chain_bridge(op: DirectorOp) -> None:
+    """A chained one-shot clip opens from the previous link's join frame —
+    resolved at submit time exactly like a scripted bridge, minus the bible.
+    No usable predecessor frame leaves the refs untouched (the run guard has
+    already refused to roll out of order)."""
+    prev = session.previous_completed_clip_op(op.session_id, op)
+    if prev is None:
+        return
+    stored = session.runtime(prev.id).get("clip")
+    if stored is None:
+        return
+    frame = _last_frame(
+        Path(stored.path),
+        cluster_root() / "director" / op.session_id / "frames" / f"{prev.id}.jpg",
+        sid=op.session_id,
+    )
+    if frame:
+        op.artifact_refs["start_image"] = frame
+        op.artifact_refs.pop("references", None)
+
+
+def _guard_chain_order(op: DirectorOp) -> None:
+    """A chained one-shot link cannot roll before its predecessor's join frame
+    exists — running clip 3 first would open from nothing and generate an
+    unrelated shot. Scripted clips keep their existing batch gating."""
+    if op.clip_id:
+        return
+    position = session.chain_position(op.session_id, op.id)
+    if not position:
+        return
+    if session.previous_completed_clip_op(op.session_id, op) is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"this is clip {position + 1} of a chained one-shot — run the previous "
+                "clip first; its final frame opens this one"
+            ),
+        )
+
+
 def _kick_submitter(sid: str) -> None:
     """Submit ready waves on a worker thread. Bible stills are synchronous
     provider calls that can take minutes in aggregate — no batch request may
@@ -625,6 +683,16 @@ def _submit_ready(sid: str) -> tuple[list[str], list[dict]]:
                 held.append({"op_id": op.id, "reason": reason})
                 session.batch_targets(sid).discard(op.id)  # stays proposed for a manual run
                 continue
+        try:
+            _guard_chain_order(op)
+        except HTTPException as err:
+            # a chained one-shot link whose predecessor has no usable frame
+            # (failed, discarded, or never rolled) is HELD, still proposed —
+            # a batch must never roll it from nothing. Retry the earlier link
+            # and it becomes runnable again.
+            held.append({"op_id": op.id, "reason": str(err.detail)})
+            session.batch_targets(sid).discard(op.id)
+            continue
         try:
             _run_approved(op)
             submitted.append(op.id)
@@ -672,6 +740,10 @@ def _dispatch_submit(op: DirectorOp) -> provider_base.CloudJobHandle:
         DirectorOpType.UPSCALE,
     }:
         _late_bind_locks(op)
+    elif op.op is DirectorOpType.GENERATE and session.chain_position(op.session_id, op.id):
+        # a chained one-shot link past position 0: no clip, no bibles — just
+        # the previous link's join frame, resolved at submit time
+        _late_bind_chain_bridge(op)
     if op.mode in {
         CloudGenerationMode.T2V,
         CloudGenerationMode.I2V,
@@ -811,7 +883,9 @@ def _run_approved(op: DirectorOp) -> dict:
 
 @app.post("/api/director/ops/{op_id}/run")
 def run_op(op_id: str) -> dict:
-    return _run_approved(_op_or_404(op_id))
+    op = _op_or_404(op_id)
+    _guard_chain_order(op)
+    return _run_approved(op)
 
 
 @app.post("/api/director/ops/{op_id}/retry")

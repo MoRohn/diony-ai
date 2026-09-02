@@ -227,6 +227,11 @@ class MasterPrompt(BaseModel):
     ending: str = ""
     constraints: list[str] = Field(default_factory=list)
     prompt: str
+    # Chained one-shot delivery: when the booked runtime exceeds the route's
+    # single-clip length, the derivation also splits the action into
+    # sequential clips — each entry {prompt, duration_s}, in play order; clip
+    # k+1 opens from clip k's final frame. Empty for a single-clip booking.
+    clips: list[dict[str, Any]] = Field(default_factory=list)
     word_count: int = Field(default=0, ge=0)
     source: Literal["brain", "template"] = "template"
     warnings: list[str] = Field(default_factory=list)

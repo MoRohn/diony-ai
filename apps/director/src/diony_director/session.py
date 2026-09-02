@@ -8,6 +8,7 @@ exists without a locked estimate.
 
 from __future__ import annotations
 
+import math
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -49,12 +50,18 @@ _VEO_GUARD = "No morphing, no warped anatomy, no on-screen text."
 class Proposal:
     op: DirectorOp
     reply: str
+    # chained one-shot: every link in play order (op is the first); a
+    # single-clip proposal leaves this empty
+    ops: list[DirectorOp] = field(default_factory=list)
 
 
 @dataclass
 class SessionState:
     id: str
     op_ids: list[str] = field(default_factory=list)
+    # The user walked away from this room on purpose (＋ NEW SESSION) — it
+    # keeps its ledger and media but never claims the resume slot again.
+    dismissed: bool = False
 
 
 _SESSIONS: dict[str, SessionState] = {}
@@ -135,9 +142,13 @@ def get_session(sid: str) -> SessionState:
 def resumable_sessions() -> list[dict[str, Any]]:
     """Sessions with unfinished business, newest first: failed clips to retry,
     ops still rolling, or approved work that never rolled. A finished session
-    (everything completed) is not resumable — the Gallery has its film."""
+    (everything completed) is not resumable — the Gallery has its film. A
+    dismissed session is never resumable: failed clips have no expiry, so
+    without the flag one dead take would reclaim the room on every boot."""
     rows: list[dict[str, Any]] = []
     for sid, state in _SESSIONS.items():
+        if state.dismissed:
+            continue
         ops = [_OPS[i] for i in state.op_ids if i in _OPS]
         if not ops:
             continue
@@ -162,6 +173,14 @@ def resumable_sessions() -> list[dict[str, Any]]:
 
     rows.sort(key=_mtime, reverse=True)
     return rows
+
+
+def dismiss_session(sid: str) -> None:
+    """Retire the room from the resume slot — the ledger, media, and any
+    still-rolling polls keep going exactly as before."""
+    state = _SESSIONS[sid]
+    state.dismissed = True
+    persist(sid)
 
 
 def get_op(op_id: str) -> DirectorOp:
@@ -381,6 +400,40 @@ def authored_elements(sid: str, idea: str, provider: CloudProvider) -> tuple[str
     return expanded or seed, authored
 
 
+def compile_master_body(
+    body: str,
+    idea: str,
+    provider: CloudProvider,
+    sid: str = "",
+    *,
+    has_start_image: bool = False,
+) -> str:
+    """Derived master prose (the whole-action prompt, or one chained clip's
+    prompt) + the route's guards → the shippable prompt."""
+    from diony_director.compiler import _fit_prompt, prompt_limit
+
+    body = body.strip()
+    if provider is CloudProvider.GROK:
+        from diony_director import grok_lexicon
+
+        pieces: list[tuple[str, int]] = [(grok_lexicon.harden_camera_locks(body), 1)]
+        if has_start_image:
+            pieces.append((grok_lexicon.I2V_DIRECTIVE, 1))
+        pieces.append((_GROK_STYLE.strip(), 0))
+        return _fit_prompt(pieces, prompt_limit(provider))
+    from diony_director import flow_lexicon
+
+    _, inline_world, _ = flow_lexicon.expand(idea)
+    return _fit_prompt(
+        [
+            (body, 1),
+            (flow_lexicon.style_clause(sid, override_world=inline_world), 0),
+            (_VEO_GUARD, 0),
+        ],
+        prompt_limit(provider),
+    )
+
+
 def compile_prompt(
     idea: str,
     provider: CloudProvider,
@@ -396,25 +449,8 @@ def compile_prompt(
         # already carrying camera, lighting, physics, continuity, and ending.
         # Only the route's guards ride on top — the Grok lock hardening and
         # i2v directive, or the Flow world clause and anatomy guard.
-        body = master.prompt.strip()
-        if provider is CloudProvider.GROK:
-            from diony_director import grok_lexicon
-
-            pieces: list[tuple[str, int]] = [(grok_lexicon.harden_camera_locks(body), 1)]
-            if has_start_image:
-                pieces.append((grok_lexicon.I2V_DIRECTIVE, 1))
-            pieces.append((_GROK_STYLE.strip(), 0))
-            return _fit_prompt(pieces, prompt_limit(provider))
-        from diony_director import flow_lexicon
-
-        _, inline_world, _ = flow_lexicon.expand(idea)
-        return _fit_prompt(
-            [
-                (body, 1),
-                (flow_lexicon.style_clause(sid, override_world=inline_world), 0),
-                (_VEO_GUARD, 0),
-            ],
-            prompt_limit(provider),
+        return compile_master_body(
+            master.prompt, idea, provider, sid, has_start_image=has_start_image
         )
 
     seed = idea.strip().rstrip(".")
@@ -469,6 +505,61 @@ def compile_prompt(
     return _fit_prompt(pieces, prompt_limit(provider))
 
 
+def _clip_plan(provider: CloudProvider, model: str, requested_s: float) -> list[int]:
+    """The chained one-shot delivery plan. A booked runtime past the route's
+    single-clip length is never silently capped: it splits into sequential
+    links on the route's grid — [] means a single clip covers it."""
+    requested = max(1, math.ceil(requested_s))
+    if provider is CloudProvider.GROK:
+        cap = estimate_mod.GROK_MAX_S
+        if requested <= cap:
+            return []
+        count = math.ceil(requested / cap)
+        base, remainder = divmod(requested, count)
+        return [base + 1] * remainder + [base] * (count - remainder)
+    grid = (
+        estimate_mod.OMNI_DURATIONS
+        if model in estimate_mod.OMNI_MODELS
+        else estimate_mod.veo_grid()
+    )
+    unit = grid[-1]
+    if requested <= unit:
+        return []
+    full, remainder = divmod(requested, unit)
+    plan = [unit] * full
+    if remainder:
+        plan.append(estimate_mod.quantize_duration(provider, model, remainder))
+    return plan
+
+
+def _route_notes(provider: CloudProvider, text: str) -> str:
+    """The lexicon advisories every proposal reply carries for its route."""
+    notes = ""
+    if provider is CloudProvider.GOOGLE_FLOW:
+        from diony_director import flow_lexicon
+
+        unknown = flow_lexicon.unknown_tokens(text)
+        if unknown:
+            notes += (
+                f" Note: {', '.join(unknown)} isn't Flow shorthand I know — "
+                "it rides the prompt as literal text."
+            )
+        for note in flow_lexicon.advisories(text):
+            notes += f" Note: {note}"
+    elif provider is CloudProvider.GROK:
+        from diony_director import grok_lexicon
+
+        unknown = grok_lexicon.unknown_tokens(text)
+        if unknown:
+            notes += (
+                f" Note: {', '.join(unknown)} isn't Grok shorthand I know — "
+                "it rides the prompt as literal text."
+            )
+        for note in grok_lexicon.advisories(text):
+            notes += f" Note: {note}"
+    return notes
+
+
 def propose(
     sid: str,
     text: str,
@@ -481,6 +572,17 @@ def propose(
 ) -> Proposal:
     chosen_provider = resolve_provider(provider)
     chosen_model = model or DEFAULT_MODELS[chosen_provider]
+    plan = _clip_plan(chosen_provider, chosen_model, duration_s)
+    if len(plan) > 1:
+        return _propose_chain(
+            sid,
+            text,
+            provider=chosen_provider,
+            model=chosen_model,
+            plan=plan,
+            resolution=resolution,
+            spent_usd_micros=spent_usd_micros,
+        )
     duration = estimate_mod.quantize_duration(chosen_provider, chosen_model, duration_s)
     est = estimate_mod.estimate_op(
         provider=chosen_provider,
@@ -570,29 +672,201 @@ def propose(
         )
     if est.rate_cards_stale:
         reply += " Heads up: the rate card is stale — re-verify provider pricing before running."
-    if chosen_provider is CloudProvider.GOOGLE_FLOW:
-        from diony_director import flow_lexicon
-
-        unknown = flow_lexicon.unknown_tokens(text)
-        if unknown:
-            reply += (
-                f" Note: {', '.join(unknown)} isn't Flow shorthand I know — "
-                "it rides the prompt as literal text."
-            )
-        for note in flow_lexicon.advisories(text):
-            reply += f" Note: {note}"
-    elif chosen_provider is CloudProvider.GROK:
-        from diony_director import grok_lexicon
-
-        unknown = grok_lexicon.unknown_tokens(text)
-        if unknown:
-            reply += (
-                f" Note: {', '.join(unknown)} isn't Grok shorthand I know — "
-                "it rides the prompt as literal text."
-            )
-        for note in grok_lexicon.advisories(text):
-            reply += f" Note: {note}"
+    reply += _route_notes(chosen_provider, text)
     return Proposal(op=op, reply=reply)
+
+
+def _propose_chain(
+    sid: str,
+    text: str,
+    *,
+    provider: CloudProvider,
+    model: str,
+    plan: list[int],
+    resolution: str,
+    spent_usd_micros: int,
+) -> Proposal:
+    """The uncapped one-shot: a booked runtime past the route's single-clip
+    length becomes a CHAIN of sequential clips. The brain splits the input
+    itself (master derivation + CLIP DELIVERY) — no screenplay stage, no
+    draft enhancement. Every link is priced now; each later link opens from
+    the previous link's final frame at submit time."""
+    from diony_director.screenwriter import brain_model, brain_url
+
+    total_s = sum(plan)
+    count = len(plan)
+    start, extras = upload_refs(sid)
+    refs = ([start] if start else []) + list(extras)
+    expanded, authored = authored_elements(sid, text, provider)
+    async_master = bool(brain_url())
+    master: MasterPrompt | None = None
+    if not async_master:
+        master = master_mod.derive(
+            expanded,
+            target_duration_s=total_s,
+            reference_images=refs,
+            authored=authored,
+            clip_plan=plan,
+        )
+    ops: list[DirectorOp] = []
+    total_cost = 0
+    stale = False
+    for index, clip_s in enumerate(plan):
+        est = estimate_mod.estimate_op(
+            provider=provider,
+            model=model,
+            mode=CloudGenerationMode.T2V,
+            duration_s=clip_s,
+            resolution=resolution,
+        )
+        total_cost += est.total_usd_micros
+        stale = stale or est.rate_cards_stale
+        first = index == 0
+        has_start = bool(start) if first else True
+        if master is not None:
+            prompt = compile_master_body(
+                master.clips[index]["prompt"], text, provider, sid, has_start_image=has_start
+            )
+        else:
+            prompt = compile_prompt(text, provider, sid, has_start_image=has_start)
+        op = DirectorOp(
+            id=f"op-{uuid.uuid4().hex[:10]}",
+            session_id=sid,
+            op=DirectorOpType.GENERATE,
+            provider=provider,
+            model=model,
+            mode=CloudGenerationMode.T2V,
+            prompt=prompt,
+            prompt_version="v1" if master is not None else "v0-provisional",
+            status="deriving" if async_master else "proposed",
+            duration_s=clip_s,
+            resolution=resolution,
+            estimate=est,
+            rationale=(
+                f"clip {index + 1}/{count} of a chained one-shot ({clip_s}s)"
+                + (
+                    " — opens the chain"
+                    if first
+                    else " — opens from the previous clip's final frame"
+                )
+            ),
+        )
+        if first and start:
+            op.artifact_refs["start_image"] = start
+            if extras:
+                op.artifact_refs["references"] = extras[:3]
+        _OPS[op.id] = op
+        if master is not None:
+            _MASTERS[op.id] = master
+        ops.append(op)
+    state = _SESSIONS.setdefault(sid, SessionState(id=sid))
+    state.op_ids.extend(op.id for op in ops)
+    _register_oneshot_chain(sid, [op.id for op in ops])
+    persist(sid)
+    if async_master:
+        _kick_chain_derivation(
+            [op.id for op in ops],
+            sid,
+            text,
+            expanded,
+            provider,
+            plan,
+            refs,
+            authored,
+            bool(start),
+        )
+
+    total_after = spent_usd_micros + committed_usd_micros(sid) + total_cost
+    plan_words = " + ".join(f"{d}s" for d in plan)
+    reply = (
+        f"That plays past a single clip on this route — reading it as a chained "
+        f"one-shot: {count} sequential {model} clips on {PROVIDER_LABELS[provider]} "
+        f"({plan_words} = {total_s}s) at {resolution}, each clip opening from the "
+        f"previous clip's final frame. This pass adds about {_usd(total_cost)}; "
+        f"session total becomes {_usd(total_after)}. Run the clips in order — "
+        "each unlocks when the one before it lands."
+    )
+    if master is not None:
+        reply += " " + master_mod.summary_line(master)
+        reply += " " + master_mod.duration_note(master, total_s)
+    else:
+        reply += (
+            f" Deriving the master prompt and its {count}-clip split on {brain_model()} — "
+            "the cards unlock the moment the artifact lands; nothing can roll before it."
+        )
+    if start:
+        upload_count = 1 + len(extras)
+        reply += (
+            " Your uploaded still opens clip 1."
+            if upload_count == 1
+            else f" Your {upload_count} uploaded stills ride along — the first opens clip 1."
+        )
+    if stale:
+        reply += " Heads up: the rate card is stale — re-verify provider pricing before running."
+    reply += _route_notes(provider, text)
+    return Proposal(op=ops[0], reply=reply, ops=ops)
+
+
+def _kick_chain_derivation(
+    op_ids: list[str],
+    sid: str,
+    idea: str,
+    expanded: str,
+    provider: CloudProvider,
+    plan: list[int],
+    refs: list[str],
+    authored: dict[str, str],
+    has_start_image: bool,
+) -> None:
+    """One derivation for the whole chain: the master plus its CLIP DELIVERY
+    split, landed on every link. Failure releases every link with its
+    provisional raw-idea prompt — labeled, never silent."""
+    import threading
+
+    def _worker() -> None:
+        ops = [op for op_id in op_ids if (op := _OPS.get(op_id)) is not None]
+        if not ops:
+            return
+        try:
+            master = master_mod.derive(
+                expanded,
+                target_duration_s=sum(plan),
+                reference_images=refs,
+                authored=authored,
+                clip_plan=plan,
+            )
+            for index, op in enumerate(ops):
+                _MASTERS[op.id] = master
+                if index < len(master.clips):
+                    op.prompt = compile_master_body(
+                        master.clips[index]["prompt"],
+                        idea,
+                        provider,
+                        sid,
+                        has_start_image=has_start_image if index == 0 else True,
+                    )
+                    op.prompt_version = "v1"
+            ops[0].rationale = (
+                ops[0].rationale.split(" · ")[0]
+                + " · "
+                + master_mod.summary_line(master)
+                + " "
+                + master_mod.duration_note(master, sum(plan))
+            )
+        except Exception as err:  # noqa: BLE001 — a failed derivation is a named state
+            for op in ops:
+                op.rationale = (
+                    op.rationale.split(" · ")[0]
+                    + f" · master derivation failed ({type(err).__name__}: {str(err)[:160]}) — "
+                    "this is the provisional raw-idea prompt; send the idea again to retry"
+                )
+        finally:
+            for op in ops:
+                if op.status == "deriving":
+                    op.status = "proposed"
+            persist(sid)
+
+    threading.Thread(target=_worker, name=f"diony-chain-{op_ids[0]}", daemon=True).start()
 
 
 def master_for_op(op_id: str) -> MasterPrompt | None:
@@ -755,7 +1029,7 @@ def _draft_reply(draft: ScreenplayDraft, runtime_s: int) -> str:
     scenes = len(draft.script.scenes)
     speaking = sum(1 for l in draft.script.lines if l.kind in {"dialogue", "vo"})
     reply = ""
-    if draft.warnings:
+    if any("deterministic template" in w for w in draft.warnings):
         reply += "⚠ Template draft (no brain configured). "
     master = getattr(draft, "master", None)
     if master is not None:
@@ -866,7 +1140,8 @@ def begin_draft(sid: str, idea: str, runtime_s: int) -> dict[str, Any]:
     state = draft_state(sid)
     state["reply"] = (
         f"Deriving the master prompt, then writing the screenplay from it, on "
-        f"{brain_model()} — a reasoning model takes a minute or two per stage. "
+        f"{brain_model()} — the master takes a minute or two, and a full "
+        "screenplay with its refine pass can run ten or more. "
         "I'll put it up the moment it lands."
     )
     return state
@@ -1327,13 +1602,36 @@ def set_sequence(
     failed plate holds the scene instead of rolling it unlocked."""
     if bible_chains is None:
         bible_chains = [[op_id] for op_id in bible_ids]
+    # a locked production replaces the directed order — but never the chained
+    # one-shots already sequenced in this room: their bridge order survives
+    existing = (_SEQUENCES.get(sid) or {}).get("scenes") or {}
+    kept = {key: list(chain) for key, chain in existing.items() if key.startswith("oneshot-")}
     _SEQUENCES[sid] = {
         "bible": list(bible_ids),
         "bible_chains": [list(chain) for chain in bible_chains],
-        "scenes": dict(scene_chains),
+        "scenes": {**kept, **dict(scene_chains)},
         "scene_plates": dict(scene_plates or {}),
         "held_scenes": set(),
     }
+
+
+def _register_oneshot_chain(sid: str, op_ids: list[str]) -> None:
+    """A chained one-shot rides the directed-sequencing rails: its links are a
+    scene chain, so batch waves order them and every later link bridges from
+    its predecessor's join frame. Registered additively — a production's
+    sequence and a one-shot chain coexist."""
+    seq = _SEQUENCES.get(sid)
+    key = f"oneshot-{op_ids[0]}"
+    if seq is None:
+        _SEQUENCES[sid] = {
+            "bible": [],
+            "bible_chains": [],
+            "scenes": {key: list(op_ids)},
+            "scene_plates": {},
+            "held_scenes": set(),
+        }
+    else:
+        seq.setdefault("scenes", {})[key] = list(op_ids)
 
 
 def sequence_for(sid: str) -> dict[str, Any] | None:
@@ -1591,6 +1889,7 @@ def persist(sid: str) -> None:
     doc = {
         "version": 1,
         "session_id": sid,
+        "dismissed": state.dismissed,
         "op_ids": list(state.op_ids),
         "ops": [_OPS[i].model_dump(mode="json") for i in state.op_ids if i in _OPS],
         "package": package.model_dump(mode="json") if package else None,
@@ -1631,7 +1930,11 @@ def _load_state(sid: str, doc: dict) -> None:
     from diony_director.screenwriter import ScreenplayDraft
     from diony_contracts.production import CharacterProfile, Script, SettingProfile
 
-    _SESSIONS[sid] = SessionState(id=sid, op_ids=list(doc.get("op_ids") or []))
+    _SESSIONS[sid] = SessionState(
+        id=sid,
+        op_ids=list(doc.get("op_ids") or []),
+        dismissed=bool(doc.get("dismissed")),
+    )
     for raw in doc.get("ops") or []:
         op = DirectorOp.model_validate(raw)
         _OPS[op.id] = op

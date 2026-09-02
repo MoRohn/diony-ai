@@ -213,6 +213,30 @@ def test_orphaned_running_jobs_are_reaped_at_boot() -> None:
     assert "reaped" in closed.error_message
 
 
+def test_a_dismissed_session_stops_resuming_across_restarts() -> None:
+    client = _client()
+    sid, locked = _locked(client)
+    op = session.get_op(locked["ops"][0]["id"])
+    op.status = "failed"  # a dead take with no retry planned kept the room hostage
+    session.persist(sid)
+    assert any(r["session_id"] == sid for r in session.resumable_sessions())
+
+    resp = client.post(f"/api/director/sessions/{sid}/dismiss")
+    assert resp.status_code == 200
+    assert all(r["session_id"] != sid for r in session.resumable_sessions())
+
+    session.reset()  # the process dies — the dismissal must be in the vault
+    session.rehydrate_from_vault()
+    assert all(r["session_id"] != sid for r in session.resumable_sessions())
+    # the session itself is still there — the ledger keeps everything
+    assert session.session_exists(sid)
+
+
+def test_dismissing_an_unknown_session_is_a_404() -> None:
+    client = _client()
+    assert client.post("/api/director/sessions/s-nope/dismiss").status_code == 404
+
+
 # --- The explicit Director dry-run flag --------------------------------------
 
 

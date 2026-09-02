@@ -219,8 +219,27 @@ LENGTH_CEILING = 220
 BRAIN_ATTEMPTS = 2
 
 
-def system_prompt() -> str:
-    return MASTER_TEMPLATE + DURATION_SECTION + OUTPUT_CONTRACT
+def split_section(clip_plan: list[int]) -> str:
+    """The chained-delivery amendment: the booked route plays the action as
+    several sequential clips, and the derivation splits it — the uncapped
+    one-shot's structure comes from the brain and the input, never from a
+    screenplay stage."""
+    durations = ", ".join(f"{d}s" for d in clip_plan)
+    count = len(clip_plan)
+    return f"""
+CLIP DELIVERY
+
+The booked route delivers this as {count} sequential clips ({durations}; {sum(clip_plan)} seconds total). After deriving the master, split the ACTION PROGRESSION into {count} consecutive segments. Cut at natural action boundaries, never mid-gesture. When the idea itself scripts scenes, align clip boundaries with those scenes — cover every scripted scene's imagery across the clips in order — and carry each scene's narration into its clip VERBATIM as spoken voiceover.
+
+In addition to every OUTPUT CONTRACT key, return clips: a list of exactly {count} objects {{"prompt", "duration_s"}} in play order, duration_s matching the booked lengths above. Each clip prompt is a complete generator-ready prompt for JUST its segment: it restates the subject, wardrobe, setting, camera treatment, lighting, and every continuity anchor in full — each clip generates alone and knows nothing of the others. Every clip after the first begins exactly where the previous clip's final frame left off, and every clip before the last closes on a stable, holdable frame the next clip can open from. Only the final clip carries the ending. Include the pacing sentence in each clip prompt for its own length. The master prompt still describes the WHOLE action.
+"""
+
+
+def system_prompt(clip_plan: list[int] | None = None) -> str:
+    base = MASTER_TEMPLATE + DURATION_SECTION
+    if clip_plan and len(clip_plan) > 1:
+        base += split_section(clip_plan)
+    return base + OUTPUT_CONTRACT
 
 
 def beat_budget(target_duration_s: int) -> int:
@@ -253,6 +272,14 @@ def user_message(
     established outside the prose — a session camera/atmosphere/world
     template or an inline /token — which the template says to preserve."""
     lines = [f"IDEA / STORY / SCENE:\n{idea.strip()}", f"TARGET DURATION: {int(target_duration_s)} seconds."]
+    from diony_director import screenwriter  # lazy — module cycles both ways
+
+    if screenwriter.authored_breakdown(idea)["is_authored"]:
+        lines.append(
+            "The idea contains the user's own scripted scene breakdown and "
+            "narration — established material: preserve its scenes, argument, "
+            "and ending; derive only what it leaves open."
+        )
     if reference_count:
         lines.append(
             f"OPTIONAL REFERENCE IMAGE: {reference_count} attached — the first is the "
@@ -281,7 +308,14 @@ class MasterUnavailable(RuntimeError):
     configured there is NO template stand-in — the failure is a named state."""
 
 
-def _parse(body: dict, *, idea: str, target_duration_s: int, has_reference: bool) -> MasterPrompt:
+def _parse(
+    body: dict,
+    *,
+    idea: str,
+    target_duration_s: int,
+    has_reference: bool,
+    clip_plan: list[int] | None = None,
+) -> MasterPrompt:
     warnings: list[str] = []
 
     def _text(key: str, default: str = "") -> str:
@@ -342,6 +376,26 @@ def _parse(body: dict, *, idea: str, target_duration_s: int, has_reference: bool
         ending = beats[-1]["text"]
         warnings.append("master: brain omitted ending — taken from the final beat")
 
+    clips: list[dict] = []
+    if clip_plan and len(clip_plan) > 1:
+        for entry in body.get("clips") or []:
+            if isinstance(entry, dict):
+                text = " ".join(str(entry.get("prompt", "") or "").split())
+            else:
+                text = " ".join(str(entry).split())
+            if text:
+                clips.append({"prompt": text, "duration_s": 0})
+        if len(clips) != len(clip_plan):
+            # a chained booking without its clips is unusable — raising here
+            # retries the derivation rather than shipping half a chain
+            raise ValueError(
+                f"brain returned {len(clips)} clip prompt(s) for a "
+                f"{len(clip_plan)}-clip booking"
+            )
+        for index, duration in enumerate(clip_plan):
+            # the BOOKED durations are law — the brain's numbers are advisory
+            clips[index]["duration_s"] = int(duration)
+
     raw_est = body.get("estimated_duration_s", 0)
     try:
         estimated = int(round(float(raw_est)))
@@ -374,6 +428,7 @@ def _parse(body: dict, *, idea: str, target_duration_s: int, has_reference: bool
         ending=ending,
         constraints=_list("constraints"),
         prompt=prompt,
+        clips=clips,
         source="brain",
         warnings=warnings,
     )
@@ -384,6 +439,7 @@ def _from_brain(
     target_duration_s: int,
     reference_images: list[str],
     authored: dict[str, str] | None,
+    clip_plan: list[int] | None = None,
 ) -> MasterPrompt:
     from diony_director import screenwriter
     from diony_director.providers import base as provider_base
@@ -404,7 +460,7 @@ def _from_brain(
         json={
             "model": screenwriter.brain_model(),
             "messages": [
-                {"role": "system", "content": system_prompt()},
+                {"role": "system", "content": system_prompt(clip_plan)},
                 {"role": "user", "content": user_content},
             ],
             "temperature": 0.4,
@@ -419,7 +475,11 @@ def _from_brain(
     payload = response.json()
     body = screenwriter._json_object(payload["choices"][0]["message"]["content"])
     master = _parse(
-        body, idea=idea, target_duration_s=target_duration_s, has_reference=bool(refs)
+        body,
+        idea=idea,
+        target_duration_s=target_duration_s,
+        has_reference=bool(refs),
+        clip_plan=clip_plan,
     )
     usage = dict(payload.get("usage") or {})
     if usage:
@@ -704,6 +764,60 @@ def assemble(master: MasterPrompt) -> str:
     return " ".join(parts)
 
 
+def split_clips(master: MasterPrompt, clip_plan: list[int]) -> list[dict]:
+    """Deterministic chained-delivery split (brain off): the master's beats
+    distributed across the booked clips in order. Every clip restates the
+    anchor, continuity, and constraints — each generates alone; only the last
+    carries the ending; every clip after the first opens from the previous
+    clip's final frame."""
+    count = len(clip_plan)
+    beats = master.beats or [{"stage": "initial_state", "text": "the described action unfolds"}]
+    buckets: list[list[str]] = [[] for _ in range(count)]
+    for index, beat in enumerate(beats):
+        buckets[min(index * count // len(beats), count - 1)].append(beat["text"])
+    anchor = f"Create a {master.visual_style or 'cinematic realism'} video of {master.primary_subject or 'the subject'}."
+    continuity = (
+        "Maintain strict continuity throughout: "
+        + ", ".join(master.continuity_anchors)
+        + " remain unchanged."
+        if master.continuity_anchors
+        else ""
+    )
+    constraints = "Constraints: " + "; ".join(master.constraints) + "." if master.constraints else ""
+    camera = f"The camera {_camera_clause(master.camera)}." if master.camera else ""
+    clips: list[dict] = []
+    for index, (duration, bucket) in enumerate(zip(clip_plan, buckets)):
+        parts: list[str] = [anchor]
+        if index == 0:
+            if master.reference_image:
+                parts.append(f"{REFERENCE_OPENER} {REFERENCE_PRESERVE}")
+        else:
+            parts.append(
+                "Continue the same continuous action from the exact frame where "
+                "the previous clip ended — same subject, wardrobe, setting, "
+                "light, and camera position."
+            )
+        action = " ".join(f"{_lower_first(text).rstrip('.')[:1].upper()}{_lower_first(text).rstrip('.')[1:]}." for text in bucket)
+        if action:
+            parts.append(action)
+        else:
+            parts.append("The action continues, developing steadily without a reset.")
+        if camera:
+            parts.append(camera)
+        if continuity:
+            parts.append(continuity)
+        parts.append(GROUNDING)
+        parts.append(pacing_sentence(duration))
+        if index == count - 1:
+            parts.append(f"{ENDING_LEAD} {_lower_first(master.ending)}.")
+        else:
+            parts.append("The clip closes on a stable, holdable frame the next clip opens from.")
+        if constraints:
+            parts.append(constraints)
+        clips.append({"prompt": " ".join(parts), "duration_s": int(duration)})
+    return clips
+
+
 # --------------------------------------------------------------------------
 # Optimization pass — the template's own rules, enforced deterministically
 # --------------------------------------------------------------------------
@@ -848,24 +962,33 @@ def derive(
     target_duration_s: int,
     reference_images: list[str] | None = None,
     authored: dict[str, str] | None = None,
+    clip_plan: list[int] | None = None,
 ) -> MasterPrompt:
-    """Idea (+ stills, + the user's duration) → the pre-split finalized artifact."""
+    """Idea (+ stills, + the user's duration) → the pre-split finalized
+    artifact. `clip_plan` books a chained one-shot: the derivation also
+    splits the action into that many sequential clip prompts."""
     from diony_director.screenwriter import brain_model, brain_url
 
     target = max(1, int(round(target_duration_s)))
     refs = [r for r in (reference_images or []) if r]
+    plan = [int(d) for d in (clip_plan or []) if int(d) > 0]
+    if len(plan) < 2:
+        plan = []
     if brain_url():
         last_error: Exception | None = None
         for _attempt in range(BRAIN_ATTEMPTS):
             try:
-                return optimize(_from_brain(idea, target, refs, authored))
+                return optimize(_from_brain(idea, target, refs, authored, plan or None))
             except Exception as err:  # noqa: BLE001 — retried, then raised as a named state
                 last_error = err
         raise MasterUnavailable(
             f"{brain_model()} could not derive the master prompt after "
             f"{BRAIN_ATTEMPTS} attempts: {last_error}"
         )
-    return optimize(_template(idea, target, bool(refs), authored))
+    master = optimize(_template(idea, target, bool(refs), authored))
+    if plan:
+        master.clips = split_clips(master, plan)
+    return master
 
 
 def duration_note(master: MasterPrompt, booked_s: int, *, cap_s: int = 0) -> str:
@@ -891,8 +1014,9 @@ def duration_note(master: MasterPrompt, booked_s: int, *, cap_s: int = 0) -> str
 
 
 def summary_line(master: MasterPrompt) -> str:
+    chain = f", {len(master.clips)} chained clips" if master.clips else ""
     return (
-        f"Master prompt derived ({master.word_count} words, {len(master.beats)} beats, "
+        f"Master prompt derived ({master.word_count} words, {len(master.beats)} beats{chain}, "
         f"{'brain' if master.source == 'brain' else 'template'}) — "
         f"style {master.visual_style or 'unset'}; camera {master.camera or 'unset'}."
     )
@@ -928,6 +1052,8 @@ __all__ = [
     "length_band",
     "optimize",
     "pacing_sentence",
+    "split_clips",
+    "split_section",
     "summary_line",
     "system_prompt",
     "user_message",

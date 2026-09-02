@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 
@@ -108,6 +109,235 @@ def _json_object(raw: str) -> dict:
     return json.loads(text[start : end + 1])
 
 
+# --------------------------------------------------------------------------
+# Authored material inside the idea. A user who submits "Scene 4 — …" with
+# "Narration: '…'" lines has WRITTEN their film — the enhancement's job is to
+# realize that material, never to re-derive it (s-2026-09-02: a 12-scene
+# authored breakdown came back as 4 merged scenes with paraphrased narration).
+# --------------------------------------------------------------------------
+
+# "Scene 1 — Quiet Success" / "Scene 2:" — numbered headers survive even when
+# a paste collapses newlines, so detection never anchors on line starts alone.
+_AUTHORED_SCENE_NUM = re.compile(r"(?i)\bscene\s+(\d+)\s*[—–:\-]\s*")
+_AUTHORED_HEADING = re.compile(r"(?m)^[ \t]*(?:INT|EXT)\.\s")
+# One narration line: a label, an optional stage direction, then either a
+# quoted span (curly or straight) or the rest of the line.
+_NARRATION_LINE = re.compile(
+    r"(?is)\b(?:narration|voice[- ]?over|narrator|v\.\s?o\.)\s*(?:\([^)\n]{0,40}\))?\s*:\s*"
+    r"(?:[“\"]\s*(.+?)\s*[”\"]|([^\n]+))"
+)
+_VISUAL_LINE = re.compile(r"(?is)\bvisual\s*:\s*(.+?)(?=\bnarration|\bvoice[- ]?over|\bnarrator\b|$)")
+_SPEECH_STRIP = re.compile(r"[^a-z0-9 ]+")
+
+
+def authored_breakdown(idea: str) -> dict:
+    """The user's own scripted structure inside the idea — scene headers,
+    per-scene visuals, and narration lines the screenplay must realize
+    verbatim, not re-derive. Conservative on purpose: only numbered scene
+    headers, screenplay sluglines, and labeled narration count as authored."""
+    text = idea or ""
+    heading_count = len(_AUTHORED_HEADING.findall(text))
+    narration: list[str] = []
+    for match in _NARRATION_LINE.finditer(text):
+        line = " ".join((match.group(1) or match.group(2) or "").split()).strip()
+        if line:
+            narration.append(line)
+    # Structured blocks: "Scene N — Title … Visual: … Narration: …" — the
+    # segments between numbered headers, each with its title, its visual, and
+    # its own narration lines (order preserved).
+    scenes: list[dict] = []
+    marks = list(_AUTHORED_SCENE_NUM.finditer(text))
+    for index, mark in enumerate(marks):
+        segment = text[mark.end() : marks[index + 1].start() if index + 1 < len(marks) else len(text)]
+        title = " ".join(segment.split("\n", 1)[0].split())
+        visual_match = _VISUAL_LINE.search(segment)
+        if visual_match:
+            title = " ".join(segment[: visual_match.start()].split()) or title
+        scenes.append(
+            {
+                "title": _snip(title, 60),
+                "visual": " ".join(visual_match.group(1).split()) if visual_match else "",
+                "narration": [
+                    " ".join((m.group(1) or m.group(2) or "").split()).strip()
+                    for m in _NARRATION_LINE.finditer(segment)
+                    if (m.group(1) or m.group(2) or "").strip()
+                ],
+            }
+        )
+    scene_count = len(marks) + heading_count
+    return {
+        "is_authored": scene_count >= 2 or len(narration) >= 2,
+        "scene_count": scene_count,
+        "narration": narration,
+        "scenes": scenes,
+    }
+
+
+def _norm_speech(text: str) -> str:
+    text = text.lower().replace("’", "'").replace("‘", "'")
+    return " ".join(_SPEECH_STRIP.sub(" ", text).split())
+
+
+def _narration_gaps(body: dict, narration: list[str]) -> list[str]:
+    """Authored narration lines missing from the draft's spoken text. The
+    check runs over the vo/dialogue stream in order, so a line the brain split
+    across two consecutive vo lines still counts as carried."""
+    stream = _norm_speech(
+        " ".join(
+            str(line.get("text", ""))
+            for scene in body.get("scenes") or []
+            for line in scene.get("lines") or []
+            if str(line.get("kind")) in {"vo", "dialogue"}
+        )
+    )
+    return [line for line in narration if _norm_speech(line) not in stream]
+
+
+def _restore_narration(body: dict, narration: list[str]) -> tuple[int, int, int]:
+    """Force the user's words back into the final body, deterministically,
+    and never speak a line twice.
+
+    In order: (1) a spoken line that already IS the authored line is claimed;
+    (2) a run of consecutive spoken lines that concatenate to the authored
+    line is merged into its first line (the shot survives, the fragments go);
+    (3) a paraphrase — the closest unclaimed narration line at difflib ratio
+    >= 0.5 — gets its text back verbatim, keeping its scene, shot, and
+    speaker; (4) a line with no survivor is inserted as a new vo line beside
+    its neighbours in authored order; (5) any narration line still unclaimed
+    that is a fragment or a paraphrase of an authored line is dropped — the
+    live brain left "The software firm. The contractor." beside the restored
+    full line, and the film spoke the sentence twice. Returns
+    (restored, inserted, dropped) counts."""
+    import difflib
+
+    scenes = body.get("scenes") or []
+    spoken: list[tuple[dict, dict]] = [
+        (scene, line)
+        for scene in scenes
+        for line in scene.get("lines") or []
+        if str(line.get("kind")) in {"vo", "dialogue"}
+    ]
+    norms = [_norm_speech(str(line.get("text", ""))) for _, line in spoken]
+    targets = [_norm_speech(line) for line in narration]
+    # lines the narrator owns: vo, or dialogue with no speaker / the narrator
+    # as speaker (narration the brain mislabeled). A named character's line is
+    # never merged or overwritten — "Abundance is not access." from the
+    # driver is the writer's echo, not a paraphrase to correct.
+    owned = [
+        str(line.get("kind")) == "vo"
+        or str(line.get("speaker", "") or "").strip().upper().startswith("NARRATOR")
+        or not str(line.get("speaker", "") or "").strip()
+        for _, line in spoken
+    ]
+    matched: dict[int, dict] = {}
+    claimed: set[int] = set()
+    restored = 0
+
+    def _remove(scene: dict, line: dict) -> None:
+        lines = scene.get("lines") or []
+        scene["lines"] = [candidate for candidate in lines if candidate is not line]
+
+    # (1) exact carries
+    for a_index, target in enumerate(targets):
+        for s_index, norm in enumerate(norms):
+            if s_index not in claimed and norm == target:
+                claimed.add(s_index)
+                matched[a_index] = spoken[s_index][1]
+                break
+    # (2) a line the brain split across consecutive spoken lines → one line
+    for a_index, target in enumerate(targets):
+        if a_index in matched:
+            continue
+        for start in range(len(spoken)):
+            if start in claimed or a_index in matched or not owned[start]:
+                continue
+            acc = ""
+            for end in range(start, min(start + 4, len(spoken))):
+                if end in claimed or not owned[end]:
+                    break
+                acc = f"{acc} {norms[end]}".strip()
+                if acc == target and end > start:
+                    first = spoken[start][1]
+                    first["text"] = narration[a_index]
+                    for k in range(start + 1, end + 1):
+                        _remove(spoken[k][0], spoken[k][1])
+                        claimed.add(k)
+                    claimed.add(start)
+                    matched[a_index] = first
+                    restored += 1
+                    break
+                if not target.startswith(acc):
+                    break
+    # (3) paraphrases
+    for a_index, target in enumerate(targets):
+        if a_index in matched:
+            continue
+        best_index, best_ratio = -1, 0.0
+        for s_index, norm in enumerate(norms):
+            if s_index in claimed or not owned[s_index]:
+                continue
+            ratio = difflib.SequenceMatcher(None, target, norm).ratio()
+            if ratio > best_ratio:
+                best_index, best_ratio = s_index, ratio
+        if best_index >= 0 and best_ratio >= 0.5:
+            line = spoken[best_index][1]
+            line["text"] = narration[a_index]
+            restored += 1
+            claimed.add(best_index)
+            matched[a_index] = line
+    # (4) dropped lines
+    inserted = 0
+    for a_index, authored_line in enumerate(narration):
+        if a_index in matched:
+            continue
+        new_line = {"kind": "vo", "text": authored_line, "speaker": "", "shot": ""}
+        anchor = next(
+            (matched[j] for j in range(a_index - 1, -1, -1) if j in matched), None
+        )
+        placed = False
+        if anchor is not None:
+            for scene in scenes:
+                lines = scene.get("lines") or []
+                if any(candidate is anchor for candidate in lines):
+                    index = next(i for i, candidate in enumerate(lines) if candidate is anchor)
+                    lines.insert(index + 1, new_line)
+                    placed = True
+                    break
+        if not placed:
+            follower = next((matched[j] for j in range(a_index + 1, len(narration)) if j in matched), None)
+            for scene in scenes:
+                lines = scene.get("lines") or []
+                if follower is not None and any(candidate is follower for candidate in lines):
+                    index = next(i for i, candidate in enumerate(lines) if candidate is follower)
+                    lines.insert(index, new_line)
+                    placed = True
+                    break
+        if not placed and scenes:
+            # nothing matched anywhere: distribute in order across the scenes
+            scene = scenes[min(a_index * len(scenes) // max(1, len(narration)), len(scenes) - 1)]
+            scene.setdefault("lines", []).append(new_line)
+            placed = True
+        if placed:
+            matched[a_index] = new_line
+            inserted += 1
+    # (5) leftovers: fragments and paraphrases of lines that now ship verbatim
+    dropped = 0
+    for s_index, (scene, line) in enumerate(spoken):
+        if s_index in claimed or str(line.get("kind")) != "vo":
+            # only vo is ever dropped — a character's dialogue that happens to
+            # echo the narration is the writer's choice, never a fragment
+            continue
+        norm = norms[s_index]
+        if not norm:
+            continue
+        duplicate = any(norm in target for target in targets) or any(
+            difflib.SequenceMatcher(None, target, norm).ratio() >= 0.5 for target in targets
+        )
+        if duplicate:
+            _remove(scene, line)
+            dropped += 1
+    return restored, inserted, dropped
+
 _BRAIN_INSTRUCTIONS = (
     "You are the Director's head of story, cinematography, costume, and sound, "
     "writing a shooting script for AI video generation. Every clip is generated "
@@ -160,7 +390,7 @@ _ABSTRACTION_TELLS = (
 )
 
 
-def _script_lint(body: dict) -> list[str]:
+def _script_lint(body: dict, *, verbatim_speech: frozenset[str] = frozenset()) -> list[str]:
     notes: list[str] = []
     shapes: dict[str, list[str]] = {}
     prev_shot = ""
@@ -187,7 +417,8 @@ def _script_lint(body: dict) -> list[str]:
                             f"scene {index}: action line is abstract, not filmable ('{text[:60]}')"
                         )
                         break
-            if kind == "dialogue" and len(text.split()) > 18:
+            if kind == "dialogue" and len(text.split()) > 18 and _norm_speech(text) not in verbatim_speech:
+                # authored narration is the user's finished words — never trimmed
                 notes.append(f"scene {index}: dialogue runs {len(text.split())} words — trim under 18")
             if kind == "sound":
                 has_sound = True
@@ -280,17 +511,57 @@ def _from_brain(
     master: MasterPrompt | None = None,
 ) -> ScreenplayDraft:
     scene_target = max(2, round((runtime_target_s - 18) / 16))
-    user_text = (
-        f"Idea: {idea}\nRuntime target: {runtime_target_s}s.\n"
-        f"Write approximately {scene_target} scenes; each plays roughly 16-20 "
-        "seconds on screen, built from 2-4 beats whose construction VARIES "
-        "scene to scene — open some on a detail, some on movement, some mid-"
-        "action; not every scene needs dialogue. Vary settings, escalate "
-        "stakes, and author every shot."
-    )
+    authored = authored_breakdown(idea)
+    if authored["is_authored"]:
+        # The user wrote their film. The screenplay REALIZES it: no scene
+        # merged away, no narration paraphrased, no re-derived structure.
+        scene_budget = ""
+        if authored["scene_count"]:
+            per_scene = max(2, round(runtime_target_s / authored["scene_count"]))
+            scene_budget = (
+                f" Write one scene per authored scene — {authored['scene_count']} scenes "
+                f"of roughly {per_scene} seconds each; merge only adjacent scenes that "
+                "share a location, and never below the count the imagery needs."
+            )
+        user_text = (
+            f"Idea: {idea}\nRuntime target: {runtime_target_s}s.\n"
+            "The idea above contains the user's own AUTHORED scene breakdown"
+            + (f" ({authored['scene_count']} scenes)" if authored["scene_count"] else "")
+            + ". REALIZE it — do not re-derive, merge away, or paraphrase it. "
+            "Cover every authored scene's imagery, in the authored order; "
+            "adjacent scenes in one location may share a heading, but no "
+            "scene's visual content may be dropped."
+            + scene_budget
+            + " Carry EVERY authored "
+            "narration line into the script as a vo line, VERBATIM and in "
+            "order — the narration is the user's finished voiceover, exempt "
+            "from the dialogue word cap. Author every shot."
+        )
+    else:
+        user_text = (
+            f"Idea: {idea}\nRuntime target: {runtime_target_s}s.\n"
+            f"Write approximately {scene_target} scenes; each plays roughly 16-20 "
+            "seconds on screen, built from 2-4 beats whose construction VARIES "
+            "scene to scene — open some on a detail, some on movement, some mid-"
+            "action; not every scene needs dialogue. Vary settings, escalate "
+            "stakes, and author every shot."
+        )
     brief = master_brief(master)
     if brief:
         user_text += "\n\n" + brief
+        if authored["is_authored"]:
+            user_text += (
+                "\nWhere the master prompt compresses the authored breakdown, "
+                "the AUTHORED scenes and narration are senior for structure and "
+                "words; the master stays law for style, camera, lighting, "
+                "continuity, and the final image."
+            )
+    if authored["narration"]:
+        user_text += (
+            "\n\nAUTHORED NARRATION — every line below appears in the script "
+            "as a vo line, verbatim, in this order:\n"
+            + "\n".join(f"{i}. {line}" for i, line in enumerate(authored["narration"], start=1))
+        )
     refs = [r for r in (reference_images or []) if r]
     if refs:
         # The brain SEES the user's reference stills — wardrobe, faces, and
@@ -340,7 +611,14 @@ def _from_brain(
     # script-doctor round with the brain to resolve it. Script tokens are
     # pennies against the video seconds they steer — a flat draft that ships
     # unrevised is the expensive path.
-    notes = _script_lint(body)
+    verbatim = frozenset(_norm_speech(line) for line in authored["narration"])
+    # Missing narration leads the notes: those lines are the user's film, and
+    # the refine round truncates its note list at 24.
+    notes = [
+        f"authored narration line {authored['narration'].index(gap) + 1} is missing or "
+        f"paraphrased — restore it verbatim as a vo line: “{gap}”"
+        for gap in _narration_gaps(body, authored["narration"])
+    ] + _script_lint(body, verbatim_speech=verbatim)
     if notes and brain_refine_enabled():
         try:
             refine_response = provider_base.post_with_retries(
@@ -389,6 +667,32 @@ def _from_brain(
         warnings.append(
             f"screenwriter: {len(notes)} supervisor note(s) open (refine disabled)"
         )
+
+    if authored["narration"] and _narration_gaps(body, authored["narration"]):
+        # the FINAL body still paraphrases or drops the user's words — the
+        # deterministic restore pass puts them back; the brain's craft stays,
+        # the user's narration ships
+        restored, inserted, dropped = _restore_narration(body, authored["narration"])
+        if restored:
+            warnings.append(
+                f"screenwriter: restored {restored} authored narration line(s) verbatim "
+                "(the draft had paraphrased them)"
+            )
+        if inserted:
+            warnings.append(
+                f"screenwriter: inserted {inserted} authored narration line(s) the draft dropped"
+            )
+        if dropped:
+            warnings.append(
+                f"screenwriter: dropped {dropped} duplicate narration fragment(s) the draft "
+                "left beside the restored line(s)"
+            )
+        residue = _narration_gaps(body, authored["narration"])
+        if residue:
+            warnings.append(
+                f"screenwriter: {len(residue)} authored narration line(s) still not carried "
+                f"verbatim — first: “{residue[0][:80]}”"
+            )
 
     def _craft(source: dict, key: str, default: str, owner: str) -> str:
         value = str(source.get(key, "") or "").strip()
@@ -763,6 +1067,126 @@ def _template(
     )
 
 
+def _template_authored(
+    idea: str,
+    runtime_target_s: int,
+    master: MasterPrompt | None,
+    blocks: list[dict],
+    narration: list[str],
+) -> ScreenplayDraft:
+    """Brain off, authored breakdown in the idea: the deterministic path
+    realizes the user's own scenes — each block's Visual becomes the action
+    line, its Narration ships verbatim as vo. Nothing is invented beyond
+    framing; the canned getaway template never overwrites a written film."""
+    light = (master.lighting if master is not None else {}) or {}
+    grade = ", ".join(x for x in (light.get("quality"), light.get("shadows")) if x)
+    camera_shot = (
+        f"The camera {master.camera[:1].lower()}{master.camera[1:].rstrip('.')}"
+        if master is not None and master.camera
+        else "Locked wide frame at chest height, one motivated light source"
+    )
+    narrator = CharacterProfile(
+        char_id="chr-narrator",
+        name="NARRATOR",
+        role="voiceover",
+        age_body_notes="voice only — never on camera",
+        wardrobe={"default": "n/a (voice only)"},
+        voice=_voice("chr-narrator", 0),
+    )
+    # blocks with no narration of their own get the global lines spread over
+    # them in order, so a paste whose labels didn't parse per-scene still ships
+    per_block = [list(b["narration"]) for b in blocks]
+    if narration and not any(per_block):
+        for index, line in enumerate(narration):
+            per_block[min(index * len(blocks) // len(narration), len(blocks) - 1)].append(line)
+
+    lines: list[ScriptLine] = []
+    scenes: list[Scene] = []
+    settings: list[SettingProfile] = []
+    counter = 0
+
+    def _add(kind_: str, text: str, scene_id: str, speaker: str = "", shot: str = "") -> str:
+        nonlocal counter
+        counter += 1
+        line = ScriptLine(
+            line_id=f"ln-{counter}", kind=kind_, text=text, speaker=speaker,
+            scene_id=scene_id, shot=shot,
+        )
+        lines.append(line)
+        return line.line_id
+
+    for number, block in enumerate(blocks, start=1):
+        pool = f"{block['title']} {block['visual']}".lower()
+        kind, tone = "EXT", "quiet ambient air"
+        for keyword, mapped in _SETTING_KEYWORDS.items():
+            if keyword in pool:
+                kind, _, tone = mapped
+                break
+        time_of_day = "NIGHT" if "night" in pool or "dark" in pool else "DAY"
+        title = block["title"] or f"Scene {number}"
+        setting = SettingProfile(
+            setting_id=f"set-a{number}",
+            name=title,
+            room_tone_id=f"set-a{number}/tone",
+            architecture_notes=tone,
+            time_weather=f"{time_of_day.title()}, {light.get('source') or 'available light'}",
+            grade_language=grade or "restrained palette, motivated contrast",
+            camera_kit="35-50mm, chest height, deliberate slow moves",
+        )
+        settings.append(setting)
+        scene_id = f"sc-{number}"
+        heading = f"{kind}. {title.upper()} - {time_of_day}"
+        line_ids = [_add("heading", heading, scene_id)]
+        if block["visual"]:
+            line_ids.append(_add("action", block["visual"], scene_id, shot=camera_shot))
+        for spoken in per_block[number - 1]:
+            line_ids.append(_add("vo", spoken, scene_id, narrator.name))
+        line_ids.append(_add("sound", f"Room tone: {tone}.", scene_id))
+        scenes.append(
+            Scene(
+                scene_id=scene_id,
+                heading=heading,
+                setting_ref=setting.setting_id,
+                cast=[narrator.char_id],
+                story_time=f"Scene {number}",
+                line_ids=line_ids,
+                emotional_job=title,
+            )
+        )
+
+    if master is not None and master.ending and scenes:
+        last = scenes[-1]
+        last.line_ids.append(
+            _add(
+                "action",
+                f"{master.ending[:1].upper()}{master.ending[1:].rstrip('.')}.",
+                last.scene_id,
+                shot=camera_shot,
+            )
+        )
+
+    script = Script(
+        id=f"scr-{uuid.uuid4().hex[:8]}",
+        logline=_snip(idea, 160),
+        runtime_target_s=runtime_target_s,
+        beats=[{"beat": b["title"] or f"Scene {i}", "story_time": f"Scene {i}"}
+               for i, b in enumerate(blocks, start=1)],
+        scenes=scenes,
+        lines=lines,
+    )
+    return ScreenplayDraft(
+        script=script,
+        characters=[narrator],
+        settings=settings,
+        warnings=[
+            "screenwriter: deterministic template (Director brain not configured) — "
+            f"realized the authored breakdown: {len(blocks)} scenes, "
+            f"{sum(len(p) for p in per_block)} narration lines verbatim"
+        ],
+        master=master,
+    )
+
+
 BRAIN_ATTEMPTS = 2
 
 
@@ -795,5 +1219,10 @@ def write_script(
                 last_error = err
         raise BrainUnavailable(
             f"{brain_model()} could not deliver after {BRAIN_ATTEMPTS} attempts: {last_error}"
+        )
+    authored = authored_breakdown(idea)
+    if authored["scenes"]:
+        return _template_authored(
+            idea, runtime_target_s, master, authored["scenes"], authored["narration"]
         )
     return _template(idea, runtime_target_s, cast_size, master)

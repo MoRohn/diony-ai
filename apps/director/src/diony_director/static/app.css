@@ -121,6 +121,10 @@ body {
 
 /* status meter */
 .meter { display: flex; gap: .4rem; flex-wrap: wrap; margin-left: auto; justify-content: flex-end; align-items: center; }
+.chaintag {
+  font: 500 .64rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
+  color: var(--mut); margin: .8em 0 .3em;
+}
 .chip {
   display: inline-flex; align-items: center; gap: .5em;
   font: 500 .68rem/1 var(--mono); letter-spacing: .04em;
@@ -129,7 +133,7 @@ body {
   background: var(--glass);
   font-variant-numeric: tabular-nums;
 }
-#engine-chip::before, #grok-chip::before, #flow-chip::before, #brain-chip::before {
+:where(#grok-chip, #flow-chip, #brain-chip)::before {
   content: ""; width: .5em; height: .5em; border-radius: 50%;
   background: var(--mut); flex: none;
 }

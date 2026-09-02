@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="/static/app.css?v=p18">
+<link rel="stylesheet" href="/static/app.css?v=p22">
 </head>
 <body>
 
@@ -57,7 +57,6 @@
     <button id="reset" type="button" class="resetbtn" title="Clear the room and start a fresh session — the ledger keeps everything"><svg class="icon"><use href="#i-plus"/></svg><span>New session</span></button>
   </nav>
   <div class="meter" id="meter">
-    <span class="chip" id="engine-chip">engine —</span>
     <span class="chip" id="grok-chip">grok —</span>
     <span class="chip" id="flow-chip">flow —</span>
     <span class="chip" id="brain-chip">brain —</span>
@@ -98,7 +97,7 @@
               <option value="google-flow">Google Flow</option>
             </select>
           </label>
-          <div class="durwrap pill" title="One shot caps at 15s — scripts run longer">
+          <div class="durwrap pill" title="Any length — a long one-shot chains into sequential clips">
             <span class="plabel durlabel">Duration</span>
             <span class="durbox" id="durbox">
               <input id="dur-min" type="number" min="0" max="180" step="1" value="0" inputmode="numeric" aria-label="minutes">
@@ -150,7 +149,7 @@
             <span class="plabel">Budget $</span>
             <input id="budget" type="number" min="0" step="1" inputmode="numeric" placeholder="∞">
           </label>
-          <span class="durhint" id="durhint">one shot ≤ 15s · scripts run longer</span>
+          <span class="durhint" id="durhint">any length · long one-shots chain into sequential clips</span>
           <span class="lexchip" id="lexchip" hidden title="The session's active look — it rides every prompt it can legally reach"></span>
           <span class="lexhint" id="lexhint" hidden></span>
         </div>
@@ -170,6 +169,6 @@
     <div class="bpane" id="bpane"></div>
   </aside>
 </div>
-<script src="/static/app.js?v=p18"></script>
+<script src="/static/app.js?v=p22"></script>
 </body>
 </html>
