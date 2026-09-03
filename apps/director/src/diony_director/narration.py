@@ -45,7 +45,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from diony_director.assembly import LOUDNESS, _ffmpeg, _probe
+from diony_director.assembly import LOUDNESS, ROOM_BED_AMPLITUDE, _ffmpeg, _probe
 
 NARRATOR_ENV = "DIONY_NARRATOR_CLI"
 BACKEND_ENV = "DIONY_NARRATOR_BACKEND"
@@ -182,6 +182,12 @@ DUCK = "sidechaincompress=threshold=0.02:ratio=6:attack=25:release=350"
 # A line may breathe into the next clip by its tail handle; past that the
 # picture is too short for the words and the cut needs attention.
 OVERRUN_TOLERANCE_S = 1.0
+# The film ends when the LAST LINE ends, not when the picture's booked length
+# runs out: the final frame holds (cloned) for as long as the last cue still
+# speaks, plus a breath, up to this cap. Past the cap the words are the
+# authored law still — the surplus is named, never silently cut.
+TAIL_BREATH_S = 0.4
+MAX_TAIL_HOLD_S = 30.0
 
 
 class NarrationUnavailable(RuntimeError):
@@ -320,6 +326,24 @@ class NarrationReport:
     # cues pushed off their clip's mark so an overrunning predecessor could
     # finish — the no-overlap layout's receipts, never a silent adjustment
     shifts: list = field(default_factory=list)
+    # how long the final frame held so the last line could finish (0 when
+    # the picture already outlasted the voice), and the master's final length
+    tail_hold_s: float = 0.0
+    duration_s: float = 0.0
+
+
+def tail_hold_for(cues: list[NarrationCue], durations: list[float], film_s: float) -> tuple[float, float]:
+    """(hold, surplus): the seconds the last frame must hold after the picture
+    ends so the last spoken line completes with a breath, capped at
+    MAX_TAIL_HOLD_S; `surplus` is what the cap still cuts (0 when it fits)."""
+    if not cues:
+        return 0.0, 0.0
+    rail_end = max(cue.start_s + duration for cue, duration in zip(cues, durations))
+    need = rail_end + TAIL_BREATH_S - film_s
+    if need <= 0:
+        return 0.0, 0.0
+    hold = min(need, MAX_TAIL_HOLD_S)
+    return round(hold, 3), round(max(0.0, need - MAX_TAIL_HOLD_S), 3)
 
 
 def layout_cues(cues: list[NarrationCue], durations: list[float]) -> list[str]:
@@ -548,11 +572,17 @@ def build_filter(
     *,
     film_duration_s: float,
     loudness_target: str,
+    tail_hold_s: float = 0.0,
 ) -> list[str]:
     """The narration mix graph: each cue conformed and placed, one voice rail,
     the film's own track ducked under it, then the program loudness relocked.
-    Input 0 is the assembled film; inputs 1..N are the cue wavs in order."""
+    Input 0 is the assembled film; inputs 1..N are the cue wavs in order.
+    With a tail hold the picture's last frame is cloned for `tail_hold_s`
+    and the location bed is padded under it (silence plus the room-tone
+    floor, so the hold never falls into digital silence) — the voice rail
+    is no longer cut at the picture's booked end."""
     chains: list[str] = []
+    total_s = film_duration_s + max(0.0, tail_hold_s)
     rail_inputs = []
     for index in range(cue_count):
         chains.append(
@@ -567,9 +597,21 @@ def build_filter(
         )
     else:
         chains.append(f"{rail_inputs[0]}acopy[railraw]")
-    chains.append(f"[railraw]apad=whole_dur={film_duration_s:.3f}[rail]")
+    chains.append(f"[railraw]apad=whole_dur={total_s:.3f}[rail]")
     chains.append("[rail]asplit=2[railmix][railkey]")
-    chains.append("[0:a]aresample=48000,aformat=channel_layouts=stereo[bed]")
+    if tail_hold_s > 0:
+        chains.append(
+            f"[0:a]aresample=48000,aformat=channel_layouts=stereo,"
+            f"apad=pad_dur={tail_hold_s:.3f}[bedpad]"
+        )
+        chains.append(
+            f"anoisesrc=r=48000:colour=brown:amplitude={ROOM_BED_AMPLITUDE}:d={tail_hold_s:.3f},"
+            f"aformat=channel_layouts=stereo,adelay={int(round(film_duration_s * 1000))}:all=1[floor]"
+        )
+        chains.append("[bedpad][floor]amix=inputs=2:duration=first:normalize=0[bed]")
+        chains.append(f"[0:v]tpad=stop_mode=clone:stop_duration={tail_hold_s:.3f}[vout]")
+    else:
+        chains.append("[0:a]aresample=48000,aformat=channel_layouts=stereo[bed]")
     chains.append(f"[bed][railkey]{DUCK}[ducked]")
     target = LOUDNESS.get(loudness_target, LOUDNESS["streaming"])
     chains.append(
@@ -618,19 +660,34 @@ def narrate(
     # cue may start — cue marks shift late rather than ever overlapping
     shifts = layout_cues(cues, durations)
     delays_ms = [max(0, int(round(cue.start_s * 1000))) for cue in cues]
+    # the film ends when the last line ends: hold the final frame for the
+    # words that play past the picture's booked length (capped, and the
+    # part the cap still cuts is named)
+    tail_hold_s, tail_surplus_s = tail_hold_for(cues, durations, film_s)
+    if tail_surplus_s > 0:
+        last = max(zip(cues, durations), key=lambda pair: pair[0].start_s + pair[1])[0]
+        overruns.append(
+            f"{last.clip_id}: the last line still runs {tail_surplus_s:.1f}s past the "
+            f"{MAX_TAIL_HOLD_S:.0f}s tail hold — book a longer final clip"
+        )
     chains = build_filter(
-        len(cues), delays_ms, film_duration_s=film_s, loudness_target=loudness_target
+        len(cues),
+        delays_ms,
+        film_duration_s=film_s,
+        loudness_target=loudness_target,
+        tail_hold_s=tail_hold_s,
     )
     cmd: list[str] = [_ffmpeg(), "-y", "-i", str(film)]
     for wav in wavs:
         cmd += ["-i", str(wav)]
-    cmd += [
-        "-filter_complex", ";".join(chains),
-        "-map", "0:v", "-map", "[aout]",
-        "-c:v", "copy",
-        "-c:a", "aac", "-b:a", "192k",
-        str(dest),
-    ]
+    cmd += ["-filter_complex", ";".join(chains)]
+    if tail_hold_s > 0:
+        # the held frame is new picture: this is the one case narration
+        # re-encodes the cut (same codec/quality as assembly)
+        cmd += ["-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+    else:
+        cmd += ["-map", "0:v", "-map", "[aout]", "-c:v", "copy"]
+    cmd += ["-c:a", "aac", "-b:a", "192k", str(dest)]
     result = subprocess.run(cmd, capture_output=True, timeout=1800)
     if result.returncode != 0 or not dest.is_file():
         tail = result.stderr.decode(errors="replace")[-800:]
@@ -655,4 +712,6 @@ def narrate(
         ],
         overruns=overruns,
         shifts=shifts,
+        tail_hold_s=tail_hold_s,
+        duration_s=float(_probe(dest)["duration_s"]),
     )

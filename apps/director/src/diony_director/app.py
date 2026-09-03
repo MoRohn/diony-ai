@@ -2389,7 +2389,13 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
             session_id=sid,
             entries=entries,
             film=dest,
-            film_duration_s=result.duration_s,
+            # the master may have grown a tail hold so the last line could
+            # finish — sidecars time against the delivered length
+            film_duration_s=(
+                narration_report.duration_s
+                if narration_report is not None and narration_report.duration_s > 0
+                else result.duration_s
+            ),
             look=result.look,
             loudness_target=result.loudness_target,
             narration=narration_report,
@@ -2398,7 +2404,11 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
         delivered = {"names": [], "error": f"{type(err).__name__}: {err}"}
     return {
         "film": str(result.path),
-        "duration_s": result.duration_s,
+        "duration_s": (
+            narration_report.duration_s
+            if narration_report is not None and narration_report.duration_s > 0
+            else result.duration_s
+        ),
         "clip_count": result.clip_count,
         "look": result.look,
         "loudness_target": result.loudness_target,
@@ -2407,6 +2417,7 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
                 "cue_count": len(narration_report.cues),
                 "overruns": narration_report.overruns,
                 "shifts": narration_report.shifts,
+                "tail_hold_s": narration_report.tail_hold_s,
             }
             if narration_report is not None
             else {"cue_count": 0, "skipped": "no lines" if body.narrate else "narrate off"}

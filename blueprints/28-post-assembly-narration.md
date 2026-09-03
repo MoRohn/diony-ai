@@ -48,7 +48,14 @@ One voice, exact words, measured placement.
    film's own track is ducked under it with the same sidechain values the
    Producer program mix earned (`threshold=0.02:ratio=6:attack=25:release=350`);
    the program then relocks to the delivery loudness target. Picture is stream-
-   copied — narration never re-encodes the cut.
+   copied — narration never re-encodes the cut — except for a tail hold (below).
+4a. **The film ends when the last line ends.** The booked length is where the
+   picture stops, not where the voice stops: `tail_hold_for()` measures how far
+   the final cue plays past the picture and clones the last frame for that long
+   plus a breath (`TAIL_BREATH_S`), capped at `MAX_TAIL_HOLD_S` (30 s), with the
+   location bed padded under it on the room-tone floor. The hold is a receipt
+   (`tail_hold_s`), the master's delivered length times the sidecars, and only
+   what the cap still cuts is named as an overrun — the words are never trimmed.
 5. **Failure is loud.** A cut that carries lines with no narrator backend is a 409
    *before* ffmpeg spends a render. A narrator error or empty take fails the
    narration, never ships a silently mute film. A line longer than its clip window

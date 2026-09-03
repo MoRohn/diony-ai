@@ -453,3 +453,85 @@ def test_a_line_too_long_for_its_clip_is_named_never_trimmed(
     report = narration.narrate(film, cues, tmp_path / "out.mp4", loudness_target="streaming")
     assert report.overruns and "cl-9" in report.overruns[0]
     assert "book a longer clip" in report.overruns[0]
+
+
+# --- The film ends when the last line ends ------------------------------------
+
+
+def _film(tmp_path, seconds: int):
+    ffmpeg = shutil.which("ffmpeg")
+    film = tmp_path / "film.mp4"
+    subprocess.run(
+        [
+            ffmpeg, "-y",
+            "-f", "lavfi", "-i", f"testsrc2=size=320x180:duration={seconds}",
+            "-f", "lavfi", "-i", f"sine=frequency=110:duration={seconds}",
+            "-c:v", "libx264", "-c:a", "aac", "-shortest", str(film),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return film
+
+
+def test_tail_hold_measures_the_last_line_past_the_picture() -> None:
+    cues = [
+        narration.NarrationCue(order=0, clip_id="cl-1", speaker="A", line="a", start_s=0.15, window_s=2.0),
+        narration.NarrationCue(order=1, clip_id="cl-2", speaker="A", line="b", start_s=2.15, window_s=2.0),
+    ]
+    # the last cue ends at 2.15 + 3.0 = 5.15 on a 4.0s picture
+    hold, surplus = narration.tail_hold_for(cues, [1.0, 3.0], 4.0)
+    assert hold == pytest.approx(1.15 + narration.TAIL_BREATH_S)
+    assert surplus == 0.0
+    # the picture outlasts the voice: nothing to hold
+    assert narration.tail_hold_for(cues, [1.0, 1.0], 4.0) == (0.0, 0.0)
+    # past the cap the hold stops at 30s and the rest is surplus
+    hold, surplus = narration.tail_hold_for(cues, [1.0, 40.0], 4.0)
+    assert hold == narration.MAX_TAIL_HOLD_S
+    assert surplus == pytest.approx(2.15 + 40.0 + narration.TAIL_BREATH_S - 4.0 - 30.0)
+
+
+@pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
+def test_the_last_frame_holds_until_the_last_line_finishes(tmp_path, monkeypatch, fake_narrator) -> None:
+    film = _film(tmp_path, 2)
+    # the fake narrator speaks 1.2s; cued at 1.5s it runs 0.7s past the picture
+    cues = [
+        narration.NarrationCue(
+            order=0, clip_id="cl-9", speaker="ANA", line="and that is the end.",
+            start_s=1.5, window_s=0.5,
+        )
+    ]
+    dest = tmp_path / "out.mp4"
+    report = narration.narrate(film, cues, dest, loudness_target="streaming")
+    from diony_director.review import probe
+
+    got = probe(dest)
+    expected_hold = 1.5 + report.cues[0]["duration_s"] + narration.TAIL_BREATH_S - 2.0
+    assert report.tail_hold_s == pytest.approx(expected_hold, abs=0.05)
+    assert report.duration_s == pytest.approx(2.0 + expected_hold, abs=0.3)
+    assert got["duration_s"] == pytest.approx(report.duration_s, abs=0.1)
+    assert (got["width"], got["height"]) == (320, 180), "the held frame keeps the raster"
+    assert report.overruns == [], "a line the hold absorbs is not an overrun"
+
+
+@pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
+def test_a_line_longer_than_the_tail_cap_is_named(tmp_path, monkeypatch, fake_narrator) -> None:
+    film = _film(tmp_path, 2)
+    ffmpeg = shutil.which("ffmpeg")
+
+    def long_take(cue, output):
+        subprocess.run(
+            [ffmpeg, "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=35",
+             "-ar", "48000", "-ac", "1", str(output)],
+            check=True, capture_output=True,
+        )
+        return 35.0
+
+    monkeypatch.setattr(narration, "synthesize", long_take)
+    cues = [
+        narration.NarrationCue(order=0, clip_id="cl-9", speaker="", line="x", start_s=0.15, window_s=40.0)
+    ]
+    report = narration.narrate(film, cues, tmp_path / "out.mp4", loudness_target="streaming")
+    assert report.tail_hold_s == narration.MAX_TAIL_HOLD_S
+    assert report.duration_s == pytest.approx(32.0, abs=0.3)
+    assert report.overruns and "tail hold" in report.overruns[0] and "cl-9" in report.overruns[0]
