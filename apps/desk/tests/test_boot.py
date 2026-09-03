@@ -1079,3 +1079,16 @@ def test_landing_waits_through_identification_then_lands_on_the_answer(monkeypat
     # Identification that never resolves falls back to Studio once identify_wait expires.
     script(["identifying"])
     assert boot.landing_url(wait=0.0, identify_wait=0.0) == boot.STUDIO_URL
+
+
+def test_agent_scratch_never_ships_in_a_release_payload() -> None:
+    """A local .claude directory (agent session scratch) leaked into the
+    staged payload, changing the payload sha on every rebuild of an unchanged
+    tree — the build script's 'already current' short-circuit never fired."""
+    from pathlib import Path as _P
+
+    from diony_desk.release import _ship
+
+    assert not _ship(_P("apps/director/.claude/confidenz-latest.json"))
+    assert not _ship(_P(".claude/settings.json"))
+    assert _ship(_P("apps/director/src/diony_director/app.py"))

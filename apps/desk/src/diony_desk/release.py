@@ -65,6 +65,7 @@ FEATURE_FILE_SETS = {
 }
 EXCLUDED_PARTS = {
     ".benchmarks",
+    ".claude",  # agent session scratch — nondeterministic, randomized every payload sha
     ".git",
     ".pytest_cache",
     ".venv",
