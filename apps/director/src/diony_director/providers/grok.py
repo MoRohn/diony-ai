@@ -25,9 +25,11 @@ def _guard(response: httpx.Response, what: str = "request") -> None:
     """Convert HTTP failures into CloudAdapterError carrying the provider's own words."""
     if response.status_code == 429:
         # rate/quota limit: transient by nature — hold and resume, never fail
+        code, why = base.quota_reason(response)
         raise base.CloudAdapterQuotaError(
-            f"xAI {what} rejected (429): {response.text[:300]}",
+            f"xAI {what} held by rate limit (429): {why}" + (f" [{code}]" if code else ""),
             retry_at=base.quota_retry_at(response),
+            reason_code=code,
         )
     if response.status_code >= 400:
         raise base.CloudAdapterError(

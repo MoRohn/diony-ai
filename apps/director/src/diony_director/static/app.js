@@ -232,15 +232,68 @@
   // reason repeating (the same hold across waves) bumps a counter on the
   // bubble it already has instead of burying the room in duplicates.
   let lastHeld = { text: "", el: null, n: 0 };
-  function addHeldMsg(reason) {
-    if (lastHeld.el && lastHeld.text === reason && lastHeld.el.isConnected) {
+  const holdTimers = new Set();
+  function clockOf(epochS) {
+    // the desk's own clock, 12-hour, with the zone the user lives in
+    const d = new Date(epochS * 1000);
+    const t = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const zone = (new Intl.DateTimeFormat([], { timeZoneName: "short" })
+      .formatToParts(d).find((p) => p.type === "timeZoneName") || {}).value || "";
+    return zone ? `${t} ${zone}` : t;
+  }
+  function untilText(epochS) {
+    const s = Math.max(0, Math.round(epochS - Date.now() / 1000));
+    if (s < 60) return s ? `in ${s}s` : "any moment now";
+    const m = Math.round(s / 60);
+    return m < 60 ? `in ${m} min` : `in ${Math.floor(m / 60)}h ${m % 60}m`;
+  }
+  function addHeldMsg(entry) {
+    // A hold is structured when the server knows why (a provider quota with
+    // a reset time); a plain string is any other reason. Either way one
+    // bubble per distinct reason — a repeat bumps its counter.
+    const h = typeof entry === "string" ? { reason: entry } : (entry || {});
+    const key = h.kind === "quota" ? `quota:${h.provider || ""}:${h.detail || h.reason}` : String(h.reason || "");
+    if (lastHeld.el && lastHeld.text === key && lastHeld.el.isConnected) {
       lastHeld.n += 1;
-      lastHeld.el.querySelector(".body").textContent = `Held: ${reason} (×${lastHeld.n})`;
+      const count = lastHeld.el.querySelector(".holdcount");
+      if (count) count.textContent = `×${lastHeld.n}`;
       lastHeld.el.scrollIntoView({ block: "end" });
       return lastHeld.el;
     }
-    const li = addMsg("director", `Held: ${reason}`, "warn");
-    lastHeld = { text: reason, el: li, n: 1 };
+    const li = addMsg("director", "", h.kind === "quota" ? "hold" : "warn");
+    const body = li.querySelector(".body");
+    if (h.kind === "quota") {
+      const provider = { "google-flow": "Google Flow", grok: "Grok Imagine" }[h.provider] || "Provider";
+      body.innerHTML =
+        `<div class="holdhead"><span class="holdtag">Run paused</span><span>${esc(provider)} quota</span><span class="holdcount"></span></div>` +
+        `<div class="holdwhy">${esc(h.detail || h.reason || "")}</div>` +
+        `<div class="holdwhen">Resumes automatically at <b class="holdclock"></b> <span class="holduntil"></span></div>` +
+        `<div class="holdnote">Nothing was spent. ${h.clip_id ? esc(h.clip_id) + " and the clips behind it" : "The held clips"} stay queued and roll on their own when the window opens.</div>`;
+      const clock = body.querySelector(".holdclock");
+      const until = body.querySelector(".holduntil");
+      const paint = () => {
+        if (!li.isConnected) { clearInterval(timer); holdTimers.delete(timer); return; }
+        if (h.resume_at) {
+          clock.textContent = clockOf(h.resume_at);
+          until.textContent = `· ${untilText(h.resume_at)}`;
+          if (h.resume_at <= Date.now() / 1000) {
+            until.textContent = "· resuming";
+            clearInterval(timer); holdTimers.delete(timer);
+          }
+        } else {
+          clock.textContent = "the provider's next window";
+        }
+      };
+      const timer = setInterval(paint, 15000);
+      holdTimers.add(timer);
+      paint();
+    } else {
+      body.innerHTML =
+        `<div class="holdhead"><span class="holdtag">Held</span><span class="holdcount"></span></div>` +
+        `<div class="holdwhy"></div>`;
+      body.querySelector(".holdwhy").textContent = h.reason || "";
+    }
+    lastHeld = { text: key, el: li, n: 1 };
     return li;
   }
 
@@ -1229,7 +1282,7 @@
             const res = await api(`/api/director/sessions/${sessionId}/run_retakes`, {
               method: "POST",
             });
-            (res.held || []).forEach((h) => addHeldMsg(h.reason));
+            (res.held || []).forEach((h) => addHeldMsg(h));
             if (!res.targeted.length) {
               addMsg(
                 "director",
@@ -1265,7 +1318,7 @@
                 anyway.disabled = false;
                 return;
               }
-              (counts.held || []).forEach((h) => addHeldMsg(h.reason));
+              (counts.held || []).forEach((h) => addHeldMsg(h));
               const mine = (counts.ops || []).filter((o) => targeted.has(o.op_id));
               const printed = mine.filter((o) => o.status === "completed").length;
               const failed = mine.filter((o) => o.status === "failed").length;
@@ -1360,7 +1413,7 @@
       addMsg("director", `Couldn't start the ${FINISH_RESOLUTION} finish: ${err.message || err}`, "warn");
       return false;
     }
-    (up.held || []).forEach((h) => addHeldMsg(h.reason));
+    (up.held || []).forEach((h) => addHeldMsg(h));
     if (up.skipped && up.skipped.length) {
       addMsg(
         "director",
@@ -1397,7 +1450,7 @@
           resolve(false);
           return;
         }
-        (counts.held || []).forEach((h) => addHeldMsg(h.reason));
+        (counts.held || []).forEach((h) => addHeldMsg(h));
         const mine = (counts.ops || []).filter((o) => targeted.has(o.op_id));
         const printed = mine.filter((o) => o.status === "completed").length;
         const failed = mine.filter((o) => o.status === "failed").length;
@@ -1566,7 +1619,7 @@
         const stalled = (counts.stalled || []).length;
         // Hold reasons are drained exactly once — a budget hold or a held
         // scene must reach the room, not vanish into an unread field.
-        (counts.held || []).forEach((h) => addHeldMsg(h.reason));
+        (counts.held || []).forEach((h) => addHeldMsg(h));
         progress.textContent =
           `${counts.completed} done · ${counts.failed} failed · ${counts.pending} generating` +
           (queued ? ` · ${queued} queued (chained)` : "") +
@@ -1737,7 +1790,7 @@
           if (c.btn) c.btn.disabled = true;
         }
       });
-      (batch.held || []).forEach((h) => addHeldMsg(h.reason));
+      (batch.held || []).forEach((h) => addHeldMsg(h));
       const tick = async () => {
         let counts;
         try {
@@ -1747,7 +1800,7 @@
           allBtn.disabled = false;
           return;
         }
-        (counts.held || []).forEach((h) => addHeldMsg(h.reason));
+        (counts.held || []).forEach((h) => addHeldMsg(h));
         const queued = counts.queued || 0;
         progress.textContent =
           `${counts.completed} done · ${counts.failed} failed · ${counts.pending} generating` +

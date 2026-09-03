@@ -41,9 +41,11 @@ def _guard(response: httpx.Response, what: str = "request") -> None:
         # quota, not failure: nothing was spent and the op is fine — raise the
         # transient flavor so the wave holds and resumes instead of failing
         # (a Flow style-frame 429 once killed a whole chained Grok run)
+        code, why = base.quota_reason(response)
         raise base.CloudAdapterQuotaError(
-            f"Flow {what} rejected (429): {response.text[:300]}",
+            f"Flow {what} held by quota (429): {why}" + (f" [{code}]" if code else ""),
             retry_at=base.quota_retry_at(response),
+            reason_code=code,
         )
     if response.status_code >= 400:
         raise base.CloudAdapterError(

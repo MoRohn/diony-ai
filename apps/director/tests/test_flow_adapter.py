@@ -100,6 +100,38 @@ def test_quota_429_raises_the_quota_error_with_the_providers_reset_time(monkeypa
         expected = datetime(2026, 9, 2, 22, 33, 11, 316000, tzinfo=timezone.utc).timestamp()
         assert err.retry_at == expected
         assert "429" in str(err)
+        assert err.reason_code == "PUBLIC_ERROR_USER_QUOTA_REACHED"
+        assert "overall quota is used up" in str(err)
+
+
+def test_quota_reason_reads_the_live_envelope_never_dumps_it() -> None:
+    """The 2026-09-03 room showed the whole JSON envelope (jobId, email,
+    nested response…) as the hold reason. The reason is the documented
+    token, read from any of the places useapi puts it, in plain words."""
+    body = {
+        "jobId": "j0903164445356080755v-u3057-email:someone@example.com-bot:google-flow",
+        "error": "PUBLIC_ERROR_USER_QUOTA_REACHED (HTTP 429)",
+        "code": 429,
+        "retryAfter": "2026-09-03T17:14:52.956Z",
+        "response": {
+            "error": {
+                "code": 429,
+                "message": "Quota exceeded: PUBLIC_ERROR_USER_QUOTA_REACHED",
+                "status": "RESOURCE_EXHAUSTED",
+            }
+        },
+    }
+    res = _Response(body, status_code=429)
+    res.text = __import__("json").dumps(body)
+    code, why = base.quota_reason(res)
+    assert code == "PUBLIC_ERROR_USER_QUOTA_REACHED"
+    assert "quota is used up" in why and "jobId" not in why and "@" not in why
+    throttled = _Response({"error": {"message": "PUBLIC_ERROR_USER_REQUESTS_THROTTLED"}}, status_code=429)
+    throttled.text = ""
+    assert base.quota_reason(throttled)[1].startswith("Flow is throttling")
+    plain = _Response({"error": "slow down please"}, status_code=429)
+    plain.text = ""
+    assert base.quota_reason(plain) == ("", "slow down please")
 
 
 def test_poll_completed_extracts_video_url_and_credits(monkeypatch) -> None:

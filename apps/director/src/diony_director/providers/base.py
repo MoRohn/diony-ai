@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+import re
+
 import httpx
 
 DOWNLOAD_TIMEOUT_S = 300.0
@@ -60,9 +62,58 @@ class CloudAdapterQuotaError(CloudAdapterTransientError):
     and nothing is wrong with the op: it stays runnable and the wave resumes
     once the quota window resets — a quota pause must never fail a run."""
 
-    def __init__(self, message: str, *, retry_at: float | None = None) -> None:
+    def __init__(
+        self, message: str, *, retry_at: float | None = None, reason_code: str = ""
+    ) -> None:
         super().__init__(message)
         self.retry_at = retry_at  # epoch seconds when the provider says to retry
+        self.reason_code = reason_code  # the provider's own reason token, if any
+
+
+# The 429 reasons useapi.net documents for Google Flow (and what they mean to
+# a person watching the room) — the raw JSON envelope never reaches the UI.
+QUOTA_REASONS: dict[str, str] = {
+    "PUBLIC_ERROR_USER_QUOTA_REACHED": "the Flow account's overall quota is used up (about a 30-minute cooldown)",
+    "PUBLIC_ERROR_USER_REQUESTS_THROTTLED": "Flow is throttling this account — too many parallel requests (about 30 minutes)",
+    "PUBLIC_ERROR_PER_MODEL_DAILY_QUOTA_REACHED": "this model's daily quota is used up (resets at midnight UTC)",
+    "PUBLIC_ERROR_UNUSUAL_ACTIVITY_TOO_MUCH_TRAFFIC": "the captcha score was too low — the worker retries it (about a minute)",
+    "no_eligible_account": "every Flow account is quarantined for this model right now",
+}
+_REASON_TOKEN = re.compile(r"\b(PUBLIC_ERROR_[A-Z_]+|no_eligible_account)\b")
+
+
+def quota_reason(response: httpx.Response) -> tuple[str, str]:
+    """(reason_code, plain-English reason) for a 429 — from the JSON body's
+    `error` (top level or nested under `response.error.message`), else the
+    raw text. Unknown tokens are shown as themselves; never the whole envelope."""
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    candidates: list[str] = []
+    if isinstance(body, dict):
+        for key in ("error", "message", "detail"):
+            value = body.get(key)
+            if isinstance(value, str):
+                candidates.append(value)
+            elif isinstance(value, dict):
+                candidates.append(str(value.get("message") or value.get("error") or ""))
+        nested = body.get("response")
+        if isinstance(nested, dict):
+            err = nested.get("error")
+            if isinstance(err, dict):
+                candidates.append(str(err.get("message") or ""))
+            elif isinstance(err, str):
+                candidates.append(err)
+    candidates.append(str(getattr(response, "text", "") or ""))
+    text = " ".join(c for c in candidates if c)
+    match = _REASON_TOKEN.search(text)
+    if match:
+        code = match.group(1)
+        return code, QUOTA_REASONS.get(code, code)
+    first = next((c.strip() for c in candidates if c and c.strip()), "")
+    first = re.sub(r"\s+", " ", first)[:160]
+    return "", first or "rate limited"
 
 
 def quota_retry_at(response: httpx.Response) -> float | None:

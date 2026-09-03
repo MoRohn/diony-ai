@@ -1,5 +1,6 @@
 """The Director service end-to-end: propose → run → poll → persisted clip → reconciled ledger."""
 
+import re
 import importlib
 
 from fastapi.testclient import TestClient
@@ -197,6 +198,14 @@ def test_provider_quota_429_pauses_the_wave_and_resumes_after_the_window(monkeyp
     assert submitted == []
     assert op.status == "proposed"  # a quota pause is never a failure
     assert held and "resumes automatically" in held[0]["reason"]
+    # the entry is structured for the room's pause card: kind, provider, a
+    # reset epoch, and a 12-hour local clock in the line (1:14 PM EDT, never 13:14)
+    entry = held[0]
+    assert entry["kind"] == "quota" and entry["provider"] in {"grok", "google-flow"}
+    assert entry["detail"] == "PUBLIC_ERROR_USER_QUOTA_REACHED", "the card gets the bare reason"
+    assert entry["resume_at"] > __import__("time").time()
+    assert re.search(r"\b(1[0-2]|[1-9]):[0-5]\d [AP]M [A-Z]{2,5}\b", entry["reason"]), entry["reason"]
+    assert "{" not in entry["reason"]
     assert session_mod.runtime(op_id)["quota_hold_until"] > time_mod.time() + 600
     assert op_id in session_mod.batch_targets(sid)  # still queued for the run
 

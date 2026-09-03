@@ -196,6 +196,31 @@ body {
 .msg.warn .who::before { background: var(--warn); }
 .msg.warn .body { color: var(--warn); }
 .msg .body { white-space: pre-line; }
+/* A provider pause: a card, not a dump — what, why, and when it resumes. */
+.msg.hold {
+  border-color: rgba(232, 180, 90, .45);
+  border-left: 3px solid var(--warn);
+  background: rgba(232, 180, 90, .07);
+}
+.msg.hold .who { color: var(--warn); }
+.msg.hold .who::before { background: var(--warn); }
+.msg.hold .body, .msg.warn .body { white-space: normal; }
+.holdhead {
+  display: flex; align-items: center; gap: .55em; flex-wrap: wrap;
+  font: 600 .66rem/1 var(--mono); letter-spacing: .14em; text-transform: uppercase;
+  color: var(--warn); margin-bottom: .45rem;
+}
+.holdtag {
+  padding: .3em .55em; border-radius: var(--r-sm);
+  background: rgba(232, 180, 90, .16); border: 1px solid rgba(232, 180, 90, .4);
+}
+.holdcount { color: var(--mut); letter-spacing: 0; }
+.holdcount:empty { display: none; }
+.holdwhy { color: var(--ink); }
+.holdwhen { margin-top: .45rem; color: var(--ink2); }
+.holdwhen b { color: var(--warn); font-weight: 600; font-variant-numeric: tabular-nums; }
+.holduntil { color: var(--mut); font: 500 .74rem/1.4 var(--mono); }
+.holdnote { margin-top: .35rem; color: var(--mut); font-size: .84em; }
 .msg .body a { color: var(--accent-ink); text-decoration-color: rgba(255,122,47,.5); }
 .msg .body a:hover { color: var(--accent); }
 .msg .body a.linkbtn {

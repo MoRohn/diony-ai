@@ -833,18 +833,38 @@ def _quota_wait_s(retry_at: float | None) -> int:
     return int(min(max(retry_at - time.time(), QUOTA_HOLD_MIN_S), QUOTA_HOLD_MAX_S))
 
 
+def resume_clock(resume_at: float) -> str:
+    """A provider reset time the way a person reads it on this desk: 12-hour
+    local time with the zone (1:14 PM EDT), never 24-hour or UTC."""
+    return time.strftime("%I:%M %p %Z", time.localtime(resume_at)).lstrip("0")
+
+
 def _hold_for_quota(op: DirectorOp, detail: str, wait_s: int, held: list[dict]) -> None:
     """Pause one op for the provider's quota window: still targeted, still
-    proposed, retried automatically once the window passes — never failed."""
+    proposed, retried automatically once the window passes — never failed.
+    The held entry is structured (kind, resume_at, provider) so the room can
+    draw a proper pause card with a live countdown instead of a raw line."""
     resume_at = time.time() + wait_s
     session.runtime(op.id)["quota_hold_until"] = resume_at
-    resume_clock = time.strftime("%H:%M", time.localtime(resume_at))
+    provider = op.provider.value if op.provider else ""
+    label = {"google-flow": "Google Flow", "grok": "Grok Imagine"}.get(provider, provider or "the provider")
+    # the card shows the reason alone; the adapter's "<lane> held by quota
+    # (429):" prefix and the bracketed token stay in the logged line
+    import re as _re
+
+    plain = _re.sub(r"^.*?\(429\):\s*", "", detail).strip()
+    plain = _re.sub(r"\s*\[[A-Za-z_]+\]$", "", plain).strip() or detail
     held.append(
         {
             "op_id": op.id,
+            "kind": "quota",
+            "provider": provider,
+            "clip_id": op.clip_id or "",
+            "detail": plain,
+            "resume_at": round(resume_at, 3),
             "reason": (
-                f"{detail} — provider quota reached; the run pauses and resumes "
-                f"automatically around {resume_clock}"
+                f"{label} quota reached — {detail}. The run pauses and resumes "
+                f"automatically at {resume_clock(resume_at)}"
             ),
         }
     )
