@@ -1107,6 +1107,11 @@ def _run_approved(op: DirectorOp) -> dict:
             detail="DIONY_DIRECTOR_DRY_RUN=1 — this host refuses to spend on providers "
             "(the explicit Director dry-run flag; unset it to roll for real)",
         )
+    block = session.derivation_block(op)
+    if block:
+        # s-16d2e6e5e0: twelve clips rolled on the raw idea after the
+        # derivation failed — a provisional prompt never spends
+        raise HTTPException(status_code=409, detail=block)
     with _RUN_GUARD:
         if op.status not in {"proposed", "approved"}:
             raise HTTPException(status_code=409, detail=f"op is {op.status}, not runnable")
@@ -1182,6 +1187,20 @@ def run_op(op_id: str) -> dict:
     op = _op_or_404(op_id)
     _guard_chain_order(op)
     return _run_link_or_op(op)
+
+
+@app.post("/api/director/ops/{op_id}/derive")
+def derive_op(op_id: str) -> dict:
+    """Retry the master derivation this op (or its whole chain) is held on,
+    from the inputs recorded at proposal — the same priced ops, no re-paste."""
+    op = _op_or_404(op_id)
+    try:
+        ops = session.retry_derivation(op.id)
+    except LookupError as err:
+        raise HTTPException(status_code=404, detail=str(err)) from err
+    except RuntimeError as err:
+        raise HTTPException(status_code=409, detail=str(err)) from err
+    return {"op_ids": [o.id for o in ops], "status": "deriving"}
 
 
 @app.post("/api/director/ops/{op_id}/retry")
@@ -1417,6 +1436,15 @@ def run_batch(sid: str, body: RunBatchIn) -> dict:
     if body.op_ids is not None:
         wanted = set(body.op_ids)
         ops = [op for op in ops if op.id in wanted]
+    blocked = [op for op in ops if op.status == "proposed" and session.derivation_block(op)]
+    if blocked:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{len(blocked)} clip(s) still carry the provisional prompt: "
+                + session.derivation_block(blocked[0])
+            ),
+        )
     targets = {op.id for op in ops if op.status == "proposed"}
     all_targets = session.set_batch_targets(sid, targets)
     _kick_submitter(sid)
@@ -2127,6 +2155,11 @@ class AssembleIn(BaseModel):
     # clips this host cannot measure — are cut with a silent bed. Off ships
     # the location tracks exactly as delivered.
     speech_guard: bool = True
+    # s-16d2e6e5e0: a cast narrator and an authored script, and the cut
+    # rendered without a single line because no clip carried one. A cut that
+    # expects lines but has none is refused before any render; this ships a
+    # deliberately mute picture instead.
+    allow_silent: bool = False
     # Blueprint 30 — which print of each take the cut uses. "auto" cuts the
     # 1080p finish wherever a usable one exists (the film's raster rises to
     # 1080 lines the moment any clip carries one); "1080p" refuses, naming
@@ -2295,6 +2328,44 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
 
     _boot()
     ops = session.completed_clip_ops(sid)
+
+    # Blueprint 28: lines are recorded in post. Which clips carry one is
+    # known before a single probe runs.
+    def _carries_line(op) -> bool:
+        clip = session.clip_for_op(op)
+        if (
+            clip is not None
+            and clip.clip_class in {"sync-dialogue", "vo-over"}
+            and clip.audio_packet.script_excerpt
+            and str(clip.audio_packet.script_excerpt[0].get("line", "")).strip()
+        ):
+            return True
+        return bool(str(getattr(op, "narration", "") or "").strip())
+
+    printed = [
+        op
+        for op in ops
+        if (stored := session.runtime(op.id).get("clip")) is not None
+        and Path(stored.path).is_file()
+    ]
+    if printed and body.narrate and not body.allow_silent and not any(map(_carries_line, printed)):
+        expected: list[str] = []
+        voice = session.voice_for(sid)
+        if voice:
+            expected.append(f"a narrator ({voice}) is cast")
+        authored = session.authored_lines_expected(sid)
+        if authored:
+            expected.append(f"the idea authored {authored} narration line(s)")
+        if expected:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "no clip carries a line but "
+                    + " and ".join(expected)
+                    + " — the script never reached the cut; retry the master derivation, "
+                    "or assemble with allow_silent to ship a deliberately mute picture"
+                ),
+            )
     paths = []
     specs = []
     used_ops = []
@@ -2366,19 +2437,8 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
                     + ", or assemble with allow_gaps to ship without them"
                 ),
             )
-    # Blueprint 28: lines are recorded in post. A cut that carries lines but
-    # has no narrator backend fails BEFORE ffmpeg spends a render on it.
-    def _carries_line(op) -> bool:
-        clip = session.clip_for_op(op)
-        if (
-            clip is not None
-            and clip.clip_class in {"sync-dialogue", "vo-over"}
-            and clip.audio_packet.script_excerpt
-            and str(clip.audio_packet.script_excerpt[0].get("line", "")).strip()
-        ):
-            return True
-        return bool(str(getattr(op, "narration", "") or "").strip())
-
+    # A cut that carries lines but has no narrator backend fails BEFORE
+    # ffmpeg spends a render on it.
     wants_narration = body.narrate and any(_carries_line(op) for op in used_ops)
     if wants_narration and not narration_mod.narrator_configured():
         raise HTTPException(

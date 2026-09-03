@@ -294,6 +294,12 @@ body {
 .opcard .state { font: 500 .7rem/1.4 var(--mono); color: var(--mut); }
 .opcard .state.done { color: var(--ok); }
 .opcard .state.failed { color: var(--bad); }
+.opcard button.rederive {
+  background: transparent; color: var(--ink2); border: 1px solid var(--line-hi);
+  box-shadow: none; padding: .3rem .6rem; font-size: .7rem;
+}
+.opcard .derivenote { font: 500 .7rem/1.5 var(--mono); color: var(--bad); margin: .2rem 0 .4rem; }
+.batchbar .progress button.rederive { margin-left: .4rem; }
 .opcard video { width: 100%; margin-top: .65rem; border-radius: var(--r-md); background: #000; box-shadow: var(--shadow-1); }
 .opcard input.clipsel { accent-color: var(--accent); width: 1rem; height: 1rem; cursor: pointer; }
 .opcard .whatrolls { font: 500 .78rem/1.5 Inter, sans-serif; color: var(--ink2); margin-top: .5rem; font-style: italic; }

@@ -220,6 +220,12 @@ MAX_CONSTRAINTS = 6
 LENGTH_BANDS = {2: (60, 100), 3: (60, 100), 4: (90, 140), 5: (120, 180), 6: (120, 180)}
 LENGTH_CEILING = 220
 BRAIN_ATTEMPTS = 2
+# Output headroom for the reply. s-16d2e6e5e0 (2026-09-03): a 12-clip CLIP
+# DELIVERY split — the master plus twelve complete, self-contained clip
+# prompts with their narration — runs past 8192 tokens; the provider cut the
+# JSON mid-object, both attempts failed on "Expecting ',' delimiter", and the
+# chain rolled on the raw idea. The screenwriter already books 32768.
+BRAIN_MAX_TOKENS = 32768
 
 
 def split_section(clip_plan: list[int]) -> str:
@@ -309,6 +315,12 @@ def user_message(
 class MasterUnavailable(RuntimeError):
     """The configured brain could not derive the master prompt. With a brain
     configured there is NO template stand-in — the failure is a named state."""
+
+
+class BrainTruncated(RuntimeError):
+    """The brain stopped at its output cap (finish_reason=length): the reply
+    is not malformed JSON, it is an unfinished one. Retrying the same call
+    blind returns the same cut — the cap, not chance, is the cause."""
 
 
 def _truthy(value) -> bool:
@@ -492,7 +504,7 @@ def _from_brain(
                 {"role": "user", "content": user_content},
             ],
             "temperature": 0.4,
-            "max_tokens": 8192,
+            "max_tokens": BRAIN_MAX_TOKENS,
             "response_format": {"type": "json_object"},
         },
         headers=screenwriter._brain_headers(),
@@ -501,7 +513,18 @@ def _from_brain(
     if response.status_code >= 400:
         raise RuntimeError(f"brain rejected ({response.status_code}): {response.text[:200]}")
     payload = response.json()
-    body = screenwriter._json_object(payload["choices"][0]["message"]["content"])
+    choice = payload["choices"][0]
+    if str(choice.get("finish_reason", "")).lower() == "length":
+        used = int((payload.get("usage") or {}).get("completion_tokens") or 0)
+        raise BrainTruncated(
+            f"brain reply truncated at {used or BRAIN_MAX_TOKENS} tokens (finish_reason=length)"
+            + (
+                f" — the {len(clip_plan)}-clip split did not fit one reply"
+                if clip_plan
+                else ""
+            )
+        )
+    body = screenwriter._json_object(choice["message"]["content"])
     master = _parse(
         body,
         idea=idea,
@@ -1021,14 +1044,19 @@ def derive(
         plan = []
     if brain_url():
         last_error: Exception | None = None
+        attempts = 0
         for _attempt in range(BRAIN_ATTEMPTS):
+            attempts += 1
             try:
                 return optimize(_from_brain(idea, target, refs, authored, plan or None))
+            except BrainTruncated as err:
+                last_error = err
+                break  # the cap is deterministic — a blind retry is the same cut
             except Exception as err:  # noqa: BLE001 — retried, then raised as a named state
                 last_error = err
         raise MasterUnavailable(
             f"{brain_model()} could not derive the master prompt after "
-            f"{BRAIN_ATTEMPTS} attempts: {last_error}"
+            f"{attempts} attempt{'s' if attempts != 1 else ''}: {last_error}"
         )
     master = optimize(_template(idea, target, bool(refs), authored))
     if plan:
@@ -1098,6 +1126,7 @@ __all__ = [
     "MASTER_TEMPLATE",
     "DURATION_SECTION",
     "OUTPUT_CONTRACT",
+    "BrainTruncated",
     "MasterUnavailable",
     "assemble",
     "beat_budget",

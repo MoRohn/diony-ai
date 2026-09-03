@@ -108,6 +108,11 @@ _ASPECTS: dict[str, str] = {}
 # The film's narrator voice (Blueprint 28): "" = Auto (the Director casts
 # from the film's tone), else a roster voice_id chosen in the console.
 _VOICES: dict[str, str] = {}
+# The inputs every master derivation was made from, keyed by op id (a chain's
+# links share one record). s-16d2e6e5e0: a failed derivation released the
+# chain with the raw idea and no way back but a re-paste — the idea was
+# nowhere. Persisted, so a retry survives a restart.
+_DERIVATIONS: dict[str, dict] = {}
 
 
 def reset() -> None:
@@ -134,6 +139,7 @@ def reset() -> None:
         _ACCEPTED,
         _ASPECTS,
         _VOICES,
+        _DERIVATIONS,
     ):
         store.clear()
     from diony_director import flow_lexicon, grok_lexicon
@@ -755,6 +761,7 @@ def propose(
     # (not runnable) until the artifact lands — a reasoning brain must never
     # ride a request through the name router.
     expanded, authored = authored_elements(sid, text, chosen_provider)
+    breakdown = screenwriter.authored_breakdown(text)
     async_master = bool(brain_url())
     master: MasterPrompt | None = None
     if not async_master:
@@ -779,6 +786,9 @@ def propose(
         rationale="single-shot draft; Grok is the iteration camera"
         if chosen_provider is CloudProvider.GROK
         else "single-shot draft on the requested Flow lane",
+        # the authored words ride the op from the first second: a derivation
+        # that fails (or a restart) never leaves the script behind
+        narration=" ".join(authored_narration_plan(breakdown, 1)),
     )
     stills_note = _attach_stills(op, start, list(extras), "the frame")
     if master is not None:
@@ -789,6 +799,18 @@ def propose(
         )
     _OPS[op.id] = op
     _SESSIONS.setdefault(sid, SessionState(id=sid)).op_ids.append(op.id)
+    _record_derivation(
+        [op.id],
+        kind="single",
+        idea=text,
+        expanded=expanded,
+        provider=chosen_provider,
+        plan=[int(duration)],
+        refs=refs,
+        authored=authored,
+        has_start=bool(start),
+        authored_lines=len(breakdown.get("narration") or []),
+    )
     persist(sid)
     if async_master:
         _kick_master_derivation(
@@ -860,6 +882,8 @@ def _propose_chain(
     start, extras = upload_refs(sid)
     refs = ([start] if start else []) + list(extras)
     expanded, authored = authored_elements(sid, text, provider)
+    breakdown = screenwriter.authored_breakdown(text)
+    seeded = authored_narration_plan(breakdown, count)
     async_master = bool(brain_url())
     master: MasterPrompt | None = None
     if not async_master:
@@ -886,7 +910,9 @@ def _propose_chain(
         stale = stale or est.rate_cards_stale
         first = index == 0
         has_start = bool(start) if first else True
-        narration = ""
+        # provisional links carry the authored lines in play order — the
+        # brain's verbatim mapping replaces them when the master lands
+        narration = seeded[index]
         if master is not None:
             narration = str(master.clips[index].get("narration", "") or "")
             prompt = compile_master_body(
@@ -932,6 +958,18 @@ def _propose_chain(
     state = _SESSIONS.setdefault(sid, SessionState(id=sid))
     state.op_ids.extend(op.id for op in ops)
     _register_oneshot_chain(sid, [op.id for op in ops])
+    _record_derivation(
+        [op.id for op in ops],
+        kind="chain",
+        idea=text,
+        expanded=expanded,
+        provider=provider,
+        plan=plan,
+        refs=refs,
+        authored=authored,
+        has_start=bool(start),
+        authored_lines=len(breakdown.get("narration") or []),
+    )
     frames = _plan_style_frames(sid, ops, master) if master is not None else []
     persist(sid)
     if async_master:
@@ -1169,8 +1207,8 @@ def _kick_chain_derivation(
             for op in ops:
                 op.rationale = (
                     op.rationale.split(" · ")[0]
-                    + f" · master derivation failed ({type(err).__name__}: {str(err)[:160]}) — "
-                    "this is the provisional raw-idea prompt; send the idea again to retry"
+                    + f" · master derivation failed ({type(err).__name__}: {str(err)[:220]}) — "
+                    "held on the provisional raw-idea prompt; Retry derivation re-derives in place"
                 )
         finally:
             for op in ops:
@@ -1183,6 +1221,154 @@ def _kick_chain_derivation(
 
 def master_for_op(op_id: str) -> MasterPrompt | None:
     return _MASTERS.get(op_id)
+
+
+def authored_narration_plan(breakdown: dict, count: int) -> list[str]:
+    """The user's own narration lines, dealt across `count` clips in play
+    order. Scene-structured input maps scene→clip when the counts agree;
+    otherwise the lines spread as contiguous groups, never reordered and
+    never dropped. Empty strings where the input carries no lines."""
+    count = max(1, int(count))
+    scenes = [
+        [str(line).strip() for line in (scene.get("narration") or []) if str(line).strip()]
+        for scene in (breakdown.get("scenes") or [])
+        if isinstance(scene, dict)
+    ]
+    scenes = [lines for lines in scenes if lines]
+    if scenes and len(scenes) == count:
+        return [" ".join(lines) for lines in scenes]
+    lines = [str(line).strip() for line in (breakdown.get("narration") or []) if str(line).strip()]
+    if not lines:
+        return [""] * count
+    per, extra = divmod(len(lines), count)
+    out: list[str] = []
+    cursor = 0
+    for index in range(count):
+        take = per + (1 if index < extra else 0)
+        out.append(" ".join(lines[cursor : cursor + take]))
+        cursor += take
+    return out
+
+
+def _record_derivation(
+    op_ids: list[str],
+    *,
+    kind: str,
+    idea: str,
+    expanded: str,
+    provider: CloudProvider,
+    plan: list[int],
+    refs: list[str],
+    authored: dict[str, str],
+    has_start: bool,
+    authored_lines: int,
+) -> None:
+    doc = {
+        "kind": kind,
+        "op_ids": list(op_ids),
+        "idea": idea,
+        "expanded": expanded,
+        "provider": provider.value,
+        "plan": [int(d) for d in plan],
+        "refs": [str(r) for r in refs],
+        "authored": dict(authored),
+        "has_start": bool(has_start),
+        "authored_lines": int(authored_lines),
+    }
+    for op_id in op_ids:
+        _DERIVATIONS[op_id] = doc
+
+
+def derivation_for(op_id: str) -> dict | None:
+    return _DERIVATIONS.get(op_id)
+
+
+def authored_lines_expected(sid: str) -> int:
+    """How many narration lines the user authored into this session's ideas."""
+    state = _SESSIONS.get(sid)
+    if state is None:
+        return 0
+    docs: dict[str, dict] = {}
+    for op_id in state.op_ids:
+        doc = _DERIVATIONS.get(op_id)
+        if doc is not None:
+            docs[(doc.get("op_ids") or [op_id])[0]] = doc
+    return sum(int(d.get("authored_lines") or 0) for d in docs.values())
+
+
+def derivation_block(op: DirectorOp) -> str:
+    """Why this op must not spend yet: its master prompt never derived. A
+    v0-provisional prompt is the raw idea shrunk to the route's caps — on
+    s-16d2e6e5e0 that was the first 400 characters of a pasted template, and
+    twelve clips rolled on it. Empty when the op is runnable."""
+    if op.prompt_version != "v0-provisional":
+        return ""
+    if op.status == "deriving":
+        return "the master prompt is deriving now — it rolls the moment the artifact lands"
+    note = ""
+    for part in op.rationale.split(" · ")[1:]:
+        if "derivation" in part:
+            note = part.strip()
+    return (
+        "the master prompt was never derived for this clip"
+        + (f" ({note})" if note else "")
+        + " — retry the derivation before it rolls"
+    )
+
+
+def retry_derivation(op_id: str) -> list[DirectorOp]:
+    """Re-run the master derivation an op (or its whole chain) is waiting on,
+    from the recorded inputs — no re-paste, the same priced ops. Raises
+    LookupError when nothing was recorded, RuntimeError when there is nothing
+    to retry or no brain to retry with."""
+    from diony_director.screenwriter import brain_url
+
+    doc = _DERIVATIONS.get(op_id)
+    if doc is None:
+        raise LookupError("no derivation is recorded for this op — send the idea again")
+    if not brain_url():
+        raise RuntimeError("no brain is configured — nothing can derive the master prompt")
+    ops = [_OPS[i] for i in doc["op_ids"] if i in _OPS]
+    if not ops:
+        raise LookupError("the ops this derivation priced are gone")
+    if any(op.status == "deriving" for op in ops):
+        raise RuntimeError("the master prompt is deriving now")
+    if all(op.prompt_version != "v0-provisional" for op in ops):
+        raise RuntimeError("the master prompt is already derived — nothing to retry")
+    if any(op.status != "proposed" for op in ops):
+        busy = ", ".join(f"{op.id} is {op.status}" for op in ops if op.status != "proposed")
+        raise RuntimeError(f"only proposed ops can re-derive: {busy}")
+    sid = ops[0].session_id
+    provider = CloudProvider(doc["provider"])
+    for op in ops:
+        op.status = "deriving"
+        op.rationale = op.rationale.split(" · ")[0]
+    persist(sid)
+    if doc["kind"] == "chain":
+        _kick_chain_derivation(
+            [op.id for op in ops],
+            sid,
+            doc["idea"],
+            doc["expanded"],
+            provider,
+            [int(d) for d in doc["plan"]],
+            list(doc.get("refs") or []),
+            dict(doc.get("authored") or {}),
+            bool(doc.get("has_start")),
+        )
+    else:
+        _kick_master_derivation(
+            ops[0].id,
+            sid,
+            doc["idea"],
+            doc["expanded"],
+            provider,
+            int((doc.get("plan") or [ops[0].duration_s])[0]),
+            list(doc.get("refs") or []),
+            dict(doc.get("authored") or {}),
+            bool(doc.get("has_start")),
+        )
+    return ops
 
 
 def _kick_master_derivation(
@@ -1230,8 +1416,8 @@ def _kick_master_derivation(
         except Exception as err:  # noqa: BLE001 — a failed derivation is a named state
             op.rationale = (
                 op.rationale.split(" · ")[0]
-                + f" · master derivation failed ({type(err).__name__}: {str(err)[:160]}) — "
-                "this is the provisional raw-idea prompt; send the idea again to retry"
+                + f" · master derivation failed ({type(err).__name__}: {str(err)[:220]}) — "
+                "held on the provisional raw-idea prompt; Retry derivation re-derives in place"
             )
         finally:
             if op.status == "deriving":
@@ -2448,6 +2634,7 @@ def persist(sid: str) -> None:
         "uploads": list(_UPLOADS.get(sid) or []),
         "runtime": runtime_doc,
         "draft": draft_doc,
+        "derivations": {i: _DERIVATIONS[i] for i in state.op_ids if i in _DERIVATIONS},
     }
     path = _state_path(sid)
     try:
@@ -2489,8 +2676,8 @@ def _load_state(sid: str, doc: dict) -> None:
             op.status = "proposed"
             if "provisional" not in op.rationale:
                 op.rationale += (
-                    " · master derivation interrupted by a restart — this is the "
-                    "provisional raw-idea prompt; send the idea again to re-derive"
+                    " · master derivation interrupted by a restart — held on the "
+                    "provisional raw-idea prompt; Retry derivation re-derives in place"
                 )
     if doc.get("package"):
         _PACKAGES[sid] = ProductionPackage.model_validate(doc["package"])
@@ -2522,6 +2709,12 @@ def _load_state(sid: str, doc: dict) -> None:
         grok_lexicon.restore_template(sid, doc["grok_template"])
     if doc.get("uploads"):
         _UPLOADS[sid] = list(doc["uploads"])
+    shared: dict[str, dict] = {}
+    for op_id, entry in (doc.get("derivations") or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        key = ",".join(entry.get("op_ids") or [op_id])
+        _DERIVATIONS[op_id] = shared.setdefault(key, dict(entry))
     for op_id, entry in (doc.get("runtime") or {}).items():
         rt = _RUNTIME.setdefault(op_id, {})
         if entry.get("handle"):

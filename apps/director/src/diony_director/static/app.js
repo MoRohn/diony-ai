@@ -471,9 +471,55 @@
     }
   }
 
+  // The failure a derivation left on the op's rationale, in the user's words.
+  function derivationNote(op) {
+    const parts = String(op.rationale || "").split(" · ").slice(1);
+    return (
+      parts.find((p) => p.includes("derivation")) ||
+      "the master prompt was never derived"
+    );
+  }
+
+  // A provisional prompt never rolls — the server 409s it, and the desk says
+  // why. s-16d2e6e5e0: a failed derivation released the chain as runnable
+  // and twelve clips rolled on the raw idea with no script. The card holds
+  // with the failure named and, alone, a Retry that re-derives in place; a
+  // chain link defers to the chain bar's one Retry.
+  function holdProvisional(op, card, chain, onRetry) {
+    const state = card.querySelector(".state");
+    const btn = card.querySelector("button");
+    if (btn) btn.disabled = true;
+    state.textContent = "held — master prompt not derived";
+    state.className = "state failed";
+    card.querySelectorAll(".rederive, .derivenote").forEach((el) => el.remove());
+    if (chain) return;
+    const note = document.createElement("div");
+    note.className = "derivenote";
+    note.textContent = derivationNote(op);
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "rederive";
+    retry.textContent = "Retry derivation";
+    retry.addEventListener("click", async () => {
+      retry.disabled = true;
+      try {
+        await api(`/api/director/ops/${op.id}/derive`, { method: "POST" });
+        note.remove();
+        retry.remove();
+        onRetry();
+      } catch (err) {
+        retry.disabled = false;
+        note.textContent = `retry failed: ${err.message || err}`;
+      }
+    });
+    state.after(retry);
+    card.querySelector(".row").after(note);
+  }
+
   // A one-shot priced while the brain derives its master prompt: the card
   // holds (Run disabled) and unlocks — prompt swapped in, artifact shown —
-  // the moment the artifact lands. Nothing can roll before it.
+  // the moment the artifact lands. Nothing can roll before it, and a
+  // derivation that failed holds the card instead of unlocking it.
   function landDerivedCard(op, card, body, chain) {
     // the artifact landed: swap the provisional prompt for the derived one,
     // hang the artifact panels, and unlock the Run button
@@ -484,9 +530,14 @@
     Object.assign(op, body.op);
     const state = card.querySelector(".state");
     const btn = card.querySelector("button");
+    if (body.op.prompt_version === "v0-provisional") {
+      holdProvisional(op, card, chain, () => watchDeriving(op, card, btn, state, chain));
+      return false;
+    }
     state.textContent = body.op.status;
     state.className = "state";
     if (btn && body.op.status === "proposed") btn.disabled = false;
+    return true;
   }
 
   function watchDeriving(op, card, btn, state, chain) {
@@ -543,6 +594,9 @@
       } else {
         watchDeriving(op, card, btn, state, chain);
       }
+    } else if (op.prompt_version === "v0-provisional" && op.status === "proposed") {
+      // a reopened room whose derivation failed (or a restart cut it short)
+      holdProvisional(op, card, chain, () => watchDeriving(op, card, btn, state, chain));
     } else if (op.master) renderMasterFor(card, op.master, chain);
     btn.addEventListener("click", async () => {
       btn.disabled = true;
@@ -1719,8 +1773,43 @@
     // Nothing can roll before the master's split lands on every link. ONE
     // derivation covers the chain, so ONE ticker lives here on the bar —
     // never duplicated per card — and unlocks every card when it lands.
-    if (ops[0].status === "deriving") {
+    // A chain whose derivation failed is HELD: Run All stays off, the bar
+    // names the failure, and one Retry re-derives every link in place.
+    const holdChain = (op) => {
       allBtn.disabled = true;
+      upBtn.disabled = true;
+      progress.textContent = `held — ${derivationNote(op)} `;
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "batch ghost rederive";
+      retry.textContent = "Retry derivation";
+      retry.addEventListener("click", async () => {
+        retry.disabled = true;
+        try {
+          await api(`/api/director/ops/${ops[0].id}/derive`, { method: "POST" });
+        } catch (err) {
+          progress.textContent = `retry failed: ${err.message || err} `;
+          progress.appendChild(retry);
+          retry.disabled = false;
+          return;
+        }
+        ops.forEach((o) => {
+          o.status = "deriving";
+          const card = cardEls.get(o.id);
+          if (!card) return;
+          const st = card.querySelector(".state");
+          st.textContent = "deriving";
+          st.className = "state deriving";
+          const b = card.querySelector("button");
+          if (b) b.disabled = true;
+        });
+        gateOnDerivation();
+      });
+      progress.appendChild(retry);
+    };
+    const gateOnDerivation = () => {
+      allBtn.disabled = true;
+      upBtn.disabled = true;
       const started = Date.now();
       progress.textContent = `deriving the master prompt + ${ops.length}-clip split…`;
       const gate = async () => {
@@ -1751,11 +1840,19 @@
           }
           landDerivedCard(op, card, one, { index, count: ops.length });
         }
+        if (body.op.prompt_version === "v0-provisional") {
+          holdChain(body.op);
+          return;
+        }
         allBtn.disabled = false;
         refreshUpLabel();
         progress.textContent = "";
       };
       setTimeout(gate, 2500);
+    };
+    if (ops[0].status === "deriving") gateOnDerivation();
+    else if (ops[0].prompt_version === "v0-provisional" && ops[0].status === "proposed") {
+      holdChain(ops[0]);
     }
 
     const parts = (id) => {
