@@ -237,7 +237,12 @@ def _package(policy: str = "auto"):
 
 def test_the_veo_dialect_finally_directs_sound(monkeypatch) -> None:
     package = _package(policy="google-flow")
-    picture = next(c for c in package.clips if c.model.startswith("veo"))
+    # the Veo dialect stays a tested capability behind an explicit model choice
+    picture = next(
+        c for c in package.clips if c.clip_class not in {"sync-dialogue", "vo-over"}
+    )
+    picture.model = "veo-3.1-fast"
+    picture.duration_s = 8
     version = compiler.compile_clip_prompt(picture, package)
     assert "Sound:" in version.prompt
     assert "Never:" in version.prompt, "the forbidden list reaches the prompt"

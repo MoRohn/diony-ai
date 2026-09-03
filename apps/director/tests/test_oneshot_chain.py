@@ -34,6 +34,13 @@ def test_flow_plans_book_grid_units() -> None:
     assert session._clip_plan(CloudProvider.GOOGLE_FLOW, "veo-3.1-fast", 8) == []
 
 
+def test_omni_chains_ride_the_10s_grid_on_any_plan() -> None:
+    # Omni 1.1 Flash books 10s links regardless of the Ultra gate
+    plan = session._clip_plan(CloudProvider.GOOGLE_FLOW, "omni-flash", 20)
+    assert plan == [10, 10]
+    assert session._clip_plan(CloudProvider.GOOGLE_FLOW, "omni-flash", 10) == []
+
+
 def test_a_long_one_shot_becomes_a_priced_sequenced_chain() -> None:
     sid = _sid()
     proposal = session.propose(

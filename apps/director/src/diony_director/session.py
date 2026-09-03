@@ -28,12 +28,16 @@ from diony_director.screenwriter import ScreenplayDraft
 
 DEFAULT_MODELS = {
     CloudProvider.GROK: "grok-imagine-video-1.5",
-    CloudProvider.GOOGLE_FLOW: "veo-3.1-fast",
+    # Omni 1.1 Flash is the Flow lane's model: audio-native video with voices,
+    # characters, start + end frames, v2v editing, 10s clips at 360p/720p
+    # (verified against useapi.net docs 2026-09-02). Veo tiers stay reachable
+    # by explicit model choice and as the extension lane.
+    CloudProvider.GOOGLE_FLOW: "omni-flash",
 }
 
 PROVIDER_LABELS = {
     CloudProvider.GROK: "Grok Imagine",
-    CloudProvider.GOOGLE_FLOW: "Google Flow (Veo)",
+    CloudProvider.GOOGLE_FLOW: "Google Flow (Omni)",
 }
 
 _GROK_STYLE = (

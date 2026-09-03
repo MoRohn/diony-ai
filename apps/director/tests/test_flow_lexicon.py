@@ -109,11 +109,23 @@ def test_template_survives_persist_and_rehydrate(tmp_path) -> None:
 # --- compiled prompts: Google route ------------------------------------------
 
 
+def _veo_picture(package):
+    """The Veo prose dialect stays a tested capability behind an explicit
+    model choice (the Flow policy now books omni-flash across the board) —
+    force a picture clip onto it, on Veo's non-Ultra grid."""
+    clip = next(
+        c for c in package.clips if c.clip_class not in {"sync-dialogue", "vo-over"}
+    )
+    clip.model = "veo-3.1-fast"
+    clip.duration_s = 8
+    return clip
+
+
 def test_veo_prompts_carry_the_session_world_clause() -> None:
     sid = "s-veo-world"
     session.set_flow_template(sid, world="cyberpunk")
     package = _package(sid, "google-flow")
-    picture = next(c for c in package.clips if c.model.startswith("veo"))
+    picture = _veo_picture(package)
     prompt = compiler.compile_clip_prompt(picture, package).prompt
     assert "Dense neon decay" in prompt
     assert "Shot on a cinema camera" not in prompt, "the world replaces the baseline, never stacks"
@@ -121,7 +133,7 @@ def test_veo_prompts_carry_the_session_world_clause() -> None:
 
 def test_veo_prompts_default_to_the_baseline_world() -> None:
     package = _package("s-veo-base", "google-flow")
-    picture = next(c for c in package.clips if c.model.startswith("veo"))
+    picture = _veo_picture(package)
     prompt = compiler.compile_clip_prompt(picture, package).prompt
     assert "Shot on a cinema camera" in prompt
 
@@ -130,7 +142,7 @@ def test_inline_world_on_the_shot_beats_the_session_template() -> None:
     sid = "s-veo-inline"
     session.set_flow_template(sid, world="cyberpunk")
     package = _package(sid, "google-flow")
-    picture = next(c for c in package.clips if c.model.startswith("veo"))
+    picture = _veo_picture(package)
     picture.camera_idea = "/dreamy: she drifts through the flooded arcade"
     prompt = compiler.compile_clip_prompt(picture, package).prompt
     assert "Soft emotional unreality" in prompt
@@ -139,7 +151,7 @@ def test_inline_world_on_the_shot_beats_the_session_template() -> None:
 
 def test_world_only_shot_never_resurrects_the_literal_token() -> None:
     package = _package("s-veo-worldonly", "google-flow")
-    picture = next(c for c in package.clips if c.model.startswith("veo"))
+    picture = _veo_picture(package)
     picture.camera_idea = "/dreamy"
     prompt = compiler.compile_clip_prompt(picture, package).prompt
     assert "/dreamy" not in prompt
@@ -149,7 +161,7 @@ def test_world_only_shot_never_resurrects_the_literal_token() -> None:
 
 def test_camera_shorthand_expands_in_veo_shot_prose() -> None:
     package = _package("s-veo-cam", "google-flow")
-    picture = next(c for c in package.clips if c.model.startswith("veo"))
+    picture = _veo_picture(package)
     picture.camera_idea = "/closeup: on her eyes as the engine turns"
     prompt = compiler.compile_clip_prompt(picture, package).prompt
     assert "micro-expression" in prompt and "/closeup" not in prompt
@@ -314,7 +326,7 @@ def test_a_vanished_custom_world_falls_back_to_baseline_not_a_crash() -> None:
     session.set_flow_template(sid, world="housestyle")
     custom.unlink()
     package = _package(sid, "google-flow")
-    picture = next(c for c in package.clips if c.model.startswith("veo"))
+    picture = _veo_picture(package)
     prompt = compiler.compile_clip_prompt(picture, package).prompt
     assert "Shot on a cinema camera" in prompt, "compile survives on the baseline clause"
     dialogue = next(c for c in package.clips if c.model == "omni-flash")
@@ -536,7 +548,7 @@ def test_blocking_locks_arm_on_every_google_dialect() -> None:
     rides — a back-to-camera / concealment cue arms the hard lock on the
     Veo and omni dialects exactly as it does on Grok."""
     package = _package("s-lock-all", "google-flow")
-    picture = next(c for c in package.clips if c.model.startswith("veo"))
+    picture = _veo_picture(package)
     picture.camera_idea = "Seen from behind, back to camera, hood drawn"
     prompt = compiler.compile_clip_prompt(picture, package).prompt
     assert "Blocking lock" in prompt and "never turns to face the camera" in prompt

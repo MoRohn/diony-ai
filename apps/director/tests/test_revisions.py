@@ -93,6 +93,33 @@ def test_a_failed_prompt_is_never_resubmitted_verbatim() -> None:
     assert revisions.failure_key(op2) != revisions.failure_key(op1)
 
 
+def test_a_grok_provider_swap_lands_on_omni_flash() -> None:
+    # the Flow lane's model is Omni 1.1 Flash — a repeat-failure swap off Grok
+    # books it, never a Veo tier
+    package = _package()
+    clip = next(
+        c
+        for c in package.clips
+        if c.provider is CloudProvider.GROK and not c.audio_packet.voice_ref
+    )
+    rev = _review(clip.clip_id, {"delivery": "fail"}, ["empty media"])
+    memory: set = set()
+    op1, _ = revisions.plan_revision(
+        rev, clip, package, session_id="s-x", revision_count=0, failure_memory=memory
+    )
+    clip.add_prompt(revisions.as_prompt_version(op1))
+    memory.add(revisions.failure_key(op1))
+    op2, _ = revisions.plan_revision(
+        rev, clip, package, session_id="s-x", revision_count=1, failure_memory=memory
+    )
+    assert op2 is not None
+    assert op2.provider is CloudProvider.GOOGLE_FLOW
+    assert op2.model == "omni-flash"
+    # the booking re-quantizes to the omni grid and prices as omni
+    assert int(op2.duration_s) in (4, 6, 8, 10)
+    assert op2.estimate is not None and op2.estimate.total_usd_micros > 0
+
+
 def test_the_revision_budget_is_a_hard_stop() -> None:
     package = _package()
     clip = package.clips[0]

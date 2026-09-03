@@ -176,7 +176,8 @@ def plan_revision(
         # it; otherwise force a differently-worded revision.
         if not clip.audio_packet.voice_ref:
             if provider is CloudProvider.GROK:
-                swapped = (CloudProvider.GOOGLE_FLOW, "veo-3.1-fast")
+                # the Flow lane's model is Omni 1.1 Flash — a swap books it
+                swapped = (CloudProvider.GOOGLE_FLOW, "omni-flash")
             else:
                 swapped = (CloudProvider.GROK, "grok-imagine-video-1.5")
             op_type = DirectorOpType.GENERATE

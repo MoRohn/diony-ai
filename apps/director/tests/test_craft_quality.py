@@ -334,17 +334,18 @@ def test_anchor_drift_fails_a_mutated_set(tmp_path) -> None:
 # --- the veo-3.1-quality lane (no reference images) --------------------------
 
 
-def test_flow_picture_lane_rides_fast_and_quality_refs_stay_legal() -> None:
-    """Pro plan doctrine: the policy routes picture to veo-3.1-fast (quality is
-    Ultra-paygated). The quality lane stays a tested capability: force a clip
-    onto it and its payload must remain legal (no reference images)."""
+def test_flow_picture_lane_rides_omni_and_quality_refs_stay_legal() -> None:
+    """Flow doctrine: the policy routes every clip through Omni 1.1 Flash.
+    The Veo quality lane stays a tested capability: force a clip onto it and
+    its payload must remain legal (no reference images)."""
     package = packagebuilder.build_package(
         "s-veo-q", "a getaway", _draft(), provider_policy="google-flow"
     )
-    picture = [c for c in package.clips if c.model.startswith("veo")]
-    assert picture and all(c.model == "veo-3.1-fast" for c in picture)
+    picture = [c for c in package.clips if c.clip_class not in {"sync-dialogue", "vo-over"}]
+    assert picture and all(c.model == "omni-flash" for c in picture)
     for clip in picture:
         clip.model = "veo-3.1-quality"  # the Ultra lane, exercised explicitly
+        clip.duration_s = 8  # re-quantized off the omni grid onto Veo's
         setting = package.setting(str(clip.continuity.setting_plate["setting_id"]))
         setting.plate_asset_id = "/vault/plates/diner.jpg"
         refs = compiler.provider_artifact_refs(clip, package)
@@ -374,7 +375,7 @@ def test_quality_re_anchor_opens_from_the_scene_master_frame(monkeypatch, tmp_pa
     package = packagebuilder.build_package(
         "s-veo-anchor", "a getaway", _draft(), provider_policy="google-flow"
     )
-    clip = next(c for c in package.clips if c.model.startswith("veo"))
+    clip = package.clips[0]
     clip.model = "veo-3.1-quality"  # force the Ultra lane to test its re-anchor
 
     op = _gen_op(
@@ -423,11 +424,7 @@ def test_flow_still_opener_with_cast_builds_a_gate_legal_payload() -> None:
     )
     opener = None
     for clip in package.clips:
-        if (
-            clip.continuity.lock_recipe == "still"
-            and clip.continuity.character_packs
-            and clip.model.startswith("veo")
-        ):
+        if clip.continuity.lock_recipe == "still" and clip.continuity.character_packs:
             opener = clip
             break
     assert opener is not None, "the draft opens on a still-recipe shot with cast"

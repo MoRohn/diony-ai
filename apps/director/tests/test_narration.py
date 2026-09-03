@@ -155,6 +155,27 @@ def test_locks_and_the_site_pin_outrank_casting(monkeypatch) -> None:
     assert fresh.cast_note.startswith("cast for:")
 
 
+def test_one_voice_carries_the_whole_film(monkeypatch) -> None:
+    """Single-speaker doctrine: every unlocked cue in a production is cast to
+    the SAME voice, whoever the scripted speaker is — per-speaker casting gave
+    a two-character scene two narrator voices, the multiple-voices defect in
+    another coat. Authored voice locks stay authored law."""
+    monkeypatch.delenv(narration.GROK_VOICE_ENV, raising=False)
+    monkeypatch.delenv(narration.GROK_VOICE_ROSTER_ENV, raising=False)
+    cues = [
+        narration.NarrationCue(order=0, clip_id="cl-1", speaker="ELIAS", line="a"),
+        narration.NarrationCue(order=1, clip_id="cl-2", speaker="MARA", line="b"),
+        narration.NarrationCue(order=2, clip_id="cl-3", speaker="", line="c"),
+        narration.NarrationCue(order=3, clip_id="cl-4", speaker="ELIAS", line="d", voice_ref="voice-x"),
+    ]
+    narration.cast_cues(cues, tone_text="tense noir, night streets")
+    unlocked = [c.voice_ref for c in cues[:3]]
+    assert len(set(unlocked)) == 1, "one production, one narrator voice"
+    assert unlocked[0] in narration.DEFAULT_ROSTER
+    assert all("one voice" in c.cast_note for c in cues[:3])
+    assert cues[3].voice_ref == "voice-x" and cues[3].cast_note == "authored voice lock"
+
+
 def test_direction_becomes_performed_speech_tags(monkeypatch) -> None:
     monkeypatch.delenv(narration.NARRATOR_TAGS_ENV, raising=False)
     # a whisper wraps the verbatim words; a beat and a laugh lead them

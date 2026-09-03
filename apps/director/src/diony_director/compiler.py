@@ -446,6 +446,18 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 (_blocking_locks(clip, char_text, action, camera_text=camera_text), 0),
                 (continuity, 1),
                 (master["anchors"], 1),
+                # the whole Flow package rides omni now, picture clips
+                # included — the authored action must reach the prompt, not
+                # just performance and sound
+                (
+                    action
+                    or (
+                        ""
+                        if clip.audio_packet.script_excerpt
+                        else scene.emotional_job or "a held cinematic moment"
+                    ),
+                    3,
+                ),
                 (_setting_block(setting, scene.heading), 2),
                 (look_block, 0),
                 (master["lighting"], 2),

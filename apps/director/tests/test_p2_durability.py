@@ -472,8 +472,9 @@ def test_a_broken_draft_is_refused_before_the_lock(monkeypatch) -> None:
 
 
 def test_provider_swap_requantizes_to_the_new_grid() -> None:
-    """A Grok 6s clip swapped to Veo must book a legal Veo duration (8s on a
-    non-Ultra plan) — the old swap emitted an op no provider would accept."""
+    """A Grok clip swapped to the Flow lane must book a legal duration on the
+    target model's grid (omni-flash: 4/6/8/10) — the old swap emitted an op
+    no provider would accept."""
     from diony_contracts.production import ClipReview
     from diony_director import capabilities, packagebuilder, revisions, screenwriter
     from diony_director.compiler import compile_clip_prompt
@@ -498,7 +499,8 @@ def test_provider_swap_requantizes_to_the_new_grid() -> None:
     )
     assert swapped is not None
     assert swapped.provider.value == "google-flow"
-    assert swapped.duration_s == 8, "re-quantized to the non-Ultra Veo grid"
+    assert swapped.model == "omni-flash"
+    assert int(swapped.duration_s) in (4, 6, 8, 10), "re-quantized to the omni grid"
     assert capabilities.violations(swapped) == []
 
 

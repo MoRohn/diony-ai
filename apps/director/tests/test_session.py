@@ -32,21 +32,24 @@ def test_every_proposal_carries_a_locked_estimate_and_speaks_its_cost() -> None:
     assert "total becomes" in proposal.reply
 
 
-def test_flow_proposals_quantize_to_the_veo_grid() -> None:
-    # 4/6s Veo bookings are Ultra-plan-only (verified against useapi docs);
-    # the conftest plan is "pro", so everything quantizes up to 8s.
+def test_flow_proposals_book_omni_flash_on_its_own_grid() -> None:
+    # the Flow lane rides Omni 1.1 Flash: 4/6/8/10s on any plan, priced per
+    # resolution and duration — no Ultra gate on the short durations
     sid = session.create_session()
     proposal = session.propose(sid, "neon diner at night", provider="google-flow", duration_s=5)
     op = proposal.op
     assert op.provider is CloudProvider.GOOGLE_FLOW
-    assert op.model == "veo-3.1-fast"
-    assert op.duration_s == 8
-    # veo-3.1-fast: 20 credits/generation on the pro plan + captcha solve
-    assert op.estimate is not None and op.estimate.total_usd_micros == 20 * 19_990 + 3_000
+    assert op.model == "omni-flash"
+    assert op.duration_s == 6
+    # omni-flash generation:720p:6s — 10 credits on the pro plan + captcha solve
+    assert op.estimate is not None and op.estimate.total_usd_micros == 10 * 19_990 + 3_000
 
 
 def test_ultra_plans_unlock_the_short_veo_durations(monkeypatch) -> None:
+    # the Veo tiers stay a tested capability behind an explicit model choice
     monkeypatch.setenv("DIONY_FLOW_PLAN", "ultra-99")
     sid = session.create_session()
-    proposal = session.propose(sid, "neon diner at night", provider="google-flow", duration_s=5)
+    proposal = session.propose(
+        sid, "neon diner at night", provider="google-flow", model="veo-3.1-fast", duration_s=5
+    )
     assert proposal.op.duration_s == 6

@@ -400,8 +400,9 @@ def test_the_artifact_is_route_neutral_across_dialects() -> None:
     package, _ops, _b, _r = session.lock_script(sid)
     providers = {clip.provider for clip in package.clips}
     assert providers == {CloudProvider.GOOGLE_FLOW}
+    # the Flow policy books one dialect now — omni-flash across the board
     dialects = {clip.model for clip in package.clips}
-    assert "omni-flash" in dialects and any(m.startswith("veo") for m in dialects)
+    assert dialects == {"omni-flash"}
     anchors = "Maintain strict continuity throughout: " + ", ".join(package.master_prompt.continuity_anchors)
     for clip in package.clips:
         assert anchors in clip.latest_prompt().prompt

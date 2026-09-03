@@ -275,10 +275,30 @@ def cast_cues(
     character_notes: dict[str, str] | None = None,
 ) -> None:
     """Resolve every cue's voice, in authored order of authority: a clip's
-    voice lock; the site-pinned DIONY_GROK_VOICE; else a cast from the
-    roster against the master's tone and the speaking character."""
+    voice lock; the site-pinned DIONY_GROK_VOICE; else ONE voice cast from
+    the roster for the whole production.
+
+    Single-speaker doctrine: per-speaker casting handed a two-character scene
+    two narrator voices — the multiple-voices defect wearing the casting
+    sheet. The film speaks with one narrator throughout; only an authored
+    voice lock (or the site pin) may say otherwise. A production whose cues
+    all belong to one scripted speaker still casts to that character's read
+    (gender tells and all); mixed speakers cast from the film's tone alone."""
     pinned = os.environ.get(GROK_VOICE_ENV, "").strip()
     notes = {str(k).strip().lower(): str(v) for k, v in (character_notes or {}).items()}
+    open_cues = [cue for cue in cues if not cue.voice_ref]
+    speakers = {c.speaker.strip().lower() for c in open_cues if c.speaker.strip()}
+    solo = next(iter(speakers)) if len(speakers) == 1 else ""
+    voice = ""
+    note = ""
+    if open_cues and not pinned:
+        directions = " ".join(c.direction for c in open_cues if c.direction)
+        voice, note = cast_voice(
+            speaker=solo or "narrator",
+            tone_text=f"{tone_text} {directions}",
+            character_notes=notes.get(solo, ""),
+        )
+        note += " — one voice for the whole film"
     for cue in cues:
         if cue.voice_ref:
             cue.cast_note = "authored voice lock"
@@ -287,11 +307,8 @@ def cast_cues(
             cue.voice_ref = pinned
             cue.cast_note = f"site-pinned {GROK_VOICE_ENV}"
             continue
-        cue.voice_ref, cue.cast_note = cast_voice(
-            speaker=cue.speaker,
-            tone_text=f"{tone_text} {cue.direction}",
-            character_notes=notes.get(cue.speaker.strip().lower(), ""),
-        )
+        cue.voice_ref = voice
+        cue.cast_note = note
 
 
 @dataclass

@@ -236,7 +236,12 @@ def test_a_chosen_flow_world_still_rides_beside_a_stylized_look() -> None:
 
     package = _package(ANIMATED, "google-flow")
     flow_lexicon.set_template(package.session_id, world="minimal")
-    clip = next(c for c in package.clips if c.model != "omni-flash")
+    # the Veo dialect stays a tested capability behind an explicit model choice
+    clip = next(
+        c for c in package.clips if c.clip_class not in {"sync-dialogue", "vo-over"}
+    )
+    clip.model = "veo-3.1-fast"
+    clip.duration_s = 8
     prompt = compiler.compile_clip_prompt(clip, package).prompt
     assert flow_lexicon.worlds()["minimal"]["clause"] in prompt
     assert package.master_prompt.look.block() in prompt

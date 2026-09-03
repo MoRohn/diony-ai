@@ -16,7 +16,8 @@ def test_auto_provider_honors_the_studio_choice(tmp_path) -> None:
     sid = session.create_session()
     proposal = session.propose(sid, "neon diner at night", duration_s=6)
     assert proposal.op.provider is CloudProvider.GOOGLE_FLOW
-    assert proposal.op.model == "veo-3.1-fast"
+    # the Flow lane rides Omni 1.1 Flash — audio-native, frames, v2v, 10s grid
+    assert proposal.op.model == "omni-flash"
 
 
 def test_explicit_provider_always_beats_the_choice(tmp_path) -> None:
@@ -55,15 +56,16 @@ def test_grok_policy_dialogue_compiles_with_a_mute_location_track() -> None:
     assert "no voice-over" in version.prompt
 
 
-def test_flow_policy_routes_picture_to_veo() -> None:
+def test_flow_policy_routes_every_clip_through_omni_flash() -> None:
+    # the whole Flow package — picture and dialogue — books on Omni 1.1 Flash:
+    # one model, one look, characters + refs + frames + v2v on every clip
     draft = _draft()
     clips = splitter.split_script(
         draft.script, draft.characters, draft.settings, provider_policy="google-flow"
     )
     for clip in clips:
         assert clip.provider is CloudProvider.GOOGLE_FLOW
-    picture = [c for c in clips if c.clip_class not in {"sync-dialogue", "vo-over"}]
-    assert picture and all(c.model == "veo-3.1-fast" for c in picture)
+    assert clips and all(c.model == "omni-flash" for c in clips)
 
 
 def test_lock_script_applies_the_studio_choice(tmp_path) -> None:

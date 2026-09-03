@@ -211,7 +211,12 @@ def test_veo_prompts_ignore_the_grok_template_and_tokens() -> None:
     sid = "s-veo-safe"
     session.set_grok_template(sid, camera="orbit", atmosphere="dust")
     package = _package(sid, "google-flow")
-    picture = next(c for c in package.clips if c.model.startswith("veo"))
+    # the Veo dialect stays a tested capability behind an explicit model choice
+    picture = next(
+        c for c in package.clips if c.clip_class not in {"sync-dialogue", "vo-over"}
+    )
+    picture.model = "veo-3.1-fast"
+    picture.duration_s = 8
     prompt = compiler.compile_clip_prompt(picture, package).prompt
     assert "dust particles swirl" not in prompt.lower()
     assert "camera orbits the subject slowly" not in prompt

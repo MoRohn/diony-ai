@@ -40,6 +40,30 @@ def test_dialogue_prompts_never_carry_the_scripted_words() -> None:
         assert "is speaking mid-conversation" in version.prompt
 
 
+def test_a_picture_clip_on_omni_flash_keeps_its_action() -> None:
+    # The Flow lane routes picture clips through Omni 1.1 Flash too — the omni
+    # dialect must carry the authored action, not just performance and sound.
+    draft = screenwriter.write_script(
+        "a getaway driver decides to leave town from a neon diner", runtime_target_s=60
+    )
+    package = packagebuilder.build_package(
+        "s-omni-pic", "a getaway", draft, provider_policy="google-flow"
+    )
+    for clip in package.clips:
+        action = compiler._action_text(clip, package)
+        if clip.clip_class in {"sync-dialogue", "vo-over"} or not action:
+            continue
+        assert clip.model == "omni-flash"
+        version = compiler.compile_clip_prompt(clip, package)
+        head = action.split(".")[0].strip()
+        assert head and head in version.prompt, (
+            f"{clip.clip_id}: the authored action is missing from the omni prompt"
+        )
+        break
+    else:
+        pytest.fail("no picture clip with authored action to test")
+
+
 def test_grok_prompts_weave_sound_inline_and_never_carry_dialogue() -> None:
     package = _package()
     picture = next(c for c in package.clips if c.provider is CloudProvider.GROK)
