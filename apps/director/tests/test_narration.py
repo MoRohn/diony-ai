@@ -377,6 +377,57 @@ def test_narrate_applies_the_no_overlap_layout(tmp_path, monkeypatch, fake_narra
 
 
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
+def test_the_final_lock_never_pumps_the_quiet_bed_into_static(
+    tmp_path, monkeypatch, fake_narrator
+) -> None:
+    # An assembled film carries a -44 dB room bed under mostly-quiet content.
+    # The narration mix's final one-pass loudnorm rode its gain up during the
+    # long quiet tail after the last cue — the bed became audible static. The
+    # lock must be linear (measured two-pass): one gain for the whole film.
+    ffmpeg = shutil.which("ffmpeg")
+    film = tmp_path / "film.mp4"
+    subprocess.run(
+        [
+            ffmpeg, "-y",
+            "-f", "lavfi", "-i", "testsrc2=size=320x180:duration=8",
+            "-filter_complex",
+            "sine=frequency=110:duration=1.5,apad=whole_dur=8,"
+            "aformat=channel_layouts=stereo[tone];"
+            "anoisesrc=r=48000:colour=brown:amplitude=0.006:d=8,"
+            "aformat=channel_layouts=stereo[bed];"
+            "[tone][bed]amix=inputs=2:duration=first:normalize=0[a]",
+            "-map", "0:v", "-map", "[a]",
+            "-c:v", "libx264", "-c:a", "aac", "-shortest", str(film),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    cues = [
+        narration.NarrationCue(
+            order=0, clip_id="cl-1", speaker="ANA", line="one line", start_s=0.15, window_s=1.5
+        )
+    ]
+    dest = tmp_path / "out.mp4"
+    narration.narrate(film, cues, dest, loudness_target="streaming")
+    probe = subprocess.run(
+        [
+            ffmpeg, "-ss", "4.0", "-t", "3.5", "-i", str(dest),
+            "-af", "volumedetect", "-f", "null", "-",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    tail_mean = next(
+        float(line.split("mean_volume:")[1].split("dB")[0])
+        for line in probe.stderr.splitlines()
+        if "mean_volume:" in line
+    )
+    assert tail_mean < -35, (
+        f"the quiet tail after the last cue must stay at the bed floor, measured {tail_mean} dB"
+    )
+
+
+@pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
 def test_a_line_too_long_for_its_clip_is_named_never_trimmed(
     tmp_path, monkeypatch, fake_narrator
 ) -> None:

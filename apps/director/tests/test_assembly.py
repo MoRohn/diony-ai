@@ -64,6 +64,22 @@ def test_a_muted_spec_silences_a_clip_that_has_audio(tmp_path) -> None:
     assert muted < -30
 
 
+def test_the_room_bed_is_never_normalized_into_static(tmp_path) -> None:
+    # The -44 dB room-tone bed is a FLOOR, not content: on a quiet program
+    # (speech-guard-muted clips) the old chain ran loudnorm over content+bed
+    # and pumped the noise ~27 dB toward the -16 LUFS target — loud static
+    # over the whole film.
+    a = tmp_path / "a.mp4"
+    b = tmp_path / "b.mp4"
+    _make_clip(a, 1.5, audio=True)
+    _make_clip(b, 1.5, audio=True)
+    result = assembly.assemble(
+        [a, b], tmp_path / "film.mp4", specs=[{"mute": True}, {"mute": True}]
+    )
+    mean = _mean_volume_db(result.path, 0.2, 2.6)
+    assert mean < -35, f"an all-muted film must stay at the bed floor, measured {mean} dB"
+
+
 def test_empty_assembly_is_refused() -> None:
     with pytest.raises(assembly.AssemblyFailed):
         assembly.assemble([], __import__("pathlib").Path("/tmp/never.mp4"))

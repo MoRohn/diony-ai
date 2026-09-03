@@ -177,10 +177,23 @@ def build_filter(
         f"aformat=channel_layouts=stereo[bed]"
     )
     target = LOUDNESS.get(loudness_target, LOUDNESS["streaming"])
+    # The loudness lock runs on the program CONTENT alone; the room-tone bed
+    # joins after it, at its authored -44 dB floor. Locking content+bed let
+    # loudnorm treat the bed as program and pump it ~27 dB toward the target
+    # on a quiet film (speech-guard-muted clips) — loud static end to end.
+    # A -100 dB dither rides under the content first: it sits below EBU
+    # R128's -70 LUFS gate so loudnorm never normalizes it, but it keeps an
+    # all-silent program (every clip muted or soundless) from feeding the
+    # lock pure digital silence — which NaN'd the AAC encoder.
     chains.append(
-        f"[ac][bed]amix=inputs=2:duration=first:normalize=0,"
-        f"loudnorm=I={target}:TP=-1.0:LRA=11,aresample=48000[aout]"
+        f"anoisesrc=r=48000:colour=white:amplitude=0.00001:d={total:.3f},"
+        f"aformat=channel_layouts=stereo[dither]"
     )
+    chains.append("[ac][dither]amix=inputs=2:duration=first:normalize=0[acd]")
+    chains.append(
+        f"[acd]loudnorm=I={target}:TP=-1.0:LRA=11,aresample=48000[locked]"
+    )
+    chains.append("[locked][bed]amix=inputs=2:duration=first:normalize=0[aout]")
     return chains
 
 
