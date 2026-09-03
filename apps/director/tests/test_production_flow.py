@@ -20,10 +20,10 @@ def _client() -> TestClient:
     return TestClient(app_module.app, raise_server_exceptions=False)
 
 
-def _real_clip(path: Path, duration: int) -> None:
+def _real_clip(path: Path, duration: int, size: str = "320x180") -> None:
     subprocess.run(
         [
-            "ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc2=size=320x180:duration={duration}",
+            "ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc2=size={size}:duration={duration}",
             "-f", "lavfi", "-i", f"sine=frequency=330:duration={duration}",
             "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", str(path),
         ],
@@ -31,23 +31,49 @@ def _real_clip(path: Path, duration: int) -> None:
     )
 
 
-def _fake_adapters(monkeypatch, tmp_path: Path, *, fail_external: set[str] | None = None):
-    """Both adapters succeed instantly, fetching a real clip sized to the booking."""
+def _fake_adapters(
+    monkeypatch,
+    tmp_path: Path,
+    *,
+    fail_external: set[str] | None = None,
+    finish_size: str = "1920x1080",
+    fail_upscales: bool = False,
+):
+    """Both adapters succeed instantly, fetching a real clip sized to the booking.
+    Flow upscales print at `finish_size` (a short finish fails its check)."""
 
     counter = {"n": 0}
     fail_external = fail_external or set()
+    durations: dict[str, int] = {}
 
     def make_submit(provider_id):
         def _submit(op):
             counter["n"] += 1
+            external = f"{provider_id}-{counter['n']}"
+            durations[external] = int(op.duration_s)
             return base.CloudJobHandle(
                 provider_id=provider_id,
-                external_id=f"{provider_id}-{counter['n']}",
+                external_id=external,
                 model=op.model,
                 duration_s=int(op.duration_s),
             )
 
         return _submit
+
+    def _submit_upscale(media_generation_id, *, resolution="1080p"):
+        counter["n"] += 1
+        source_external = str(media_generation_id).split("user:", 1)[-1]
+        external = f"google-flow-up-{counter['n']}"
+        if fail_upscales:
+            fail_external.add(external)
+        return base.CloudJobHandle(
+            provider_id="google-flow",
+            external_id=external,
+            model=flow.UPSCALE_MODEL,
+            resolution=resolution,
+            duration_s=durations.get(source_external, 8),
+            metadata={"kind": "upscale", "source_media_generation_id": str(media_generation_id)},
+        )
 
     def _poll(handle):
         if handle.external_id in fail_external:
@@ -76,7 +102,8 @@ def _fake_adapters(monkeypatch, tmp_path: Path, *, fail_external: set[str] | Non
         if str(dest).endswith(".jpg"):
             dest.write_bytes(b"jpgdata" * 512)
         elif HAVE_FFMPEG:
-            _real_clip(dest, max(1, handle.duration_s))
+            size = finish_size if handle.metadata.get("kind") == "upscale" else "320x180"
+            _real_clip(dest, max(1, handle.duration_s), size)
         else:
             dest.write_bytes(b"clip" * 1024)
         payload = dest.read_bytes()
@@ -95,6 +122,7 @@ def _fake_adapters(monkeypatch, tmp_path: Path, *, fail_external: set[str] | Non
         monkeypatch.setattr(adapter, "submit_image", make_submit_image(pid))
         monkeypatch.setattr(adapter, "poll", _poll)
         monkeypatch.setattr(adapter, "fetch", _fetch)
+    monkeypatch.setattr(flow, "submit_upscale", _submit_upscale)
 
 
 def _drive(client, sid, max_ticks=60):
@@ -284,8 +312,15 @@ def test_upscale_proposal_on_a_completed_flow_clip(monkeypatch, tmp_path) -> Non
     assert proposal.status_code == 200, proposal.text
     body = proposal.json()
     assert body["op"]["op"] == "upscale"
-    assert body["op"]["estimate"]["total_usd_micros"] == 20 * 19_990
+    # a 1080p finish is free on the documented plan — only the captcha solve bills
+    assert body["op"]["estimate"]["total_usd_micros"] == 3000
+    assert body["op"]["artifact_refs"]["source_op"] == flow_op["id"]
+    assert body["op"]["duration_s"] == flow_op["duration_s"]
     assert "$" in body["reply"]
+    # proposing twice never mints a second finish for the same take
+    again = client.post(f"/api/director/ops/{flow_op['id']}/upscale")
+    assert again.status_code == 409
+    assert "already proposed" in again.text
 
 
 def test_upscale_refuses_an_incomplete_op(monkeypatch, tmp_path) -> None:
@@ -558,3 +593,239 @@ def test_narration_lands_on_every_studio_engine(
     qc = json.loads((root / "qc-packet.json").read_text())
     assert qc["narration"]["recorded"] is True
     assert all(c["voice"] for c in qc["narration"]["cues"]), "every cue was cast"
+
+
+# --- Blueprint 30: Run, Assemble & Upscale All --------------------------------
+
+
+def _locked_production(client, monkeypatch, tmp_path, **fake_kwargs):
+    _fake_adapters(monkeypatch, tmp_path, **fake_kwargs)
+    sid = _start(client)
+    client.post(
+        f"/api/director/sessions/{sid}/produce",
+        json={"idea": "a getaway driver decides to leave town from a neon diner"},
+    )
+    ops = client.post(f"/api/director/sessions/{sid}/lock_script").json()["ops"]
+    flow_ids = {o["clip_id"] for o in ops if o["provider"] == "google-flow"}
+    grok_ids = {o["clip_id"] for o in ops if o["provider"] == "grok"}
+    assert flow_ids and grok_ids, "the fixture production must route both lanes"
+    client.post(f"/api/director/sessions/{sid}/run_batch", json={})
+    tick = _drive(client, sid)
+    assert tick["failed"] == 0
+    return sid, ops, flow_ids, grok_ids
+
+
+@pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
+def test_upscale_all_finishes_the_flow_takes_and_cuts_a_1080p_film(
+    monkeypatch, tmp_path, fake_narrator
+) -> None:
+    from diony_director import review
+
+    client = _client()
+    sid, ops, flow_ids, grok_ids = _locked_production(client, monkeypatch, tmp_path)
+
+    # a 1080p cut is refused, naming the takes, before their finishes exist
+    early = client.post(f"/api/director/sessions/{sid}/assemble", json={"finish": "1080p"})
+    assert early.status_code == 409, early.text
+    assert "Upscale All" in early.text
+    assert all(cid in early.text for cid in flow_ids)
+
+    up = client.post(f"/api/director/sessions/{sid}/upscale_all", json={}).json()
+    assert up["resolution"] == "1080p"
+    assert len(up["targeted"]) == len(flow_ids)
+    assert {s["clip_id"] for s in up["skipped"]} == grok_ids
+    assert all("Grok" in s["reason"] for s in up["skipped"])
+    assert up["already"] == [] and up["rolling"] == []
+    assert up["est_usd_micros"] == 3000 * len(flow_ids)  # captcha solves only
+
+    tick = _drive(client, sid)
+    assert tick["failed"] == 0
+    assert tick["completed"] >= len(ops) + len(flow_ids)
+
+    board = client.get(f"/api/director/sessions/{sid}/board").json()
+    rows = {c["clip_id"]: c for c in board["clips"]}
+    for cid in flow_ids:
+        assert rows[cid]["status"] == "completed", "the take stays the board's unit"
+        assert rows[cid]["finish"]["usable"] is True
+        assert rows[cid]["finish"]["verdict"] == "pass"
+        assert rows[cid]["finish"]["resolution"] == "1080p"
+        assert rows[cid]["can_upscale"] is False
+    for cid in grok_ids:
+        assert rows[cid]["finish"] is None
+    for op_id in up["targeted"]:
+        state = client.get(f"/api/director/ops/{op_id}").json()
+        assert state["op"]["status"] == "completed"
+        assert state["review"]["families"] == {"finish": "pass"}
+        assert state["review"]["measured"]["height"] == 1080
+        assert state["next_op"] is None
+        assert "replaces the take" in state["narration"]
+
+    film = client.post(f"/api/director/sessions/{sid}/assemble", json={"finish": "1080p"}).json()
+    assert film["clip_count"] == len(ops)
+    assert film["raster"] == "1920x1080"
+    assert set(film["finish"]["finished"]) == flow_ids
+    assert set(film["finish"]["native"]) == grok_ids
+    assert set(film["finish"]["conformed_up"]) == grok_ids
+    assert film["finish"]["resolution"] == "1080p"
+    probe = review.probe(Path(film["film"]))
+    assert (probe["width"], probe["height"]) == (1920, 1080)
+
+    # idempotent: a second pass keeps every usable finish and mints nothing
+    again = client.post(f"/api/director/sessions/{sid}/upscale_all", json={}).json()
+    assert again["targeted"] == []
+    assert set(again["already"]) == flow_ids
+    receipt = client.get(f"/api/director/sessions/{sid}/receipt").json()
+    assert sum(1 for line in receipt["lines"] if "video-upscale" in str(line)) == len(flow_ids)
+
+    # a 720p cut ignores the finishes on request
+    native = client.post(f"/api/director/sessions/{sid}/assemble", json={"finish": "720p"}).json()
+    assert native["raster"] == "1280x720"
+    assert native["finish"]["finished"] == []
+
+
+@pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
+def test_a_short_finish_fails_its_check_and_the_take_stays_in_the_cut(
+    monkeypatch, tmp_path, fake_narrator
+) -> None:
+    client = _client()
+    sid, ops, flow_ids, grok_ids = _locked_production(
+        client, monkeypatch, tmp_path, finish_size="640x360"
+    )
+    up = client.post(f"/api/director/sessions/{sid}/upscale_all", json={}).json()
+    _drive(client, sid)
+    board = client.get(f"/api/director/sessions/{sid}/board").json()
+    rows = {c["clip_id"]: c for c in board["clips"]}
+    for cid in flow_ids:
+        assert rows[cid]["finish"]["verdict"] == "fail"
+        assert rows[cid]["finish"]["usable"] is False
+        assert "below the 1080-line target" in " ".join(rows[cid]["finish"]["issues"])
+        assert rows[cid]["can_upscale"] is True, "a failed finish may be proposed again"
+    for op_id in up["targeted"]:
+        state = client.get(f"/api/director/ops/{op_id}").json()
+        assert state["op"]["status"] == "completed"
+        assert state["review"]["verdict"] == "fail"
+        assert state["next_op"] is None, "a finish never rides the fix ladder"
+        assert "stays in the cut" in state["narration"]
+
+    strict = client.post(f"/api/director/sessions/{sid}/assemble", json={"finish": "1080p"})
+    assert strict.status_code == 409
+    assert "below the 1080-line target" in strict.text
+
+    film = client.post(f"/api/director/sessions/{sid}/assemble", json={}).json()
+    assert film["raster"] == "1280x720"
+    assert film["finish"]["finished"] == []
+    assert film["clip_count"] == len(ops)
+
+
+@pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
+def test_a_failed_finish_job_never_drafts_a_retake(monkeypatch, tmp_path, fake_narrator) -> None:
+    client = _client()
+    sid, ops, flow_ids, grok_ids = _locked_production(
+        client, monkeypatch, tmp_path, fail_upscales=True
+    )
+    up = client.post(f"/api/director/sessions/{sid}/upscale_all", json={}).json()
+    tick = _drive(client, sid)
+    assert tick["failed"] == len(flow_ids)
+    for op_id in up["targeted"]:
+        state = client.get(f"/api/director/ops/{op_id}").json()
+        assert state["op"]["status"] == "failed"
+        assert state["next_op"] is None
+        assert state["review"] is None, "no synthetic fail review lands on the take's behalf"
+        assert "nothing is re-shot" in state["narration"]
+    board = client.get(f"/api/director/sessions/{sid}/board").json()
+    rows = {c["clip_id"]: c for c in board["clips"]}
+    for cid in flow_ids:
+        assert rows[cid]["status"] == "completed", "the take itself is untouched"
+        assert rows[cid]["finish"]["status"] == "failed"
+        assert "provider exploded" in rows[cid]["finish"]["reason"] or rows[cid]["finish"]["status"] == "failed"
+    strict = client.post(f"/api/director/sessions/{sid}/assemble", json={"finish": "1080p"})
+    assert strict.status_code == 409
+    assert "finish" in strict.text
+    film = client.post(f"/api/director/sessions/{sid}/assemble", json={}).json()
+    assert film["clip_count"] == len(ops)
+    assert film["raster"] == "1280x720"
+    # a failed finish is drafted anew on the next pass
+    again = client.post(f"/api/director/sessions/{sid}/upscale_all", json={}).json()
+    assert len(again["targeted"]) == len(flow_ids)
+
+
+def test_a_link_pending_job_is_left_alone_for_the_providers_window(monkeypatch, tmp_path) -> None:
+    from diony_director import session as director_session
+
+    client = _client()
+    _fake_adapters(monkeypatch, tmp_path)
+    polls = {"n": 0}
+
+    def _pending(handle):
+        polls["n"] += 1
+        return base.CloudJobStatus(
+            state="running",
+            detail="completed — media link pending",
+            metadata={"link_pending": True, "poll_after_s": 60},
+        )
+
+    monkeypatch.setattr(flow, "poll", _pending)
+    sid = _start(client)
+    client.post(
+        f"/api/director/sessions/{sid}/produce",
+        json={"idea": "a getaway driver decides to leave town from a neon diner"},
+    )
+    ops = client.post(f"/api/director/sessions/{sid}/lock_script").json()["ops"]
+    flow_op = next(o for o in ops if o["provider"] == "google-flow")
+    client.post(f"/api/director/ops/{flow_op['id']}/run")
+    client.post(f"/api/director/sessions/{sid}/advance")
+    assert polls["n"] == 1
+    rt = director_session.runtime(flow_op["id"])
+    assert rt["poll_not_before"] > __import__("time").time() + 30
+    client.post(f"/api/director/sessions/{sid}/advance")
+    client.post(f"/api/director/sessions/{sid}/advance")
+    assert polls["n"] == 1, "a tight retry loop lengthens the provider's block"
+    assert client.get(f"/api/director/ops/{flow_op['id']}").json()["op"]["status"] == "submitted"
+    rt["poll_not_before"] = 0
+    client.post(f"/api/director/sessions/{sid}/advance")
+    assert polls["n"] == 2
+
+
+def test_finish_waves_release_a_few_upscales_at_a_time(monkeypatch, tmp_path) -> None:
+    from diony_contracts.director import CloudGenerationMode, CloudProvider, DirectorOp, DirectorOpType
+    from diony_director import session as director_session
+
+    from diony_director import estimate as estimate_mod
+
+    monkeypatch.setenv("DIONY_FLOW_UPSCALE_PARALLEL", "2")
+    client = _client()
+    sid = _start(client)
+    est = estimate_mod.estimate_op(
+        provider=CloudProvider.GOOGLE_FLOW,
+        model=flow.UPSCALE_MODEL,
+        mode=CloudGenerationMode.UPSCALE,
+        duration_s=8,
+        resolution="1080p",
+    )
+    finishes = [
+        DirectorOp(
+            id=f"op-up-{i}",
+            session_id=sid,
+            op=DirectorOpType.UPSCALE,
+            clip_id=f"cl-{i}",
+            provider=CloudProvider.GOOGLE_FLOW,
+            model=flow.UPSCALE_MODEL,
+            mode=CloudGenerationMode.UPSCALE,
+            duration_s=8,
+            resolution="1080p",
+            artifact_refs={"source_video": f"user:v{i}", "source_op": f"op-src-{i}"},
+            estimate=est,
+        )
+        for i in range(5)
+    ]
+    for op in finishes:
+        director_session.register_op(sid, op)
+        director_session.add_batch_target(sid, op.id)
+    first = director_session.ready_ops(sid)
+    assert [op.id for op in first] == ["op-up-0", "op-up-1"]
+    finishes[0].status = "submitted"
+    finishes[1].status = "submitted"
+    assert director_session.ready_ops(sid) == []
+    finishes[0].status = "completed"
+    assert [op.id for op in director_session.ready_ops(sid)] == ["op-up-2"]
+    assert director_session.queued_count(sid) == 3

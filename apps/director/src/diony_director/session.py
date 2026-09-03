@@ -95,6 +95,14 @@ DEFAULT_BUDGET = {"max_usd_micros": 0, "max_revisions_per_clip": 3, "autopilot":
 # The program raster is a session-level lock: every generation, bridge frame,
 # plate conform, and the final assembly all cut to the SAME shape.
 PROGRAM_ASPECTS: dict[str, tuple[int, int]] = {"16:9": (1280, 720), "9:16": (720, 1280)}
+# The 1080p finish raster: the cut a film takes once its clips carry the
+# server-side 1080p prints (Blueprint 30). Same shape lock, 1080 lines.
+FINISH_ASPECTS: dict[str, tuple[int, int]] = {"16:9": (1920, 1080), "9:16": (1080, 1920)}
+FINISH_RESOLUTION = "1080p"
+# Upscales released per submit wave: Flow throttles an account that runs too
+# many parallel requests (PUBLIC_ERROR_USER_REQUESTS_THROTTLED, ~30 min), and
+# a 225-clip production must never fire 225 upscales in one wave.
+DEFAULT_UPSCALE_PARALLELISM = 4
 DEFAULT_ASPECT = "16:9"
 _ASPECTS: dict[str, str] = {}
 
@@ -1244,6 +1252,20 @@ def program_raster(sid: str) -> tuple[int, int]:
     return PROGRAM_ASPECTS[aspect_for(sid)]
 
 
+def finish_raster(sid: str) -> tuple[int, int]:
+    return FINISH_ASPECTS[aspect_for(sid)]
+
+
+def upscale_parallelism() -> int:
+    import os
+
+    raw = os.environ.get("DIONY_FLOW_UPSCALE_PARALLEL", "").strip()
+    try:
+        return max(1, int(raw)) if raw else DEFAULT_UPSCALE_PARALLELISM
+    except ValueError:
+        return DEFAULT_UPSCALE_PARALLELISM
+
+
 def set_aspect(sid: str, aspect: str) -> None:
     if aspect not in PROGRAM_ASPECTS:
         raise ValueError(
@@ -1897,9 +1919,85 @@ def completed_clip_ops(sid: str) -> list[DirectorOp]:
         ]
     latest: dict[str, DirectorOp] = {}
     for op in ops_for(sid):
-        if op.clip_id and usable_take(op):
+        # a finish (upscale) is never a take of its own: it rides beside the
+        # take it finished and substitutes its pixels at the cut
+        if op.clip_id and op.op is not DirectorOpType.UPSCALE and usable_take(op):
             latest[op.clip_id] = op
     return [latest[c.clip_id] for c in package.clips if c.clip_id in latest]
+
+
+# --- The 1080p finish (Blueprint 30) ----------------------------------------
+#
+# A server-side upscale is an UPSCALE op whose artifact_refs.source_op names
+# the take it finishes. The take stays the unit of record (review, narration,
+# cue sheet, EDL); at the cut its finished print replaces its pixels.
+
+
+def finish_ops_for(op: DirectorOp) -> list[DirectorOp]:
+    """Every upscale of this take, in registration order."""
+    return [
+        candidate
+        for candidate in ops_for(op.session_id)
+        if candidate.op is DirectorOpType.UPSCALE
+        and str(candidate.artifact_refs.get("source_op") or "") == op.id
+    ]
+
+
+def finish_op_for(op: DirectorOp, resolution: str | None = None) -> DirectorOp | None:
+    """The usable finished print of this take — completed, its finish review
+    not failed, its clip on disk — at `resolution` when given, latest first."""
+    from pathlib import Path
+
+    for candidate in reversed(finish_ops_for(op)):
+        if resolution and candidate.resolution != resolution:
+            continue
+        if not usable_take(candidate):
+            continue
+        stored = runtime(candidate.id).get("clip")
+        if stored is not None and Path(stored.path).is_file():
+            return candidate
+    return None
+
+
+def finish_in_flight_for(op: DirectorOp) -> DirectorOp | None:
+    """An upscale of this take that is queued or rolling right now."""
+    for candidate in reversed(finish_ops_for(op)):
+        if candidate.status in {"proposed", "approved", "submitting", "submitted"}:
+            return candidate
+    return None
+
+
+def finish_state_for(op: DirectorOp) -> dict[str, Any] | None:
+    """What the board shows beside a take: its latest finish, if any."""
+    ops = finish_ops_for(op)
+    if not ops:
+        return None
+    usable = finish_op_for(op)
+    latest = usable or ops[-1]
+    review = _REVIEWS.get(latest.id)
+    return {
+        "op_id": latest.id,
+        "status": latest.status,
+        "resolution": latest.resolution,
+        "usable": usable is not None,
+        "verdict": review.verdict if review is not None else "",
+        "issues": list(review.issues[:2]) if review is not None else [],
+        "reason": str(_RUNTIME.get(latest.id, {}).get("submit_error") or ""),
+    }
+
+
+def can_upscale(op: DirectorOp) -> bool:
+    """A completed Flow take with a hosted media id, no usable finish yet and
+    none rolling — the one case a server-side upscale is worth proposing."""
+    return bool(
+        op.status == "completed"
+        and op.op is not DirectorOpType.UPSCALE
+        and op.provider is not None
+        and op.provider.value == "google-flow"
+        and _RUNTIME.get(op.id, {}).get("media_generation_id")
+        and finish_op_for(op) is None
+        and finish_in_flight_for(op) is None
+    )
 
 
 # --- Directed sequencing (Blueprint 26 bridge-lock, wired) ------------------
@@ -2001,9 +2099,7 @@ def ready_ops(sid: str) -> list[DirectorOp]:
     if not targets:
         return []
     if seq is None:
-        return [
-            _OPS[i] for i in targets if _OPS.get(i) is not None and _OPS[i].status == "proposed"
-        ]
+        return _ready_unsequenced(sid, {}, targets)
     ready: list[DirectorOp] = []
     bible_pending = False
     for chain in seq.get("bible_chains") or [[i] for i in seq["bible"]]:
@@ -2048,6 +2144,39 @@ def ready_ops(sid: str) -> list[DirectorOp]:
                 # anything in flight blocks its successors, targeted or not —
                 # a revision mid-generation must land before the next bridge
                 blocked = True
+    ready.extend(_ready_unsequenced(sid, seq, targets))
+    return ready
+
+
+def _ready_unsequenced(sid: str, seq: dict[str, Any], targets: set[str]) -> list[DirectorOp]:
+    """Targeted ops that ride no chain — the finish upscales — are ready once
+    the bibles are settled, released a few at a time. A targeted op outside
+    every chain used to sit "queued" forever and the batch never settled."""
+    sequenced: set[str] = set(seq.get("bible") or [])
+    for chain in seq.get("bible_chains") or []:
+        sequenced.update(chain)
+    for chain in (seq.get("scenes") or {}).values():
+        sequenced.update(chain)
+    loose = [
+        op
+        for op in ops_for(sid)
+        if op.id in targets and op.id not in sequenced and op.status == "proposed"
+    ]
+    if not loose:
+        return []
+    in_flight = sum(
+        1
+        for op in ops_for(sid)
+        if op.op is DirectorOpType.UPSCALE and op.status in {"submitting", "submitted"}
+    )
+    slots = max(0, upscale_parallelism() - in_flight)
+    ready: list[DirectorOp] = []
+    for op in loose:
+        if op.op is DirectorOpType.UPSCALE:
+            if slots <= 0:
+                continue
+            slots -= 1
+        ready.append(op)
     return ready
 
 

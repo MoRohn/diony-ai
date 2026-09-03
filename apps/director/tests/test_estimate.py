@@ -64,3 +64,29 @@ def test_unknown_model_refuses_to_estimate() -> None:
             mode=CloudGenerationMode.T2V,
             duration_s=6,
         )
+
+
+def test_upscale_is_free_at_1080p_and_50_credits_at_4k() -> None:
+    # useapi.net docs (verified 2026-09-03): 720p/1080p upscales spend no
+    # credits on any paid plan; 4K costs 50 credits and needs Ultra. The
+    # captcha solve still rides every Flow call.
+    finish = estimate.estimate_op(
+        provider=CloudProvider.GOOGLE_FLOW,
+        model="video-upscale",
+        mode=CloudGenerationMode.UPSCALE,
+        duration_s=8,
+        resolution="1080p",
+    )
+    assert [line.label for line in finish.lines] == ["server-side upscale · 1080p", "captcha solve"]
+    assert finish.lines[0].internal_credits == 0
+    assert finish.lines[0].unit == "generation:1080p"
+    assert finish.total_usd_micros == 3000
+    ultra = estimate.estimate_op(
+        provider=CloudProvider.GOOGLE_FLOW,
+        model="video-upscale",
+        mode=CloudGenerationMode.UPSCALE,
+        duration_s=8,
+        resolution="4K",
+    )
+    assert ultra.lines[0].internal_credits == 50
+    assert ultra.total_usd_micros == 50 * 19_990 + 3000  # pro plan in conftest

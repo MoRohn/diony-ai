@@ -357,40 +357,95 @@ def submit_extend(
     )
 
 
+# POST /videos/upscale (useapi.net docs, verified 2026-09-03): the source is a
+# Flow-generated video's mediaGenerationId; resolution is 720p (promotes a 360p
+# Omni clip), 1080p (default) or 4K (Google AI Ultra only); async=true answers
+# 201 with a lowercase `jobid`; a paid Google AI plan is required (free
+# accounts cannot upscale at all); 720p/1080p spend no credits; upscaling the
+# same video twice returns the cached result.
+UPSCALE_RESOLUTIONS = ("720p", "1080p", "4K")
+UPSCALE_MODEL = "video-upscale"
+# A job that reports completed but carries no videoUrl yet is "not yet", not
+# "failed" (Google's link endpoint throttles by address): GET /jobs re-resolves
+# the link at most once a minute, so the next poll waits at least that long.
+LINK_PENDING_POLL_S = 60
+
+
 def submit_upscale(media_generation_id: str, *, resolution: str = "1080p") -> base.CloudJobHandle:
+    if resolution not in UPSCALE_RESOLUTIONS:
+        raise base.CloudAdapterError(
+            f"Flow upscale resolution must be one of {', '.join(UPSCALE_RESOLUTIONS)} — got {resolution!r}"
+        )
+    source = str(media_generation_id or "")
+    if not source:
+        raise base.CloudAdapterError("Flow upscale needs the mediaGenerationId of a Flow-generated video")
+    if Path(source).is_file() or source.startswith(("http://", "https://", "data:")):
+        raise base.CloudAdapterError(
+            "Flow upscale needs the mediaGenerationId of a Flow-generated video — a "
+            "local file or URL cannot be upscaled server-side"
+        )
     # No email parameter here — /videos/upscale 400s on it (verified live);
     # the mediaGenerationId already names the owning account.
     payload: dict = {
-        "mediaGenerationId": media_generation_id,
+        "mediaGenerationId": source,
         "resolution": resolution,
         "async": True,
     }
     response = base.post_with_retries(
         f"{api_base()}/videos/upscale", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
-    _guard(response)
+    _guard(response, "upscale")
     body = response.json()
     external_id = str(body.get("jobId") or body.get("jobid") or "")
     if not external_id:
         raise base.CloudAdapterError(f"Flow returned no jobId for upscale: {body}")
     credits_before = body.get("remainingCredits")
-    return submit_handle(
+    handle = submit_handle(
         external_id,
-        model="video-upscale",
+        model=UPSCALE_MODEL,
         duration_s=0,
         credits_before=credits_before if isinstance(credits_before, int) else None,
         kind="upscale",
         resolution=resolution,
+        source_media_generation_id=source,
     )
+    # A 200 (the cached result of an earlier upscale of the same video, or a
+    # synchronous answer) carries the media in the response itself: capture
+    # it so poll never has to ask for a job that already finished.
+    if response.status_code == 200:
+        first = _first_media(body)
+        url = str(first.get("videoUrl") or "")
+        if url:
+            handle.metadata["sync_result_url"] = url
+            finished_id = str(first.get("mediaGenerationId") or "")
+            if finished_id:
+                handle.metadata["media_generation_id"] = finished_id
+            remaining = body.get("remainingCredits")
+            if isinstance(remaining, int):
+                handle.metadata["credits_after"] = remaining
+    return handle
+
+
+def _first_media(body: dict) -> dict:
+    """The first media item of a job/upscale body — live jobs nest media under
+    `response`, docs show it at the top level; read both."""
+    nested = body.get("response") if isinstance(body.get("response"), dict) else {}
+    media = nested.get("media") or body.get("media") or []
+    if media and isinstance(media, list) and isinstance(media[0], dict):
+        return media[0]
+    return {}
 
 
 def poll(handle: base.CloudJobHandle) -> base.CloudJobStatus:
     sync_url = handle.metadata.get("sync_result_url")
     if sync_url:
-        # images complete inside their own submit response — no job to poll
+        # images (and cached upscales) complete inside their own submit
+        # response — no job to poll
         metadata: dict = {}
         if handle.metadata.get("media_generation_id"):
             metadata["media_generation_id"] = handle.metadata["media_generation_id"]
+        if isinstance(handle.metadata.get("credits_after"), int):
+            metadata["credits_after"] = handle.metadata["credits_after"]
         return base.CloudJobStatus(state="done", result_url=str(sync_url), metadata=metadata)
     response = base.get_with_retries(
         f"{api_base()}/jobs/{handle.external_id}", headers=_headers(), timeout=CALL_TIMEOUT_S
@@ -418,7 +473,7 @@ def poll(handle: base.CloudJobHandle) -> base.CloudJobStatus:
         metadata["credits_after"] = remaining
     if raw_state in {"completed", "done"} or (url and not raw_state):
         if not url:
-            return base.CloudJobStatus(state="failed", detail="completed without a media URL")
+            return _completed_without_url(media, detail, metadata)
         return base.CloudJobStatus(state="done", result_url=url, metadata=metadata)
     if raw_state in {"failed", "error"}:
         return base.CloudJobStatus(state="failed", detail=detail or "generation failed", metadata=metadata)
@@ -438,6 +493,30 @@ def poll(handle: base.CloudJobHandle) -> base.CloudJobStatus:
     return base.CloudJobStatus(state="running", detail=raw_state, metadata=metadata)
 
 
+def _completed_without_url(media: list, detail: str, metadata: dict) -> base.CloudJobStatus:
+    """A completed job with no download link. Per the docs this is Google's
+    link endpoint throttling, not a failed generation: the media exists and
+    GET /jobs re-resolves the URL (at most once a minute). Only a media item
+    that itself reports a failed generation is terminal here."""
+    first = media[0] if media and isinstance(media[0], dict) else {}
+    media_status = str(
+        ((first.get("mediaStatus") or {}) if isinstance(first.get("mediaStatus"), dict) else {})
+        .get("mediaGenerationStatus")
+        or ""
+    ).upper()
+    if media_status and "SUCCESS" not in media_status:
+        return base.CloudJobStatus(
+            state="failed",
+            detail=detail or f"media generation reported {media_status}",
+            metadata=metadata,
+        )
+    return base.CloudJobStatus(
+        state="running",
+        detail="completed — media link pending (Google is throttling link issue); re-resolving",
+        metadata={**metadata, "link_pending": True, "poll_after_s": LINK_PENDING_POLL_S},
+    )
+
+
 def credits_used(handle: base.CloudJobHandle, status: base.CloudJobStatus) -> int:
     before = handle.metadata.get("credits_before")
     after = status.metadata.get("credits_after")
@@ -446,6 +525,13 @@ def credits_used(handle: base.CloudJobHandle, status: base.CloudJobStatus) -> in
     files = ratecards.load_files()
     duration = handle.duration_s or 8
     resolution = handle.resolution or "720p"
+    if handle.model == UPSCALE_MODEL:
+        from diony_director.estimate import upscale_rate
+
+        try:
+            return upscale_rate(files, resolution).internal_credits_per_unit
+        except ratecards.RateCardMissing:
+            return 0
     if handle.model in OMNI_MODELS:
         unit = f"generation:{resolution}:{duration}s"
     else:

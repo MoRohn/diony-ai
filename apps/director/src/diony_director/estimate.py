@@ -72,6 +72,18 @@ def image_inputs_for(clip, provider: CloudProvider | None = None) -> int:
     return 0
 
 
+UPSCALE_RESOLUTIONS = ("720p", "1080p", "4K")
+
+
+def upscale_rate(files: dict, resolution: str) -> ratecards.ResolvedRate:
+    """The rate for one server-side upscale to `resolution`: the per-resolution
+    unit first, the legacy flat unit as a fallback for overridden card dirs."""
+    try:
+        return ratecards.resolve(files, "google-flow", "video-upscale", f"generation:{resolution}")
+    except ratecards.RateCardMissing:
+        return ratecards.resolve(files, "google-flow", "video-upscale", "generation")
+
+
 def estimate_op(
     *,
     provider: CloudProvider,
@@ -91,24 +103,44 @@ def estimate_op(
 
     try:
         if mode is CloudGenerationMode.UPSCALE:
-            rate = ratecards.resolve(files, "google-flow", "video-upscale", "generation")
+            # POST /videos/upscale is priced per target resolution (useapi.net
+            # docs, verified 2026-09-03: 720p and 1080p are free on any paid
+            # Google AI plan, 4K costs 50 credits and needs Ultra). An older
+            # card that still carries the flat "generation" unit resolves too.
+            rate = upscale_rate(files, resolution)
+            lines = [
+                CostEstimateLine(
+                    label=f"server-side upscale · {resolution}",
+                    provider_id="google-flow",
+                    model="video-upscale",
+                    unit=rate.unit,
+                    unit_rate_usd_micros=rate.usd_micros_per_unit,
+                    quantity_microunits=1_000_000,
+                    internal_credits=rate.internal_credits_per_unit,
+                    usd_micros=rate.usd_micros_per_unit,
+                    rate_card_id=rate.rate_card_id,
+                )
+            ]
+            captcha = ratecards.captcha_usd_micros(files)
+            if captcha:
+                # the upscale call solves a captcha like every Flow request —
+                # a "free" finish still carries the solve on the ledger
+                lines.append(
+                    CostEstimateLine(
+                        label="captcha solve",
+                        provider_id="google-flow",
+                        model="captcha",
+                        unit="solve",
+                        unit_rate_usd_micros=captcha,
+                        quantity_microunits=1_000_000,
+                        usd_micros=captcha,
+                    )
+                )
             return CostEstimate(
                 id=f"est-{uuid.uuid4().hex[:12]}",
                 workspace_id=workspace_id,
                 project_id=project_id,
-                lines=[
-                    CostEstimateLine(
-                        label=f"server-side upscale · {resolution}",
-                        provider_id="google-flow",
-                        model="video-upscale",
-                        unit=rate.unit,
-                        unit_rate_usd_micros=rate.usd_micros_per_unit,
-                        quantity_microunits=1_000_000,
-                        internal_credits=rate.internal_credits_per_unit,
-                        usd_micros=rate.usd_micros_per_unit,
-                        rate_card_id=rate.rate_card_id,
-                    )
-                ],
+                lines=lines,
                 rate_cards_stale=rate.stale,
             )
         if mode is CloudGenerationMode.IMAGE:

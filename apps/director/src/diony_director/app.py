@@ -1131,7 +1131,10 @@ def retry_op(op_id: str) -> dict:
     op.status = "proposed"
     op.job_id = ""
     rt = session.runtime(op.id)
-    for stale in ("handle", "ledger_error", "transient_holds", "quota_hold_until", "submit_error"):
+    for stale in (
+        "handle", "ledger_error", "transient_holds", "quota_hold_until", "submit_error",
+        "poll_not_before",
+    ):
         rt.pop(stale, None)
     # A retry must be able to succeed: riders the routed model refuses beside
     # a start/end frame are dropped here, loudly — the opening frame wins.
@@ -1185,10 +1188,20 @@ def _advance_op(op: DirectorOp, *, allow_spend: bool = False) -> dict:
             rt["ledger_error"] = f"{type(err).__name__}: {err}"
     job = plane.job(ctx.workspace.id, op.job_id) if op.job_id else None
 
-    if op.status == "submitted" and job is not None:
+    # A job the provider asked us to leave alone for a while (a completed
+    # Flow job whose download link is still being re-issued — GET /jobs
+    # re-resolves it at most once a minute, and a tight loop lengthens the
+    # wait) is not polled before its window passes.
+    poll_due = float(rt.get("poll_not_before") or 0) <= time.time()
+    if op.status == "submitted" and job is not None and poll_due:
         handle = rt.get("handle")
         adapter = _ADAPTERS[op.provider.value]
         poll = adapter.poll(handle)
+        hold_s = (poll.metadata or {}).get("poll_after_s")
+        if isinstance(hold_s, (int, float)) and hold_s > 0 and poll.state not in {"done"}:
+            rt["poll_not_before"] = time.time() + float(hold_s)
+        else:
+            rt.pop("poll_not_before", None)
         # The watchdog's clock: progress is a CHANGE of observed state. A job
         # answering "running" forever looks healthy to every poll — only the
         # timestamp of its last transition exposes that it's going nowhere.
@@ -1250,16 +1263,11 @@ def _advance_op(op: DirectorOp, *, allow_spend: bool = False) -> dict:
 
     clip = rt.get("clip")
     review = session.review_for(op.id)
-    can_upscale = bool(
-        op.status == "completed"
-        and rt.get("media_generation_id")
-        and op.provider is not None
-        and op.provider.value == "google-flow"
-        and op.op is not DirectorOpType.UPSCALE
-    )
     return {
         "op": op.model_dump(mode="json"),
-        "can_upscale": can_upscale,
+        "can_upscale": session.can_upscale(op),
+        # Blueprint 30: the take's 1080p finish, when one exists
+        "finish": session.finish_state_for(op),
         "job": job.model_dump(mode="json") if job is not None else None,
         "clip": {
             "path": str(clip.path),
@@ -1475,9 +1483,94 @@ def _maybe_autopilot_run(sid: str, op: DirectorOp, rt: dict, *, allow_spend: boo
         rt["narration"] = rt.get("narration", "") + f" Autopilot held: {reason}."
 
 
+FINISH_LINES = {"720p": 720, "1080p": 1080, "4K": 2160}
+FINISH_DURATION_TOLERANCE_S = 0.5
+
+
+def _source_op_for_finish(op: DirectorOp) -> DirectorOp | None:
+    source_id = str(op.artifact_refs.get("source_op") or "")
+    if not source_id:
+        return None
+    try:
+        return session.get_op(source_id)
+    except KeyError:
+        return None
+
+
+def _review_finish(op: DirectorOp, rt: dict) -> None:
+    """A finished print is measured before it may replace its take at the cut
+    (Blueprint 30): it must carry the lines it was booked for and run the
+    same length as the take it finished. A print that measures short fails
+    its finish review — the take's own print stays in the cut and nothing
+    is re-shot; an unmeasurable host records an honest `unmeasured`."""
+    from diony_contracts.production import ClipReview
+
+    stored = rt["clip"]
+    source = _source_op_for_finish(op)
+    label = op.clip_id or (source.clip_id if source is not None else "") or op.id
+    probe = review_mod.probe(Path(stored.path))
+    issues: list[str] = []
+    measured: dict[str, float] = {}
+    if probe is None:
+        review = ClipReview(
+            id=f"rev-finish-{op.id}",
+            clip_id=label,
+            op_id=op.id,
+            verdict="warn",
+            families={"finish": "unmeasured"},
+            issues=["ffprobe is not available on this host — the finish raster was not measured"],
+            recommended_op="accept",
+        )
+        session.register_review(op.id, review)
+        rt["narration"] = f"{label} finished at {op.resolution} (raster unmeasured on this host)."
+        return
+    width, height = int(probe.get("width") or 0), int(probe.get("height") or 0)
+    lines = min(width, height) if width and height else 0
+    target = FINISH_LINES.get(op.resolution, 1080)
+    measured.update({"width": width, "height": height, "duration_s": float(probe["duration_s"])})
+    if lines < target:
+        issues.append(
+            f"the {op.resolution} finish came back at {width}×{height} — below the {target}-line target"
+        )
+    source_clip = session.runtime(source.id).get("clip") if source is not None else None
+    if source_clip is not None and Path(source_clip.path).is_file():
+        source_probe = review_mod.probe(Path(source_clip.path))
+        if source_probe is not None:
+            drift = abs(float(source_probe["duration_s"]) - float(probe["duration_s"]))
+            measured["duration_drift_s"] = round(drift, 3)
+            if drift > FINISH_DURATION_TOLERANCE_S:
+                issues.append(
+                    f"the finish runs {probe['duration_s']:.2f}s against the take's "
+                    f"{source_probe['duration_s']:.2f}s — the cut would drift"
+                )
+    verdict = "fail" if issues else "pass"
+    review = ClipReview(
+        id=f"rev-finish-{op.id}",
+        clip_id=label,
+        op_id=op.id,
+        verdict=verdict,
+        families={"finish": verdict},
+        measured=measured,
+        issues=issues,
+        recommended_op="accept" if verdict == "pass" else "retry",
+    )
+    session.register_review(op.id, review)
+    if verdict == "pass":
+        rt["narration"] = f"{label} finished at {width}×{height} — it replaces the take at the cut."
+    else:
+        rt["narration"] = (
+            f"{label}: the {op.resolution} finish failed its check ({'; '.join(issues)}). "
+            "The take's own print stays in the cut — Retry re-runs the finish; nothing is re-shot."
+        )
+
+
 def _review_and_maybe_revise(op: DirectorOp, rt: dict, *, allow_spend: bool = False) -> None:
     stored = rt.get("clip")
     if stored is None:
+        return
+    if op.op is DirectorOpType.UPSCALE:
+        # a finish is measured, never re-shot: it rides no fix ladder
+        _review_finish(op, rt)
         return
     package = session.package_for(op.session_id)
     if op.mode is CloudGenerationMode.IMAGE and op.artifact_refs.get("style_frame"):
@@ -1601,6 +1694,15 @@ def _revise_after_job_failure(op: DirectorOp, detail: str, *, allow_spend: bool 
     from diony_contracts.production import ClipReview
 
     rt = session.runtime(op.id)
+    if op.op is DirectorOpType.UPSCALE:
+        # a failed finish never drafts a retake of the take it was finishing:
+        # the take printed and stays in the cut; the finish alone retries
+        label = op.clip_id or op.id
+        rt["narration"] = (
+            f"The {op.resolution} finish of {label} failed: {detail}. Its own print stays "
+            "in the cut — Retry re-runs the finish; nothing is re-shot."
+        )
+        return
     clip_unit = session.clip_for_op(op)
     if clip_unit is None:
         rt["narration"] = f"Job failed: {detail}. No package behind this op — nothing to restage."
@@ -1747,14 +1849,14 @@ def board(sid: str) -> dict:
     package = session.package_for(sid)
     latest: dict[str, DirectorOp] = {}
     for op in session.ops_for(sid):
-        if op.clip_id:
+        # a finish rides beside its take on the board, never as the take
+        if op.clip_id and op.op is not DirectorOpType.UPSCALE:
             latest[op.clip_id] = op
     clips = []
     if package is not None:
         for clip in package.clips:
             op = latest.get(clip.clip_id)
             review = session.review_for(op.id) if op is not None else None
-            rt = session.runtime(op.id) if op is not None else {}
             clips.append(
                 {
                     "clip_id": clip.clip_id,
@@ -1771,14 +1873,9 @@ def board(sid: str) -> dict:
                     "verdict": review.verdict if review is not None else "",
                     "issues": review.issues[:3] if review is not None else [],
                     "accepted": session.is_accepted(op.id) if op is not None else False,
-                    "can_upscale": bool(
-                        op is not None
-                        and op.status == "completed"
-                        and rt.get("media_generation_id")
-                        and op.provider is not None
-                        and op.provider.value == "google-flow"
-                        and op.op is not DirectorOpType.UPSCALE
-                    ),
+                    "can_upscale": session.can_upscale(op) if op is not None else False,
+                    # Blueprint 30: the take's 1080p finish — usable, rolling, or failed
+                    "finish": session.finish_state_for(op) if op is not None else None,
                 }
             )
     characters = []
@@ -1953,6 +2050,12 @@ class AssembleIn(BaseModel):
     # clips this host cannot measure — are cut with a silent bed. Off ships
     # the location tracks exactly as delivered.
     speech_guard: bool = True
+    # Blueprint 30 — which print of each take the cut uses. "auto" cuts the
+    # 1080p finish wherever a usable one exists (the film's raster rises to
+    # 1080 lines the moment any clip carries one); "1080p" refuses, naming
+    # them, while any Flow take in the cut still lacks its usable finish;
+    # "720p" cuts the takes' own prints and ignores every finish.
+    finish: str = Field(default="auto", pattern="^(auto|720p|1080p)$")
 
 
 def _cut_gaps(sid: str) -> tuple[list[str], list[DirectorOp], list[str]]:
@@ -2103,14 +2206,52 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
     paths = []
     specs = []
     used_ops = []
+    # Blueprint 30: the take is the unit of record; its finished print, when
+    # one is usable, supplies the pixels
+    finished: list[str] = []
+    native: list[str] = []
+    unfinished: list[str] = []
     for op in ops:
         stored = session.runtime(op.id).get("clip")
-        if stored is not None and Path(stored.path).is_file():
-            paths.append(Path(stored.path))
-            specs.append(_assembly_spec(op))
-            used_ops.append(op)
+        if stored is None or not Path(stored.path).is_file():
+            continue
+        label = op.clip_id or op.id
+        print_path = Path(stored.path)
+        finish_op = None if body.finish == "720p" else session.finish_op_for(op)
+        if finish_op is not None:
+            print_path = Path(session.runtime(finish_op.id).get("clip").path)
+            finished.append(label)
+        else:
+            native.append(label)
+            if op.provider is not None and op.provider.value == "google-flow":
+                unfinished.append(label)
+        paths.append(print_path)
+        specs.append(_assembly_spec(op))
+        used_ops.append(op)
     if not paths:
         raise HTTPException(status_code=409, detail="no completed clips to assemble yet")
+    if body.finish == "1080p" and unfinished:
+        reasons = []
+        for op in used_ops:
+            if (op.clip_id or op.id) not in unfinished:
+                continue
+            state = session.finish_state_for(op)
+            if state is None:
+                reasons.append(f"{op.clip_id or op.id} (no finish yet)")
+            elif state["status"] in {"proposed", "submitting", "submitted"}:
+                reasons.append(f"{op.clip_id or op.id} (finish still rolling)")
+            else:
+                why = state.get("reason") or "; ".join(state.get("issues") or []) or state["status"]
+                reasons.append(f"{op.clip_id or op.id} (finish {why})")
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "refusing to cut a 1080p film while these Flow takes lack their 1080p finish: "
+                + ", ".join(reasons)
+                + " — run Upscale All (or Retry the failed finish) first, or assemble with "
+                "finish=auto to cut the prints that exist"
+            ),
+        )
     if not body.allow_gaps:
         missing, drafts, rolling = _cut_gaps(sid)
         if missing:
@@ -2163,7 +2304,9 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
         )
 
     dest = cluster_root() / "director" / sid / "film.mp4"
-    raster_w, raster_h = session.program_raster(sid)
+    # one finished print lifts the whole cut to the 1080 raster: the takes
+    # without a finish are conformed up locally and named in the receipt
+    raster_w, raster_h = session.finish_raster(sid) if finished else session.program_raster(sid)
     try:
         result = assembly.assemble(
             paths,
@@ -2269,6 +2412,16 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
             else {"cue_count": 0, "skipped": "no lines" if body.narrate else "narrate off"}
         ),
         "speech_guard": speech_report,
+        "raster": f"{raster_w}x{raster_h}",
+        # Blueprint 30 receipt: which takes cut from their 1080p finish, which
+        # cut from their own print (and were conformed up when the raster rose)
+        "finish": {
+            "mode": body.finish,
+            "resolution": session.FINISH_RESOLUTION if finished else "720p",
+            "finished": finished,
+            "native": native,
+            "conformed_up": native if finished else [],
+        },
         "deliverables": delivered.get("names", []),
         "final_check": delivered.get("final_check"),
         "cue_count": delivered.get("cue_count", 0),
@@ -2365,30 +2518,50 @@ def register_flow_character(sid: str, char_id: str) -> dict:
     }
 
 
-@app.post("/api/director/ops/{op_id}/upscale")
-def propose_upscale(op_id: str) -> dict:
+class UpscaleIn(BaseModel):
+    # 720p promotes a 360p Omni clip; 1080p is the finish; 4K needs Google AI Ultra
+    resolution: str = Field(default=session.FINISH_RESOLUTION, pattern="^(720p|1080p|4K)$")
+
+
+def _upscale_source(op: DirectorOp) -> str:
+    """The Flow-hosted media id a server-side upscale needs, or the reason
+    this take cannot have one."""
+    if op.op is DirectorOpType.UPSCALE:
+        raise HTTPException(status_code=409, detail="this op is already a finish — upscale its take")
+    if op.status != "completed":
+        raise HTTPException(status_code=409, detail=f"op is {op.status}; upscale needs a completed clip")
+    if op.provider is None or op.provider.value != "google-flow":
+        raise HTTPException(
+            status_code=409,
+            detail=f"{op.provider.value if op.provider else 'this'} clips have no server-side "
+            "upscale lane — Grok clips are conformed locally at the cut instead",
+        )
+    source = str(session.runtime(op.id).get("media_generation_id") or "")
+    if not source:
+        raise HTTPException(
+            status_code=409,
+            detail="no Flow-hosted media id for this clip — server-side upscale needs "
+            "Flow-origin media (Grok clips are conformed locally at the cut instead)",
+        )
+    return source
+
+
+def _draft_upscale(op: DirectorOp, resolution: str) -> DirectorOp:
+    """One priced UPSCALE op for a completed Flow take: the take is its
+    source_op (the cut substitutes the print), its duration is the take's
+    (the ledger row and the finish check both read it)."""
     import uuid as _uuid
 
     from diony_contracts.director import CloudProvider
     from diony_director import estimate as estimate_mod
 
-    op = _op_or_404(op_id)
-    if op.status != "completed":
-        raise HTTPException(status_code=409, detail=f"op is {op.status}; upscale needs a completed clip")
-    rt = session.runtime(op.id)
-    source = rt.get("media_generation_id")
-    if not source:
-        raise HTTPException(
-            status_code=409,
-            detail="no Flow-hosted media id for this clip — server-side upscale needs "
-            "Flow-origin media (Grok clips finish through the local lane instead)",
-        )
+    source = _upscale_source(op)
     est = estimate_mod.estimate_op(
         provider=CloudProvider.GOOGLE_FLOW,
-        model="video-upscale",
+        model=flow.UPSCALE_MODEL,
         mode=CloudGenerationMode.UPSCALE,
-        duration_s=1,
-        resolution="1080p",
+        duration_s=max(1, int(op.duration_s or 1)),
+        resolution=resolution,
     )
     upscale_op = DirectorOp(
         id=f"op-{_uuid.uuid4().hex[:10]}",
@@ -2396,19 +2569,122 @@ def propose_upscale(op_id: str) -> dict:
         op=DirectorOpType.UPSCALE,
         clip_id=op.clip_id,
         provider=CloudProvider.GOOGLE_FLOW,
-        model="video-upscale",
+        model=flow.UPSCALE_MODEL,
         mode=CloudGenerationMode.UPSCALE,
-        duration_s=1,
-        resolution="1080p",
-        artifact_refs={"source_video": source},
+        duration_s=max(1, int(op.duration_s or 1)),
+        resolution=resolution,
+        artifact_refs={"source_video": source, "source_op": op.id},
         estimate=est,
-        rationale=f"finish pass on {op.clip_id or op.id}",
+        rationale=f"{resolution} finish of {op.clip_id or op.id}",
     )
-    session.register_op(op.session_id, upscale_op)
-    usd = est.total_usd_micros / 1_000_000
+    return session.register_op(op.session_id, upscale_op)
+
+
+@app.post("/api/director/ops/{op_id}/upscale")
+def propose_upscale(op_id: str, body: UpscaleIn | None = None) -> dict:
+    resolution = body.resolution if body is not None else session.FINISH_RESOLUTION
+    op = _op_or_404(op_id)
+    _upscale_source(op)
+    existing = session.finish_op_for(op, resolution)
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{op.clip_id or op.id} already has its {resolution} finish ({existing.id})",
+        )
+    rolling = session.finish_in_flight_for(op)
+    if rolling is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"a finish of {op.clip_id or op.id} is already {rolling.status} ({rolling.id})",
+        )
+    upscale_op = _draft_upscale(op, resolution)
+    usd = upscale_op.estimate.total_usd_micros / 1_000_000
     return {
         "op": upscale_op.model_dump(mode="json"),
-        "reply": f"Upscale to 1080p adds about ${usd:.2f}. Run it when ready.",
+        "reply": f"Upscale to {resolution} adds about ${usd:.2f}. Run it when ready.",
+    }
+
+
+@app.get("/api/director/upscale/rate")
+def upscale_rate(resolution: str = session.FINISH_RESOLUTION) -> dict:
+    """What one server-side finish costs on the user's plan — the batch bar
+    prices 'Run, Assemble & Upscale All' from it before anything rolls."""
+    from diony_contracts.director import CloudProvider
+    from diony_director import estimate as estimate_mod
+
+    if resolution not in flow.UPSCALE_RESOLUTIONS:
+        raise HTTPException(status_code=422, detail=f"resolution must be one of {flow.UPSCALE_RESOLUTIONS}")
+    try:
+        est = estimate_mod.estimate_op(
+            provider=CloudProvider.GOOGLE_FLOW,
+            model=flow.UPSCALE_MODEL,
+            mode=CloudGenerationMode.UPSCALE,
+            duration_s=1,
+            resolution=resolution,
+        )
+    except estimate_mod.EstimateError as err:
+        raise HTTPException(status_code=409, detail=str(err)) from err
+    return {
+        "resolution": resolution,
+        "usd_micros": est.total_usd_micros,
+        "credits": sum(line.internal_credits for line in est.lines),
+        "rate_cards_stale": est.rate_cards_stale,
+        "pricing_basis": "modeled_from_plan",
+        "ultra_only": resolution == "4K",
+        "lines": [line.model_dump(mode="json") for line in est.lines],
+    }
+
+
+@app.post("/api/director/sessions/{sid}/upscale_all")
+def upscale_all(sid: str, body: UpscaleIn | None = None) -> dict:
+    """Blueprint 30 — finish every printed Flow take of the cut at 1080p in
+    one directed batch: a priced UPSCALE op per take (idempotent: a usable
+    finish is kept, a rolling one is left alone, a drafted one is re-targeted,
+    only a missing or failed finish drafts anew), targeted onto the submitter
+    a few at a time. Grok takes have no server-side lane and are named as
+    skipped — the cut conforms them locally. The cut itself is a separate
+    call: assemble with finish=1080p once this settles."""
+    _boot()
+    resolution = body.resolution if body is not None else session.FINISH_RESOLUTION
+    targeted: list[str] = []
+    already: list[str] = []
+    rolling: list[str] = []
+    skipped: list[dict] = []
+    est_total = 0
+    for op in session.completed_clip_ops(sid):
+        label = op.clip_id or op.id
+        stored = session.runtime(op.id).get("clip")
+        if stored is None or not Path(stored.path).is_file():
+            continue
+        if session.finish_op_for(op, resolution) is not None:
+            already.append(label)
+            continue
+        in_flight = session.finish_in_flight_for(op)
+        if in_flight is not None and in_flight.status != "proposed":
+            rolling.append(label)
+            continue
+        try:
+            _upscale_source(op)
+        except HTTPException as err:
+            skipped.append({"clip_id": label, "reason": str(err.detail)})
+            continue
+        upscale_op = in_flight if in_flight is not None else _draft_upscale(op, resolution)
+        session.add_batch_target(sid, upscale_op.id)
+        targeted.append(upscale_op.id)
+        est_total += upscale_op.estimate.total_usd_micros if upscale_op.estimate else 0
+    if targeted:
+        session.persist(sid)
+        _kick_submitter(sid)
+    return {
+        "resolution": resolution,
+        "targeted": targeted,
+        "already": already,
+        "rolling": rolling,
+        "skipped": skipped,
+        "est_usd_micros": est_total,
+        "queued": session.queued_count(sid),
+        "submitting": session.submitter_active(sid),
+        "held": session.drain_held(sid),
     }
 
 

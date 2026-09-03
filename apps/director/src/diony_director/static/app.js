@@ -1097,17 +1097,32 @@
     return card;
   }
 
-  async function assembleNow(allowGaps) {
+  // Blueprint 30: which print of each take the cut uses. "auto" cuts every
+  // usable 1080p finish and lifts the raster the moment one exists; "1080p"
+  // refuses (naming the takes) while a Flow take still lacks its finish.
+  async function assembleNow(allowGaps, opts) {
+    const finish = (opts && opts.finish) || "auto";
     try {
+      const body = allowGaps === true ? { allow_gaps: true } : {};
+      if (finish !== "auto") body.finish = finish;
       const film = await api(`/api/director/sessions/${sessionId}/assemble`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(allowGaps === true ? { allow_gaps: true } : {}),
+        body: JSON.stringify(body),
       });
+      const raster = film.raster ? ` at ${film.raster.replace("x", "×")}` : "";
       const done = addMsg(
         "director",
-        `Assembled ${plural(film.clip_count, "clip")} into a ${film.duration_s.toFixed(1)}s cut, ${film.loudness_target} loudness, ${film.look} look.`
+        `Assembled ${plural(film.clip_count, "clip")} into a ${film.duration_s.toFixed(1)}s cut${raster}, ${film.loudness_target} loudness, ${film.look} look.`
       );
+      if (film.finish && film.finish.finished && film.finish.finished.length) {
+        let line = `${plural(film.finish.finished.length, "take")} cut from the 1080p finish.`;
+        if (film.finish.conformed_up && film.finish.conformed_up.length) {
+          line += ` ${plural(film.finish.conformed_up.length, "take")} had no server-side lane and ` +
+            `were conformed up from their native print: ${film.finish.conformed_up.join(", ")}.`;
+        }
+        addMsg("director", line);
+      }
       const video = document.createElement("video");
       video.controls = true;
       video.src = `/api/director/films/${sessionId}`;
@@ -1139,6 +1154,22 @@
     } catch (err) {
       const text = String(err.message || err);
       const note = addMsg("director", `Assembly isn't ready: ${text}`);
+      if (text.includes("finish=auto")) {
+        // the strict 1080p cut refused: a finish failed or never rolled —
+        // the user may cut the prints that exist, at whatever raster they earn
+        const body = note.querySelector(".body");
+        const anyway = document.createElement("button");
+        anyway.type = "button";
+        anyway.className = "batch ghost";
+        anyway.textContent = "Assemble with the prints that exist";
+        anyway.title = "Cuts every usable 1080p finish; takes without one keep their native print";
+        anyway.addEventListener("click", async () => {
+          anyway.disabled = true;
+          await assembleNow(allowGaps, { finish: "auto" });
+        });
+        body.appendChild(anyway);
+        return false;
+      }
       if (text.includes("allow_gaps")) {
         const body = note.querySelector(".body");
         const retry = document.createElement("button");
@@ -1245,6 +1276,114 @@
     }
   }
 
+  // --- Blueprint 30: the 1080p finish -------------------------------------
+  //
+  // One server-side upscale per printed Flow take, priced from the rate card
+  // before anything rolls, watched on the bar like the takes themselves, and
+  // then the cut at 1920×1080. Grok takes have no server-side lane: they are
+  // named, and the cut conforms them up locally.
+  const FINISH_RESOLUTION = "1080p";
+  let finishRate = null; // {usd_micros, credits} once fetched
+  async function loadFinishRate() {
+    if (finishRate) return finishRate;
+    try {
+      finishRate = await api(`/api/director/upscale/rate?resolution=${FINISH_RESOLUTION}`);
+    } catch (err) {
+      finishRate = { usd_micros: 0, credits: 0, unavailable: String(err.message || err) };
+    }
+    return finishRate;
+  }
+  function finishableCount(ops) {
+    return ops.filter((op) => op.provider === "google-flow").length;
+  }
+  function finishCost(ops) {
+    return finishableCount(ops) * ((finishRate && finishRate.usd_micros) || 0);
+  }
+  function finishLabel(ops, runCost, suffix) {
+    const n = finishableCount(ops);
+    return `Run, Assemble & Upscale All (${ops.length} + ${n}×${FINISH_RESOLUTION}${suffix || ""}) — ${usd(runCost + finishCost(ops))}`;
+  }
+
+  // Finish every printed Flow take, then report on `progress` until the
+  // finishes settle. Resolves true when every targeted finish printed.
+  async function upscaleAll(progress) {
+    let up;
+    try {
+      up = await api(`/api/director/sessions/${sessionId}/upscale_all`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolution: FINISH_RESOLUTION }),
+      });
+    } catch (err) {
+      addMsg("director", `Couldn't start the ${FINISH_RESOLUTION} finish: ${err.message || err}`, "warn");
+      return false;
+    }
+    (up.held || []).forEach((h) => addHeldMsg(h.reason));
+    if (up.skipped && up.skipped.length) {
+      addMsg(
+        "director",
+        `${plural(up.skipped.length, "take")} keep their native print — no server-side upscale lane ` +
+          `(${up.skipped.map((s) => s.clip_id).join(", ")}); the cut conforms them to the 1080 raster.`
+      );
+    }
+    if (!up.targeted.length) {
+      if (up.already.length) {
+        addMsg("director", `Every Flow take already carries its ${FINISH_RESOLUTION} finish (${up.already.length}).`);
+        return true;
+      }
+      if (up.rolling.length) {
+        addMsg("director", `Finishes are already rolling for ${up.rolling.join(", ")} — waiting on them.`);
+      } else {
+        addMsg("director", "Nothing to finish — no printed Flow take in the cut.");
+        return "none";
+      }
+    } else {
+      addMsg(
+        "director",
+        `Finishing ${plural(up.targeted.length, "Flow take")} at ${FINISH_RESOLUTION} — ${usd(up.est_usd_micros)}. ` +
+          "Finishes roll a few at a time (the provider throttles parallel requests); the cut follows."
+      );
+    }
+    const targeted = new Set(up.targeted);
+    return new Promise((resolve) => {
+      const tick = async () => {
+        let counts;
+        try {
+          counts = await api(`/api/director/sessions/${sessionId}/advance`, { method: "POST" });
+        } catch (err) {
+          progress.textContent = `lost the room during the finish: ${err.message || err}`;
+          resolve(false);
+          return;
+        }
+        (counts.held || []).forEach((h) => addHeldMsg(h.reason));
+        const mine = (counts.ops || []).filter((o) => targeted.has(o.op_id));
+        const printed = mine.filter((o) => o.status === "completed").length;
+        const failed = mine.filter((o) => o.status === "failed").length;
+        const total = targeted.size || up.rolling.length || 0;
+        progress.textContent =
+          `finishing at ${FINISH_RESOLUTION} — ${printed}/${total} printed` +
+          (failed ? ` · ${failed} failed` : "") +
+          ((counts.stalled || []).length ? ` · stalled: ${counts.stalled[0].reason}` : "");
+        refreshMeter();
+        if (counts.pending > 0 || (counts.queued || 0) > 0 || counts.submitting) {
+          setTimeout(tick, 3000);
+          return;
+        }
+        refreshBoard(); // the SHOTS tab shows each take's finish chip
+        if (failed) {
+          addMsg(
+            "director",
+            `${plural(failed, "finish")} failed — the takes' own prints stay in the cut. ` +
+              "Retry the finish from the board's SHOTS tab, or assemble with the prints that exist.",
+            "warn"
+          );
+        }
+        resolve(failed === 0);
+      };
+      setTimeout(tick, 2500);
+    });
+  }
+
   function setupBatch(host, ops, bibleOps) {
     const cards = new Map(); // op_id -> {card, state, checkbox, est}
     const biblePending = (bibleOps || []).filter((b) => b.status === "proposed");
@@ -1259,6 +1398,7 @@
     bar.innerHTML = `
       <label class="selall"><input type="checkbox" id="selall-box" checked> Select all</label>
       <button type="button" class="batch primary" id="run-all"></button>
+      <button type="button" class="batch primary finish" id="run-all-up" title="Roll every clip, finish each printed Flow take at 1080p server-side, then cut the film at 1920×1080"></button>
       <button type="button" class="batch" id="run-sel"></button>
       <button type="button" class="batch ghost" id="assemble-only">Assemble completed</button>
       <span class="progress" id="batch-progress"></span>`;
@@ -1283,10 +1423,12 @@
     });
 
     const allBtn = bar.querySelector("#run-all");
+    const upBtn = bar.querySelector("#run-all-up");
     const selBtn = bar.querySelector("#run-sel");
     const asmBtn = bar.querySelector("#assemble-only");
     const selAll = bar.querySelector("#selall-box");
     const progress = bar.querySelector("#batch-progress");
+    loadFinishRate().then(refreshBatchLabels);
 
     function selectedIds() {
       return [...cards.entries()].filter(([, c]) => c.checkbox.checked).map(([id]) => id);
@@ -1299,6 +1441,8 @@
       const allIds = [...cards.keys()];
       allBtn.textContent =
         `Run & Assemble All (${allIds.length}${bibleSuffix}) — ${usd(sumFor(allIds) + bibleCost)}`;
+      upBtn.textContent = finishLabel(ops, sumFor(allIds) + bibleCost, bibleSuffix);
+      upBtn.disabled = allBtn.disabled || finishableCount(ops) === 0;
       selBtn.textContent =
         `Run & Assemble Selected (${sel.length}${bibleSuffix}) — ${usd(sumFor(sel) + (sel.length ? bibleCost : 0))}`;
       selBtn.disabled = sel.length === 0;
@@ -1310,8 +1454,9 @@
     });
     refreshBatchLabels();
 
-    async function runAndAssemble(ids) {
-      allBtn.disabled = true; selBtn.disabled = true;
+    async function runAndAssemble(ids, opts) {
+      const withFinish = !!(opts && opts.upscale);
+      allBtn.disabled = true; selBtn.disabled = true; upBtn.disabled = true;
       progress.textContent = "submitting…";
       let batch;
       try {
@@ -1329,6 +1474,25 @@
         const c = cards.get(id);
         if (c) { c.state.textContent = "queued…"; c.btn.disabled = true; }
       });
+      const cutFilm = async () => {
+        if (withFinish) {
+          progress.textContent += " — finishing…";
+          const finished = await upscaleAll(progress);
+          progress.textContent = progress.textContent.replace(
+            " — finishing…",
+            finished === true
+              ? ` — finished at ${FINISH_RESOLUTION}`
+              : finished === "none" ? " — nothing to finish" : " — some finishes failed"
+          );
+        }
+        progress.textContent += " — assembling…";
+        const delivered = await assembleNow(false, { finish: withFinish ? FINISH_RESOLUTION : "auto" });
+        progress.textContent = progress.textContent.replace(
+          " — assembling…",
+          delivered ? " — film delivered" : " — assembly is holding (see the room)"
+        );
+        allBtn.disabled = false; refreshBatchLabels();
+      };
       batch.held.forEach((h) => {
         const c = cards.get(h.op_id);
         if (c) { c.state.textContent = h.reason; c.state.className = "state failed"; }
@@ -1337,12 +1501,17 @@
         addMsg("director", `${plural(batch.held.length, "clip")} held: ${batch.held[0].reason}`);
       }
       if (!(batch.queued || 0) && !batch.submitting && !batch.submitted.length) {
+        if (withFinish && batch.skipped) {
+          // nothing left to roll (every clip already printed): still finish and cut
+          progress.textContent = "every clip already printed";
+          await cutFilm();
+          return;
+        }
         progress.textContent = "nothing submitted";
         allBtn.disabled = false; refreshBatchLabels();
         return;
       }
 
-      const total = batch.submitted.length;
       const tick = async () => {
         let counts;
         try {
@@ -1390,13 +1559,7 @@
             attachVerdict(c.card, c.state, body.review, id);
           } catch (err) { /* card stays coarse; the film still cuts */ }
         }
-        progress.textContent += " — assembling…";
-        const delivered = await assembleNow();
-        progress.textContent = progress.textContent.replace(
-          " — assembling…",
-          delivered ? " — film delivered" : " — assembly is holding (see the room)"
-        );
-        allBtn.disabled = false; refreshBatchLabels();
+        await cutFilm();
       };
       setTimeout(tick, 2500);
     }
@@ -1407,6 +1570,16 @@
         allBtn,
         `Confirm — roll ${plural(ids.length, "clip")}${bibleSuffix}, ${usd(sumFor(ids) + bibleCost)} total`,
         () => runAndAssemble(ids)
+      );
+    });
+    upBtn.addEventListener("click", () => {
+      const ids = [...cards.keys()];
+      const n = finishableCount(ops);
+      armConfirm(
+        upBtn,
+        `Confirm — roll ${plural(ids.length, "clip")}${bibleSuffix}, finish ${n} at ${FINISH_RESOLUTION}, ` +
+          `cut at 1080 — ${usd(sumFor(ids) + bibleCost + finishCost(ops))} total`,
+        () => runAndAssemble(ids, { upscale: true })
       );
     });
     selBtn.addEventListener("click", () => {
@@ -1432,13 +1605,21 @@
       (sum, op) => sum + (op.estimate ? op.estimate.total_usd_micros : 0), 0);
     bar.innerHTML = `
       <button type="button" class="batch primary" id="chain-run-all">Run &amp; Assemble All (${ops.length}) — ${usd(total)}</button>
+      <button type="button" class="batch primary finish" id="chain-run-all-up" title="Roll every link in order, finish each printed Flow link at 1080p server-side, then cut the film at 1920×1080"></button>
       <button type="button" class="batch ghost" id="chain-assemble">Assemble completed</button>
       <span class="progress" id="chain-progress"></span>`;
     host.appendChild(bar);
     const allBtn = bar.querySelector("#chain-run-all");
+    const upBtn = bar.querySelector("#chain-run-all-up");
     const asmBtn = bar.querySelector("#chain-assemble");
     const progress = bar.querySelector("#chain-progress");
-    asmBtn.addEventListener("click", assembleNow);
+    asmBtn.addEventListener("click", () => assembleNow());
+    const refreshUpLabel = () => {
+      upBtn.textContent = finishLabel(ops, total);
+      upBtn.disabled = allBtn.disabled || finishableCount(ops) === 0;
+    };
+    refreshUpLabel();
+    loadFinishRate().then(refreshUpLabel);
 
     // Nothing can roll before the master's split lands on every link. ONE
     // derivation covers the chain, so ONE ticker lives here on the bar —
@@ -1476,6 +1657,7 @@
           landDerivedCard(op, card, one, { index, count: ops.length });
         }
         allBtn.disabled = false;
+        refreshUpLabel();
         progress.textContent = "";
       };
       setTimeout(gate, 2500);
@@ -1488,8 +1670,10 @@
         : null;
     };
 
-    async function runAll() {
+    async function runAll(opts) {
+      const withFinish = !!(opts && opts.upscale);
       allBtn.disabled = true;
+      upBtn.disabled = true;
       progress.textContent = "submitting…";
       let batch;
       try {
@@ -1501,6 +1685,7 @@
       } catch (err) {
         progress.textContent = `batch failed: ${err.message || err}`;
         allBtn.disabled = false;
+        refreshUpLabel();
         return;
       }
       ops.forEach((op) => {
@@ -1567,6 +1752,7 @@
             "warn"
           );
           allBtn.disabled = false;
+          refreshUpLabel();
           return;
         }
         if (counts.failed > 0) {
@@ -1580,15 +1766,27 @@
             "warn"
           );
           allBtn.disabled = false;
+          refreshUpLabel();
           return;
         }
+        if (withFinish) {
+          progress.textContent += " — finishing…";
+          const finished = await upscaleAll(progress);
+          progress.textContent = progress.textContent.replace(
+            " — finishing…",
+            finished === true
+              ? ` — finished at ${FINISH_RESOLUTION}`
+              : finished === "none" ? " — nothing to finish" : " — some finishes failed"
+          );
+        }
         progress.textContent += " — assembling…";
-        const delivered = await assembleNow();
+        const delivered = await assembleNow(false, { finish: withFinish ? FINISH_RESOLUTION : "auto" });
         progress.textContent = progress.textContent.replace(
           " — assembling…",
           delivered ? " — film delivered" : " — assembly is holding (see the room)"
         );
         allBtn.disabled = false;
+        refreshUpLabel();
       };
       setTimeout(tick, 2500);
     }
@@ -1597,7 +1795,15 @@
       armConfirm(
         allBtn,
         `Confirm — roll ${plural(ops.length, "clip")} in order, ${usd(total)} total`,
-        runAll
+        () => runAll()
+      );
+    });
+    upBtn.addEventListener("click", () => {
+      armConfirm(
+        upBtn,
+        `Confirm — roll ${plural(ops.length, "clip")} in order, finish ${finishableCount(ops)} at ` +
+          `${FINISH_RESOLUTION}, cut at 1080 — ${usd(total + finishCost(ops))} total`,
+        () => runAll({ upscale: true })
       );
     });
   }
@@ -1951,6 +2157,18 @@
     });
   }
 
+  // Blueprint 30: the take's 1080p finish, beside its verdict on the board
+  function finishChip(finish) {
+    if (!finish) return "";
+    const res = esc(finish.resolution || "1080p");
+    if (finish.usable) return ` <span class="bok">${res} ✓</span>`;
+    if (finish.status === "proposed" || finish.status === "submitting" || finish.status === "submitted") {
+      return ` <span class="bt">${res} finishing…</span>`;
+    }
+    const why = finish.reason || (finish.issues || []).join("; ") || finish.status;
+    return ` <span class="verdict fail" title="${esc(why)}">${res} finish failed</span>`;
+  }
+
   function renderShotsTab(pane, b) {
     pane.replaceChildren();
     if (!b.clips.length) {
@@ -1968,9 +2186,27 @@
         `<span class="bt">${esc(c.clip_class)}</span>` +
         `<span class="bt">${c.duration_s}s · ${esc(c.model)}</span>` +
         `<span class="bt">${usd(c.est_usd_micros)}</span>` +
-        `<span class="bstate">${esc(c.status)}</span>${verdict}${accepted}` +
+        `<span class="bstate">${esc(c.status)}</span>${verdict}${accepted}${finishChip(c.finish)}` +
         `<span class="bjoin">${join}</span></div>` +
         `<div class="bcam">${esc(c.camera)}</div>`;
+      if (c.finish && c.finish.status === "failed" && c.finish.op_id) {
+        const retry = document.createElement("button");
+        retry.type = "button";
+        retry.className = "retrybtn";
+        retry.textContent = `↻ Retry ${esc(c.finish.resolution)} finish`;
+        retry.title = c.finish.reason || "Re-run the server-side finish — the take itself is never re-shot";
+        retry.addEventListener("click", async () => {
+          retry.disabled = true;
+          try {
+            await api(`/api/director/ops/${c.finish.op_id}/retry`, { method: "POST" });
+            addMsg("director", `${c.clip_id}: the ${c.finish.resolution} finish is rolling again.`);
+            refreshBoard();
+          } catch (err) {
+            retry.textContent = String(err.message || err);
+          }
+        });
+        row.appendChild(retry);
+      }
       if (c.issues && c.issues.length) {
         const why = document.createElement("div");
         why.className = "verdict-issues";

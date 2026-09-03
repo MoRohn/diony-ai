@@ -26,7 +26,9 @@
     { "capability": "video", "model": "omni-flash", "unit": "generation:360p:10s", "credits": 7 },
     { "capability": "video", "model": "omni-flash", "unit": "v2v:720p", "credits": 20 },
     { "capability": "video", "model": "omni-flash", "unit": "v2v:360p", "credits": 10 },
-    { "capability": "video", "model": "video-upscale", "unit": "generation", "credits": 20, "confidence": "estimated" },
+    { "capability": "video", "model": "video-upscale", "unit": "generation:720p", "credits": 0, "confidence": "documented" },
+    { "capability": "video", "model": "video-upscale", "unit": "generation:1080p", "credits": 0, "confidence": "documented" },
+    { "capability": "video", "model": "video-upscale", "unit": "generation:4K", "credits": 50, "confidence": "documented" },
     { "capability": "image", "model": "nano-banana-2-lite", "unit": "generation", "credits": 1, "confidence": "estimated" },
     { "capability": "image", "model": "nano-banana-2", "unit": "generation", "credits": 1, "confidence": "estimated" },
     { "capability": "image", "model": "nano-banana-pro", "unit": "generation", "credits": 2, "confidence": "estimated" }

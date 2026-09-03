@@ -42,8 +42,20 @@ def _probe(path: Path) -> dict | None:
     except (subprocess.SubprocessError, json.JSONDecodeError, OSError):
         return None
     duration = float(body.get("format", {}).get("duration") or 0)
-    has_audio = any(s.get("codec_type") == "audio" for s in body.get("streams", []))
-    return {"duration_s": duration, "has_audio": has_audio}
+    streams = body.get("streams", [])
+    has_audio = any(s.get("codec_type") == "audio" for s in streams)
+    video = next((s for s in streams if s.get("codec_type") == "video"), {})
+    return {
+        "duration_s": duration,
+        "has_audio": has_audio,
+        "width": int(video.get("width") or 0),
+        "height": int(video.get("height") or 0),
+    }
+
+
+def probe(path: Path) -> dict | None:
+    """Duration, audio presence and raster of one file (None without ffprobe)."""
+    return _probe(path)
 
 
 def _face_receipt(clip_path: Path, still_path: Path, frame_count: int):

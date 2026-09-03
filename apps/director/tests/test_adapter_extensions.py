@@ -97,3 +97,126 @@ def test_grok_edit_and_extension_endpoints(monkeypatch) -> None:
     assert seen[0][0].endswith("/v1/videos/edits")
     assert seen[1][0].endswith("/v1/videos/extensions")
     assert seen[1][1]["duration"] == 6
+
+
+# --- POST /videos/upscale contract (useapi.net docs, verified 2026-09-03) ----
+
+
+def test_flow_upscale_payload_is_async_and_never_carries_email(monkeypatch) -> None:
+    seen = {}
+
+    def fake_post(url, **kwargs):
+        seen["url"] = url
+        seen["json"] = kwargs.get("json")
+        # async mode answers 201 with a LOWERCASE jobid
+        return _Response({"jobid": "j-up-1", "status": "created"}, status_code=201)
+
+    monkeypatch.setenv("DIONY_FLOW_EMAIL", "studio@example.com")
+    monkeypatch.setattr(flow.httpx, "post", fake_post)
+    handle = flow.submit_upscale("user:12345-video:abc", resolution="1080p")
+    assert seen["url"].endswith("/videos/upscale")
+    assert seen["json"] == {
+        "mediaGenerationId": "user:12345-video:abc",
+        "resolution": "1080p",
+        "async": True,
+    }
+    assert "email" not in seen["json"]
+    assert handle.external_id == "j-up-1"
+    assert handle.model == flow.UPSCALE_MODEL
+    assert handle.resolution == "1080p"
+    assert handle.metadata["kind"] == "upscale"
+    assert handle.metadata["source_media_generation_id"] == "user:12345-video:abc"
+    assert "sync_result_url" not in handle.metadata
+
+
+def test_flow_upscale_refuses_illegal_inputs_before_any_request(monkeypatch) -> None:
+    import pytest
+
+    from diony_director.providers import base
+
+    def never(url, **kwargs):
+        raise AssertionError("no request may leave for an illegal upscale")
+
+    monkeypatch.setattr(flow.httpx, "post", never)
+    with pytest.raises(base.CloudAdapterError, match="720p, 1080p, 4K"):
+        flow.submit_upscale("user:vid", resolution="2K")
+    with pytest.raises(base.CloudAdapterError, match="local file or URL"):
+        flow.submit_upscale("https://cdn/clip.mp4")
+    with pytest.raises(base.CloudAdapterError, match="mediaGenerationId"):
+        flow.submit_upscale("")
+
+
+def test_flow_upscale_cached_200_completes_without_a_poll(monkeypatch) -> None:
+    # upscaling the same video twice returns the cached result synchronously
+    body = {
+        "jobId": "j-up-cached",
+        "media": [
+            {
+                "mediaGenerationId": "user:vid_upsampled",
+                "videoUrl": "https://flow-content.google/video/up.mp4",
+            }
+        ],
+        "remainingCredits": 500,
+    }
+    monkeypatch.setattr(flow.httpx, "post", lambda url, **kw: _Response(body, status_code=200))
+
+    def never_get(url, **kw):
+        raise AssertionError("a cached upscale never polls")
+
+    monkeypatch.setattr(flow.httpx, "get", never_get)
+    handle = flow.submit_upscale("user:vid")
+    status = flow.poll(handle)
+    assert status.state == "done"
+    assert status.result_url.endswith("/up.mp4")
+    assert status.metadata["media_generation_id"] == "user:vid_upsampled"
+    assert status.metadata["credits_after"] == 500
+
+
+def test_flow_poll_treats_a_completed_job_without_a_link_as_pending(monkeypatch) -> None:
+    # the docs: a missing videoUrl on a successful media item is Google's
+    # link throttling — re-resolved by GET /jobs at most once a minute
+    body = {
+        "status": "completed",
+        "response": {
+            "media": [
+                {
+                    "mediaGenerationId": "user:vid_upsampled",
+                    "mediaStatus": {"mediaGenerationStatus": "MEDIA_GENERATION_STATUS_SUCCESSFUL"},
+                }
+            ],
+            "remainingCredits": 12,
+        },
+    }
+    monkeypatch.setattr(flow.httpx, "get", lambda url, **kw: _Response(body))
+    handle = flow.submit_handle("j-up-2", model=flow.UPSCALE_MODEL, duration_s=0, kind="upscale")
+    status = flow.poll(handle)
+    assert status.state == "running"
+    assert status.terminal is False
+    assert status.metadata["link_pending"] is True
+    assert status.metadata["poll_after_s"] == flow.LINK_PENDING_POLL_S
+    assert "link pending" in status.detail
+
+    failed = {
+        "status": "completed",
+        "media": [{"mediaStatus": {"mediaGenerationStatus": "MEDIA_GENERATION_STATUS_FAILED"}}],
+    }
+    monkeypatch.setattr(flow.httpx, "get", lambda url, **kw: _Response(failed))
+    status = flow.poll(handle)
+    assert status.state == "failed"
+    assert "FAILED" in status.detail
+
+
+def test_flow_upscale_credits_follow_the_documented_resolution_prices() -> None:
+    from diony_director.providers import base
+
+    silent = base.CloudJobStatus(state="done", result_url="https://x/y.mp4")
+    free = flow.submit_handle("j", model=flow.UPSCALE_MODEL, duration_s=0, resolution="1080p")
+    assert flow.credits_used(free, silent) == 0
+    ultra = flow.submit_handle("j", model=flow.UPSCALE_MODEL, duration_s=0, resolution="4K")
+    assert flow.credits_used(ultra, silent) == 50
+    metered = flow.submit_handle(
+        "j", model=flow.UPSCALE_MODEL, duration_s=0, resolution="1080p", credits_before=100
+    )
+    assert flow.credits_used(metered, base.CloudJobStatus(
+        state="done", result_url="https://x/y.mp4", metadata={"credits_after": 97}
+    )) == 3

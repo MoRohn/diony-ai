@@ -344,6 +344,8 @@ details.lines td:last-child { text-align: right; color: var(--ink); font-variant
   background: transparent; border: 1px solid rgba(255,122,47,.5); color: var(--accent-ink); box-shadow: none;
 }
 .batchbar button.batch.ghost { border-color: var(--line-hi); color: var(--ink2); }
+/* the 1080p finish variant: same primary weight, a finish accent on the edge */
+.batchbar button.batch.finish { box-shadow: 0 2px 10px rgba(255,64,47,.22), inset 0 0 0 1px rgba(255,255,255,.22); }
 .batchbar button.batch:disabled { opacity: .4; cursor: default; transform: none; }
 .batchbar .progress { font: 500 .7rem/1.5 var(--mono); color: var(--mut); font-variant-numeric: tabular-nums; }
 
