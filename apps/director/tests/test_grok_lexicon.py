@@ -359,6 +359,7 @@ def test_settings_endpoint_serves_the_stored_program_settings() -> None:
     body = client.get(f"/api/director/sessions/{sid}/settings").json()
     assert body == {
         "aspect": "9:16",
+        "voice": "",
         "flow_template": {"world": "filmic", "camera": "dollyin"},
         "grok_template": {"camera": "orbit", "atmosphere": "dust"},
     }

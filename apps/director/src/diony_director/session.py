@@ -105,6 +105,9 @@ FINISH_RESOLUTION = "1080p"
 DEFAULT_UPSCALE_PARALLELISM = 4
 DEFAULT_ASPECT = "16:9"
 _ASPECTS: dict[str, str] = {}
+# The film's narrator voice (Blueprint 28): "" = Auto (the Director casts
+# from the film's tone), else a roster voice_id chosen in the console.
+_VOICES: dict[str, str] = {}
 
 
 def reset() -> None:
@@ -130,6 +133,7 @@ def reset() -> None:
         _MASTERS,
         _ACCEPTED,
         _ASPECTS,
+        _VOICES,
     ):
         store.clear()
     from diony_director import flow_lexicon, grok_lexicon
@@ -1254,6 +1258,24 @@ def program_raster(sid: str) -> tuple[int, int]:
 
 def finish_raster(sid: str) -> tuple[int, int]:
     return FINISH_ASPECTS[aspect_for(sid)]
+
+
+def voice_for(sid: str) -> str:
+    return _VOICES.get(sid, "")
+
+
+def set_voice(sid: str, voice: str) -> str:
+    """The narrator voice for this film: a roster key, or "" for Auto."""
+    from diony_director import narration
+
+    resolved = narration.normalize_voice(voice)
+    if resolved:
+        _VOICES[sid] = resolved
+    else:
+        _VOICES.pop(sid, None)
+    if sid in _SESSIONS:
+        persist(sid)
+    return resolved
 
 
 def upscale_parallelism() -> int:
@@ -2420,6 +2442,7 @@ def persist(sid: str) -> None:
         "batch_targets": sorted(_BATCH_TARGETS.get(sid, set())),
         "budget": _BUDGETS.get(sid),
         "aspect": _ASPECTS.get(sid),
+        "voice": _VOICES.get(sid) or None,
         "flow_template": _flow_template_raw(sid),
         "grok_template": _grok_template_raw(sid),
         "uploads": list(_UPLOADS.get(sid) or []),
@@ -2487,6 +2510,8 @@ def _load_state(sid: str, doc: dict) -> None:
         _BUDGETS[sid] = dict(doc["budget"])
     if doc.get("aspect") in PROGRAM_ASPECTS:
         _ASPECTS[sid] = str(doc["aspect"])
+    if doc.get("voice"):
+        _VOICES[sid] = str(doc["voice"])
     if doc.get("flow_template"):
         from diony_director import flow_lexicon
 

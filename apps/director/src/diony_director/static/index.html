@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="/static/app.css?v=p33">
+<link rel="stylesheet" href="/static/app.css?v=p34">
 </head>
 <body>
 
@@ -145,6 +145,12 @@
               <option value="" selected>Authored</option>
             </select>
           </label>
+          <label class="pill" title="Narrator voice for the whole film — recorded in post, one voice per film (Blueprint 28). Auto lets the Director cast from the film's tone and speaker; a name pins one Grok voice. Changeable any time before the cut.">
+            <span class="plabel">Voice</span>
+            <select id="voice">
+              <option value="" selected>Auto</option>
+            </select>
+          </label>
           <label class="pill" title="Ceiling for this session's scripted production — holds anything that would breach it. Empty = no ceiling.">
             <span class="plabel">Budget $</span>
             <input id="budget" type="number" min="0" step="1" inputmode="numeric" placeholder="∞">
@@ -169,6 +175,6 @@
     <div class="bpane" id="bpane"></div>
   </aside>
 </div>
-<script src="/static/app.js?v=p33"></script>
+<script src="/static/app.js?v=p34"></script>
 </body>
 </html>

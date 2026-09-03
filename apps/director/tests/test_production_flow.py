@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from diony_director import app as app_module
+from diony_director.narration import DEFAULT_ROSTER
 from diony_director.providers import base, flow, grok
 
 HAVE_FFMPEG = shutil.which("ffmpeg") is not None
@@ -829,3 +830,59 @@ def test_finish_waves_release_a_few_upscales_at_a_time(monkeypatch, tmp_path) ->
     finishes[0].status = "completed"
     assert [op.id for op in director_session.ready_ops(sid)] == ["op-up-2"]
     assert director_session.queued_count(sid) == 3
+
+
+# --- The film's narrator voice: a console setting, Auto by default ------------
+
+
+def test_the_voice_setting_is_offered_validated_and_persisted(monkeypatch) -> None:
+    from diony_director import session as director_session
+
+    client = _client()
+    catalog = client.get("/api/director/voices").json()
+    assert catalog["default"] == ""
+    keys = [v["key"] for v in catalog["voices"]]
+    assert "atlas" in keys and "eve" in keys
+    sid = _start(client)
+    assert client.get(f"/api/director/sessions/{sid}/settings").json()["voice"] == ""
+
+    bad = client.post(f"/api/director/sessions/{sid}/voice", json={"voice": "marvin"})
+    assert bad.status_code == 422 and "unknown narrator voice" in bad.text
+    assert client.post(f"/api/director/sessions/{sid}/voice", json={"voice": "Atlas"}).json()["voice"] == "atlas"
+    assert client.get(f"/api/director/sessions/{sid}/settings").json()["voice"] == "atlas"
+    # the message body carries it too, None keeps, "auto" releases
+    client.post(f"/api/director/sessions/{sid}/message", json={"text": "a truck", "duration_s": 6})
+    assert director_session.voice_for(sid) == "atlas"
+    client.post(
+        f"/api/director/sessions/{sid}/message",
+        json={"text": "a truck at night", "duration_s": 6, "voice": "auto"},
+    )
+    assert director_session.voice_for(sid) == ""
+    client.post(f"/api/director/sessions/{sid}/voice", json={"voice": "luna"})
+
+    director_session.reset()  # the process dies
+    director_session.rehydrate_from_vault()
+    assert director_session.voice_for(sid) == "luna", "the choice survives a restart"
+
+
+@pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
+def test_the_cut_speaks_with_the_chosen_voice_and_reports_it(monkeypatch, tmp_path, fake_narrator) -> None:
+    monkeypatch.delenv("DIONY_GROK_VOICE", raising=False)
+    client = _client()
+    sid, ops, flow_ids, grok_ids = _locked_production(client, monkeypatch, tmp_path)
+    # Auto: the Director casts one roster voice for the film
+    film = client.post(f"/api/director/sessions/{sid}/assemble", json={}).json()
+    auto = film["narration"]["voice"]
+    assert auto["chosen"] == ""
+    assert auto["voice_id"] in DEFAULT_ROSTER, "the splitter's vox- identity ref is not a voice id"
+    assert "cast for:" in auto["cast"]
+    # a console choice speaks the next cut — and the whole film — in that voice
+    client.post(f"/api/director/sessions/{sid}/voice", json={"voice": "atlas"})
+    film = client.post(f"/api/director/sessions/{sid}/assemble", json={}).json()
+    assert film["narration"]["voice"]["voice_id"] == "atlas"
+    assert film["narration"]["voice"]["chosen"] == "atlas"
+    assert "chosen in the Director console" in film["narration"]["voice"]["cast"]
+    # the assemble body may pick one for this cut and it sticks to the film
+    film = client.post(f"/api/director/sessions/{sid}/assemble", json={"voice": "Celeste"}).json()
+    assert film["narration"]["voice"]["voice_id"] == "celeste"
+    assert client.get(f"/api/director/sessions/{sid}/settings").json()["voice"] == "celeste"

@@ -180,6 +180,9 @@ class MessageIn(BaseModel):
     flow_camera: str | None = None
     grok_camera: str | None = None
     grok_atmosphere: str | None = None
+    # Narrator voice for the film: None = keep, "" / "auto" = the Director
+    # casts, a roster name pins one voice (Blueprint 28, post-recorded).
+    voice: str | None = None
 
 
 # Each program-setting change is PLANNED (validated, never mutating) before
@@ -267,6 +270,24 @@ def _plan_grok_template(
     )
 
 
+def _plan_voice(sid: str, voice: str | None) -> Callable[[], None] | None:
+    """Validate a narrator-voice change. None keeps; "" or "auto" returns the
+    film to Director casting; a roster name pins one voice for the whole
+    film. Narration is recorded in post (Blueprint 28), so this may change
+    at any time before the cut — a lock never freezes it."""
+    from diony_director import narration as narration_mod
+
+    if voice is None:
+        return None
+    try:
+        resolved = narration_mod.normalize_voice(voice)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    if resolved == session.voice_for(sid):
+        return None
+    return lambda: session.set_voice(sid, resolved)
+
+
 def _apply_program_settings(sid: str, body: "MessageIn | ProduceIn") -> None:
     """Validate every program-setting change, then commit them together — so
     a request the caller sees rejected never half-mutates the session."""
@@ -274,6 +295,7 @@ def _apply_program_settings(sid: str, body: "MessageIn | ProduceIn") -> None:
         _plan_aspect(sid, body.aspect),
         _plan_flow_template(sid, body.flow_world, body.flow_camera),
         _plan_grok_template(sid, body.grok_camera, body.grok_atmosphere),
+        _plan_voice(sid, body.voice),
     ]
     for commit in committers:  # every planner validated first; none raise here
         if commit is not None:
@@ -319,9 +341,43 @@ def session_settings(sid: str) -> dict:
         raise HTTPException(status_code=404, detail=f"unknown session {sid}")
     return {
         "aspect": session.aspect_for(sid),
+        "voice": session.voice_for(sid),
         "flow_template": session.flow_template_for(sid),
         "grok_template": session.grok_template_for(sid),
     }
+
+
+@app.get("/api/director/voices")
+def voice_catalog() -> dict:
+    """The narrator voices the console offers: Auto (the Director casts from
+    the film's tone, spread per film) plus the Grok roster by name."""
+    import os as _os
+
+    from diony_director import narration as narration_mod
+
+    return {
+        "default": "",
+        "voices": narration_mod.roster_catalog(),
+        "pinned": _os.environ.get(narration_mod.GROK_VOICE_ENV, "").strip(),
+        "backend": narration_mod.backend() if narration_mod.narrator_configured() else "",
+    }
+
+
+class VoiceIn(BaseModel):
+    voice: str = ""  # "" or "auto" = the Director casts
+
+
+@app.post("/api/director/sessions/{sid}/voice")
+def set_session_voice(sid: str, body: VoiceIn) -> dict:
+    """Choose (or release to Auto) the film's narrator voice. Post-recorded,
+    so it applies to the next cut whether the script is locked or not."""
+    _boot()
+    if not session.session_exists(sid):
+        raise HTTPException(status_code=404, detail=f"unknown session {sid}")
+    commit = _plan_voice(sid, body.voice)
+    if commit is not None:
+        commit()
+    return {"session_id": sid, "voice": session.voice_for(sid)}
 
 
 @app.post("/api/director/sessions/{sid}/message")
@@ -1737,6 +1793,7 @@ class ProduceIn(BaseModel):
     flow_camera: str | None = None
     grok_camera: str | None = None
     grok_atmosphere: str | None = None
+    voice: str | None = None
 
 
 @app.post("/api/director/sessions/{sid}/produce")
@@ -2056,6 +2113,10 @@ class AssembleIn(BaseModel):
     # them, while any Flow take in the cut still lacks its usable finish;
     # "720p" cuts the takes' own prints and ignores every finish.
     finish: str = Field(default="auto", pattern="^(auto|720p|1080p)$")
+    # Narrator voice for THIS cut (and the film from here on): None keeps the
+    # session's choice, "" / "auto" releases it to Director casting, a
+    # roster name pins one voice.
+    voice: str | None = None
 
 
 def _cut_gaps(sid: str) -> tuple[list[str], list[DirectorOp], list[str]]:
@@ -2194,6 +2255,17 @@ def _speech_guard(
                 }
             )
     return {"muted": muted, "measured": checked, "clips": len(paths)}
+
+
+def _film_voice(report, chosen: str) -> dict | None:
+    """Who narrated the film and why: the narrator cue (the first cue that
+    is not an authored per-clip voice lock), or the lock when every cue is."""
+    if not report.cues:
+        return None
+    narrator = next(
+        (c for c in report.cues if c.get("cast") != "authored voice lock"), report.cues[0]
+    )
+    return {"voice_id": narrator["voice"], "cast": narrator["cast"], "chosen": chosen}
 
 
 @app.post("/api/director/sessions/{sid}/assemble")
@@ -2358,10 +2430,15 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
             if package is not None
             else {}
         )
+        commit_voice = _plan_voice(sid, body.voice)
+        if commit_voice is not None:
+            commit_voice()
         narration_mod.cast_cues(
             cues,
             tone_text=" ".join(b for b in tone_bits if b),
             character_notes=notes,
+            voice=session.voice_for(sid),
+            seed=sid,
         )
         picture_lock = dest.with_name("picture-lock.mp4")
         narrated = dest.with_name("film-narrated.tmp.mp4")
@@ -2418,6 +2495,8 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
                 "overruns": narration_report.overruns,
                 "shifts": narration_report.shifts,
                 "tail_hold_s": narration_report.tail_hold_s,
+                # who spoke, and why: the console's choice or the cast
+                "voice": _film_voice(narration_report, session.voice_for(sid)),
             }
             if narration_report is not None
             else {"cue_count": 0, "skipped": "no lines" if body.narrate else "narrate off"}

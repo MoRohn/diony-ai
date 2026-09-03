@@ -235,15 +235,52 @@ def _roster() -> dict[str, list[str]]:
     )
 
 
-def cast_voice(*, speaker: str = "", tone_text: str = "", character_notes: str = "") -> tuple[str, str]:
+IDENTITY_REF = re.compile(r"^vox-[A-Za-z0-9_.-]+(@v\d+)?$")
+
+
+def is_identity_ref(voice_ref: str) -> bool:
+    """A Diony character-identity voice ref (`vox-<char>@v1`), as opposed to
+    a narrator voice id a backend can speak."""
+    return bool(IDENTITY_REF.match(str(voice_ref or "").strip()))
+
+
+def roster_catalog() -> list[dict]:
+    """The selectable narrator voices (the curated Grok roster, env-overridable)
+    for the Director console: key = voice_id, label, and the casting tags."""
+    return [
+        {"key": name, "label": name[:1].upper() + name[1:], "tags": list(tags),
+         "hint": ", ".join(t for t in tags if t not in {"male", "female"})}
+        for name, tags in _roster().items()
+    ]
+
+
+def normalize_voice(value: str | None) -> str:
+    """A console/API voice value as the roster knows it: '' for Auto (the
+    Director casts), else the roster key. Unknown names raise ValueError."""
+    chosen = str(value or "").strip().lower()
+    if chosen in {"", "auto"}:
+        return ""
+    keys = {name.lower(): name for name in _roster()}
+    if chosen not in keys:
+        raise ValueError(
+            f"unknown narrator voice {value!r} — choose Auto or one of: "
+            + ", ".join(sorted(keys.values()))
+        )
+    return keys[chosen]
+
+
+def cast_voice(
+    *, speaker: str = "", tone_text: str = "", character_notes: str = "", seed: str = ""
+) -> tuple[str, str]:
     """Pick the roster voice that reads like this production.
 
     Tone text (the master prompt's mood, visual style, and performance, plus
     the cue's own direction) scores against each voice's tags; a character
     whose notes read a gender strongly prefers a matching voice. Ties break
-    on a stable hash of the speaker, so one production casts each character
-    to the same voice on every assemble — and different characters spread
-    across the roster instead of piling onto one name."""
+    on a stable hash of the speaker AND the film (`seed`, the session), so
+    one production casts the same voice on every assemble — while different
+    films spread across the roster instead of every tone-neutral film
+    landing on the same name (the "one default voice for all clips" defect)."""
     roster = _roster()
     tone = f" {tone_text.strip().lower()} "
     notes = f" {character_notes.strip().lower()} "
@@ -266,7 +303,7 @@ def cast_voice(*, speaker: str = "", tone_text: str = "", character_notes: str =
         hits[name] = matched
     best = max(scores.values())
     top = sorted(name for name, score in scores.items() if score == best)
-    spread = int(hashlib.md5((speaker or "narrator").encode()).hexdigest(), 16)
+    spread = int(hashlib.md5(f"{seed}|{speaker or 'narrator'}".encode()).hexdigest(), 16)
     pick = top[spread % len(top)]
     why = ", ".join(hits[pick][:3]) or "roster default for this tone"
     if gender:
@@ -279,10 +316,13 @@ def cast_cues(
     *,
     tone_text: str = "",
     character_notes: dict[str, str] | None = None,
+    voice: str = "",
+    seed: str = "",
 ) -> None:
     """Resolve every cue's voice, in authored order of authority: a clip's
-    voice lock; the site-pinned DIONY_GROK_VOICE; else ONE voice cast from
-    the roster for the whole production.
+    voice lock; the voice chosen for this film in the Director console
+    (`voice`); the site-pinned DIONY_GROK_VOICE; else ONE voice cast from
+    the roster for the whole production (spread per film by `seed`).
 
     Single-speaker doctrine: per-speaker casting handed a two-character scene
     two narrator voices — the multiple-voices defect wearing the casting
@@ -290,31 +330,51 @@ def cast_cues(
     voice lock (or the site pin) may say otherwise. A production whose cues
     all belong to one scripted speaker still casts to that character's read
     (gender tells and all); mixed speakers cast from the film's tone alone."""
+    chosen = str(voice or "").strip()
+    if chosen.lower() == "auto":
+        chosen = ""  # the console's Auto: the Director casts
     pinned = os.environ.get(GROK_VOICE_ENV, "").strip()
     notes = {str(k).strip().lower(): str(v) for k, v in (character_notes or {}).items()}
+    # A `vox-<char>@vN` ref is the splitter's CHARACTER IDENTITY lock (the
+    # Flow lane's "this character keeps one voice"), not a narrator voice
+    # id: sent to Grok TTS verbatim it is an unknown voice, and read as an
+    # authored lock it silenced every console choice and cast on the Flow
+    # route. Under the single-speaker doctrine it resolves to the film's
+    # narrator like any open cue; only a real voice id stays authored law.
+    for cue in cues:
+        if is_identity_ref(cue.voice_ref):
+            cue.voice_ref = ""
+            cue.cast_note = "character voice lock → the film's narrator"
     open_cues = [cue for cue in cues if not cue.voice_ref]
     speakers = {c.speaker.strip().lower() for c in open_cues if c.speaker.strip()}
     solo = next(iter(speakers)) if len(speakers) == 1 else ""
     voice = ""
     note = ""
-    if open_cues and not pinned:
+    if open_cues and not chosen and not pinned:
         directions = " ".join(c.direction for c in open_cues if c.direction)
         voice, note = cast_voice(
             speaker=solo or "narrator",
             tone_text=f"{tone_text} {directions}",
             character_notes=notes.get(solo, ""),
+            seed=seed,
         )
         note += " — one voice for the whole film"
     for cue in cues:
         if cue.voice_ref:
             cue.cast_note = "authored voice lock"
             continue
+        identity = cue.cast_note if cue.cast_note.startswith("character voice lock") else ""
+        prefix = f"{identity}; " if identity else ""
+        if chosen:
+            cue.voice_ref = chosen
+            cue.cast_note = prefix + "chosen in the Director console — one voice for the whole film"
+            continue
         if pinned:
             cue.voice_ref = pinned
-            cue.cast_note = f"site-pinned {GROK_VOICE_ENV}"
+            cue.cast_note = prefix + f"site-pinned {GROK_VOICE_ENV}"
             continue
         cue.voice_ref = voice
-        cue.cast_note = note
+        cue.cast_note = prefix + note
 
 
 @dataclass

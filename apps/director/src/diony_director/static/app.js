@@ -592,6 +592,19 @@
       } catch (err) {
         /* static fallbacks in the HTML keep the pills usable */
       }
+      // The narrator roster (Blueprint 28): Auto casts per film; a name
+      // pins one Grok voice for the whole film.
+      try {
+        const cat = await api("/api/director/voices");
+        fillLexSelect(
+          $("voice"),
+          (cat.voices || []).map((v) => ({ key: v.key, label: v.label, hint: v.hint })),
+          "",
+          cat.pinned ? `Auto (site pin: ${cat.pinned})` : "Auto"
+        );
+      } catch (err) {
+        /* the static Auto option keeps the pill usable */
+      }
       updateLexiconPillState();
       renderPairings();
       updateTemplateChip();
@@ -659,6 +672,7 @@
         if (el && [...el.options].some((o) => o.value === value)) el.value = value;
       };
       if (s.aspect) set("aspect", s.aspect);
+      set("voice", s.voice || "");
       if (s.flow_template) {
         set("flow-world", s.flow_template.world || "baseline");
         set("flow-camera", s.flow_template.camera || "");
@@ -714,7 +728,29 @@
       flow_camera: fieldOrKeep("flow-camera"),
       grok_camera: fieldOrKeep("grok-camera"),
       grok_atmosphere: fieldOrKeep("grok-atmosphere"),
+      voice: fieldOrKeep("voice"),
     };
+  }
+
+  // The voice is post-recorded, so a choice lands on the session at once —
+  // "Assemble completed" after a change must speak with the new voice even
+  // when no message follows.
+  async function pushVoice() {
+    const el = $("voice");
+    if (!el || !sessionId) return;
+    try {
+      const res = await api(`/api/director/sessions/${sessionId}/voice`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ voice: el.value }),
+      });
+      const label = res.voice
+        ? [...el.options].find((o) => o.value === res.voice)?.textContent || res.voice
+        : "Auto (the Director casts from the film's tone)";
+      addMsg("director", `Narrator voice: ${label}.`);
+    } catch (err) {
+      addMsg("director", `Couldn't set the voice: ${err.message || err}`, "warn");
+    }
   }
 
   function lexTokensIn(text) {
@@ -1127,6 +1163,12 @@
       video.controls = true;
       video.src = `/api/director/films/${sessionId}`;
       done.appendChild(video);
+      if (film.narration && film.narration.voice && film.narration.voice.voice_id) {
+        const v = film.narration.voice;
+        const name = v.voice_id[0].toUpperCase() + v.voice_id.slice(1);
+        const hold = film.narration.tail_hold_s ? ` The last frame held ${film.narration.tail_hold_s.toFixed(1)}s so the final line could finish.` : "";
+        addMsg("director", `Narrated by ${name} (${v.cast}).${hold}`);
+      }
       if (film.deliverables && film.deliverables.length) {
         let line = `Delivered with ${plural(film.cue_count || 0, "subtitle cue")}: ${film.deliverables.join(", ")} — on the board's CUT tab.`;
         if (film.final_check && film.final_check.verdict !== "pass") {
@@ -2422,6 +2464,7 @@
       });
   });
   { const a = $("aspect"); if (a) a.addEventListener("change", () => markDirty("aspect")); }
+  { const v = $("voice"); if (v) v.addEventListener("change", () => { markDirty("voice"); pushVoice(); }); }
   $("idea").addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" && !ev.shiftKey) {
       ev.preventDefault();

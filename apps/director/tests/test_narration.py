@@ -535,3 +535,80 @@ def test_a_line_longer_than_the_tail_cap_is_named(tmp_path, monkeypatch, fake_na
     assert report.tail_hold_s == narration.MAX_TAIL_HOLD_S
     assert report.duration_s == pytest.approx(32.0, abs=0.3)
     assert report.overruns and "tail hold" in report.overruns[0] and "cl-9" in report.overruns[0]
+
+
+# --- A voice per film: chosen in the console, or cast and spread per film ----
+
+
+def test_tone_neutral_films_spread_across_the_roster_by_seed(monkeypatch) -> None:
+    """Without a seed every tone-neutral, mixed-speaker film tie-broke on the
+    constant "narrator" — one default voice for all Diony films. Seeded by
+    the session, films spread across the roster and each film stays stable."""
+    monkeypatch.delenv(narration.GROK_VOICE_ENV, raising=False)
+    monkeypatch.delenv(narration.GROK_VOICE_ROSTER_ENV, raising=False)
+    picks = {
+        narration.cast_voice(speaker="narrator", tone_text="", seed=f"s-{i:02d}")[0]
+        for i in range(24)
+    }
+    assert len(picks) > 1, "different films must not all land on one voice"
+    assert picks <= set(narration.DEFAULT_ROSTER)
+    again = narration.cast_voice(speaker="narrator", tone_text="", seed="s-07")[0]
+    assert again == narration.cast_voice(speaker="narrator", tone_text="", seed="s-07")[0]
+
+
+def test_the_console_choice_outranks_the_pin_and_the_cast_but_not_a_lock(monkeypatch) -> None:
+    monkeypatch.delenv(narration.GROK_VOICE_ROSTER_ENV, raising=False)
+    monkeypatch.setenv(narration.GROK_VOICE_ENV, "rex")
+    locked = narration.NarrationCue(order=0, clip_id="cl-1", speaker="ANA", line="a", voice_ref="voice-ana")
+    open_a = narration.NarrationCue(order=1, clip_id="cl-2", speaker="BEN", line="b")
+    open_b = narration.NarrationCue(order=2, clip_id="cl-3", speaker="", line="c")
+    narration.cast_cues([locked, open_a, open_b], tone_text="tense noir", voice="atlas", seed="s-1")
+    assert locked.voice_ref == "voice-ana"
+    assert open_a.voice_ref == "atlas" and open_b.voice_ref == "atlas"
+    assert "chosen in the Director console" in open_a.cast_note
+    # Auto releases it: the pin speaks, then the cast
+    fresh = narration.NarrationCue(order=3, clip_id="cl-4", speaker="", line="d")
+    narration.cast_cues([fresh], tone_text="tense noir", voice="", seed="s-1")
+    assert fresh.voice_ref == "rex"
+    monkeypatch.delenv(narration.GROK_VOICE_ENV, raising=False)
+    fresh = narration.NarrationCue(order=4, clip_id="cl-5", speaker="", line="e")
+    narration.cast_cues([fresh], tone_text="tense noir", voice="auto", seed="s-1")
+    assert fresh.voice_ref == "sal" and fresh.cast_note.startswith("cast for:")
+
+
+def test_voice_names_normalize_against_the_roster(monkeypatch) -> None:
+    monkeypatch.delenv(narration.GROK_VOICE_ROSTER_ENV, raising=False)
+    assert narration.normalize_voice("") == ""
+    assert narration.normalize_voice("Auto") == ""
+    assert narration.normalize_voice(" Atlas ") == "atlas"
+    with pytest.raises(ValueError, match="unknown narrator voice"):
+        narration.normalize_voice("marvin")
+    keys = [v["key"] for v in narration.roster_catalog()]
+    assert keys == list(narration.DEFAULT_ROSTER)
+    assert all(v["label"][0].isupper() and v["hint"] for v in narration.roster_catalog())
+
+
+def test_a_character_identity_ref_is_not_a_narrator_voice(monkeypatch) -> None:
+    """The splitter stamps Flow-routed dialogue with `vox-<char>@v1` — a
+    character identity, not a voice id. Read as an authored lock it went to
+    Grok verbatim (an unknown voice) and silenced every console choice on
+    the Flow route. It now resolves to the film's narrator."""
+    monkeypatch.delenv(narration.GROK_VOICE_ENV, raising=False)
+    monkeypatch.delenv(narration.GROK_VOICE_ROSTER_ENV, raising=False)
+    assert narration.is_identity_ref("vox-chr-lead@v1")
+    assert narration.is_identity_ref("vox-chr_2")
+    assert not narration.is_identity_ref("sal") and not narration.is_identity_ref("voice-ana")
+    cues = [
+        narration.NarrationCue(order=0, clip_id="cl-1", speaker="ELIAS", line="a", voice_ref="vox-chr-lead@v1"),
+        narration.NarrationCue(order=1, clip_id="cl-2", speaker="MARA", line="b", voice_ref="vox-chr-2@v1"),
+        narration.NarrationCue(order=2, clip_id="cl-3", speaker="ANA", line="c", voice_ref="voice-ana"),
+    ]
+    narration.cast_cues(cues, tone_text="tense noir", voice="atlas", seed="s-1")
+    assert cues[0].voice_ref == "atlas" and cues[1].voice_ref == "atlas"
+    assert cues[0].cast_note.startswith("character voice lock")
+    assert cues[2].voice_ref == "voice-ana" and cues[2].cast_note == "authored voice lock"
+    fresh = [
+        narration.NarrationCue(order=0, clip_id="cl-1", speaker="ELIAS", line="a", voice_ref="vox-chr-lead@v1"),
+    ]
+    narration.cast_cues(fresh, tone_text="tense noir", character_notes={"Elias": "a quiet man"}, seed="s-1")
+    assert fresh[0].voice_ref == "sal"

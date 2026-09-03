@@ -67,6 +67,10 @@ One voice, exact words, measured placement.
 7. **Voice locks bind the narrator, not the provider.** They no longer constrain
    routing (a voice lock compiles onto Grok), and provider voice registration
    (`voices` refs, Grok `reference_audios` for speech) is gone from compilation.
+   The splitter's `vox-<char>@vN` ref is a character *identity* lock, never a
+   narrator voice id: `cast_cues()` resolves it to the film's narrator (it once
+   went to Grok verbatim as an unknown voice and silenced every choice on the
+   Flow route). Only a real voice id authored on a clip is an authored lock.
 
 ## Backends
 
@@ -169,6 +173,16 @@ two cast voices at once. Three layered guarantees now stand:
    dirty and muted — the narrator is about to speak over it. Every mute is a
    named receipt in the response (`speech_guard`); `speech_guard: false` ships
    the tracks as delivered.
+2a. **One voice per film, and the film chooses it.** `cast_cues()` resolves the
+   narrator in authored order of authority: a clip's voice lock; the voice
+   chosen for the film in the Director console (`Voice` pill, `voice` on
+   message/produce/assemble, `POST …/sessions/{sid}/voice`, persisted in
+   state.json); the site pin `DIONY_GROK_VOICE`; else the Director casts ONE
+   roster voice from the film's tone and speaker. `Auto` is the default. The
+   cast tie-break is seeded by the session, so tone-neutral films spread across
+   the roster instead of all landing on one name, while a film stays stable
+   across re-cuts. `GET /api/director/voices` lists the roster; the assemble
+   response names who spoke and why (`narration.voice`).
 3. **Narration cues can never overlap.** `layout_cues()` starts each cue no
    earlier than the previous line's end plus a breath (`MIN_CUE_GAP_S`).
    Shifts are receipts on the narration report (`shifts`); overruns stay named
