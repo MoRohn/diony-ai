@@ -89,7 +89,7 @@ def _headers() -> dict[str, str]:
 # DIONY_FLOW_REQUEST_GAP_S has passed since the previous one FINISHED
 # (a failed request counts — it still touched the API). Media downloads are
 # not Flow API calls (they go to Google's storage) and are not paced.
-DEFAULT_REQUEST_GAP_S = 1.5
+DEFAULT_REQUEST_GAP_S = 5.0
 _PACE_LOCK = threading.Lock()
 _last_request_done_at: float = 0.0  # monotonic clock; 0.0 = no request yet
 # injectable for tests: the suite must never really sleep between fakes
