@@ -499,6 +499,95 @@ def _first_media(body: dict) -> dict:
     return {}
 
 
+# Flow's top-level `error` on a failed job is the generic "All operations
+# failed"; the reason that matters is nested: `response.failureReasons` and
+# each media item's `mediaMetadata.mediaStatus` (verified on a live job —
+# PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED / PROMINENT_PERSON when the
+# prompt named a real public figure). Google's filters refuse before render,
+# so those land as "moderated" (nothing burned) with words a director can act on.
+_GENERIC_ERRORS = {"all operations failed", "operation failed", "generation failed", "failed"}
+
+_FILTER_REASONS: dict[str, str] = {
+    "PROMINENT_PERSON": (
+        "Google Flow refused the clip: its prominent-people filter matched a "
+        "recognizable real person in the prompt or the reference image. Retry "
+        "fails the same way — rewrite without naming or depicting the person "
+        "(describe the role, suit, and setting instead)."
+    ),
+    "MINOR": "Google Flow refused the clip: its filter matched a depiction of a minor.",
+    "VIOLENCE": "Google Flow refused the clip: its safety filter matched violent content.",
+    "SEXUAL": "Google Flow refused the clip: its safety filter matched sexual content.",
+    "HATE": "Google Flow refused the clip: its safety filter matched hateful content.",
+    "DANGEROUS": "Google Flow refused the clip: its safety filter matched dangerous content.",
+    "CELEBRITY": (
+        "Google Flow refused the clip: its filter matched a celebrity likeness in the "
+        "prompt or the reference image. Rewrite without naming or depicting the person."
+    ),
+}
+_FILTER_MARKERS = ("FILTER", "SAFETY", "MODERAT", "POLICY", "BLOCKED", "HARM")
+
+
+def _failure_reasons(body: dict) -> list[str]:
+    """Every failure code Flow reports for a job, top level and per media item."""
+    nested = body.get("response") if isinstance(body.get("response"), dict) else {}
+    reasons: list[str] = []
+
+    def _add(items) -> None:
+        for item in items if isinstance(items, list) else []:
+            code = str(item or "").strip()
+            if code and code not in reasons:
+                reasons.append(code)
+
+    _add(nested.get("failureReasons") or body.get("failureReasons"))
+    media = nested.get("media") or body.get("media") or []
+    for item in media if isinstance(media, list) else []:
+        if not isinstance(item, dict):
+            continue
+        meta = item.get("mediaMetadata") if isinstance(item.get("mediaMetadata"), dict) else {}
+        status = meta.get("mediaStatus") if isinstance(meta.get("mediaStatus"), dict) else {}
+        if not status and isinstance(item.get("mediaStatus"), dict):
+            status = item["mediaStatus"]
+        error = status.get("error") if isinstance(status.get("error"), dict) else {}
+        _add([error.get("message")] if error.get("message") else [])
+        _add(status.get("failureReasons"))
+    return reasons
+
+
+def _is_filter_reason(code: str) -> bool:
+    upper = code.upper()
+    return any(key in upper for key in _FILTER_REASONS) or any(m in upper for m in _FILTER_MARKERS)
+
+
+def failure_detail(body: dict) -> tuple[str, bool]:
+    """(what to tell the director, was it a content filter). Prefers Flow's
+    nested reasons over the generic top-level `error`; falls back to it."""
+    top = str(body.get("error") or "").strip()
+    reasons = _failure_reasons(body)
+    filtered = any(_is_filter_reason(r) for r in reasons)
+    plain = ""
+    for code in reasons:
+        upper = code.upper()
+        for key, words in _FILTER_REASONS.items():
+            if key in upper:
+                plain = words
+                break
+        if plain:
+            break
+    if not plain and filtered:
+        plain = (
+            "Google Flow refused the clip before rendering — its content filter "
+            f"reported {', '.join(reasons)}. Retry fails the same way; rewrite the prompt."
+        )
+    if not plain and reasons:
+        plain = "Google Flow reported " + ", ".join(reasons)
+    if plain:
+        codes = ", ".join(r for r in reasons if r.upper() not in plain.upper())
+        return (f"{plain} [{codes}]" if codes else plain), filtered
+    if top and top.lower() not in _GENERIC_ERRORS:
+        return top, False
+    return (top or ""), False
+
+
 def poll(handle: base.CloudJobHandle) -> base.CloudJobStatus:
     sync_url = handle.metadata.get("sync_result_url")
     if sync_url:
@@ -539,7 +628,10 @@ def poll(handle: base.CloudJobHandle) -> base.CloudJobStatus:
             return _completed_without_url(media, detail, metadata)
         return base.CloudJobStatus(state="done", result_url=url, metadata=metadata)
     if raw_state in {"failed", "error"}:
-        return base.CloudJobStatus(state="failed", detail=detail or "generation failed", metadata=metadata)
+        words, filtered = failure_detail(body)
+        if filtered:
+            return base.CloudJobStatus(state="moderated", detail=words, metadata=metadata)
+        return base.CloudJobStatus(state="failed", detail=words or "generation failed", metadata=metadata)
     # Terminal states outside the happy vocabulary must land terminal — an
     # unmapped "moderated"/"cancelled" would poll as "running" forever and
     # wedge the whole batch behind a job that already died.
@@ -562,15 +654,17 @@ def _completed_without_url(media: list, detail: str, metadata: dict) -> base.Clo
     GET /jobs re-resolves the URL (at most once a minute). Only a media item
     that itself reports a failed generation is terminal here."""
     first = media[0] if media and isinstance(media[0], dict) else {}
-    media_status = str(
-        ((first.get("mediaStatus") or {}) if isinstance(first.get("mediaStatus"), dict) else {})
-        .get("mediaGenerationStatus")
-        or ""
-    ).upper()
+    # live jobs nest the status under mediaMetadata; older docs put it at the top
+    meta = first.get("mediaMetadata") if isinstance(first.get("mediaMetadata"), dict) else {}
+    status_obj = meta.get("mediaStatus") if isinstance(meta.get("mediaStatus"), dict) else {}
+    if not status_obj and isinstance(first.get("mediaStatus"), dict):
+        status_obj = first["mediaStatus"]
+    media_status = str(status_obj.get("mediaGenerationStatus") or "").upper()
     if media_status and "SUCCESS" not in media_status:
+        words, filtered = failure_detail({"error": detail, "media": media})
         return base.CloudJobStatus(
-            state="failed",
-            detail=detail or f"media generation reported {media_status}",
+            state="moderated" if filtered else "failed",
+            detail=words or f"media generation reported {media_status}",
             metadata=metadata,
         )
     return base.CloudJobStatus(

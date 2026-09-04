@@ -339,3 +339,84 @@ def test_every_flow_api_call_passes_through_the_pacing_gate(monkeypatch, tmp_pat
         "voice register",
         "asset upload",
     ]
+
+
+def _live_filtered_job_body() -> dict:
+    """Shape of a real Flow job (2026-09-04) refused by Google's prominent-people
+    filter: the top-level error is the generic "All operations failed"; the
+    reason lives in response.failureReasons and the media item's mediaStatus."""
+    return {
+        "jobid": "j0904-filtered",
+        "status": "failed",
+        "code": 400,
+        "error": "All operations failed",
+        "response": {
+            "failureReasons": ["PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED", "PROMINENT_PERSON"],
+            "media": [
+                {
+                    "mediaGenerationId": "user:1-video:abc",
+                    "mediaMetadata": {
+                        "visibility": "FILTERED",
+                        "mediaStatus": {
+                            "error": {"message": "PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED", "code": 3},
+                            "failureReasons": ["PROMINENT_PERSON"],
+                            "mediaGenerationStatus": "MEDIA_GENERATION_STATUS_FAILED",
+                        },
+                    },
+                    "name": "abc",
+                }
+            ],
+            "operations": [],
+            "remainingCredits": 10000,
+        },
+    }
+
+
+def test_poll_names_the_filter_behind_all_operations_failed(monkeypatch) -> None:
+    """"All operations failed" is Flow's generic wrapper; the director must
+    read the nested reason — a prominent-person refusal — and land it as
+    moderated (nothing rendered, nothing burned) with actionable words."""
+    monkeypatch.setattr(
+        flow.httpx, "get", lambda url, **kw: _Response(_live_filtered_job_body(), status_code=200)
+    )
+    handle = flow.submit_handle("j0904-filtered", model="omni-flash", duration_s=10)
+    status = flow.poll(handle)
+    assert status.state == "moderated"
+    assert status.terminal
+    assert "All operations failed" not in status.detail
+    assert "prominent-people filter" in status.detail
+    assert "PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED" in status.detail
+    assert "rewrite" in status.detail.lower()
+    assert status.metadata["credits_after"] == 10000
+
+
+def test_poll_keeps_a_specific_top_level_error_when_nothing_is_nested(monkeypatch) -> None:
+    body = {"status": "failed", "error": "captcha required", "response": {"media": []}}
+    monkeypatch.setattr(flow.httpx, "get", lambda url, **kw: _Response(body, status_code=200))
+    status = flow.poll(flow.submit_handle("j-175", model="omni-flash", duration_s=10))
+    assert status.state == "failed"
+    assert status.detail == "captcha required"
+
+
+def test_poll_reports_a_non_filter_nested_reason_as_failed(monkeypatch) -> None:
+    body = {
+        "status": "failed",
+        "error": "All operations failed",
+        "response": {"failureReasons": ["INTERNAL_ERROR"], "media": []},
+    }
+    monkeypatch.setattr(flow.httpx, "get", lambda url, **kw: _Response(body, status_code=200))
+    status = flow.poll(flow.submit_handle("j-176", model="omni-flash", duration_s=10))
+    assert status.state == "failed"
+    assert status.detail == "Google Flow reported INTERNAL_ERROR"
+
+
+def test_completed_job_whose_media_was_filtered_lands_moderated(monkeypatch) -> None:
+    """A "completed" job with no link and a FILTERED media item is a refusal,
+    not Google's link throttle — it must not re-poll forever."""
+    body = _live_filtered_job_body()
+    body["status"] = "completed"
+    body["error"] = ""
+    monkeypatch.setattr(flow.httpx, "get", lambda url, **kw: _Response(body, status_code=200))
+    status = flow.poll(flow.submit_handle("j-177", model="omni-flash", duration_s=10))
+    assert status.state == "moderated"
+    assert "prominent-people filter" in status.detail
