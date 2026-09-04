@@ -88,14 +88,17 @@ def push_cookies(cookie_table: str) -> dict:
     if not flow.configured():
         return {"ok": False, "status": 0, "detail": "USEAPI_TOKEN not set"}
     try:
-        response = httpx.post(
-            f"{flow.api_base()}/accounts",
-            headers={
-                "Authorization": f"Bearer {flow.api_token()}",
-                "Content-Type": "application/json",
-            },
-            json={"cookies": cookie_table},
-            timeout=PUSH_TIMEOUT_S,
+        response = flow.paced(
+            lambda: httpx.post(
+                f"{flow.api_base()}/accounts",
+                headers={
+                    "Authorization": f"Bearer {flow.api_token()}",
+                    "Content-Type": "application/json",
+                },
+                json={"cookies": cookie_table},
+                timeout=PUSH_TIMEOUT_S,
+            ),
+            what="account push",
         )
     except Exception as err:  # noqa: BLE001 - a push reports, never raises
         return {"ok": False, "status": 0, "detail": f"push failed: {type(err).__name__}: {err}"}

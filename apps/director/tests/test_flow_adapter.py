@@ -1,5 +1,7 @@
 """GoogleFlowAdapter: POST /videos, poll /jobs, credit reconciliation from remainingCredits."""
 
+import pytest
+
 from diony_contracts.director import (
     CloudGenerationMode,
     CloudProvider,
@@ -194,3 +196,146 @@ def test_poll_lands_off_vocabulary_terminal_states_as_terminal(monkeypatch) -> N
         lambda url, **kw: _Response({"status": "warming_up"}, status_code=200),
     )
     assert flow.poll(handle).state == "running"
+
+
+# --- Request pacing: Flow is never hit in a burst -----------------------------
+
+
+class _FakeClock:
+    def __init__(self, start: float = 1000.0):
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _pacing_harness(monkeypatch, *, gap: str, start: float = 1000.0):
+    clock = _FakeClock(start)
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(round(seconds, 6))
+        clock.now += seconds
+
+    monkeypatch.setenv("DIONY_FLOW_REQUEST_GAP_S", gap)
+    monkeypatch.setattr(flow, "_clock", clock)
+    monkeypatch.setattr(flow, "_sleep", fake_sleep)
+    monkeypatch.setattr(flow, "_last_request_done_at", 0.0)
+    return clock, sleeps
+
+
+def test_consecutive_flow_requests_wait_out_the_gap_after_the_previous_one_finished(
+    monkeypatch,
+) -> None:
+    clock, sleeps = _pacing_harness(monkeypatch, gap="2")
+
+    def send():
+        clock.now += 0.3  # the request itself takes 300 ms
+        return "ok"
+
+    assert flow.paced(send) == "ok"
+    assert sleeps == []  # the first request never waits
+    assert flow.paced(send) == "ok"
+    assert sleeps == [2.0]  # a full gap, measured from the previous completion
+    clock.now += 0.5  # half a second of unrelated work
+    flow.paced(send)
+    assert sleeps == [2.0, 1.5]  # only the remainder of the gap
+    clock.now += 10
+    flow.paced(send)
+    assert sleeps == [2.0, 1.5]  # the gap already passed: no wait at all
+
+
+def test_a_failed_flow_request_still_counts_toward_the_gap(monkeypatch) -> None:
+    clock, sleeps = _pacing_harness(monkeypatch, gap="1.5")
+
+    def boom():
+        raise base.CloudAdapterTransientError("reset by peer")
+
+    with pytest.raises(base.CloudAdapterTransientError):
+        flow.paced(boom)
+    flow.paced(lambda: "ok")
+    assert sleeps == [1.5]
+
+
+def test_request_gap_env_override_and_fallbacks(monkeypatch) -> None:
+    monkeypatch.delenv("DIONY_FLOW_REQUEST_GAP_S", raising=False)
+    assert flow.request_gap_s() == flow.DEFAULT_REQUEST_GAP_S
+    monkeypatch.setenv("DIONY_FLOW_REQUEST_GAP_S", "0.25")
+    assert flow.request_gap_s() == 0.25
+    monkeypatch.setenv("DIONY_FLOW_REQUEST_GAP_S", "-3")
+    assert flow.request_gap_s() == 0.0
+    monkeypatch.setenv("DIONY_FLOW_REQUEST_GAP_S", "soon")
+    assert flow.request_gap_s() == flow.DEFAULT_REQUEST_GAP_S
+
+
+def test_a_zero_gap_never_sleeps(monkeypatch) -> None:
+    _clock, sleeps = _pacing_harness(monkeypatch, gap="0")
+    for _ in range(3):
+        flow.paced(lambda: "ok")
+    assert sleeps == []
+
+
+def test_concurrent_flow_requests_never_overlap(monkeypatch) -> None:
+    import threading
+    import time as time_mod
+
+    monkeypatch.setenv("DIONY_FLOW_REQUEST_GAP_S", "0")
+    monkeypatch.setattr(flow, "_last_request_done_at", 0.0)
+    state = {"in_flight": 0, "peak": 0}
+    guard = threading.Lock()
+
+    def send():
+        with guard:
+            state["in_flight"] += 1
+            state["peak"] = max(state["peak"], state["in_flight"])
+        time_mod.sleep(0.005)
+        with guard:
+            state["in_flight"] -= 1
+        return "ok"
+
+    workers = [threading.Thread(target=flow.paced, args=(send,)) for _ in range(8)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=5)
+    assert state["peak"] == 1
+    assert state["in_flight"] == 0
+
+
+def test_every_flow_api_call_passes_through_the_pacing_gate(monkeypatch, tmp_path) -> None:
+    gated: list[str] = []
+    real_paced = flow.paced
+
+    def counting_paced(send, *, what="request"):
+        gated.append(what)
+        return real_paced(send, what=what)
+
+    monkeypatch.setattr(flow, "paced", counting_paced)
+    monkeypatch.setattr(flow.httpx, "post", lambda url, **kw: _Response(
+        {"jobId": "j-1", "mediaGenerationId": "m-1", "entityId": "c-1", "ref": "v-1"}
+    ))
+    monkeypatch.setattr(
+        flow.httpx, "get", lambda url, **kw: _Response({"status": "running"}, status_code=200)
+    )
+
+    video = flow.submit(_op())
+    flow.poll(video)
+    flow.submit_image("a plate")
+    flow.submit_extend("m-1", prompt="keep rolling", duration_s=8)
+    flow.submit_upscale("m-1", resolution="1080p")
+    flow.register_character("Mara", ["img-1"])
+    flow.register_voice("Mara", "aud-1")
+    plate = tmp_path / "plate.png"
+    plate.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    flow.upload_asset(plate)
+
+    assert gated == [
+        "video submit",
+        "job poll",
+        "image submit",
+        "extend submit",
+        "upscale submit",
+        "character register",
+        "voice register",
+        "asset upload",
+    ]

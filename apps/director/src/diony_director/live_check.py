@@ -73,10 +73,13 @@ def live_probe() -> dict:
         out["google-flow"] = {"ok": False, "detail": "USEAPI_TOKEN not set"}
     else:
         try:
-            response = httpx.get(
-                f"{flow.api_base()}/accounts",
-                headers={"Authorization": f"Bearer {flow.api_token()}"},
-                timeout=PROBE_TIMEOUT_S,
+            response = flow.paced(
+                lambda: httpx.get(
+                    f"{flow.api_base()}/accounts",
+                    headers={"Authorization": f"Bearer {flow.api_token()}"},
+                    timeout=PROBE_TIMEOUT_S,
+                ),
+                what="account probe",
             )
             response.raise_for_status()
             body = response.json()

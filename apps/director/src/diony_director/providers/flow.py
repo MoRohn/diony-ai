@@ -12,6 +12,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -74,6 +76,65 @@ def _headers() -> dict[str, str]:
     if not token:
         raise base.CloudAdapterError("USEAPI_TOKEN is not set")
     return {"Authorization": f"Bearer {token}"}
+
+
+# --- Request pacing ----------------------------------------------------------
+#
+# useapi.net throttles a Flow account that is hit in a burst
+# (PUBLIC_ERROR_USER_REQUESTS_THROTTLED: about a 30-minute hold, and the whole
+# run pauses on it). Several threads talk to Flow at once — the submitter,
+# the chain and master workers, every advance tick, a reconnect push — and
+# none of them can see the others, so the gate is process-wide: Flow requests
+# never overlap, and each one starts only after a quiet gap of
+# DIONY_FLOW_REQUEST_GAP_S has passed since the previous one FINISHED
+# (a failed request counts — it still touched the API). Media downloads are
+# not Flow API calls (they go to Google's storage) and are not paced.
+DEFAULT_REQUEST_GAP_S = 1.5
+_PACE_LOCK = threading.Lock()
+_last_request_done_at: float = 0.0  # monotonic clock; 0.0 = no request yet
+# injectable for tests: the suite must never really sleep between fakes
+_sleep = time.sleep
+_clock = time.monotonic
+
+
+def request_gap_s() -> float:
+    """The quiet gap between consecutive Flow API requests, in seconds.
+    DIONY_FLOW_REQUEST_GAP_S overrides the default; 0 disables the gap
+    (requests still never overlap); junk falls back to the default."""
+    raw = os.environ.get("DIONY_FLOW_REQUEST_GAP_S", "").strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass
+    return DEFAULT_REQUEST_GAP_S
+
+
+def paced(send, *, what: str = "request"):
+    """Run one Flow API call through the pacing gate."""
+    global _last_request_done_at
+    gap = request_gap_s()
+    with _PACE_LOCK:
+        if _last_request_done_at:
+            wait = _last_request_done_at + gap - _clock()
+            if wait > 0:
+                _sleep(wait)
+        try:
+            return send()
+        finally:
+            _last_request_done_at = _clock()
+
+
+def _post(url: str, *, what: str = "request", **kwargs) -> httpx.Response:
+    return paced(
+        lambda: base.post_with_retries(url, what=f"Flow {what}", **kwargs), what=what
+    )
+
+
+def _get(url: str, *, what: str = "request", **kwargs) -> httpx.Response:
+    return paced(
+        lambda: base.get_with_retries(url, what=f"Flow {what}", **kwargs), what=what
+    )
 
 
 def submit_handle(
@@ -147,7 +208,7 @@ def upload_asset(path: Path) -> str:
         url += f"/{quote(account_email(), safe='')}"
     headers = _headers()
     headers["Content-Type"] = content_type
-    response = base.post_with_retries(url, content=payload, headers=headers, timeout=UPLOAD_TIMEOUT_S)
+    response = _post(url, what="asset upload", content=payload, headers=headers, timeout=UPLOAD_TIMEOUT_S)
     _guard(response, "asset upload")
     body = response.json()
     media_id = body.get("mediaGenerationId")
@@ -213,8 +274,8 @@ def submit(op: DirectorOp) -> base.CloudJobHandle:
     if source_video and op.mode is not None and op.mode.value == "v2v_edit":
         payload["referenceVideo_1"] = _media_ref(source_video, what="referenceVideo_1")
 
-    response = base.post_with_retries(
-        f"{api_base()}/videos", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
+    response = _post(
+        f"{api_base()}/videos", what="video submit", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
     _guard(response)
     body = response.json()
@@ -254,8 +315,8 @@ def submit_image(
         payload["email"] = account_email()
     for index, ref in enumerate(references or [], start=1):
         payload[f"reference_{index}"] = _media_ref(ref, what=f"reference_{index}")
-    response = base.post_with_retries(
-        f"{api_base()}/images", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
+    response = _post(
+        f"{api_base()}/images", what="image submit", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
     _guard(response)
     body = response.json()
@@ -294,8 +355,8 @@ def register_character(name: str, image_media_ids: list[str]) -> str:
         payload["email"] = account_email()
     for index, ref in enumerate(image_media_ids, start=1):
         payload[f"imageReference_{index}"] = _media_ref(ref, what=f"imageReference_{index}")
-    response = base.post_with_retries(
-        f"{api_base()}/characters", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
+    response = _post(
+        f"{api_base()}/characters", what="character register", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
     _guard(response)
     body = response.json()
@@ -309,8 +370,8 @@ def register_voice(name: str, audio_media_id: str) -> str:
     payload: dict = {"name": name, "referenceAudio": audio_media_id}
     if account_email():
         payload["email"] = account_email()
-    response = base.post_with_retries(
-        f"{api_base()}/voices", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
+    response = _post(
+        f"{api_base()}/voices", what="voice register", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
     _guard(response)
     body = response.json()
@@ -341,8 +402,8 @@ def submit_extend(
     }
     if account_email():
         payload["email"] = account_email()
-    response = base.post_with_retries(
-        f"{api_base()}/videos/extend", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
+    response = _post(
+        f"{api_base()}/videos/extend", what="extend submit", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
     _guard(response)
     body = response.json()
@@ -393,8 +454,8 @@ def submit_upscale(media_generation_id: str, *, resolution: str = "1080p") -> ba
         "resolution": resolution,
         "async": True,
     }
-    response = base.post_with_retries(
-        f"{api_base()}/videos/upscale", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
+    response = _post(
+        f"{api_base()}/videos/upscale", what="upscale submit", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
     )
     _guard(response, "upscale")
     body = response.json()
@@ -449,8 +510,8 @@ def poll(handle: base.CloudJobHandle) -> base.CloudJobStatus:
         if isinstance(handle.metadata.get("credits_after"), int):
             metadata["credits_after"] = handle.metadata["credits_after"]
         return base.CloudJobStatus(state="done", result_url=str(sync_url), metadata=metadata)
-    response = base.get_with_retries(
-        f"{api_base()}/jobs/{handle.external_id}", headers=_headers(), timeout=CALL_TIMEOUT_S
+    response = _get(
+        f"{api_base()}/jobs/{handle.external_id}", what="job poll", headers=_headers(), timeout=CALL_TIMEOUT_S
     )
     _guard(response)
     body = response.json()

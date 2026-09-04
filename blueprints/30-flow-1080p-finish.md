@@ -72,6 +72,12 @@ conformed up locally at the cut.
 4. **Waves release a few finishes at a time.** Targeted ops that ride no scene
    chain are released after the bibles settle, capped by
    `DIONY_FLOW_UPSCALE_PARALLEL` (default 4) in flight at once.
+   Underneath every wave, the Flow adapter paces the wire itself: all Flow
+   API calls in the process (submits, polls, uploads, registrations, the
+   reconnect push) pass one gate, never overlap, and each starts only after
+   `DIONY_FLOW_REQUEST_GAP_S` (default 1.5) seconds of quiet since the
+   previous one finished — the submitter, the chain and master workers, and
+   every advance tick cannot burst the account between them.
 5. **The cut names what it did.** `assemble` takes `finish`:
    - `auto` (default) cuts every usable finish; one finished print lifts the
      whole raster to 1080 lines, and takes without a finish are conformed up
@@ -103,5 +109,5 @@ conformed up locally at the cut.
 | `refusing to cut a 1080p film while these Flow takes lack their 1080p finish` | A finish failed or never rolled | Retry the finish from SHOTS, or "Assemble with the prints that exist" (finish=auto) |
 | Finish review fail "below the 1080-line target" | Flow returned a print without the booked lines | The take's print stays; Upscale 1080p is offered again |
 | Finish held at `link pending` | Google's link throttling | Wait; the op polls once a minute and stalls loudly after 30 minutes |
-| `PUBLIC_ERROR_USER_REQUESTS_THROTTLED` | Too many parallel Flow requests | The run pauses on the quota hold; lower `DIONY_FLOW_UPSCALE_PARALLEL` |
+| `PUBLIC_ERROR_USER_REQUESTS_THROTTLED` | Too many parallel Flow requests | The run pauses on the quota hold; widen `DIONY_FLOW_REQUEST_GAP_S` (default 1.5 s of quiet between consecutive Flow calls, process-wide, requests never overlap) or lower `DIONY_FLOW_UPSCALE_PARALLEL` |
 | Grok takes listed under `skipped` | No server-side lane on Grok | Expected; they are conformed up at the cut and named in the receipt |

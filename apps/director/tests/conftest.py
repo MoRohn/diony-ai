@@ -32,6 +32,13 @@ def director_isolated_vault(tmp_path, monkeypatch):
     # since the test key is present); brain tests set the URL themselves.
     monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_URL", "")
     monkeypatch.setenv("DIONY_KEYS_FILE", str(tmp_path / "keys.env"))
+    # The Flow request-pacing gate stays live (requests still serialize and
+    # stamp the clock) but never really sleeps between fakes; the pacing
+    # tests install their own recording sleep.
+    from diony_director.providers import flow as _flow
+
+    monkeypatch.setattr(_flow, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(_flow, "_last_request_done_at", 0.0)
     from diony_director import session as _director_session
 
     _director_session.reset()
