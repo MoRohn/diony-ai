@@ -33,6 +33,7 @@ from __future__ import annotations
 import re
 
 from diony_contracts.production import MASTER_BEAT_STAGES, MasterPrompt
+from diony_director import likeness as likeness_mod
 from diony_director import look as look_mod
 
 # --------------------------------------------------------------------------
@@ -183,7 +184,30 @@ the target — say so through that number, never by silently rewriting the
 target.
 """
 
-OUTPUT_CONTRACT = f"""
+# Blueprint 28 vs 31: how the contract tells the brain where the narration
+# goes. Post voicing (the Narrated default) forbids the words inside the
+# prompt; generated voicing tells the brain the SYSTEM appends the spoken
+# performance, so the prompt still must not quote the words itself — and
+# must not forbid speech either.
+NARRATION_KEY_POST = (
+    "narration (the verbatim voice-over or scripted lines the finished video "
+    "carries, an empty string when the idea scripts none — narration is "
+    "recorded in post against the assembled film, so these words must NEVER "
+    "appear inside the prompt as spoken dialogue, and the prompt must not "
+    "direct anyone to speak audible words)"
+)
+NARRATION_KEY_GENERATED = (
+    "narration (the verbatim voice-over or scripted lines the finished video "
+    "carries, an empty string when the idea scripts none — the SYSTEM appends "
+    "these words to the prompt as the spoken performance the on-screen speaker "
+    "voices in the clip, so do not quote them inside the prompt yourself, and "
+    "never write that the scene is silent or that no one speaks)"
+)
+
+
+def output_contract(voicing: str = "post") -> str:
+    key = NARRATION_KEY_GENERATED if voicing == "generated" else NARRATION_KEY_POST
+    return f"""
 OUTPUT CONTRACT
 
 Return ONLY a JSON object with these keys (strings unless noted):
@@ -194,11 +218,15 @@ spatial, camera, performance, micro_expressions, physics, body_mechanics,
 lighting ({{source, quality, shadows, secondary}}),
 mood, continuity_anchors (list of short phrases), ending,
 constraints (list of 3–6 short imperatives),
-narration (the verbatim voice-over or scripted lines the finished video carries, an empty string when the idea scripts none — narration is recorded in post against the assembled film, so these words must NEVER appear inside the prompt as spoken dialogue, and the prompt must not direct anyone to speak audible words),
+{key},
 {look_mod.LOOK_CONTRACT}
+real_people (list of {{name, aliases, descriptor, label}} — every real, identifiable person you recognized in the idea or the images and described instead of naming, per the LIKENESS LAW; an empty list when none),
 estimated_duration_s (integer),
 prompt (the finished generator-ready prompt, following FINAL GENERATOR-READY PROMPT STRUCTURE, after the OPTIMIZATION PASS).
 """
+
+
+OUTPUT_CONTRACT = output_contract("post")
 
 REFERENCE_OPENER = (
     "Use the reference image as the exact visual setting and starting composition."
@@ -228,27 +256,45 @@ BRAIN_ATTEMPTS = 2
 BRAIN_MAX_TOKENS = 32768
 
 
-def split_section(clip_plan: list[int]) -> str:
+SPLIT_NARRATION_POST = (
+    "Narration is recorded in post against the assembled film: it must NEVER "
+    "appear inside a clip prompt as spoken dialogue or voiceover, and no clip "
+    "prompt may direct anyone to speak audible words."
+)
+SPLIT_NARRATION_GENERATED = (
+    "The system appends each clip's narration to that clip's prompt as the "
+    "spoken performance its on-screen speaker voices in the clip: do not quote "
+    "the words inside the clip prompt yourself, and never write that a clip is "
+    "silent or that no one speaks."
+)
+
+
+def split_section(clip_plan: list[int], voicing: str = "post") -> str:
     """The chained-delivery amendment: the booked route plays the action as
     several sequential clips, and the derivation splits it — the uncapped
     one-shot's structure comes from the brain and the input, never from a
     screenplay stage."""
     durations = ", ".join(f"{d}s" for d in clip_plan)
     count = len(clip_plan)
+    speech_law = SPLIT_NARRATION_GENERATED if voicing == "generated" else SPLIT_NARRATION_POST
     return f"""
 CLIP DELIVERY
 
-The booked route delivers this as {count} sequential clips ({durations}; {sum(clip_plan)} seconds total). After deriving the master, split the ACTION PROGRESSION into {count} consecutive segments. Cut at natural action boundaries, never mid-gesture. When the idea itself scripts scenes, align clip boundaries with those scenes — cover every scripted scene's imagery across the clips in order — and return each scene's narration in its clip's "narration" field VERBATIM. Narration is recorded in post against the assembled film: it must NEVER appear inside a clip prompt as spoken dialogue or voiceover, and no clip prompt may direct anyone to speak audible words.
+The booked route delivers this as {count} sequential clips ({durations}; {sum(clip_plan)} seconds total). After deriving the master, split the ACTION PROGRESSION into {count} consecutive segments. Cut at natural action boundaries, never mid-gesture. When the idea itself scripts scenes, align clip boundaries with those scenes — cover every scripted scene's imagery across the clips in order — and return each scene's narration in its clip's "narration" field VERBATIM. {speech_law}
 
 In addition to every OUTPUT CONTRACT key, return clips: a list of exactly {count} objects {{"prompt", "duration_s", "narration", "scene_change", "opening"}} in play order, duration_s matching the booked lengths above, narration holding that segment's scripted lines verbatim (an empty string when the segment carries none). Each clip prompt is a complete generator-ready prompt for JUST its segment: it restates the subject, wardrobe, setting, camera treatment, and every continuity anchor in full — each clip generates alone and knows nothing of the others. It names the scene's motivated light sources, but it NEVER restates or varies the medium, palette, grain, or rendering style: the film's LOOK BIBLE is appended verbatim to every clip prompt by the system. scene_change is true when the clip opens on a different place or subject than the previous clip's final frame (a cut, not a continuation) — such a clip opens from a still frame the system composes in the film's look; a clip that continues the previous clip's action directly is false. opening is ONE sentence describing the clip's first frame as a still image (subject, place, composition), used to compose that opening frame. Every continuing clip begins exactly where the previous clip's final frame left off, and every clip before the last closes on a stable, holdable frame the next clip can open from. Only the final clip carries the ending. Include the pacing sentence in each clip prompt for its own length. The master prompt still describes the WHOLE action.
 """
 
 
-def system_prompt(clip_plan: list[int] | None = None) -> str:
+def system_prompt(clip_plan: list[int] | None = None, voicing: str = "post") -> str:
+    from diony_director import likeness
+
     base = MASTER_TEMPLATE + DURATION_SECTION
     if clip_plan and len(clip_plan) > 1:
-        base += split_section(clip_plan)
-    return base + OUTPUT_CONTRACT
+        base += split_section(clip_plan, voicing)
+    # The likeness law rides every derivation: a real person recognized in a
+    # still is described, never named — and confessed in real_people.
+    return base + "\n" + likeness.BRAIN_LAW + "\n" + output_contract(voicing)
 
 
 def beat_budget(target_duration_s: int) -> int:
@@ -467,11 +513,45 @@ def _parse(
         ending=ending,
         constraints=_list("constraints"),
         narration=" ".join(str(body.get("narration", "") or "").split()),
+        real_people=likeness_mod.normalize_people(
+            body.get("real_people"), has_reference=has_reference
+        ),
         prompt=prompt,
         clips=clips,
         source="brain",
         warnings=warnings,
     )
+
+
+def guard_likeness(master: MasterPrompt, *, brain: bool) -> MasterPrompt:
+    """The likeness guard on a derived artifact (Blueprint 27 §3a). The
+    people the brain confessed are enforced first; then, with a brain on,
+    every capitalized phrase it did not list is audited once, text only, and
+    anyone the audit names is enforced too. The audit is best effort: its
+    failure is a warning on the artifact, never a failed derivation."""
+    people = list(master.real_people or [])
+    where = "reference image" if master.reference_image else "idea"
+    hits = likeness_mod.enforce_master(master, people) if people else 0
+    if brain and likeness_mod.audit_enabled():
+        phrases = likeness_mod.candidates(likeness_mod.master_texts(master), people)
+        if phrases:
+            try:
+                found = likeness_mod.audit(
+                    master.prompt, phrases, has_reference=master.reference_image
+                )
+            except Exception as err:  # noqa: BLE001 — the audit is a net, not a gate
+                master.warnings.append(
+                    f"master: likeness audit unavailable ({type(err).__name__}) — "
+                    "the brain's own real_people list was enforced; review names by eye"
+                )
+                found = []
+            if found:
+                people = likeness_mod.merge(people, found)
+                hits += likeness_mod.enforce_master(master, found)
+                master.real_people = [dict(p) for p in people]
+    if people:
+        master.warnings.append(likeness_mod.note(hits, people, owner="master", where=where))
+    return master
 
 
 def _from_brain(
@@ -480,6 +560,7 @@ def _from_brain(
     reference_images: list[str],
     authored: dict[str, str] | None,
     clip_plan: list[int] | None = None,
+    voicing: str = "post",
 ) -> MasterPrompt:
     from diony_director import screenwriter
     from diony_director.providers import base as provider_base
@@ -500,7 +581,7 @@ def _from_brain(
         json={
             "model": screenwriter.brain_model(),
             "messages": [
-                {"role": "system", "content": system_prompt(clip_plan)},
+                {"role": "system", "content": system_prompt(clip_plan, voicing)},
                 {"role": "user", "content": user_content},
             ],
             "temperature": 0.4,
@@ -538,7 +619,7 @@ def _from_brain(
             "prompt_tokens": int(usage.get("prompt_tokens") or 0),
             "completion_tokens": int(usage.get("completion_tokens") or 0),
         }
-    return master
+    return guard_likeness(master, brain=True)
 
 
 # --------------------------------------------------------------------------
@@ -1031,10 +1112,13 @@ def derive(
     reference_images: list[str] | None = None,
     authored: dict[str, str] | None = None,
     clip_plan: list[int] | None = None,
+    voicing: str = "post",
 ) -> MasterPrompt:
     """Idea (+ stills, + the user's duration) → the pre-split finalized
     artifact. `clip_plan` books a chained one-shot: the derivation also
-    splits the action into that many sequential clip prompts."""
+    splits the action into that many sequential clip prompts. `voicing`
+    (Blueprint 31) tells the brain whether the narration is recorded in
+    post or appended by the system as the clip's spoken performance."""
     from diony_director.screenwriter import brain_model, brain_url
 
     target = max(1, int(round(target_duration_s)))
@@ -1048,7 +1132,9 @@ def derive(
         for _attempt in range(BRAIN_ATTEMPTS):
             attempts += 1
             try:
-                return optimize(_from_brain(idea, target, refs, authored, plan or None))
+                return optimize(
+                    _from_brain(idea, target, refs, authored, plan or None, voicing=voicing)
+                )
             except BrainTruncated as err:
                 last_error = err
                 break  # the cap is deterministic — a blind retry is the same cut
@@ -1132,6 +1218,7 @@ __all__ = [
     "beat_budget",
     "derive",
     "duration_note",
+    "guard_likeness",
     "length_band",
     "optimize",
     "pacing_sentence",

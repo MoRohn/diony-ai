@@ -40,6 +40,15 @@
           "title": "On Camera",
           "type": "boolean"
         },
+        "voicing": {
+          "default": "post",
+          "enum": [
+            "post",
+            "generated"
+          ],
+          "title": "Voicing",
+          "type": "string"
+        },
         "room_tone_id": {
           "default": "",
           "title": "Room Tone Id",
@@ -711,6 +720,14 @@
           "title": "Narration",
           "type": "string"
         },
+        "real_people": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Real People",
+          "type": "array"
+        },
         "word_count": {
           "default": 0,
           "minimum": 0,
@@ -753,6 +770,16 @@
       ],
       "title": "MasterPrompt",
       "type": "object"
+    },
+    "ProductionStyle": {
+      "description": "Blueprint 31 \u2014 how the film's spoken words reach the master.\n\nNARRATED: every scripted or narrated line is recorded in post by ONE\nnarrator against the assembled cut (Blueprint 28); every location track\nis speechless by law. DIALOGUE: every line rides its clip's generation\nprompt and the character voices it in the clip \u2014 the provider's native\naudio is the voice track. MIX: on-camera dialogue is voiced in the clip;\nvoice-over and one-shot narration are recorded in post; the cut balances\nthe two rails and mutes or rescues tracks from what the script says each\nclip must carry.",
+      "enum": [
+        "narrated",
+        "dialogue",
+        "mix"
+      ],
+      "title": "ProductionStyle",
+      "type": "string"
     },
     "PromptVersion": {
       "properties": {
@@ -1164,6 +1191,10 @@
         }
       ],
       "default": null
+    },
+    "production_style": {
+      "$ref": "#/$defs/ProductionStyle",
+      "default": "narrated"
     },
     "created_at": {
       "format": "date-time",

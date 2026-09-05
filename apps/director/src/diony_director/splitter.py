@@ -80,8 +80,11 @@ def split_script(
     settings: list[SettingProfile],
     *,
     provider_policy: str = "auto",
+    production_style: str = "narrated",
 ) -> list[ClipUnit]:
-    """Provider policy comes from Studio's engine choice.
+    """Provider policy comes from Studio's engine choice; the production
+    style (Blueprint 31) decides each spoken clip's voicing — post narrator
+    or the character in the clip — and lands it on the clip's audio packet.
 
     "auto": doctrine routing — picture on Grok, dialogue on the voice-capable
     Omni lane. "grok": everything on Grok; dialogue speaks through native audio
@@ -103,6 +106,9 @@ def split_script(
         picture_provider, picture_model = CloudProvider.GROK, PICTURE_MODEL
         dialogue_provider, dialogue_model = CloudProvider.GOOGLE_FLOW, DIALOGUE_MODEL
     dialogue_voice_locked = dialogue_provider is CloudProvider.GOOGLE_FLOW
+    from diony_director import styles
+
+    style = styles.normalize_style(production_style)
 
     settings_by_id = {s.setting_id: s for s in settings}
     known_chars = {c.char_id: c for c in characters}
@@ -285,6 +291,7 @@ def split_script(
                         if on_camera
                         else {"pace": "measured", "distance": "close, dry"},
                         on_camera=on_camera,
+                        voicing=styles.voicing_for(style, on_camera=on_camera),
                         room_tone_id=tone,
                         score="in" if scene_score else "none",
                         score_desc=scene_score,

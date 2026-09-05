@@ -159,10 +159,15 @@ def build_filter(
                 f"afade=t=out:st={fade_out_start:.3f}:d={DECLICK_FADE_S}[a{index}]"
             )
         else:
+            # Blueprint 31 (Mix): a clip that carries its own spoken line is
+            # level-matched to the narrator rail, not the ambience bed, so
+            # on-camera dialogue and post narration sit at one voice level
+            spec = (specs[index] if specs and index < len(specs) else {}) or {}
+            clip_loudness = str(spec.get("loudness") or PER_CLIP_LOUDNESS)
             chains.append(
                 f"[{index}:a]atrim=start={head:.3f}:end={head + effective:.3f},asetpts=PTS-STARTPTS,"
                 f"aresample=48000,aformat=channel_layouts=stereo,"
-                f"loudnorm=I={PER_CLIP_LOUDNESS}:TP=-2.0:LRA=11,aresample=48000,"
+                f"loudnorm=I={clip_loudness}:TP=-2.0:LRA=11,aresample=48000,"
                 f"afade=t=in:st=0:d={DECLICK_FADE_S},"
                 f"afade=t=out:st={fade_out_start:.3f}:d={DECLICK_FADE_S}[a{index}]"
             )

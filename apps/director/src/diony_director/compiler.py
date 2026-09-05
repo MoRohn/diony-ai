@@ -16,6 +16,7 @@ from diony_contracts.production import (
     PromptVersion,
     SettingProfile,
 )
+from diony_director import likeness
 
 ANTI_ARTIFACT = (
     "No morphing, no floating motion, no warped anatomy, no extra limbs, "
@@ -31,6 +32,16 @@ NO_SPEECH = (
     "The location sound carries no spoken words: no dialogue, no narration, "
     "no voice-over, no crowd chatter reading as speech — the voice track is "
     "recorded and mixed in post."
+)
+
+# Blueprint 31: under the Dialogue and Mix styles a spoken clip's words DO
+# ride the prompt — quoted verbatim, with the instruction that the character
+# voices them — and the location track is that voice and nothing else. The
+# clause below rides beside the quoted line on every dialect.
+ONLY_THE_LINE = (
+    "The only speech on this track is that line, spoken once by that one "
+    "voice — no narration, no voice-over, no other character speaks, no "
+    "crowd chatter reading as words."
 )
 
 # Every Grok picture carries the same photographic ground truth — without it
@@ -62,6 +73,13 @@ REVISION_DIRECTIVES = {
         "no black frames, no freezes, no dropout."
     ),
     "extend-motion": "Continue the existing motion and sound without resetting the scene.",
+    # Blueprint 31: a spoken clip whose character never voiced the line, or
+    # voiced other words — the fix is the line, clearly, once, and nothing else
+    "fix-line": (
+        "The character must speak the quoted line aloud, clearly and audibly, "
+        "exactly as written, once, lips in sync — and nothing else is spoken "
+        "on this track."
+    ),
 }
 
 
@@ -188,6 +206,73 @@ def _delivery_clause(clip: ClipUnit) -> str:
         + ", natural mouth movement and gesture, unhurried — their voice is "
         "recorded separately and is not heard on this track."
     )
+
+
+def speaks_in_clip(clip: ClipUnit) -> bool:
+    """Blueprint 31: does this clip's provider voice its own line? True for a
+    line-carrying clip whose audio packet books generated voicing."""
+    return bool(
+        clip.audio_packet.script_excerpt
+        and clip.audio_packet.voicing == "generated"
+        and str(clip.audio_packet.script_excerpt[0].get("line", "")).strip()
+    )
+
+
+def _spoken_clause(clip: ClipUnit) -> str:
+    """The line itself, quoted verbatim, with the instruction that the
+    character voices it (Blueprint 31, Dialogue and Mix styles). An on-camera
+    line is spoken in frame, lips in sync; a voice-over line is heard in the
+    speaker's voice over the picture. The direction (parenthetical and the
+    packet's delivery notes) shapes the read. The words are never
+    paraphrased — _fit_prompt shrinks a quoted piece last of all."""
+    excerpt = clip.audio_packet.script_excerpt
+    if not excerpt:
+        return ""
+    entry = excerpt[0]
+    line = str(entry.get("line", "")).strip()
+    if not line:
+        return ""
+    who = str(entry.get("speaker", "")).strip() or "The speaker"
+    parenthetical = str(entry.get("parenthetical", "")).strip()
+    delivery = ", ".join(f"{k}: {v}" for k, v in clip.audio_packet.delivery.items())
+    direction = "; ".join(x for x in (parenthetical, delivery) if x)
+    read = f" — delivered {direction}" if direction else ""
+    if clip.audio_packet.on_camera:
+        return (
+            f'{who} speaks aloud, on camera, lips in sync with the words, exactly '
+            f'these words and nothing else: "{line}"{read}. A natural, clear, '
+            "close-miked voice that stays the same voice for the whole line."
+        )
+    return (
+        f"A voice-over is heard on the track in {who}'s voice, exactly these "
+        f'words and nothing else: "{line}"{read}. No one on screen mouths the '
+        "words; the voice is clear and close-miked."
+    )
+
+
+def spoken_narration_clause(narration: str) -> str:
+    """A one-shot's (or chain link's) narration voiced INSIDE the clip
+    (Blueprint 31, Dialogue style): the words quoted verbatim, spoken by the
+    on-screen speaker when one is present and otherwise as a voice-over."""
+    words = " ".join(str(narration or "").split())
+    if not words:
+        return ""
+    return (
+        "Spoken aloud on this clip's track, exactly these words and nothing "
+        f'else: "{words}" — by the on-screen speaker, lips in sync, when one is '
+        "present; otherwise as a clear voice-over. One natural, close-miked "
+        "voice for the whole line."
+    )
+
+
+def _voice_pieces(clip: ClipUnit) -> list[tuple[str, int]]:
+    """The two untouchable voice pieces every dialect carries, by voicing:
+    post (Blueprint 28) — the delivery performance without the words, plus
+    the speechless-track law; generated (Blueprint 31) — the quoted line with
+    the instruction to voice it, plus the one-voice law."""
+    if speaks_in_clip(clip):
+        return [(_spoken_clause(clip), 0), (ONLY_THE_LINE, 0)]
+    return [(_delivery_clause(clip), 0), (NO_SPEECH, 0)]
 
 
 def _sound_clause(clip: ClipUnit, setting: SettingProfile, *, continues: bool = True) -> str:
@@ -349,6 +434,9 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
     continuity = CONTINUITY_CLAUSE if _continues_scene(clip, package) else ""
     master = _master_pieces(clip, package)
     look_block = _look_block(package)
+    # Blueprint 28 or 31, by the clip's own voicing: the mute-track delivery
+    # performance, or the quoted line the character voices in the clip.
+    voice = _voice_pieces(clip)
 
     limit = prompt_limit(clip.provider)
     if clip.provider is CloudProvider.GROK:
@@ -398,10 +486,10 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 (_setting_block(setting, scene.heading), 2),
                 (look_block, 0),
                 (master["lighting"], 2),
-                (_delivery_clause(clip), 0),
+                voice[0],
                 (_realism_clause(package), 1),
                 (_sound_clause(clip, setting, continues=bool(continuity)), 2),
-                (NO_SPEECH, 0),
+                voice[1],
                 (char_text, 3),
                 (master["ending"], 1),
                 (master["constraints"], 1),
@@ -463,9 +551,9 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 (master["lighting"], 2),
                 (omni_style, 2),
                 (char_text, 3),
-                (_delivery_clause(clip), 0),
+                voice[0],
                 (_sound_clause(clip, setting, continues=bool(continuity)), 2),
-                (NO_SPEECH, 0),
+                voice[1],
                 ("Performance is grounded and unhurried.", 1),
                 (master["physics"], 2),
                 (master["ending"], 1),
@@ -491,9 +579,9 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
             (look_block, 0),
             (master["lighting"], 2),
             (_flow_style_slot(package, inline_world), 1),
-            (_delivery_clause(clip), 0),
+            voice[0],
             (_sound_clause(clip, setting, continues=bool(continuity)), 2),
-            (NO_SPEECH, 0),
+            voice[1],
             (char_text, 3),
             (master["ending"], 1),
             (master["constraints"], 1),
@@ -520,13 +608,32 @@ def compile_clip_prompt(clip: ClipUnit, package: ProductionPackage) -> PromptVer
             f"clip {clip.clip_id} books {clip.duration_s}s, which is not on the "
             f"{clip.model} duration grid"
         )
-    return PromptVersion(version="v1", prompt=_base_prompt(clip, package))
+    return PromptVersion(version="v1", prompt=_guarded(_base_prompt(clip, package), package))
+
+
+def _guarded(prompt: str, package: ProductionPackage) -> str:
+    """The likeness guard at the last gate before a provider: whoever the
+    master derivation recognized stays described, never named, whatever a
+    later note, authored shot, or character block carried in."""
+    master = package.master_prompt
+    people = list(master.real_people or []) if master is not None else []
+    if not people:
+        return prompt
+    scrubbed, _ = likeness.scrub(prompt, people)
+    return scrubbed
 
 
 def revise_prompt(clip: ClipUnit, package: ProductionPackage, *, note: str) -> PromptVersion:
-    directive = f"Revision: {REVISION_DIRECTIVES.get(note, f'Address precisely: {note}.')}"
+    # A spoken clip (Blueprint 31) never gets the "remove all speech" audio
+    # fix — its track IS the voice; the fix is the line, clearly, once.
+    key = note
+    if speaks_in_clip(clip) and (note == "fix-audio" or note.startswith("fix-audio-")):
+        key = "fix-line"
+    directive = _guarded(
+        f"Revision: {REVISION_DIRECTIVES.get(key, f'Address precisely: {note}.')}", package
+    )
     limit = prompt_limit(clip.provider)
-    base = _base_prompt(clip, package)
+    base = _guarded(_base_prompt(clip, package), package)
     n = len(clip.prompt_versions) + 1
     return PromptVersion(
         version=f"v{n}-{note}",
@@ -573,7 +680,7 @@ def provider_artifact_refs(clip: ClipUnit, package: ProductionPackage) -> dict:
             if plate_asset and plate_asset not in pack:
                 pack = pack + [plate_asset]
             refs["references"] = pack[:3]
-        if clip.clip_class == "silent-picture":
+        if clip.clip_class == "silent-picture" and not speaks_in_clip(clip):
             refs["generate_audio"] = False
         return refs
 

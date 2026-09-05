@@ -23,6 +23,10 @@ from diony_director import compiler, estimate as estimate_mod
 DEFAULT_MAX_REVISIONS_PER_CLIP = 3
 
 _NOTE_BY_FAMILY = (
+    # Blueprint 31: a spoken clip whose character never voiced its line (or
+    # voiced other words) — before identity, because the failed evidence is
+    # the line, not the face
+    ("line", "fix-line"),
     ("identity", "fix-face"),
     ("audio", "fix-audio"),
     # a talking voice on the speechless-by-law location track (Blueprint 28)

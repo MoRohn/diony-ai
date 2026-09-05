@@ -26,6 +26,7 @@ from diony_contracts.production import (
     SettingProfile,
     VoiceProfile,
 )
+from diony_director import likeness as _likeness
 
 def brain_timeout_s() -> float:
     raw = os.environ.get("DIONY_DIRECTOR_BRAIN_TIMEOUT", "").strip()
@@ -386,7 +387,10 @@ _BRAIN_INSTRUCTIONS = (
     "STRUCTURE: every scene changes something irreversible; stakes escalate "
     "scene to scene; scene shapes VARY — never the same establishing/line/"
     "reaction template twice; the film ends on an image, not a summary. "
-    "Headings follow screenplay form 'INT. NAME - TIME'."
+    "Headings follow screenplay form 'INT. NAME - TIME'.\n\n"
+    + _likeness.BRAIN_LAW
+    + " A character's name is an invented name or a role label ('THE DRIVER'), "
+    "never a real person's; also return real_people at the top level of the JSON."
 )
 
 # Deterministic craft lint: the notes a script supervisor would write before
@@ -707,6 +711,38 @@ def _from_brain(
                 f"screenwriter: {len(residue)} authored narration line(s) still not carried "
                 f"verbatim — first: “{residue[0][:80]}”"
             )
+
+    # The likeness guard (Blueprint 27 §3a): whoever the master derivation
+    # recognized, plus whoever this brain confessed, plus whoever a text-only
+    # audit of the FINAL draft still finds — described, never named; a real
+    # person cast as a character is renamed to a label, speakers with them.
+    people = _likeness.merge(
+        getattr(master, "real_people", None) if master is not None else None,
+        _likeness.normalize_people(body.get("real_people"), has_reference=bool(refs)),
+    )
+    if _likeness.audit_enabled():
+        phrases = _likeness.candidates(_likeness.script_texts(body), people)
+        if phrases:
+            try:
+                found = _likeness.audit(
+                    " ".join(_likeness.script_texts(body)), phrases, has_reference=bool(refs)
+                )
+            except Exception as err:  # noqa: BLE001 — the audit is a net, not a gate
+                warnings.append(
+                    f"screenwriter: likeness audit unavailable ({type(err).__name__}) — "
+                    "the brains' own real_people lists were enforced; review names by eye"
+                )
+                found = []
+            if found:
+                people = _likeness.merge(people, found)
+    if people:
+        hits = _likeness.enforce_script_body(body, people)
+        warnings.append(
+            _likeness.note(
+                hits, people, owner="screenwriter",
+                where="reference image" if refs else "idea",
+            )
+        )
 
     def _craft(source: dict, key: str, default: str, owner: str) -> str:
         value = str(source.get(key, "") or "").strip()

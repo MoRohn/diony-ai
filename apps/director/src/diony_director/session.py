@@ -108,6 +108,11 @@ _ASPECTS: dict[str, str] = {}
 # The film's narrator voice (Blueprint 28): "" = Auto (the Director casts
 # from the film's tone), else a roster voice_id chosen in the console.
 _VOICES: dict[str, str] = {}
+# The film's production style (Blueprint 31): "narrated" (default, the post
+# narrator speaks every line), "dialogue" (characters voice their lines in
+# the clips), or "mix" (on-camera dialogue in the clip, voice-over in post).
+# Resolved into a per-clip/per-op `voicing` at draft and lock time.
+_STYLES: dict[str, str] = {}
 # The inputs every master derivation was made from, keyed by op id (a chain's
 # links share one record). s-16d2e6e5e0: a failed derivation released the
 # chain with the raw idea and no way back but a re-paste — the idea was
@@ -139,6 +144,7 @@ def reset() -> None:
         _ACCEPTED,
         _ASPECTS,
         _VOICES,
+        _STYLES,
         _DERIVATIONS,
     ):
         store.clear()
@@ -472,17 +478,39 @@ def compile_master_body(
     has_start_image: bool = False,
     narration: str = "",
     look: LookBible | None = None,
+    voicing: str = "post",
+    people: list[dict] | None = None,
 ) -> str:
     """Derived master prose (the whole-action prompt, or one chained clip's
     prompt) + the film's LOOK BIBLE, verbatim + the route's guards → the
     shippable prompt. The look rides at priority 0: length pressure shrinks
     the prose, never the one clause that keeps the film one film. A segment
     whose narration is recorded in post (Blueprint 28) tells the generator its
-    location track carries no speech — the words never ride the prompt."""
-    from diony_director.compiler import NO_SPEECH, _fit_prompt, prompt_limit
+    location track carries no speech — the words never ride the prompt. A
+    segment voiced in the clip (Blueprint 31, `voicing="generated"`) carries
+    the words verbatim with the instruction to speak them, and the one-voice
+    law instead. `people` is the artifact's likeness record: a real person it
+    recognized stays described, never named, in the body and the narration."""
+    from diony_director import likeness
+    from diony_director.compiler import (
+        NO_SPEECH,
+        ONLY_THE_LINE,
+        _fit_prompt,
+        prompt_limit,
+        spoken_narration_clause,
+    )
 
     body = body.strip()
+    if people:
+        body, _ = likeness.scrub(body, people)
+        narration, _ = likeness.scrub(narration, people)
     look_block = look.block() if look is not None else ""
+    speech: list[tuple[str, int]] = []
+    if narration.strip():
+        if voicing == "generated":
+            speech = [(spoken_narration_clause(narration), 0), (ONLY_THE_LINE, 0)]
+        else:
+            speech = [(NO_SPEECH, 0)]
     if provider is CloudProvider.GROK:
         from diony_director import grok_lexicon
 
@@ -490,8 +518,7 @@ def compile_master_body(
         if has_start_image:
             pieces.append((grok_lexicon.I2V_DIRECTIVE, 1))
         pieces.append((look_block, 0))
-        if narration.strip():
-            pieces.append((NO_SPEECH, 0))
+        pieces.extend(speech)
         pieces.append((_GROK_STYLE.strip(), 0))
         return _fit_prompt(pieces, prompt_limit(provider))
     from diony_director import flow_lexicon
@@ -502,8 +529,7 @@ def compile_master_body(
         (look_block, 0),
         (_flow_style_slot(sid, inline_world, look), 0),
     ]
-    if narration.strip():
-        pieces.append((NO_SPEECH, 0))
+    pieces.extend(speech)
     pieces.append((_VEO_GUARD, 0))
     return _fit_prompt(pieces, prompt_limit(provider))
 
@@ -530,7 +556,12 @@ def compile_prompt(
     *,
     has_start_image: bool = False,
     master: MasterPrompt | None = None,
+    voicing: str = "post",
+    narration: str | None = None,
 ) -> str:
+    """`narration` overrides the master's own (the seeded authored lines when
+    a template-path master carries none) — the speech clause follows the
+    words that actually ride the op."""
     from diony_director.compiler import _fit_prompt, prompt_limit
 
     if master is not None:
@@ -544,8 +575,10 @@ def compile_prompt(
             provider,
             sid,
             has_start_image=has_start_image,
-            narration=master.narration,
+            narration=master.narration if narration is None else narration,
             look=master.look,
+            voicing=voicing,
+            people=master.real_people,
         )
 
     seed = idea.strip().rstrip(".")
@@ -762,12 +795,23 @@ def propose(
     # ride a request through the name router.
     expanded, authored = authored_elements(sid, text, chosen_provider)
     breakdown = screenwriter.authored_breakdown(text)
+    voicing = oneshot_voicing(sid)
     async_master = bool(brain_url())
     master: MasterPrompt | None = None
     if not async_master:
         master = master_mod.derive(
-            expanded, target_duration_s=duration, reference_images=refs, authored=authored
+            expanded,
+            target_duration_s=duration,
+            reference_images=refs,
+            authored=authored,
+            voicing=voicing,
         )
+    # the authored words ride the op from the first second: a derivation
+    # that fails (or a restart) never leaves the script behind; the brain's
+    # verbatim narration replaces them, a master with none (the template
+    # path) leaves them standing
+    seeded_narration = " ".join(authored_narration_plan(breakdown, 1))
+    narration_text = (master.narration if master is not None else "") or seeded_narration
     op = DirectorOp(
         id=f"op-{uuid.uuid4().hex[:10]}",
         session_id=sid,
@@ -776,8 +820,15 @@ def propose(
         model=chosen_model,
         mode=CloudGenerationMode.T2V,
         prompt=compile_prompt(
-            text, chosen_provider, sid, has_start_image=bool(start), master=master
+            text,
+            chosen_provider,
+            sid,
+            has_start_image=bool(start),
+            master=master,
+            voicing=voicing,
+            narration=narration_text if master is not None else None,
         ),
+        voicing=voicing,
         prompt_version="v1" if master is not None else "v0-provisional",
         status="deriving" if async_master else "proposed",
         duration_s=duration,
@@ -786,14 +837,11 @@ def propose(
         rationale="single-shot draft; Grok is the iteration camera"
         if chosen_provider is CloudProvider.GROK
         else "single-shot draft on the requested Flow lane",
-        # the authored words ride the op from the first second: a derivation
-        # that fails (or a restart) never leaves the script behind
-        narration=" ".join(authored_narration_plan(breakdown, 1)),
+        narration=narration_text,
     )
     stills_note = _attach_stills(op, start, list(extras), "the frame")
     if master is not None:
         _MASTERS[op.id] = master
-        op.narration = master.narration
         op.rationale += " · " + master_mod.duration_note(
             master, int(duration), cap_s=estimate_mod.GROK_MAX_S if chosen_provider is CloudProvider.GROK else 0
         )
@@ -884,6 +932,7 @@ def _propose_chain(
     expanded, authored = authored_elements(sid, text, provider)
     breakdown = screenwriter.authored_breakdown(text)
     seeded = authored_narration_plan(breakdown, count)
+    voicing = oneshot_voicing(sid)
     async_master = bool(brain_url())
     master: MasterPrompt | None = None
     if not async_master:
@@ -893,6 +942,7 @@ def _propose_chain(
             reference_images=refs,
             authored=authored,
             clip_plan=plan,
+            voicing=voicing,
         )
     ops: list[DirectorOp] = []
     total_cost = 0
@@ -914,7 +964,7 @@ def _propose_chain(
         # brain's verbatim mapping replaces them when the master lands
         narration = seeded[index]
         if master is not None:
-            narration = str(master.clips[index].get("narration", "") or "")
+            narration = str(master.clips[index].get("narration", "") or "") or seeded[index]
             prompt = compile_master_body(
                 master.clips[index]["prompt"],
                 text,
@@ -923,6 +973,8 @@ def _propose_chain(
                 has_start_image=has_start,
                 narration=narration,
                 look=master.look,
+                voicing=voicing,
+                people=master.real_people,
             )
         else:
             prompt = compile_prompt(text, provider, sid, has_start_image=has_start)
@@ -935,6 +987,7 @@ def _propose_chain(
             mode=CloudGenerationMode.T2V,
             prompt=prompt,
             narration=narration,
+            voicing=voicing,
             prompt_version="v1" if master is not None else "v0-provisional",
             status="deriving" if async_master else "proposed",
             duration_s=clip_s,
@@ -1179,11 +1232,14 @@ def _kick_chain_derivation(
                 reference_images=refs,
                 authored=authored,
                 clip_plan=plan,
+                voicing=ops[0].voicing,
             )
             for index, op in enumerate(ops):
                 _MASTERS[op.id] = master
                 if index < len(master.clips):
-                    op.narration = str(master.clips[index].get("narration", "") or "")
+                    op.narration = (
+                        str(master.clips[index].get("narration", "") or "") or op.narration
+                    )
                     op.prompt = compile_master_body(
                         master.clips[index]["prompt"],
                         idea,
@@ -1192,6 +1248,8 @@ def _kick_chain_derivation(
                         has_start_image=has_start_image if index == 0 else True,
                         narration=op.narration,
                         look=master.look,
+                        voicing=op.voicing,
+                        people=master.real_people,
                     )
                     op.prompt_version = "v1"
             frames = _plan_style_frames(sid, ops, master)
@@ -1394,13 +1452,23 @@ def _kick_master_derivation(
             return
         try:
             master = master_mod.derive(
-                expanded, target_duration_s=duration, reference_images=refs, authored=authored
+                expanded,
+                target_duration_s=duration,
+                reference_images=refs,
+                authored=authored,
+                voicing=op.voicing,
             )
             _MASTERS[op_id] = master
+            op.narration = master.narration or op.narration
             op.prompt = compile_prompt(
-                idea, provider, sid, has_start_image=has_start_image, master=master
+                idea,
+                provider,
+                sid,
+                has_start_image=has_start_image,
+                master=master,
+                voicing=op.voicing,
+                narration=op.narration,
             )
-            op.narration = master.narration
             op.prompt_version = "v1"
             op.rationale = (
                 op.rationale.split(" · ")[0]
@@ -1462,6 +1530,36 @@ def set_voice(sid: str, voice: str) -> str:
     if sid in _SESSIONS:
         persist(sid)
     return resolved
+
+
+def style_for(sid: str) -> str:
+    """The session's production style key (Blueprint 31); "narrated" by default."""
+    from diony_director import styles
+
+    return _STYLES.get(sid, styles.DEFAULT_STYLE.value)
+
+
+def set_style(sid: str, style: str) -> str:
+    """Choose the film's production style. Unknown names raise ValueError."""
+    from diony_director import styles
+
+    resolved = styles.normalize_style(style).value
+    if resolved == styles.DEFAULT_STYLE.value:
+        _STYLES.pop(sid, None)
+    else:
+        _STYLES[sid] = resolved
+    if sid in _SESSIONS:
+        persist(sid)
+    return resolved
+
+
+def oneshot_voicing(sid: str) -> str:
+    """Who voices a one-shot's narration under the session's style: a
+    one-shot's words are voice-over by nature, so Dialogue voices them in
+    the clip and both Narrated and Mix keep them on the post narrator."""
+    from diony_director import styles
+
+    return styles.voicing_for(style_for(sid), on_camera=False)
 
 
 def upscale_parallelism() -> int:
@@ -1862,7 +1960,11 @@ def lock_script(
     ops_before = len(state.op_ids)
     try:
         package = packagebuilder.build_package(
-            sid, draft.script.logline, draft, provider_policy=policy
+            sid,
+            draft.script.logline,
+            draft,
+            provider_policy=policy,
+            production_style=style_for(sid),
         )
         _PACKAGES[sid] = package
         ops = [_op_from_clip(sid, clip, package) for clip in package.clips]
@@ -2629,6 +2731,7 @@ def persist(sid: str) -> None:
         "budget": _BUDGETS.get(sid),
         "aspect": _ASPECTS.get(sid),
         "voice": _VOICES.get(sid) or None,
+        "style": _STYLES.get(sid) or None,
         "flow_template": _flow_template_raw(sid),
         "grok_template": _grok_template_raw(sid),
         "uploads": list(_UPLOADS.get(sid) or []),
@@ -2699,6 +2802,8 @@ def _load_state(sid: str, doc: dict) -> None:
         _ASPECTS[sid] = str(doc["aspect"])
     if doc.get("voice"):
         _VOICES[sid] = str(doc["voice"])
+    if doc.get("style"):
+        _STYLES[sid] = str(doc["style"])
     if doc.get("flow_template"):
         from diony_director import flow_lexicon
 

@@ -21,10 +21,18 @@ def build_package(
     *,
     split: bool = True,
     provider_policy: str = "auto",
+    production_style: str = "narrated",
 ) -> ProductionPackage:
+    from diony_director import styles
+
+    style = styles.normalize_style(production_style)
     clips = (
         splitter.split_script(
-            draft.script, draft.characters, draft.settings, provider_policy=provider_policy
+            draft.script,
+            draft.characters,
+            draft.settings,
+            provider_policy=provider_policy,
+            production_style=style.value,
         )
         if split
         else []
@@ -40,6 +48,7 @@ def build_package(
         # the pre-split finalized artifact the screenplay realized — every
         # compiled clip inherits its lighting, physics, anchors, constraints
         master_prompt=getattr(draft, "master", None),
+        production_style=style,
     )
     if split:
         price_package(package)

@@ -40,6 +40,15 @@
           "title": "On Camera",
           "type": "boolean"
         },
+        "voicing": {
+          "default": "post",
+          "enum": [
+            "post",
+            "generated"
+          ],
+          "title": "Voicing",
+          "type": "string"
+        },
         "room_tone_id": {
           "default": "",
           "title": "Room Tone Id",

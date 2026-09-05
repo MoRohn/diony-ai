@@ -88,6 +88,50 @@ camera/world — are passed as ALREADY ESTABLISHED elements the template says to
 preserve rather than reinterpret. Route isolation is unchanged: Grok tokens on Flow
 stay literal and vice-versa.
 
+## 3a. The likeness guard — a real person is described, never named
+
+2026-09-05: the idea named nobody; the reference still was a truck poster; the brain,
+which SEES the still, recognized the actor and wrote his name into the master prompt
+and all 26 clip prompts (`Create a video of <actor> locked in a full split…`,
+`<actor>'s face`). Google Flow's prominent-people filter refuses such a prompt before
+render (Blueprint 30 `PROMINENT_PERSON`), Grok's likeness policy is no kinder, and a
+name is not a visual instruction — the generator needs the build, the sunglasses, the
+vest, the pose. `diony_director.likeness` closes it in three layers, one law:
+
+1. **The brain is told.** Both system prompts (the master template and the
+   screenwriter) carry the LIKENESS LAW: never write a real, identifiable person's
+   name, nickname, initials, or identifying title — from the idea or from a still —
+   describe them as a character instead; and return `real_people`
+   (`{name, aliases, descriptor, label}`) for everyone recognized. A script character
+   is an invented name or a role label, never a real person's.
+2. **The system enforces.** Every listed person's full name, surname group (particles
+   ride with it: "Van Damme", "De Niro"), a distinctive first name (hyphenated or ≥ 5
+   letters — "Will" stays a verb), the brain's aliases, and their possessives are
+   replaced by the descriptor in every text field of the artifact: prompt, narration,
+   subject/action/setting, beats, depth, anchors, constraints, ending, every chained
+   clip's prompt/opening/narration, and the look. Running prose capitalizes a
+   replacement that opens a sentence; fragments the assembler joins (anchors,
+   constraints) never do; an ALL CAPS mention (a cue line) becomes the label in caps.
+   In a screenplay a real person cast as a character is renamed to the label and every
+   speaker follows. The record lands on the artifact (`MasterPrompt.real_people`), so a
+   revision note, an authored shot, or a chained clip compiled later holds the same law
+   (`compiler._guarded`, `session.compile_master_body(people=)`); the master's record
+   is inherited by the screenplay stage.
+3. **The system audits.** Capitalized phrases the brain did not list (multi-word
+   anywhere; single words only mid-sentence; never ALL CAPS on-screen titles) go back
+   to the brain once, text only (`LIKENESS AUDIT`, temperature 0): which of these name
+   a real person? Anyone named is enforced as above, and a phrase containing a
+   confirmed surname ("Jean-Claude Van Damme" when the audit said "Van Damme") joins
+   the aliases. Best effort: an audit that fails is a warning on the artifact, never a
+   failed derivation. `DIONY_LIKENESS_AUDIT=0` switches the second call off.
+
+Only people are touched. Brands (Volvo FM), places, on-screen titles (PRECISION), and
+the user's own invented characters (Mara, ELIAS) are left exactly as written — the
+brain decides who is real, the code never guesses. The artifact's warning names the
+descriptor and the mention count, never the name; the record keeps the name for
+enforcement only, and it never reaches a provider. A film with no real people compiles
+byte-identical to before.
+
 ## 4. Where it lands
 
 **One-shot** (`session.propose`). The master prompt IS the prompt body; the route's
@@ -148,6 +192,11 @@ pixels; one-shot bodies on both routes; lock hardening on the body; the duration
 and the cap; the async hold, release, and named failure; the draft brief; per-clip
 inheritance with the ending on the last clip only; route neutrality; no-artifact
 parity; provider limits; state.json round trip; restart release; the API surfaces.
+`apps/director/tests/test_likeness.py` — the likeness guard (§3a): every form of a
+name, possessives, sentence case, cue lines, aliases, a descriptor that names the
+person refused, candidates, the confessed path, the audit path, audit failure as a
+warning, the switch, byte-identical parity, the shippable body, a revision note, a
+screenplay character relabeled with its speakers, master-record inheritance.
 Existing brain fakes that serve a screenplay now also serve a master reply when the
 system prompt is the template (`conftest.master_brain_body`, `is_master_call`), as
 the real brain does.

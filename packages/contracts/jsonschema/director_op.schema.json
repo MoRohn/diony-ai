@@ -254,6 +254,15 @@
       "title": "Narration",
       "type": "string"
     },
+    "voicing": {
+      "default": "post",
+      "enum": [
+        "post",
+        "generated"
+      ],
+      "title": "Voicing",
+      "type": "string"
+    },
     "estimate": {
       "anyOf": [
         {

@@ -17,6 +17,8 @@ from diony_contracts.director import (
     CloudGenerationMode,
     CloudProvider,
     CostEstimate,
+    ProductionStyle,
+    Voicing,
 )
 
 
@@ -154,6 +156,11 @@ class AudioPacket(BaseModel):
     voice_ref: str = ""
     delivery: dict[str, str] = Field(default_factory=dict)
     on_camera: bool = True
+    # Blueprint 31: where this clip's words come from. "post" — the narrator
+    # records the excerpt against the cut and the location track carries no
+    # speech (Blueprint 28). "generated" — the excerpt rides the prompt and
+    # the character voices it in the clip; the track IS the voice.
+    voicing: Voicing = "post"
     room_tone_id: str = ""
     foley: list[dict[str, Any]] = Field(default_factory=list)
     score: Literal["in", "out", "none"] = "none"
@@ -345,6 +352,12 @@ class MasterPrompt(BaseModel):
     # the generator prompt as spoken dialogue — the narrator records it
     # against the assembled cut (Blueprint 28).
     narration: str = ""
+    # The likeness guard's record: every real, identifiable person the
+    # derivation recognized (in the idea or a reference still) and the
+    # descriptor written in place of the name — {name, aliases, descriptor,
+    # label}. A name never reaches a generator; every later compile of this
+    # artifact (clip prompts, revisions, screenplay) holds to the same list.
+    real_people: list[dict[str, Any]] = Field(default_factory=list)
     word_count: int = Field(default=0, ge=0)
     source: Literal["brain", "template"] = "template"
     warnings: list[str] = Field(default_factory=list)
@@ -445,6 +458,9 @@ class ProductionPackage(BaseModel):
     revision_allowance_bp: int = Field(default=4000, ge=0, le=10000)
     # The pre-split finalized artifact this package was written from (Blueprint 27).
     master_prompt: MasterPrompt | None = None
+    # Blueprint 31: the production style the package was split under — the
+    # record of why each clip carries the voicing it does.
+    production_style: ProductionStyle = ProductionStyle.NARRATED
     created_at: datetime = Field(default_factory=_utc_now)
 
     @model_validator(mode="after")

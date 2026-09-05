@@ -183,6 +183,9 @@ class MessageIn(BaseModel):
     # Narrator voice for the film: None = keep, "" / "auto" = the Director
     # casts, a roster name pins one voice (Blueprint 28, post-recorded).
     voice: str | None = None
+    # Production style (Blueprint 31): None = keep; "narrated" (default),
+    # "dialogue", or "mix". Fixed once the script locks.
+    style: str | None = None
 
 
 # Each program-setting change is PLANNED (validated, never mutating) before
@@ -288,6 +291,35 @@ def _plan_voice(sid: str, voice: str | None) -> Callable[[], None] | None:
     return lambda: session.set_voice(sid, resolved)
 
 
+def _plan_style(sid: str, style: str | None) -> Callable[[], None] | None:
+    """Validate a production-style change (Blueprint 31). None keeps; a key
+    sets it. Refused once THIS session's script is locked: every clip's
+    voicing was resolved from the style at the split and its prompts are
+    compiled — the cut reads the clips, never the style, so a late change
+    would describe a film that was not shot. One-shots drafted later take
+    the new style; ops already drafted keep the voicing they were priced with."""
+    from diony_director import styles
+
+    if style is None:
+        return None
+    try:
+        resolved = styles.normalize_style(style).value
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    if resolved == session.style_for(sid):
+        return None
+    if session.script_locked(sid):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "the script is locked and every clip's voicing is compiled — the "
+                "production style cannot change mid-production; start a new session "
+                f"for a {styles.describe(resolved)} film"
+            ),
+        )
+    return lambda: session.set_style(sid, resolved)
+
+
 def _apply_program_settings(sid: str, body: "MessageIn | ProduceIn") -> None:
     """Validate every program-setting change, then commit them together — so
     a request the caller sees rejected never half-mutates the session."""
@@ -296,6 +328,7 @@ def _apply_program_settings(sid: str, body: "MessageIn | ProduceIn") -> None:
         _plan_flow_template(sid, body.flow_world, body.flow_camera),
         _plan_grok_template(sid, body.grok_camera, body.grok_atmosphere),
         _plan_voice(sid, body.voice),
+        _plan_style(sid, body.style),
     ]
     for commit in committers:  # every planner validated first; none raise here
         if commit is not None:
@@ -342,6 +375,7 @@ def session_settings(sid: str) -> dict:
     return {
         "aspect": session.aspect_for(sid),
         "voice": session.voice_for(sid),
+        "style": session.style_for(sid),
         "flow_template": session.flow_template_for(sid),
         "grok_template": session.grok_template_for(sid),
     }
@@ -378,6 +412,34 @@ def set_session_voice(sid: str, body: VoiceIn) -> dict:
     if commit is not None:
         commit()
     return {"session_id": sid, "voice": session.voice_for(sid)}
+
+
+@app.get("/api/director/styles")
+def style_catalog() -> dict:
+    """The production styles the console offers (Blueprint 31): Narrated
+    (the default — one post narrator), Dialogue (characters voice their
+    lines in the clips), Mix (on-camera dialogue in the clip, voice-over in
+    post; balanced, rescued, and muted at the cut)."""
+    from diony_director import styles
+
+    return {"default": styles.DEFAULT_STYLE.value, "styles": styles.catalog()}
+
+
+class StyleIn(BaseModel):
+    style: str = ""  # "" = the Narrated default
+
+
+@app.post("/api/director/sessions/{sid}/style")
+def set_session_style(sid: str, body: StyleIn) -> dict:
+    """Choose the film's production style. Refused (409) once the script is
+    locked — the voicing is on the clips by then."""
+    _boot()
+    if not session.session_exists(sid):
+        raise HTTPException(status_code=404, detail=f"unknown session {sid}")
+    commit = _plan_style(sid, body.style)
+    if commit is not None:
+        commit()
+    return {"session_id": sid, "style": session.style_for(sid)}
 
 
 @app.post("/api/director/sessions/{sid}/message")
@@ -1774,6 +1836,10 @@ def _review_chain_link(op: DirectorOp, rt: dict) -> None:
         start_image=Path(start) if start else None,
         prev_clip_path=Path(prev_clip.path) if prev_clip is not None else None,
         scene_change=session.chain_scene_change(op),
+        # Blueprint 31: a link that voices its own narration is measured for it
+        spoken_line=(
+            str(op.narration or "").strip() if getattr(op, "voicing", "post") == "generated" else ""
+        ),
     )
     session.register_review(op.id, result)
     if position == 0:
@@ -1842,6 +1908,8 @@ class ProduceIn(BaseModel):
     grok_camera: str | None = None
     grok_atmosphere: str | None = None
     voice: str | None = None
+    # Production style (Blueprint 31) — None = keep
+    style: str | None = None
 
 
 @app.post("/api/director/sessions/{sid}/produce")
@@ -2256,7 +2324,14 @@ def _assembly_spec(op: DirectorOp) -> dict:
     if clip is None:
         return {}
     spec: dict = {"join": clip.join_next}
-    if clip.clip_class in {"sync-dialogue", "vo-over"} and clip.audio_packet.script_excerpt:
+    # Blueprint 31: a clip that voices its own line is never tail-trimmed to
+    # the word-count arithmetic — the provider paced the words itself, and a
+    # trim could cut the last of them; the take plays at its full length.
+    if (
+        clip.clip_class in {"sync-dialogue", "vo-over"}
+        and clip.audio_packet.script_excerpt
+        and clip.audio_packet.voicing != "generated"
+    ):
         words = len(str(clip.audio_packet.script_excerpt[0].get("line", "")).split())
         spec["needed_s"] = round(
             max(1, words) / WORDS_PER_SECOND + PRE_HANDLE_S + TAIL_HANDLE_S + 0.25, 3
@@ -2265,7 +2340,13 @@ def _assembly_spec(op: DirectorOp) -> dict:
 
 
 def _speech_guard(
-    paths: list[Path], labels: list[str], carries_line: list[bool], specs: list[dict]
+    paths: list[Path],
+    labels: list[str],
+    carries_line: list[bool],
+    specs: list[dict],
+    voicing: list[str] | None = None,
+    *,
+    has_post_lines: bool = False,
 ) -> dict:
     """Blueprint 28's guarantee at the cut: no talking voice on any location
     track that reaches the mix. A track that MEASURES a voice is muted
@@ -2275,13 +2356,57 @@ def _speech_guard(
     one defect this lane may never ship. Measured-clean tracks keep their
     ambience and score untouched. Mutes are receipts in the response, never a
     silent adjustment; staging DIONY_WHISPER_MODEL turns the presumption into
-    a measurement."""
+    a measurement.
+
+    Blueprint 31 (Dialogue / Mix): a clip whose `voicing` is "generated"
+    voices its own line — its track IS the voice and is never muted. One that
+    measures NO talking voice (the provider stayed mute) is RESCUED: the
+    narrator records its line in post (`rescued`). When the cut has a
+    narrator rail at all (post lines, or a rescue), every kept spoken track
+    is BALANCED to the narrator's voice level (`balanced`) so on-camera
+    dialogue and narration sit at one level."""
+    from diony_director.narration import NARRATION_LOUDNESS
     from diony_director.review import SPEECH_SECONDS_FAIL, SPEECH_WORDS_FAIL
 
+    voicing = list(voicing or []) + ["post"] * (len(paths) - len(voicing or []))
     muted: list[dict] = []
+    kept: list[dict] = []
+    rescued: list[dict] = []
     checked = 0
     for index, path in enumerate(paths):
         detection = review_mod.location_speech(path)
+        if voicing[index] == "generated" and carries_line[index]:
+            if detection is None:
+                kept.append(
+                    {
+                        "clip": labels[index],
+                        "why": "voices its own line — the track is the voice; kept as "
+                        "delivered (unverified on this host)",
+                    }
+                )
+                continue
+            checked += 1
+            talking = (
+                detection.word_count >= SPEECH_WORDS_FAIL
+                or detection.speech_s >= SPEECH_SECONDS_FAIL
+            )
+            if not talking:
+                rescued.append(
+                    {
+                        "clip": labels[index],
+                        "why": "booked to voice its line but no talking voice is heard "
+                        f"(heard: “{detection.transcript[:80]}”) — the narrator records "
+                        "the line in post over the track",
+                    }
+                )
+                continue
+            kept.append(
+                {
+                    "clip": labels[index],
+                    "why": f"voices its own line (heard: “{detection.transcript[:80]}”)",
+                }
+            )
+            continue
         if detection is None:
             if carries_line[index]:
                 specs[index]["mute"] = True
@@ -2307,7 +2432,23 @@ def _speech_guard(
                     f"(heard: “{detection.transcript[:80]}”) — muted",
                 }
             )
-    return {"muted": muted, "measured": checked, "clips": len(paths)}
+    # the balance: with a narrator rail in the cut, every kept spoken track
+    # is level-matched to the narrator instead of the ambience bed
+    balanced: list[str] = []
+    if kept and (has_post_lines or rescued):
+        kept_labels = {entry["clip"] for entry in kept}
+        for index, label in enumerate(labels):
+            if label in kept_labels:
+                specs[index]["loudness"] = NARRATION_LOUDNESS
+                balanced.append(label)
+    return {
+        "muted": muted,
+        "measured": checked,
+        "clips": len(paths),
+        "kept": kept,
+        "rescued": rescued,
+        "balanced": balanced,
+    }
 
 
 def _film_voice(report, chosen: str) -> dict | None:
@@ -2330,7 +2471,9 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
     ops = session.completed_clip_ops(sid)
 
     # Blueprint 28: lines are recorded in post. Which clips carry one is
-    # known before a single probe runs.
+    # known before a single probe runs. Blueprint 31: a clip may instead
+    # voice its line itself (`voicing == "generated"`) — it carries a line
+    # but books no narrator cue.
     def _carries_line(op) -> bool:
         clip = session.clip_for_op(op)
         if (
@@ -2341,6 +2484,15 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
         ):
             return True
         return bool(str(getattr(op, "narration", "") or "").strip())
+
+    def _voicing(op) -> str:
+        clip = session.clip_for_op(op)
+        if clip is not None:
+            return clip.audio_packet.voicing
+        return str(getattr(op, "voicing", "post") or "post")
+
+    def _post_line(op) -> bool:
+        return _carries_line(op) and _voicing(op) != "generated"
 
     printed = [
         op
@@ -2437,22 +2589,30 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
                     + ", or assemble with allow_gaps to ship without them"
                 ),
             )
-    # A cut that carries lines but has no narrator backend fails BEFORE
-    # ffmpeg spends a render on it.
-    wants_narration = body.narrate and any(_carries_line(op) for op in used_ops)
-    if wants_narration and not narration_mod.narrator_configured():
-        raise HTTPException(
-            status_code=409,
-            detail=f"this cut carries scripted lines and {narration_mod.UNCONFIGURED}",
-        )
-
-    speech_report: dict = {"muted": [], "measured": 0, "clips": len(paths)}
+    post_lines = any(_post_line(op) for op in used_ops)
+    spoken = [op.clip_id or op.id for op in used_ops if _carries_line(op) and _voicing(op) == "generated"]
+    speech_report: dict = {
+        "muted": [], "measured": 0, "clips": len(paths), "kept": [], "rescued": [], "balanced": [],
+    }
     if body.speech_guard:
         speech_report = _speech_guard(
             paths,
             [op.clip_id or op.id for op in used_ops],
             [_carries_line(op) for op in used_ops],
             specs,
+            [_voicing(op) for op in used_ops],
+            has_post_lines=post_lines,
+        )
+    rescued_labels = {entry["clip"] for entry in speech_report.get("rescued", [])}
+    # A cut that carries post-recorded lines (or rescues a mute spoken clip)
+    # but has no narrator backend fails BEFORE ffmpeg spends a render on it.
+    # A Dialogue-style cut whose every line is voiced in its clip needs no
+    # narrator at all.
+    wants_narration = body.narrate and (post_lines or bool(rescued_labels))
+    if wants_narration and not narration_mod.narrator_configured():
+        raise HTTPException(
+            status_code=409,
+            detail=f"this cut carries scripted lines and {narration_mod.UNCONFIGURED}",
         )
 
     dest = cluster_root() / "director" / sid / "film.mp4"
@@ -2482,6 +2642,9 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
             "window": result.windows[index],
             "review": session.review_for(op.id),
             "accepted": session.is_accepted(op.id),
+            # Blueprint 31: a spoken clip the provider left mute gets its
+            # line from the narrator after all
+            "narrate_anyway": (op.clip_id or op.id) in rescued_labels,
         }
         for index, op in enumerate(used_ops)
     ]
@@ -2579,9 +2742,24 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
                 "voice": _film_voice(narration_report, session.voice_for(sid)),
             }
             if narration_report is not None
-            else {"cue_count": 0, "skipped": "no lines" if body.narrate else "narrate off"}
+            else {
+                "cue_count": 0,
+                "skipped": (
+                    "narrate off"
+                    if not body.narrate
+                    else ("lines voiced in the clips" if spoken else "no lines")
+                ),
+            }
         ),
         "speech_guard": speech_report,
+        # Blueprint 31 receipt: the film's production style and how its
+        # lines were voiced — in the clips, by the narrator, or rescued
+        "style": {
+            "key": session.style_for(sid),
+            "spoken_in_clip": spoken,
+            "narrated": [op.clip_id or op.id for op in used_ops if _post_line(op)],
+            "rescued": sorted(rescued_labels),
+        },
         "raster": f"{raster_w}x{raster_h}",
         # Blueprint 30 receipt: which takes cut from their 1080p finish, which
         # cut from their own print (and were conformed up when the raster rose)

@@ -360,6 +360,7 @@ def test_settings_endpoint_serves_the_stored_program_settings() -> None:
     assert body == {
         "aspect": "9:16",
         "voice": "",
+        "style": "narrated",
         "flow_template": {"world": "filmic", "camera": "dollyin"},
         "grok_template": {"camera": "orbit", "atmosphere": "dust"},
     }

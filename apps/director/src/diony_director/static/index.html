@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="/static/app.css?v=p36">
+<link rel="stylesheet" href="/static/app.css?v=p37">
 </head>
 <body>
 
@@ -145,7 +145,15 @@
               <option value="" selected>Authored</option>
             </select>
           </label>
-          <label class="pill" title="Narrator voice for the whole film — recorded in post, one voice per film (Blueprint 28). Auto lets the Director cast from the film's tone and speaker; a name pins one Grok voice. Changeable any time before the cut.">
+          <label class="pill" title="Production style — how the film's spoken words reach the master (Blueprint 31). Narrated: one narrator records every line in post against the cut; location tracks stay speechless. Dialogue: the script lines ride each clip's prompt and the characters voice them in the clip. Mix: characters speak on camera in the clip, voice-over is narrated in post, and the cut balances, rescues, and mutes per the script. Fixed once the script locks.">
+            <span class="plabel">Style</span>
+            <select id="style">
+              <option value="narrated" selected>Narrated</option>
+              <option value="dialogue">Dialogue</option>
+              <option value="mix">Mix</option>
+            </select>
+          </label>
+          <label class="pill" title="Narrator voice for the whole film — recorded in post, one voice per film (Blueprint 28). Auto lets the Director cast from the film's tone and speaker; a name pins one Grok voice. Changeable any time before the cut. Under the Dialogue style the narrator only speaks a line the clip left unvoiced.">
             <span class="plabel">Voice</span>
             <select id="voice">
               <option value="" selected>Auto</option>
@@ -175,6 +183,6 @@
     <div class="bpane" id="bpane"></div>
   </aside>
 </div>
-<script src="/static/app.js?v=p36"></script>
+<script src="/static/app.js?v=p37"></script>
 </body>
 </html>

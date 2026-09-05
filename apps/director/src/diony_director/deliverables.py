@@ -119,6 +119,13 @@ def build_deliverables(
                 "join_next": clip.join_next if clip is not None else "cut",
                 "camera": clip.camera_idea if clip is not None else "",
                 "clip_class": clip.clip_class if clip is not None else "",
+                # Blueprint 31: who voiced this clip's words — the post
+                # narrator or the provider inside the clip
+                "voicing": (
+                    clip.audio_packet.voicing
+                    if clip is not None
+                    else str(getattr(op, "voicing", "post") or "post")
+                ),
                 "provider": op.provider.value if op.provider else "",
                 "model": op.model,
                 "prompt_version": op.prompt_version,

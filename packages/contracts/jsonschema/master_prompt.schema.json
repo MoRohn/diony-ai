@@ -215,6 +215,14 @@
       "title": "Narration",
       "type": "string"
     },
+    "real_people": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Real People",
+      "type": "array"
+    },
     "word_count": {
       "default": 0,
       "minimum": 0,

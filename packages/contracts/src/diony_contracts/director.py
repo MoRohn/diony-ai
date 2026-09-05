@@ -26,6 +26,29 @@ class EngineMode(StrEnum):
     LOCAL_LEGACY = "local_legacy"
 
 
+class ProductionStyle(StrEnum):
+    """Blueprint 31 — how the film's spoken words reach the master.
+
+    NARRATED: every scripted or narrated line is recorded in post by ONE
+    narrator against the assembled cut (Blueprint 28); every location track
+    is speechless by law. DIALOGUE: every line rides its clip's generation
+    prompt and the character voices it in the clip — the provider's native
+    audio is the voice track. MIX: on-camera dialogue is voiced in the clip;
+    voice-over and one-shot narration are recorded in post; the cut balances
+    the two rails and mutes or rescues tracks from what the script says each
+    clip must carry."""
+
+    NARRATED = "narrated"
+    DIALOGUE = "dialogue"
+    MIX = "mix"
+
+
+#: Where a clip's spoken words come from: ``post`` — the narrator records them
+#: against the cut (the location track must be speechless); ``generated`` —
+#: the provider voices them inside the clip (the location track IS the voice).
+Voicing = Literal["post", "generated"]
+
+
 class CloudProvider(StrEnum):
     GROK = "grok"
     GOOGLE_FLOW = "google-flow"
@@ -129,6 +152,11 @@ class DirectorOp(BaseModel):
     # ride the generator prompt as spoken dialogue — the narrator records
     # them against the assembled cut, placed at this clip's timeline start.
     narration: str = ""
+    # Blueprint 31: who speaks this op's narration — the post narrator
+    # ("post", the Narrated default) or the provider inside the clip
+    # ("generated", the Dialogue style). Fixed at draft time from the
+    # session's production style; the cut reads it, never the style.
+    voicing: Voicing = "post"
     estimate: CostEstimate | None = None
     rationale: str = ""
     requires_confirmation: bool = True

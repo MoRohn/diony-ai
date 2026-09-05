@@ -699,6 +699,18 @@
       } catch (err) {
         /* static fallbacks in the HTML keep the pills usable */
       }
+      // The production styles (Blueprint 31): Narrated (default), Dialogue, Mix.
+      try {
+        const styles = await api("/api/director/styles");
+        fillLexSelect(
+          $("style"),
+          (styles.styles || []).map((s) => ({ key: s.key, label: s.label, hint: s.hint })),
+          styles.default || "narrated",
+          null
+        );
+      } catch (err) {
+        /* the static options keep the pill usable */
+      }
       // The narrator roster (Blueprint 28): Auto casts per film; a name
       // pins one Grok voice for the whole film.
       try {
@@ -780,6 +792,7 @@
       };
       if (s.aspect) set("aspect", s.aspect);
       set("voice", s.voice || "");
+      set("style", s.style || "narrated");
       if (s.flow_template) {
         set("flow-world", s.flow_template.world || "baseline");
         set("flow-camera", s.flow_template.camera || "");
@@ -836,7 +849,34 @@
       grok_camera: fieldOrKeep("grok-camera"),
       grok_atmosphere: fieldOrKeep("grok-atmosphere"),
       voice: fieldOrKeep("voice"),
+      style: fieldOrKeep("style"),
     };
+  }
+
+  // The production style (Blueprint 31) lands on the session at once, like
+  // the voice — a one-shot drafted right after the change must already
+  // carry the new voicing. A locked script refuses it, and the room says so.
+  const STYLE_NOTES = {
+    narrated: "one narrator records every line in post; location tracks stay speechless.",
+    dialogue: "the script lines ride each clip's prompt and the characters voice them in the clip; no post narrator.",
+    mix: "characters speak on camera in the clip, voice-over is narrated in post; the cut balances, rescues, and mutes per the script.",
+  };
+  async function pushStyle() {
+    const el = $("style");
+    if (!el || !sessionId) return;
+    try {
+      const res = await api(`/api/director/sessions/${sessionId}/style`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ style: el.value }),
+      });
+      const label = [...el.options].find((o) => o.value === res.style)?.textContent || res.style;
+      addMsg("director", `Production style: ${label} — ${STYLE_NOTES[res.style] || ""}`);
+    } catch (err) {
+      addMsg("director", `Couldn't set the production style: ${err.message || err}`, "warn");
+      // the server kept its style — put the pill back where the session is
+      syncSessionSettings();
+    }
   }
 
   // The voice is post-recorded, so a choice lands on the session at once —
@@ -1275,6 +1315,20 @@
         const name = v.voice_id[0].toUpperCase() + v.voice_id.slice(1);
         const hold = film.narration.tail_hold_s ? ` The last frame held ${film.narration.tail_hold_s.toFixed(1)}s so the final line could finish.` : "";
         addMsg("director", `Narrated by ${name} (${v.cast}).${hold}`);
+      }
+      // Blueprint 31: how the film's lines were voiced — in the clips, by
+      // the narrator, rescued — and what the cut balanced or muted
+      if (film.style && film.style.key && film.style.key !== "narrated") {
+        const st = film.style;
+        const label = st.key === "mix" ? "Mix" : "Dialogue";
+        const bits = [];
+        if (st.spoken_in_clip && st.spoken_in_clip.length) bits.push(`${plural(st.spoken_in_clip.length, "line")} voiced in the clips`);
+        if (st.narrated && st.narrated.length) bits.push(`${plural(st.narrated.length, "line")} narrated in post`);
+        if (st.rescued && st.rescued.length) bits.push(`${plural(st.rescued.length, "line")} rescued by the narrator (${st.rescued.join(", ")})`);
+        const guard = film.speech_guard || {};
+        if (guard.balanced && guard.balanced.length) bits.push(`${plural(guard.balanced.length, "spoken track")} balanced to the narrator's level`);
+        if (guard.muted && guard.muted.length) bits.push(`${plural(guard.muted.length, "track")} muted (${guard.muted.map((m) => m.clip).join(", ")})`);
+        addMsg("director", `${label} style: ${bits.length ? bits.join("; ") : "no spoken lines in this cut"}.`);
       }
       if (film.deliverables && film.deliverables.length) {
         let line = `Delivered with ${plural(film.cue_count || 0, "subtitle cue")}: ${film.deliverables.join(", ")} — on the board's CUT tab.`;
@@ -2615,6 +2669,7 @@
   });
   { const a = $("aspect"); if (a) a.addEventListener("change", () => markDirty("aspect")); }
   { const v = $("voice"); if (v) v.addEventListener("change", () => { markDirty("voice"); pushVoice(); }); }
+  { const st = $("style"); if (st) st.addEventListener("change", () => { markDirty("style"); pushStyle(); }); }
   $("idea").addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" && !ev.shiftKey) {
       ev.preventDefault();

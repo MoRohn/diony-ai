@@ -470,7 +470,12 @@ def cue_sheet(entries: list[dict]) -> list[NarrationCue]:
     Each entry: {op, clip, window: (source_in_s, duration_s)} in play order —
     the same shape deliverables consume. A scripted clip's line comes from its
     audio packet; a one-shot chain link's from the narration the master
-    derivation split onto its op. A clip with no line contributes nothing."""
+    derivation split onto its op. A clip with no line contributes nothing.
+
+    Blueprint 31: a clip whose voicing is "generated" (the character speaks
+    the line in the clip) contributes nothing either — unless the entry is
+    flagged ``narrate_anyway`` (the speech guard found the provider never
+    voiced the line and the narrator rescues it)."""
     cues: list[NarrationCue] = []
     timeline_s = 0.0
     for index, entry in enumerate(entries):
@@ -481,6 +486,14 @@ def cue_sheet(entries: list[dict]) -> list[NarrationCue]:
         speaker = ""
         direction = ""
         voice_ref = ""
+        voicing = str(
+            getattr(clip.audio_packet, "voicing", "post")
+            if clip is not None
+            else getattr(op, "voicing", "post")
+        ) or "post"
+        if voicing == "generated" and not entry.get("narrate_anyway"):
+            timeline_s += duration
+            continue
         if (
             clip is not None
             and clip.clip_class in {"sync-dialogue", "vo-over"}

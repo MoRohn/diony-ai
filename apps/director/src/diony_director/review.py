@@ -129,6 +129,12 @@ ANCHOR_DRIFT_ADVISORY = 0.03
 SPEECH_WORDS_FAIL = 3
 SPEECH_SECONDS_FAIL = 1.5
 
+# Blueprint 31: a clip that voices its OWN line (Dialogue / Mix styles) is
+# measured the other way round — the heard words must BE the scripted line.
+# The floor tolerates an ASR's ear and a model's diction; a clip where the
+# character stayed mute, or spoke other words, falls well under it.
+LINE_ACCURACY_FAIL = 0.6
+
 
 def _measure_frames(
     path: Path, clip: ClipUnit, families: dict[str, str], measured: dict[str, float], issues: list[str]
@@ -252,6 +258,49 @@ def _measure_speech(
         families["speech"] = "pass"
 
 
+def _measure_spoken_line(
+    path: Path, line: str, families: dict[str, str], measured: dict[str, float], issues: list[str]
+) -> None:
+    """Blueprint 31: did the character speak THIS line? The track is
+    transcribed once; heard words are scored against the authored line. A
+    voice on this track is authored — the `speech` family passes when it is
+    heard — and the `line` family carries the verdict: mute or off-script
+    fails (a `fix-line` retake), on-script passes, no detector is honest
+    `unmeasured` for both."""
+    detection = location_speech(path)
+    if detection is None:
+        return
+    measured["speech_words"] = float(detection.word_count)
+    measured["speech_s"] = float(detection.speech_s)
+    heard = str(detection.transcript or "").strip()
+    if detection.word_count == 0 or not heard:
+        families["speech"] = "unmeasured"
+        families["line"] = "fail"
+        issues.append(
+            "the character never spoke the scripted line — nothing is heard on "
+            "the track; the line must be voiced in the clip"
+        )
+        return
+    families["speech"] = "pass"
+    try:
+        from diony_producer.speech_transcript import score_transcript
+
+        accuracy, _last_ok, missed = score_transcript(line, heard)
+    except ImportError:
+        families["line"] = "unmeasured"
+        return
+    measured["line_accuracy"] = float(accuracy)
+    if accuracy < LINE_ACCURACY_FAIL:
+        families["line"] = "fail"
+        issues.append(
+            f"the spoken words are not the scripted line ({accuracy:.0%} of the "
+            f"words heard: “{heard[:120]}”; missed: {', '.join(missed[:6]) or '—'}) — "
+            "the line must be voiced exactly as written"
+        )
+    else:
+        families["line"] = "pass"
+
+
 def _measure_adherence(
     path: Path, clip: ClipUnit, families: dict[str, str], measured: dict[str, float], issues: list[str]
 ) -> None:
@@ -320,6 +369,22 @@ def review_clip(
         else:
             families["audio"] = "pass" if probe["has_audio"] else "unmeasured"
 
+    # Blueprint 31: a clip that voices its own line is measured for THAT line;
+    # every other clip's location track is speechless by law (Blueprint 28).
+    from diony_director.compiler import speaks_in_clip
+
+    spoken_line = (
+        str(clip.audio_packet.script_excerpt[0].get("line", "")).strip()
+        if speaks_in_clip(clip)
+        else ""
+    )
+
+    def _speech_check() -> None:
+        if spoken_line:
+            _measure_spoken_line(path, spoken_line, families, measured, issues)
+        else:
+            _measure_speech(path, families, measured, issues)
+
     if families["delivery"] == "pass":
         # A crashed measurement degrades ITS family to unmeasured with the
         # crash on record — it never aborts the whole review (an evidence-free
@@ -328,7 +393,7 @@ def review_clip(
             ("identity", lambda: _measure_identity(path, clip, package, families, measured, issues)),
             ("frames", lambda: _measure_frames(path, clip, families, measured, issues)),
             ("continuity", lambda: _measure_continuity(path, prev_clip_path, families, measured, issues, anchor_path)),
-            ("speech", lambda: _measure_speech(path, families, measured, issues)),
+            ("speech", _speech_check),
             ("adherence", lambda: _measure_adherence(path, clip, families, measured, issues)),
         ):
             try:
@@ -344,6 +409,8 @@ def review_clip(
     families.setdefault("continuity", "unmeasured")
     families.setdefault("speech", "unmeasured")
     families.setdefault("adherence", "unmeasured")
+    if spoken_line:
+        families.setdefault("line", "unmeasured")
 
     if any(v == "fail" for v in families.values()):
         verdict = "fail"
@@ -447,10 +514,13 @@ def review_chain_link(
     start_image: Path | None = None,
     prev_clip_path: Path | None = None,
     scene_change: bool = False,
+    spoken_line: str = "",
 ) -> ClipReview:
     """Review one link of a chained one-shot: delivery, duration, frames, and
     look continuity — did it open from the frame it was given, did it hold
-    the previous clip's colour when it was a continuation, did it wander."""
+    the previous clip's colour when it was a continuation, did it wander.
+    `spoken_line` (Blueprint 31) is the narration this link voices in the
+    clip; empty means the link's track is speechless by law."""
     families: dict[str, str] = {}
     measured: dict[str, float] = {}
     issues: list[str] = []
@@ -479,8 +549,16 @@ def review_chain_link(
         for family_name, measure in (
             ("frames", lambda: _measure_frames_for(path, duration_s, families, measured, issues)),
             # a chain link's narration rides its op (Blueprint 28) — its
-            # location track is as speechless-by-law as any scripted clip's
-            ("speech", lambda: _measure_speech(path, families, measured, issues)),
+            # location track is as speechless-by-law as any scripted clip's,
+            # unless the link voices its own narration (Blueprint 31)
+            (
+                "speech",
+                lambda: (
+                    _measure_spoken_line(path, spoken_line, families, measured, issues)
+                    if spoken_line
+                    else _measure_speech(path, families, measured, issues)
+                ),
+            ),
             (
                 "continuity",
                 lambda: _measure_chain_continuity(
@@ -504,6 +582,8 @@ def review_chain_link(
     families.setdefault("continuity", "unmeasured")
     families.setdefault("identity", "unmeasured")
     families.setdefault("speech", "unmeasured")
+    if spoken_line:
+        families.setdefault("line", "unmeasured")
     verdict = "fail" if any(v == "fail" for v in families.values()) else "pass"
     return ClipReview(
         id=f"rev-{uuid.uuid4().hex[:10]}",
