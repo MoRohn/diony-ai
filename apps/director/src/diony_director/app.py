@@ -1000,6 +1000,7 @@ def _submit_ready(sid: str) -> tuple[list[str], list[dict]]:
             # the reason must survive the drained held list: the card's
             # "failed" state reads it back long after the chat scrolled
             session.runtime(op.id)["submit_error"] = str(err.detail)
+            session.record_failure(op, "submit", str(err.detail))
         except provider_base.CloudAdapterQuotaError as err:
             # a 429 that surfaced raw (e.g. while polling a style frame
             # mid-roll): the same time-gated pause, never a failed op
@@ -1008,6 +1009,7 @@ def _submit_ready(sid: str) -> tuple[list[str], list[dict]]:
             held.append({"op_id": op.id, "reason": f"{type(err).__name__}: {err}"})
             op.status = "failed"
             session.runtime(op.id)["submit_error"] = f"{type(err).__name__}: {err}"
+            session.record_failure(op, "submit", f"{type(err).__name__}: {err}")
     if submitted or held:
         session.persist(sid)
     return submitted, held
@@ -1136,13 +1138,24 @@ def _style_frame_references(op: DirectorOp) -> list[str]:
         if path and Path(path).is_file() and path not in refs:
             refs.append(path)
 
-    _add(_chain_look_frame(link))
+    # A REDRAW after a refusal composes from less each time: the first safe
+    # redraw drops the previous link's last frame (the likeliest carrier of
+    # the face the filter matched); a second drops every frame pulled from the
+    # film and keeps only the user's own stills. The prompt's steer does the
+    # rest. A redraw after a plain failure keeps the full reference set.
+    redraw = int(info.get("redraw") or 0)
+    safe = bool(info.get("safe"))
+    frames_from_film = not (safe and redraw >= 2)
+    previous_last_frame = not safe
+    if frames_from_film:
+        _add(_chain_look_frame(link))
     master = session.master_for_op(link.id)
-    for asset in (master.look.anchor_assets if master is not None and master.look else []):
-        _add(asset)
+    if frames_from_film:
+        for asset in (master.look.anchor_assets if master is not None and master.look else []):
+            _add(asset)
     for path in session.all_upload_paths(link.session_id):
         _add(path)
-    prev = session.previous_completed_clip_op(link.session_id, link)
+    prev = session.previous_completed_clip_op(link.session_id, link) if previous_last_frame else None
     if prev is not None:
         stored = session.runtime(prev.id).get("clip")
         if stored is not None:
@@ -1265,12 +1278,77 @@ def derive_op(op_id: str) -> dict:
     return {"op_ids": [o.id for o in ops], "status": "deriving"}
 
 
+class RetryIn(BaseModel):
+    # force a fresh opening frame (or forbid one) regardless of the ladder
+    fresh_frame: bool | None = None
+
+
+def _failure_detail(op: DirectorOp) -> str:
+    """Why the op failed, in the words the room showed: the recorded failure,
+    else the plane's job row (ops that failed before failures were recorded),
+    else the submit error."""
+    failure = session.runtime(op.id).get("failure") or {}
+    if failure.get("detail"):
+        return str(failure["detail"])
+    if op.job_id:
+        try:
+            plane, ctx = _boot()
+            job = plane.job(ctx.workspace.id, op.job_id)
+            if job is not None and job.error_message:
+                return str(job.error_message)
+        except Exception:  # noqa: BLE001 - best-effort; the ladder still works without it
+            pass
+    return str(session.runtime(op.id).get("submit_error") or "")
+
+
+def _opens_from_a_frame(op: DirectorOp) -> bool:
+    """A chain link past the opener opens from a picture — its style frame or
+    the previous link's last frame — and that picture can be the thing the
+    provider refuses."""
+    return _is_chain_link(op) and bool(session.chain_position(op.session_id, op.id))
+
+
+def _plan_frame_redraw(op: DirectorOp, body: RetryIn | None) -> tuple[bool, bool, str]:
+    """Decide whether this Retry redraws the link's opening frame.
+
+    Returns (redraw, safe, why). The ladder: a provider REFUSAL (moderated /
+    filter) redraws at once, steered clear of recognizable people — the same
+    still would be refused the same way (clip 6/30, 2026-09-06, four times).
+    Any other failure retries once on the same frame, then redraws — by the
+    second failure the frame is the common factor. `fresh_frame` overrides
+    either way. A frame redrawn FRAME_REDRAW_LIMIT times is refused: by then
+    the prompt is what keeps tripping the filter."""
+    if not _opens_from_a_frame(op):
+        return False, False, ""
+    rt = session.runtime(op.id)
+    failure = rt.get("failure") or {}
+    if not failure.get("detail"):
+        detail = _failure_detail(op)
+        if detail:
+            failure = {**failure, "detail": detail}
+    refusal = session.failure_is_refusal(failure)
+    retries = int(rt.get("retries") or 0)
+    if body is not None and body.fresh_frame is False:
+        return False, False, ""
+    if body is not None and body.fresh_frame is True:
+        return True, refusal, "a fresh opening frame was asked for"
+    if refusal:
+        return True, True, "the provider refused the picture it opened from"
+    if retries >= 1:
+        return True, False, f"the same opening frame failed {retries + 1} times"
+    return False, False, ""
+
+
 @app.post("/api/director/ops/{op_id}/retry")
-def retry_op(op_id: str) -> dict:
+def retry_op(op_id: str, body: RetryIn | None = None) -> dict:
     """Un-strand a failed op: back to proposed with a clean runtime, then roll.
 
     The locked estimate the user already approved still stands, and the budget
-    gate in the submit wave still applies — a retry re-spends only this op."""
+    gate in the submit wave still applies — a retry re-spends only this op
+    (plus a redrawn opening frame, a priced still, when the ladder calls for
+    one). A Retry also re-arms the RUN the op belonged to: the later links and
+    the plan's waiting ops are targeted again, and the plan (assemble, finish)
+    comes back so the room resumes it without another press."""
     op = _op_or_404(op_id)
     if (
         op.status == "completed"
@@ -1281,18 +1359,63 @@ def retry_op(op_id: str) -> dict:
         # rejected take stays on the ledger, the link rolls again
         session.retake_chain_link(op)
         session.add_batch_target(op.session_id, op.id)
+        retargeted = session.retarget_after_retry(op.session_id, op)
         _kick_submitter(op.session_id)
-        return {"op": op.model_dump(mode="json")}
+        return {
+            "op": op.model_dump(mode="json"),
+            "redraw": None,
+            "retargeted": retargeted,
+            "run_plan": session.run_plan(op.session_id),
+        }
     if op.status != "failed":
         raise HTTPException(status_code=409, detail=f"op is {op.status}; only failed ops retry")
+    redraw, safe, why = _plan_frame_redraw(op, body)
+    rt = session.runtime(op.id)
+    if redraw and int(rt.get("frame_redraws") or 0) >= session.FRAME_REDRAW_LIMIT:
+        position = (session.chain_position(op.session_id, op.id) or 0) + 1
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"clip {position}'s opening frame was redrawn {session.FRAME_REDRAW_LIMIT} "
+                "times and the provider still refused the clip — the prompt itself is what "
+                "the filter matches. Rewrite the clip (describe the role, wardrobe, and "
+                "setting; name no real person) and Retry again."
+            ),
+        )
     op.status = "proposed"
     op.job_id = ""
-    rt = session.runtime(op.id)
     for stale in (
         "handle", "ledger_error", "transient_holds", "quota_hold_until", "submit_error",
-        "poll_not_before",
+        "poll_not_before", "last_poll_state", "last_progress_ts", "advance_error",
+        "advance_failures", "next_op",
     ):
         rt.pop(stale, None)
+    rt["retries"] = int(rt.get("retries") or 0) + 1
+    redraw_note = None
+    if redraw:
+        reason = _failure_detail(op) or why
+        frame_op = session.redraw_opening_frame(op, reason=reason, safe=safe)
+        cost = frame_op.estimate.total_usd_micros if frame_op.estimate else 0
+        position = (session.chain_position(op.session_id, op.id) or 0) + 1
+        redraws = int(rt.get("frame_redraws") or 0)
+        redraw_note = {
+            "frame_op_id": frame_op.id,
+            "attempt": redraws,
+            "safe": safe,
+            "model": frame_op.model,
+            "est_usd_micros": cost,
+            "note": (
+                f"Retry {rt['retries']} of clip {position}: {why} — its opening frame is "
+                f"redrawn on {frame_op.model} (attempt {redraws}, {session._usd(cost)})"
+                + (", steered clear of any recognizable person" if safe else "")
+                + ", and the clip rolls again from the new frame."
+            ),
+        }
+        op.rationale += (
+            f" · retry {rt['retries']}: opening frame redrawn (attempt {redraws}"
+            + (", likeness-safe" if safe else "")
+            + f") — {why}"
+        )
     # A retry must be able to succeed: riders the routed model refuses beside
     # a start/end frame are dropped here, loudly — the opening frame wins.
     # (Un-strands ops proposed before the frames-exclusive rule reached the
@@ -1312,9 +1435,15 @@ def retry_op(op_id: str) -> dict:
                     "opening frame or identity refs, never both"
                 )
     session.add_batch_target(op.session_id, op.id)
+    retargeted = session.retarget_after_retry(op.session_id, op)
     session.persist(op.session_id)
     _kick_submitter(op.session_id)
-    return {"op": op.model_dump(mode="json")}
+    return {
+        "op": op.model_dump(mode="json"),
+        "redraw": redraw_note,
+        "retargeted": retargeted,
+        "run_plan": session.run_plan(op.session_id),
+    }
 
 
 def _clip_dest(op) -> Path:
@@ -1415,6 +1544,7 @@ def _advance_op(op: DirectorOp, *, allow_spend: bool = False) -> dict:
                 credits_burned=credits_burned if poll.state == "failed" else 0,
             )
             op.status = "failed"
+            session.record_failure(op, poll.state, poll.detail or poll.state)
             _revise_after_job_failure(op, poll.detail or poll.state, allow_spend=allow_spend)
             session.persist(op.session_id)
 
@@ -1460,6 +1590,12 @@ def _style_frame_state(op: DirectorOp) -> dict | None:
         "model": frame_op.model,
         "est_usd_micros": frame_op.estimate.total_usd_micros if frame_op.estimate else 0,
         "ready": bool(session.runtime(op.id).get("style_frame")),
+        # the Retry ladder: how many times this link's opening frame was
+        # redrawn, and whether the current frame continues the previous shot
+        # (a redraw on a continuing link) rather than opening a scene change
+        "redraws": int(session.runtime(op.id).get("frame_redraws") or 0),
+        "continues": bool((frame_op.artifact_refs.get("style_frame") or {}).get("continues")),
+        "safe": bool((frame_op.artifact_refs.get("style_frame") or {}).get("safe")),
     }
 
 
@@ -1487,6 +1623,12 @@ def accept_op(op_id: str) -> dict:
 
 class RunBatchIn(BaseModel):
     op_ids: list[str] | None = None
+    # what the press asked for AFTER the last print: cut the film, and at
+    # which finish ("auto" = each take's native print, "1080p" = Upscale All
+    # first). Recorded as the session's run plan so a Retry resumes it.
+    assemble: bool = False
+    finish: str = "auto"
+    upscale: bool = False
 
 
 @app.post("/api/director/sessions/{sid}/run_batch")
@@ -1514,9 +1656,23 @@ def run_batch(sid: str, body: RunBatchIn) -> dict:
         )
     targets = {op.id for op in ops if op.status == "proposed"}
     all_targets = session.set_batch_targets(sid, targets | retired_asked)
+    if body.assemble:
+        # the whole set the press covered — printed ones included, so a later
+        # Retry knows which clips the cut is waiting on
+        session.set_run_plan(
+            sid,
+            {
+                "op_ids": [op.id for op in ops if not op.artifact_refs.get("style_frame")],
+                "assemble": True,
+                "finish": body.finish or "auto",
+                "upscale": bool(body.upscale),
+                "started_at": time.time(),
+            },
+        )
     _kick_submitter(sid)
     return {
         "submitted": [],
+        "run_plan": session.run_plan(sid),
         "targeted": sorted(all_targets),
         "held": session.drain_held(sid),
         "queued": session.queued_count(sid),
@@ -1561,6 +1717,7 @@ def advance_session(sid: str) -> dict:
                     # fail it, close its plane row, and let the ladder re-shoot
                     # the clip instead of wedging the whole batch forever.
                     op.status = "failed"
+                    session.record_failure(op, "lost", f"gave up after 5 poll failures: {detail[:160]}")
                     try:
                         plane, ctx = _boot()
                         if op.job_id:
@@ -1614,6 +1771,7 @@ def advance_session(sid: str) -> dict:
     counts["submitting"] = session.submitter_active(sid)
     counts["held"] = held
     counts["stalled"] = stalled
+    counts["run_plan"] = session.run_plan(sid)
     # per-op status so the room can show LIVE progress for a targeted set
     # (the retake watch) instead of a silent wait on aggregate counts
     counts["ops"] = [

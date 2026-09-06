@@ -116,10 +116,38 @@ printed, review-failed, unaccepted link rolls it again from the same opening fra
 rejected take stays on the ledger) or **Accept** re-arms the chain. The chain opener's
 first frame registers as a look anchor.
 
+## 4a. The Retry ladder: a fresh frame, and the run resumes
+
+A failed link's picture can be the thing the provider refuses (2026-09-06, clip 6/30:
+Flow's prominent-people filter matched the style frame, and four Retries rolled the same
+still into the same refusal). Every failure is recorded on the op (`failure`: state,
+detail, the frame it opened from), and `POST /ops/{id}/retry` decides what changes:
+
+- a provider REFUSAL (moderated / filter words) redraws the opening frame at once —
+  `session.redraw_opening_frame` registers a new priced style-frame op tied to the link,
+  its prompt a fresh composition (`look.frame_redraw_prompt`) with `SAFE_FRAME_STEER`,
+  its references WITHOUT the previous link's last frame; a second refusal composes from
+  the user's own stills alone;
+- any other failure retries once on the same frame, then redraws (the frame is the common
+  factor by the second failure); `{"fresh_frame": true|false}` overrides;
+- `FRAME_REDRAW_LIMIT` (3) redraws refuse the retry (409): the prompt is what the filter
+  matches by then, and every redraw is money;
+- a continuing link (no scene change) redraws too — the still is composed from the
+  previous link's last frame and marked `continues`; `_late_bind_chain_bridge` already
+  prefers a link's style frame over the bridge frame, so nothing else changes.
+
+The spent frame op stays on the ledger (`discarded_frames` on the link's runtime). And a
+Retry re-arms the RUN, not the clip: Run & Assemble All / Run, Assemble & Upscale All
+record a `run_plan` on the session (`run_batch` takes `assemble`, `finish`, `upscale`;
+persisted), the retry re-targets the plan's waiting ops and the later links of the
+retake's chain (`retarget_after_retry`) and returns the plan, and the room re-enters the
+same watch-then-cut loop — the run bar resumes, or after a reload the plan drives a
+generic watch (`resumeFromPlan`) that finishes and cuts the way the press asked.
+
 ## 5. Surfaces
 
 - `GET /ops/{id}` carries `scene_change` and `style_frame` `{op_id, status, model,
-  est_usd_micros, ready}`; `GET /ops/{id}/style_frame` serves the still.
+  est_usd_micros, ready, redraws, continues, safe}`; `GET /ops/{id}/style_frame` serves the still.
 - Cards: a scene-change link says it opens from a style frame (priced, with its status),
   shows the frame once printed, lands its look review with Accept / ↻ Retake, and the
   chain bar holds — loudly, once — on a failed look review instead of cutting over it.

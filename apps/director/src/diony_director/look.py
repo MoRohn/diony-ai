@@ -205,6 +205,55 @@ def style_frame_prompt(opening: str, look: LookBible, *, continues_from: str = "
     return " ".join(p for p in parts if p)
 
 
+# What a redrawn opening frame must steer away from when the provider refused
+# the picture: anything its prominent-person / celebrity filter could match.
+# Roles and settings stay; recognizable faces go.
+SAFE_FRAME_STEER = (
+    "No recognizable real person and no celebrity likeness: every figure is a "
+    "generic, invented character with unremarkable features, seen from behind, "
+    "in three-quarter profile turned from camera, in shadow, or out of focus. "
+    "Keep the role, wardrobe, and setting; drop anything that reads as a "
+    "specific public figure."
+)
+
+
+def frame_redraw_prompt(
+    opening: str,
+    look: LookBible | None,
+    *,
+    safe: bool,
+    attempt: int,
+    continues: bool = False,
+) -> str:
+    """The image-lane prompt for a REDRAWN opening frame — the still a chain
+    link opens from after the earlier one failed at the video provider. A
+    fresh composition of the same moment (so the redraw is not the same
+    picture again), steered clear of recognizable people when the failure was
+    a filter refusal, in the film's look when the film has one."""
+    opening = " ".join((opening or "the scene at rest, composed for the shot to come").split()).rstrip(".")
+    if look is not None and look.block():
+        base = style_frame_prompt(opening, look)
+    else:
+        base = (
+            f"{STYLE_FRAME_LEAD} {opening[:1].lower()}{opening[1:]}. "
+            "Match the reference images for palette, light, and framing. "
+            "No text, no captions, no watermark."
+        )
+    parts = [base]
+    if continues:
+        parts.append(
+            "This frame continues the previous shot directly: the same place, "
+            "the same figures where the last frame left them, redrawn cleanly."
+        )
+    parts.append(
+        f"A fresh composition of this moment (attempt {max(1, int(attempt))}): choose a "
+        "different angle, distance, or arrangement than an earlier attempt would."
+    )
+    if safe:
+        parts.append(SAFE_FRAME_STEER)
+    return " ".join(p for p in parts if p)
+
+
 def describe(look: LookBible | None) -> str:
     """One reply-line description of the look."""
     if look is None or not look.medium:
@@ -215,7 +264,9 @@ def describe(look: LookBible | None) -> str:
 __all__ = [
     "LOOK_CONTRACT",
     "STYLE_FRAME_LEAD",
+    "SAFE_FRAME_STEER",
     "describe",
+    "frame_redraw_prompt",
     "parse_look",
     "style_frame_prompt",
     "template_look",

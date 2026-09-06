@@ -3,6 +3,12 @@
   const $ = (id) => document.getElementById(id);
   const thread = $("thread");
   let sessionId = null;
+  // The run a Retry resumes. Run & Assemble (and Run, Assemble & Upscale All)
+  // register their watch-then-cut loop here; a Retry re-enters it instead of
+  // asking the user to press the run button again. Survives a reload through
+  // the server's run plan (resumeFromPlan).
+  let runContinuation = null; // { active: bool, resume(): void }
+  let planResumeActive = false;
   const usd = (micros) => `$${(micros / 1e6).toFixed(2)}`;
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -459,15 +465,26 @@
     }
     const cost = frame.est_usd_micros ? ` · ${usd(frame.est_usd_micros)}` : "";
     const status = frame.ready ? "printed" : frame.status;
-    note.textContent =
-      `scene change — opens from a style frame composed in the film's look (${frame.model}${cost}, ${status})`;
-    if (frame.ready && !card.querySelector(".styleframe")) {
-      const img = document.createElement("img");
-      img.className = "styleframe";
-      img.alt = "style frame — the opening frame of this clip";
-      img.title = img.alt;
+    const redrawn = frame.redraws
+      ? ` · opening frame redrawn ${frame.redraws}× after a failed attempt${frame.safe ? ", steered clear of any recognizable person" : ""}`
+      : "";
+    note.textContent = frame.continues
+      ? `continues the previous shot — opens from a redrawn frame composed in the film's look (${frame.model}${cost}, ${status})${redrawn}`
+      : `scene change — opens from a style frame composed in the film's look (${frame.model}${cost}, ${status})${redrawn}`;
+    let img = card.querySelector(".styleframe");
+    if (frame.ready && (!img || img.dataset.frameOp !== frame.op_id)) {
+      // a redrawn frame replaces the picture on the card — never a stale still
+      if (!img) {
+        img = document.createElement("img");
+        img.className = "styleframe";
+        img.alt = "style frame — the opening frame of this clip";
+        img.title = img.alt;
+        note.after(img);
+      }
+      img.dataset.frameOp = frame.op_id;
       img.src = `/api/director/ops/${body.op.id}/style_frame?t=${Date.now()}`;
-      note.after(img);
+    } else if (!frame.ready && img && frame.redraws) {
+      img.remove(); // the old frame is discarded; the redraw is on its way
     }
   }
 
@@ -1158,17 +1175,94 @@
     btn.addEventListener("click", async () => {
       btn.disabled = true;
       try {
-        await api(`/api/director/ops/${opId}/retry`, { method: "POST" });
+        const res = await api(`/api/director/ops/${opId}/retry`, { method: "POST" });
         btn.remove();
-        state.textContent = "retrying…";
+        state.textContent = res.redraw ? "redrawing the opening frame…" : "retrying…";
         state.className = "state";
+        if (res.redraw) addMsg("director", res.redraw.note);
+        if (res.retargeted && res.retargeted.length) {
+          addMsg(
+            "director",
+            `${plural(res.retargeted.length, "later clip")} rejoin the run behind this retake — they roll in order once it prints.`
+          );
+        }
         watchRetried(opId, card, state);
+        resumeRunAfterRetry(res);
       } catch (err) {
         state.textContent = String(err.message || err);
         btn.disabled = false;
       }
     });
     (card.querySelector(".row") || card).appendChild(btn);
+  }
+
+  // A Retry continues the run the user already chose — Run & Assemble, or
+  // Run, Assemble & Upscale All — without another press. The bar's own loop
+  // resumes when this page ran the batch; after a reload the server's run
+  // plan drives a generic watch that finishes and cuts the same way.
+  function resumeRunAfterRetry(res) {
+    if (runContinuation) {
+      if (!runContinuation.active) runContinuation.resume();
+      return; // an active loop sees the retake in the counts and waits for it
+    }
+    const plan = res && res.run_plan;
+    if (plan && plan.assemble && !planResumeActive) resumeFromPlan(plan);
+  }
+
+  async function resumeFromPlan(plan) {
+    planResumeActive = true;
+    const withFinish = plan.finish === FINISH_RESOLUTION || !!plan.upscale;
+    const li = addMsg(
+      "director",
+      `Resuming the run — the retake rolls, then the film ${withFinish ? `finishes at ${FINISH_RESOLUTION} and ` : ""}cuts as you asked. `
+    );
+    const progress = document.createElement("span");
+    progress.className = "progress";
+    li.appendChild(progress);
+    const planIds = new Set(plan.op_ids || []);
+    const tick = async () => {
+      let counts;
+      try {
+        counts = await api(`/api/director/sessions/${sessionId}/advance`, { method: "POST" });
+      } catch (err) {
+        progress.textContent = `lost the room: ${err.message || err}`;
+        planResumeActive = false;
+        return;
+      }
+      (counts.held || []).forEach((h) => addHeldMsg(h));
+      const mine = (counts.ops || []).filter((o) => planIds.has(o.op_id));
+      const done = mine.filter((o) => o.status === "completed").length;
+      const failed = mine.filter((o) => o.status === "failed").length;
+      const pending = mine.filter((o) => o.status === "submitted" || o.status === "submitting").length;
+      progress.textContent =
+        `${done}/${planIds.size} printed · ${failed} failed · ${pending} generating` +
+        ((counts.queued || 0) ? ` · ${counts.queued} queued (chained)` : "");
+      refreshMeter();
+      if (counts.pending > 0 || (counts.queued || 0) > 0 || counts.submitting) {
+        setTimeout(tick, 3000);
+        return;
+      }
+      planResumeActive = false;
+      refreshProduction();
+      if (failed) {
+        progress.textContent += " — the cut waits for the failed clips; each has a Retry on the SHOTS tab";
+        return;
+      }
+      if (withFinish) {
+        progress.textContent += " — finishing…";
+        const finished = await upscaleAll(progress);
+        if (finished !== true && finished !== "none") {
+          progress.textContent += " — some finishes failed; the cut uses the prints that exist";
+        }
+      }
+      progress.textContent += " — assembling…";
+      const delivered = await assembleNow(false, { finish: withFinish ? FINISH_RESOLUTION : "auto" });
+      progress.textContent = progress.textContent.replace(
+        " — assembling…",
+        delivered ? " — film delivered" : " — assembly is holding (see the room)"
+      );
+    };
+    setTimeout(tick, 2500);
   }
 
   async function watchRetried(opId, card, state, deadlineTicks = 120) {
@@ -1181,6 +1275,7 @@
         continue;
       }
       const st = body.op.status;
+      attachStyleFrame(card, body);
       if (st === "completed") {
         state.textContent = "printed";
         state.className = "state done";
@@ -1190,7 +1285,6 @@
           video.src = `/api/director/clips/${opId}`;
           card.appendChild(video);
         }
-        attachStyleFrame(card, body);
         attachVerdict(card, state, body.review, opId, { retake: !body.op.clip_id });
         refreshMeter();
         return;
@@ -1202,7 +1296,11 @@
         refreshMeter();
         return;
       }
-      state.textContent = st === "proposed" ? "waiting for the wave…" : `${st}…`;
+      const frame = body.style_frame;
+      const redrawing = frame && frame.redraws && !frame.ready && st === "proposed";
+      state.textContent = redrawing
+        ? "redrawing the opening frame…"
+        : st === "proposed" ? "waiting for the wave…" : `${st}…`;
     }
     state.textContent = "still not rolling — check the connection and Retry";
     state.className = "state failed";
@@ -1669,7 +1767,12 @@
         batch = await api(`/api/director/sessions/${sessionId}/run_batch`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ op_ids: ids }),
+          body: JSON.stringify({
+            op_ids: ids,
+            assemble: true,
+            finish: withFinish ? FINISH_RESOLUTION : "auto",
+            upscale: withFinish,
+          }),
         });
       } catch (err) {
         progress.textContent = `batch failed: ${err.message || err}`;
@@ -1724,6 +1827,7 @@
           counts = await api(`/api/director/sessions/${sessionId}/advance`, { method: "POST" });
         } catch (err) {
           progress.textContent = `lost the room: ${err.message || err}`;
+          runContinuation.active = false;
           return;
         }
         const queued = counts.queued || 0;
@@ -1741,6 +1845,7 @@
           setTimeout(tick, 3000);
           return;
         }
+        runContinuation.active = false; // a Retry from here re-enters this loop
         // settle each card with its final state, then cut the film
         for (const id of ids) {
           try {
@@ -1766,6 +1871,15 @@
           } catch (err) { /* card stays coarse; the film still cuts */ }
         }
         await cutFilm();
+      };
+      runContinuation = {
+        active: true,
+        resume() {
+          this.active = true;
+          allBtn.disabled = true; selBtn.disabled = true; upBtn.disabled = true;
+          progress.textContent = "resuming the run — the retake rolls, then the film cuts…";
+          setTimeout(tick, 2500);
+        },
       };
       setTimeout(tick, 2500);
     }
@@ -1929,7 +2043,12 @@
         batch = await api(`/api/director/sessions/${sessionId}/run_batch`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ op_ids: ops.map((op) => op.id) }),
+          body: JSON.stringify({
+            op_ids: ops.map((op) => op.id),
+            assemble: true,
+            finish: withFinish ? FINISH_RESOLUTION : "auto",
+            upscale: withFinish,
+          }),
         });
       } catch (err) {
         progress.textContent = `batch failed: ${err.message || err}`;
@@ -1952,6 +2071,7 @@
         } catch (err) {
           progress.textContent = `lost the room: ${err.message || err}`;
           allBtn.disabled = false;
+          runContinuation.active = false;
           return;
         }
         (counts.held || []).forEach((h) => addHeldMsg(h));
@@ -1964,6 +2084,7 @@
           setTimeout(tick, 3000);
           return;
         }
+        runContinuation.active = false; // a Retry from here re-enters this loop
         // settle each card with its final state, then cut the film
         const lookHeld = [];
         for (const [index, op] of ops.entries()) {
@@ -1997,7 +2118,7 @@
           addMsg(
             "director",
             `Clip ${lookHeld[0]} printed but failed its look review — hit ↻ Retake on its card ` +
-              "(or Accept anyway), then Run & Assemble All again. The chain resumes from there.",
+              "(or Accept anyway). The run resumes from there on its own and cuts the film as you asked.",
             "warn"
           );
           allBtn.disabled = false;
@@ -2010,8 +2131,9 @@
           addMsg(
             "director",
             `${plural(counts.failed, "clip")} failed — hit ↻ Retry on the failed card ` +
-              "(its reason is printed there), then Run & Assemble All again. " +
-              "Printed clips are never re-spent; the chain resumes from the break.",
+              "(its reason is printed there). A clip refused for its opening frame gets a fresh " +
+              "frame redrawn; the run resumes from the break on its own and cuts the film as you asked. " +
+              "Printed clips are never re-spent.",
             "warn"
           );
           allBtn.disabled = false;
@@ -2036,6 +2158,16 @@
         );
         allBtn.disabled = false;
         refreshUpLabel();
+      };
+      runContinuation = {
+        active: true,
+        resume() {
+          this.active = true;
+          allBtn.disabled = true;
+          upBtn.disabled = true;
+          progress.textContent = "resuming the run — the retake rolls, the chain follows, then the film cuts…";
+          setTimeout(tick, 2500);
+        },
       };
       setTimeout(tick, 2500);
     }

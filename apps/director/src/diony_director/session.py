@@ -9,6 +9,7 @@ exists without a locked estimate.
 from __future__ import annotations
 
 import math
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -89,6 +90,10 @@ _UPLOADS: dict[str, list[dict[str, Any]]] = {}
 # Blueprint 27: the pre-split finalized artifact behind each one-shot op
 _MASTERS: dict[str, MasterPrompt] = {}
 _ACCEPTED: set[str] = set()
+# The run the user asked for with one press (Run & Assemble / Run, Assemble &
+# Upscale All): which ops, and what follows the last print. A Retry re-enters
+# THIS plan — the user never presses the run button again for a retake.
+_RUN_PLANS: dict[str, dict[str, Any]] = {}
 
 DEFAULT_BUDGET = {"max_usd_micros": 0, "max_revisions_per_clip": 3, "autopilot": False}
 
@@ -146,6 +151,7 @@ def reset() -> None:
         _VOICES,
         _STYLES,
         _DERIVATIONS,
+        _RUN_PLANS,
     ):
         store.clear()
     from diony_director import flow_lexicon, grok_lexicon
@@ -1208,6 +1214,169 @@ def retake_chain_link(op: DirectorOp) -> None:
     if "retake after a failed look review" not in op.rationale:
         op.rationale += " · retake after a failed look review"
     persist(op.session_id)
+
+
+# --- Retry ladder: a fresh opening frame, and the run resumes -----------------
+
+# A link's opening frame is redrawn at most this many times before Retry
+# refuses: a frame the provider keeps rejecting is a prompt problem by then,
+# and every redraw is money.
+FRAME_REDRAW_LIMIT = 3
+
+# Words in a failure that mean the PICTURE (or the prompt) was refused, not
+# that the network hiccuped. Flow's own filter lines land as state "moderated";
+# the markers catch the same refusal when only the detail survived.
+_REFUSAL_MARKERS = (
+    "refused", "filter", "moderat", "prominent", "celebrity", "likeness",
+    "policy", "blocked", "safety", "rejected", "content_violation",
+)
+
+
+def record_failure(op: DirectorOp, state: str, detail: str) -> dict[str, Any]:
+    """Remember WHY this attempt failed and what it opened from, so a Retry
+    can decide whether the frame — not the prompt, not the network — is the
+    thing to change."""
+    entry = {
+        "state": str(state or ""),
+        "detail": str(detail or "")[:600],
+        "start_image": str((op.artifact_refs or {}).get("start_image") or ""),
+        "at": time.time(),
+    }
+    runtime(op.id)["failure"] = entry
+    return entry
+
+
+def failure_is_refusal(failure: dict[str, Any] | None) -> bool:
+    """A provider refusal of the picture or the prompt (moderation/filter),
+    as opposed to a lost job or a network failure."""
+    if not failure:
+        return False
+    if str(failure.get("state") or "") == "moderated":
+        return True
+    detail = str(failure.get("detail") or "").lower()
+    return any(marker in detail for marker in _REFUSAL_MARKERS)
+
+
+def redraw_opening_frame(op: DirectorOp, *, reason: str, safe: bool) -> DirectorOp:
+    """A chain link whose opening frame keeps failing gets a NEW one: a fresh
+    style-frame op on the image lane (priced, registered, tied to the link)
+    replaces the still it opened from. The earlier frame op stays on the
+    ledger as a spent attempt. `safe` steers the redraw away from anything a
+    prominent-person filter could match — the case of clip 6/30 on
+    2026-09-06, which retried into the same refusal four times because the
+    same still rode every retry. Works for a continuing link too (no scene
+    change): the still is composed from the previous link's last frame."""
+    from diony_director import artifacts, look as look_mod
+
+    sid = op.session_id
+    master = _MASTERS.get(op.id)
+    position = chain_position(sid, op.id) or 0
+    clip = (
+        master.clips[position]
+        if master is not None and position < len(master.clips)
+        else {}
+    )
+    look = master.look if master is not None else None
+    rt = runtime(op.id)
+    redraws = int(rt.get("frame_redraws") or 0) + 1
+    lane_provider, lane_model = artifacts.sheet_lane()
+    resolution = "2k" if lane_provider is CloudProvider.GROK else "image"
+    est = estimate_mod.estimate_op(
+        provider=lane_provider,
+        model=lane_model,
+        mode=CloudGenerationMode.IMAGE,
+        duration_s=1,
+        resolution=resolution,
+    )
+    opening = str(clip.get("opening") or "").strip()
+    if not opening:
+        # a template chain has no per-clip opening sentence; the clip's own
+        # prompt (first sentence) describes the moment well enough for a still
+        opening = str(op.prompt or "").split(". ")[0][:240]
+    scene_change = bool(clip.get("scene_change"))
+    frame_op = DirectorOp(
+        id=f"op-{uuid.uuid4().hex[:10]}",
+        session_id=sid,
+        op=DirectorOpType.REIMAGE,
+        provider=lane_provider,
+        model=lane_model,
+        mode=CloudGenerationMode.IMAGE,
+        prompt=look_mod.frame_redraw_prompt(
+            opening, look, safe=safe, attempt=redraws, continues=not scene_change
+        ),
+        prompt_version="v1",
+        duration_s=1,
+        resolution=resolution,
+        artifact_refs={
+            "style_frame": {
+                "for_op": op.id,
+                "clip_index": position,
+                "redraw": redraws,
+                "safe": bool(safe),
+                "continues": not scene_change,
+            }
+        },
+        estimate=est,
+        rationale=(
+            f"opening frame redrawn (attempt {redraws}) for clip {position + 1} — "
+            f"the earlier frame failed: {reason[:160]}"
+        ),
+    )
+    _OPS[frame_op.id] = frame_op
+    state = _SESSIONS.setdefault(sid, SessionState(id=sid))
+    state.op_ids.append(frame_op.id)
+    previous_frame = rt.pop("style_frame", None)
+    rt["style_frame_op"] = frame_op.id
+    rt["frame_redraws"] = redraws
+    if previous_frame:
+        rt.setdefault("discarded_frames", []).append(str(previous_frame))
+    op.artifact_refs.pop("start_image", None)
+    persist(sid)
+    return frame_op
+
+
+def set_run_plan(sid: str, plan: dict[str, Any] | None) -> None:
+    if plan is None:
+        _RUN_PLANS.pop(sid, None)
+    else:
+        _RUN_PLANS[sid] = dict(plan)
+    persist(sid)
+
+
+def run_plan(sid: str) -> dict[str, Any] | None:
+    plan = _RUN_PLANS.get(sid)
+    return dict(plan) if plan else None
+
+
+def retarget_after_retry(sid: str, op: DirectorOp) -> list[str]:
+    """A Retry re-arms the RUN, not just the one clip: every op the run plan
+    named that is still waiting (proposed, not retired) is targeted again,
+    and so is every later link of the retried op's own chain — the chain-order
+    hold had dropped them from the batch when their predecessor failed. The
+    submitter waves then roll them in order behind the retake, and the room's
+    watch cuts the film the way the original press asked."""
+    plan = _RUN_PLANS.get(sid) or {}
+    wanted: list[str] = [str(i) for i in (plan.get("op_ids") or [])]
+    seq = _SEQUENCES.get(sid) or {}
+    for chain in (seq.get("scenes") or {}).values():
+        if op.id in chain:
+            wanted.extend(chain[chain.index(op.id) + 1 :])
+    retired = retired_op_ids(sid)
+    targets = _BATCH_TARGETS.setdefault(sid, set())
+    added: list[str] = []
+    for op_id in wanted:
+        candidate = _OPS.get(op_id)
+        if candidate is None or op_id == op.id or op_id in retired:
+            continue
+        if candidate.status != "proposed" or op_id in targets:
+            continue
+        if candidate.artifact_refs.get("style_frame"):
+            continue  # frames roll at their link's submit, never as targets
+        if candidate.prompt_version == "v0-provisional":
+            continue  # a provisional prompt never spends
+        targets.add(op_id)
+        added.append(op_id)
+    return added
 
 
 def _kick_chain_derivation(
@@ -2723,6 +2892,12 @@ _RUNTIME_KEYS = (
     "style_frame_op",
     "style_frame",
     "quota_hold_until",
+    # why the last attempt failed (state, detail, the frame it opened from)
+    # and how many times this op retried / redrew its opening frame — the
+    # Retry ladder reads these to stop a frame that keeps being refused
+    "failure",
+    "retries",
+    "frame_redraws",
 )
 
 
@@ -2827,6 +3002,7 @@ def persist(sid: str) -> None:
         "failure_memory": sorted(_FAILURE_MEMORY.get(sid, set())),
         "sequence": seq_doc,
         "batch_targets": sorted(_BATCH_TARGETS.get(sid, set())),
+        "run_plan": _RUN_PLANS.get(sid),
         "budget": _BUDGETS.get(sid),
         "aspect": _ASPECTS.get(sid),
         "voice": _VOICES.get(sid) or None,
@@ -2896,6 +3072,8 @@ def _load_state(sid: str, doc: dict) -> None:
         _SEQUENCES[sid] = seq
     if doc.get("batch_targets"):
         _BATCH_TARGETS[sid] = set(doc["batch_targets"])
+    if isinstance(doc.get("run_plan"), dict):
+        _RUN_PLANS[sid] = dict(doc["run_plan"])
     if doc.get("budget"):
         _BUDGETS[sid] = dict(doc["budget"])
     if doc.get("aspect") in PROGRAM_ASPECTS:
