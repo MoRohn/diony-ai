@@ -1446,6 +1446,50 @@ def retry_op(op_id: str, body: RetryIn | None = None) -> dict:
     }
 
 
+@app.post("/api/director/ops/{op_id}/skip")
+def skip_op(op_id: str) -> dict:
+    """Skip a shot the retries could not land. The op is DISCARDED — it leaves
+    the batch, the cut leaves it out (no allow_gaps needed), and the RUN
+    continues past it: the later links of its chain and the plan's waiting
+    ops are targeted again, and the plan comes back so the room resumes it
+    and cuts the film from every other shot. A printed link that failed its
+    look review may be skipped the same way instead of accepted or retaken."""
+    op = _op_or_404(op_id)
+    review_failed = (
+        op.status == "completed" and _is_chain_link(op) and not session.usable_take(op)
+    )
+    if op.status != "failed" and not review_failed:
+        raise HTTPException(
+            status_code=409,
+            detail=f"op is {op.status}; only a failed shot (or a printed link that failed its look review) can be skipped",
+        )
+    if review_failed:
+        review = session.review_for(op.id)
+        reason = "look review failed: " + ("; ".join((review.issues if review else [])[:2]) or "see its review")
+    else:
+        reason = _failure_detail(op)
+    session.skip_op(op, reason)
+    retargeted = session.retarget_after_retry(op.session_id, op)
+    session.persist(op.session_id)
+    _kick_submitter(op.session_id)
+    position = session.chain_position(op.session_id, op.id)
+    label = op.clip_id or (f"clip {position + 1}" if position is not None else "the shot")
+    if retargeted:
+        follow = (
+            f" {len(retargeted)} later clip{'s' if len(retargeted) != 1 else ''} rejoin the run "
+            "behind it — the next one opens from the last shot that printed."
+        )
+    else:
+        follow = " The cut assembles from the shots that printed."
+    return {
+        "op": op.model_dump(mode="json"),
+        "label": label,
+        "retargeted": retargeted,
+        "run_plan": session.run_plan(op.session_id),
+        "reply": f"{label} skipped — the cut leaves it out.{follow}",
+    }
+
+
 def _clip_dest(op) -> Path:
     suffix = ".jpg" if op.mode is CloudGenerationMode.IMAGE else ".mp4"
     return cluster_root() / "director" / op.session_id / f"{op.job_id}{suffix}"
@@ -2417,7 +2461,8 @@ def _cut_gaps(sid: str) -> tuple[list[str], list[DirectorOp], list[str]]:
         stored = session.runtime(op.id).get("clip")
         if stored is not None and Path(stored.path).is_file():
             have.add(op.clip_id)
-    missing = [c.clip_id for c in package.clips if c.clip_id not in have]
+    skipped = session.skipped_clip_ids(sid)  # a Skip is a decision, never a gap
+    missing = [c.clip_id for c in package.clips if c.clip_id not in have and c.clip_id not in skipped]
     gaps = set(missing)
     drafts = [
         o for o in session.ops_for(sid) if o.clip_id in gaps and o.status == "proposed"
@@ -2440,6 +2485,8 @@ def _oneshot_gaps(sid: str) -> tuple[list[str], list[DirectorOp], list[str]]:
     rolling: list[str] = []
     for chain in session.oneshot_chain_ops(sid):
         for index, op in enumerate(chain):
+            if op.status == "discarded":
+                continue  # skipped by the director — a decision, never a gap
             if session.usable_take(op):
                 stored = session.runtime(op.id).get("clip")
                 if stored is not None and Path(stored.path).is_file():
@@ -2938,7 +2985,18 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
         "deliverables": delivered.get("names", []),
         "final_check": delivered.get("final_check"),
         "cue_count": delivered.get("cue_count", 0),
+        # the shots the director skipped — the cut leaves them out by decision
+        "skipped": _skipped_labels(sid),
     }
+
+
+def _skipped_labels(sid: str) -> list[str]:
+    labels = sorted(session.skipped_clip_ids(sid))
+    for chain in session.oneshot_chain_ops(sid):
+        for index, op in enumerate(chain):
+            if op.status == "discarded":
+                labels.append(f"clip {index + 1}/{len(chain)}")
+    return labels
 
 
 @app.get("/api/director/sessions/{sid}/deliverables/{name}")

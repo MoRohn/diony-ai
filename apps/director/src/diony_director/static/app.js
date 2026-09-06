@@ -268,6 +268,10 @@
     }
     const li = addMsg("director", "", h.kind === "quota" ? "hold" : "warn");
     const body = li.querySelector(".body");
+    if (h.kind === "quota" && h.resume_at) {
+      runState.hold = h; // the strip shows the pause and its clock
+      repaintRun();
+    }
     if (h.kind === "quota") {
       const provider = { "google-flow": "Google Flow", grok: "Grok Imagine" }[h.provider] || "Provider";
       body.innerHTML =
@@ -618,14 +622,17 @@
     btn.addEventListener("click", async () => {
       btn.disabled = true;
       state.textContent = "submitting…";
+      singleBegin(op.id, chain ? `clip ${chain.index + 1} / ${chain.count}` : op.clip_id || "the clip", op.estimate.total_usd_micros);
       try {
         await api(`/api/director/ops/${op.id}/run`, { method: "POST" });
         state.textContent = "generating…";
+        singleSet(op.id, "submitted");
         poll(op.id, card, state);
       } catch (err) {
         state.textContent = String(err.message || err);
         state.className = "state failed";
         btn.disabled = false;
+        singleSet(op.id, "failed");
       }
       refreshMeter();
     });
@@ -638,6 +645,7 @@
         const body = await api(`/api/director/ops/${opId}`);
         const status = body.op.status;
         if (status === "completed") {
+          singleSet(opId, "completed");
           state.textContent = `printed · ${body.clip ? body.clip.bytes + " bytes" : ""}`;
           state.className = "state done";
           attachStyleFrame(card, body);
@@ -654,19 +662,439 @@
           return;
         }
         if (status === "failed") {
+          singleSet(opId, "failed");
           state.textContent = failedText(body);
           state.className = "state failed";
           attachRetry(card, opId, state);
           refreshMeter();
           return;
         }
+        if (status === "discarded") {
+          singleSet(opId, "discarded");
+          state.textContent = "skipped — the cut leaves this shot out";
+          state.className = "state skipped";
+          return;
+        }
         setTimeout(tick, 2500);
       } catch (err) {
+        singleSet(opId, "failed");
         state.textContent = String(err.message || err);
         state.className = "state failed";
       }
     };
     setTimeout(tick, 1500);
+  }
+
+  // --- The run strip -------------------------------------------------------
+  // While the Director rolls, the console folds into one live status panel:
+  // phase, a per-clip track in shot order, pace and ETA, the locked price
+  // against spend so far, and the set the run holds — read-only. The idea,
+  // stills, and pills are hidden and inert until the set settles: nothing
+  // can be re-aimed mid-run. Three sources feed it, in precedence order:
+  // the loop that owns a run (batch / chain / plan / retakes / draft), the
+  // one-off Run buttons, and the Production card's own poll — which is what
+  // survives a reload. body[data-running="<phase>"] is the one switch.
+  const RUN_PHASES = {
+    deriving: { tag: "Deriving", title: "Deriving the master prompt" },
+    drafting: { tag: "Drafting", title: "Writing the screenplay" },
+    rolling: { tag: "Rolling", title: "Rolling the clips" },
+    retaking: { tag: "Retaking", title: "Rolling the retakes" },
+    finishing: { tag: "Finishing", title: "Finishing at 1080p" },
+    assembling: { tag: "Assembling", title: "Cutting the film" },
+    holding: { tag: "Paused", title: "Run paused" },
+  };
+  const runState = {
+    flow: null, // { source, model } — the loop that owns the run
+    single: new Map(), // op_id -> { status, label, est } — one-off Run buttons
+    board: null, // a model derived from the Production card's poll
+    hold: null, // a quota pause { provider, detail, resume_at }
+    startedAt: 0, // wall clock of the first activity; resets when all settles
+    phase: "", phaseAt: 0, phasePrinted: 0, lastPrintAt: 0,
+    ticker: null,
+    spendMicros: null, spendFor: -1,
+  };
+  const runbar = $("runbar");
+
+  function runBegin(source, model) {
+    runState.flow = { source, model: Object.assign({ phase: "rolling" }, model) };
+    repaintRun();
+  }
+  function runUpdate(source, patch) {
+    if (!runState.flow || runState.flow.source !== source) return;
+    Object.assign(runState.flow.model, patch);
+    repaintRun();
+  }
+  // a later stage (finish, cut) rides whichever loop owns the run
+  function runPatch(patch) {
+    if (!runState.flow) return;
+    Object.assign(runState.flow.model, patch);
+    repaintRun();
+  }
+  function runEnd(source) {
+    if (runState.flow && runState.flow.source === source) runState.flow = null;
+    repaintRun();
+  }
+  function runReset() {
+    runState.flow = null;
+    runState.single.clear();
+    runState.board = null;
+    runState.hold = null;
+    repaintRun();
+  }
+
+  // One-off Run buttons: every op pressed is a segment; the strip folds when
+  // the last one settles (a terminal entry stays on the track until then).
+  const SINGLE_LIVE = new Set(["submitting", "submitted", "proposed", "deriving"]);
+  function singleBegin(opId, label, estMicros) {
+    runState.single.set(opId, { status: "submitting", label, est: estMicros || 0 });
+    repaintRun();
+  }
+  function singleSet(opId, status) {
+    const entry = runState.single.get(opId);
+    if (!entry) return;
+    entry.status = status;
+    const live = [...runState.single.values()].some((s) => SINGLE_LIVE.has(s.status));
+    if (!live) runState.single.clear();
+    repaintRun();
+  }
+
+  function segClass(status) {
+    if (status === "completed") return "done";
+    if (status === "failed") return "failed";
+    if (status === "discarded") return "skipped";
+    if (status === "submitted" || status === "submitting" || status === "deriving") return "rolling";
+    if (status === "proposed") return "queued";
+    return "idle";
+  }
+  // counts from a list of {status, label} segments in shot order
+  function countSegments(segments) {
+    const m = { total: segments.length, printed: 0, rolling: 0, queued: 0, failed: 0, skipped: 0, segments, detail: "" };
+    const live = [];
+    segments.forEach((s) => {
+      const k = segClass(s.status);
+      if (k === "done") m.printed += 1;
+      else if (k === "failed") m.failed += 1;
+      else if (k === "skipped") m.skipped += 1;
+      else if (k === "queued") m.queued += 1;
+      else if (k === "rolling") { m.rolling += 1; live.push(s.label); }
+    });
+    if (live.length) {
+      m.detail = `rolling ${live.slice(0, 3).join(", ")}${live.length > 3 ? ` +${live.length - 3} more` : ""}`;
+    }
+    return m;
+  }
+  // the advance tick's per-op statuses, mapped onto a fixed id order
+  function segmentsFor(ids, labels, ops) {
+    const byId = new Map((ops || []).map((o) => [o.op_id, o]));
+    return ids.map((id, i) => {
+      const o = byId.get(id);
+      return { status: o ? o.status : "proposed", label: labels[i] || (o && o.clip_id) || `clip ${i + 1}` };
+    });
+  }
+  // A run loop's handle on the strip: begin once, feed every advance tick,
+  // end when the loop settles. `ids` fixes the track's order and labels.
+  function runTracker(source, ids, labels, base) {
+    let last = countSegments(ids.map((id, i) => ({ status: "proposed", label: labels[i] || `clip ${i + 1}` })));
+    return {
+      begin(extra) { runBegin(source, Object.assign({}, base, last, extra || {})); },
+      tick(counts, extra) {
+        last = countSegments(segmentsFor(ids, labels, counts.ops));
+        const stalled = counts.stalled || [];
+        runUpdate(source, Object.assign(
+          { phase: "rolling", note: stalled.length ? `stalled — ${stalled[0].reason}` : "" },
+          last, extra || {}
+        ));
+      },
+      end() { runEnd(source); },
+    };
+  }
+  function modelFromSingle() {
+    const items = [...runState.single.values()];
+    if (!items.length) return null;
+    const m = countSegments(items.map((s) => ({ status: s.status, label: s.label })));
+    return Object.assign(m, {
+      phase: "rolling",
+      title: items.length === 1 ? `Rolling ${items[0].label}` : RUN_PHASES.rolling.title,
+      estMicros: items.reduce((t, s) => t + s.est, 0),
+    });
+  }
+  function modelFromBoard(b) {
+    const clips = b.clips || [];
+    const takesLive = clips.some((c) => IN_FLIGHT.has(c.status));
+    if (!takesLive) {
+      // only finishes are moving: the track is the finishes, in shot order
+      const withFinish = clips.filter((c) => c.finish);
+      const segs = withFinish.map((c) => ({
+        status: c.finish.usable ? "completed" : c.finish.status, label: `${c.clip_id} ${c.finish.resolution || "1080p"}`,
+      }));
+      return Object.assign(countSegments(segs), { phase: "finishing", queuedLabel: "Waiting" });
+    }
+    const segs = clips.map((c) => ({ status: c.status, label: c.clip_id }));
+    return Object.assign(countSegments(segs), {
+      phase: "rolling",
+      queuedLabel: "Drafted",
+      estMicros: clips.reduce((t, c) => t + (c.est_usd_micros || 0), 0),
+    });
+  }
+
+  function activeRun() {
+    if (runState.flow) return runState.flow.model;
+    return modelFromSingle() || runState.board;
+  }
+  function repaintRun() {
+    const m = activeRun();
+    if (!m) {
+      runState.startedAt = 0;
+      runState.phase = "";
+      runState.spendMicros = null;
+      runState.spendFor = -1;
+      stopRunTicker();
+      delete document.body.dataset.running;
+      document.body.classList.remove("peek");
+      runbar.hidden = true;
+      runbar.replaceChildren();
+      return;
+    }
+    const now = Date.now();
+    if (!runState.startedAt) {
+      runState.startedAt = now;
+      runState.lastPrintAt = now;
+    }
+    if (m.phase !== runState.phase) {
+      runState.phase = m.phase;
+      runState.phaseAt = now;
+      runState.phasePrinted = m.printed || 0;
+      runState.lastPrintAt = now;
+    }
+    if ((m.printed || 0) !== runState.spendFor) {
+      if (runState.spendFor >= 0) runState.lastPrintAt = now;
+      fetchRunSpend(m.printed || 0);
+    }
+    const holding = !!(runState.hold && runState.hold.resume_at > now / 1000);
+    if (!holding) runState.hold = null;
+    document.body.dataset.running = holding ? "holding" : m.phase;
+    runbar.hidden = false;
+    paintRunbar(m, holding);
+    startRunTicker();
+  }
+
+  function mk(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = String(text);
+    return node;
+  }
+  function runFact(host, label, value, sub, cls) {
+    const f = mk("div", "fact" + (cls ? ` ${cls}` : ""));
+    f.appendChild(mk("span", "flabel", label));
+    f.appendChild(mk("span", "fval", value));
+    const s = mk("span", "fsub" + (label === "Pace" ? " runeta" : label === "Locked" ? " runspend" : ""), sub || "");
+    f.appendChild(s);
+    host.appendChild(f);
+    return f;
+  }
+  function paintRunbar(m, holding) {
+    const phase = RUN_PHASES[m.phase] || RUN_PHASES.rolling;
+    const total = m.total || 0;
+    const printed = m.printed || 0;
+    runbar.replaceChildren();
+
+    const head = mk("div", "runhead");
+    head.appendChild(mk("span", "runpulse"));
+    head.appendChild(mk("span", "runtag", holding ? RUN_PHASES.holding.tag : phase.tag));
+    head.appendChild(mk("span", "runtitle", m.title || phase.title));
+    if (m.detail) head.appendChild(mk("span", "rundetail", m.detail));
+    const clock = mk("span", "runclock", elapsedText());
+    clock.title = "elapsed since the run began";
+    head.appendChild(clock);
+    runbar.appendChild(head);
+
+    if (total) {
+      const track = mk("div", "runtrack" + (total > 60 ? " dense" : ""));
+      track.setAttribute("role", "progressbar");
+      track.setAttribute("aria-valuemin", "0");
+      track.setAttribute("aria-valuemax", String(total));
+      track.setAttribute("aria-valuenow", String(printed));
+      track.setAttribute("aria-label", `${printed} of ${total} printed`);
+      m.segments.forEach((s) => {
+        const seg = mk("span", `seg ${segClass(s.status)}`);
+        seg.title = `${s.label} — ${s.status}`;
+        track.appendChild(seg);
+      });
+      runbar.appendChild(track);
+
+      const facts = mk("div", "runfacts");
+      const pct = Math.round((printed / total) * 100);
+      runFact(facts, "Printed", `${printed} / ${total}`, `${pct}% of the set`, "ok");
+      runFact(facts, "Rolling", m.rolling || 0, m.rolling ? "at the provider now" : "none in flight", m.rolling ? "hot" : "quiet");
+      runFact(facts, m.queuedLabel || "Queued", m.queued || 0, m.queued ? "roll in order" : "", "quiet");
+      if (m.failed) runFact(facts, "Failed", m.failed, "Retry or Skip on the card", "bad");
+      if (m.skipped) runFact(facts, "Skipped", m.skipped, "left out of the cut", "quiet");
+      runFact(facts, "Pace", paceText(m), etaText(m), "quiet");
+      if (m.estMicros) runFact(facts, "Locked", usd(m.estMicros), spendText(), "cost");
+      runbar.appendChild(facts);
+
+      const legend = mk("div", "runlegend");
+      legend.appendChild(mk("span", "done", "printed"));
+      legend.appendChild(mk("span", "rolling", "rolling"));
+      legend.appendChild(mk("span", "queued", (m.queuedLabel || "queued").toLowerCase()));
+      if (m.failed) legend.appendChild(mk("span", "failed", "failed"));
+      if (m.skipped) legend.appendChild(mk("span", "skipped", "skipped"));
+      runbar.appendChild(legend);
+    }
+
+    if (holding) {
+      const h = runState.hold;
+      const provider = { "google-flow": "Google Flow", grok: "Grok Imagine" }[h.provider] || "Provider";
+      const box = mk("div", "runhold");
+      box.appendChild(mk("span", "holdtag", "Paused"));
+      box.appendChild(mk("span", "", `${provider} quota — ${h.detail || h.reason || "the provider's window is closed"}. Nothing is spent while it waits.`));
+      const when = mk("span", "");
+      when.append("Resumes at ", mk("b", "holdclock", clockOf(h.resume_at)), " ");
+      when.appendChild(mk("span", "holduntil", untilText(h.resume_at)));
+      box.appendChild(when);
+      runbar.appendChild(box);
+    }
+    if (m.note) runbar.appendChild(mk("div", "runnote", m.note));
+
+    const foot = mk("div", "runfoot");
+    const cfg = mk("span", "runcfg");
+    cfg.appendChild(mk("span", "cfglbl", "holds"));
+    configSummary().forEach((bit, i) => {
+      if (i) cfg.append(" · ");
+      cfg.appendChild(mk("b", "", bit));
+    });
+    foot.appendChild(cfg);
+    const peek = mk("button", "runbtn" + (document.body.classList.contains("peek") ? " on" : ""), "Settings");
+    peek.type = "button";
+    peek.title = "Peek at the pills this run holds — read-only until the set settles";
+    peek.addEventListener("click", () => {
+      peek.classList.toggle("on", document.body.classList.toggle("peek"));
+    });
+    foot.appendChild(peek);
+    const jump = mk("button", "runbtn", productionCard && productionCard.isConnected ? "Production ▸" : "Latest ▸");
+    jump.type = "button";
+    jump.title = "Scroll to where the run is reporting";
+    jump.addEventListener("click", () => {
+      if (productionCard && productionCard.isConnected) showProductionCard();
+      else if (thread.lastElementChild) thread.lastElementChild.scrollIntoView({ block: "end" });
+    });
+    foot.appendChild(jump);
+    runbar.appendChild(foot);
+  }
+
+  // pace: wall time per print within the current phase; ETA counts down
+  // from the last print — never a number before the first one lands
+  function paceInfo(m) {
+    const done = (m.printed || 0) - runState.phasePrinted;
+    const elapsed = Date.now() - runState.phaseAt;
+    if (done < 1 || elapsed < 1000) return null;
+    const per = elapsed / done;
+    const left = Math.max(0, (m.total || 0) - (m.printed || 0) - (m.failed || 0) - (m.skipped || 0));
+    const remaining = Math.max(0, left * per - (Date.now() - runState.lastPrintAt));
+    return { per, left, remaining };
+  }
+  function durText(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    return m < 60 ? `${m}m ${String(s % 60).padStart(2, "0")}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+  }
+  function paceText(m) {
+    const p = paceInfo(m);
+    return p ? `~${durText(p.per)} / clip` : "measuring…";
+  }
+  function etaText(m) {
+    const p = paceInfo(m);
+    if (!p) return "ETA after the first print";
+    if (!p.left) return "last one landing";
+    return `~${durText(p.remaining)} left`;
+  }
+  function elapsedText() {
+    const s = Math.max(0, Math.floor((Date.now() - runState.startedAt) / 1000));
+    const h = Math.floor(s / 3600);
+    const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+    const ss = String(s % 60).padStart(2, "0");
+    return (h ? `${h}:` : "") + `${mm}:${ss}`;
+  }
+  function spendText() {
+    return runState.spendMicros == null ? "spend so far — reading the ledger" : `spent so far ${usd(runState.spendMicros)}`;
+  }
+  async function fetchRunSpend(printed) {
+    runState.spendFor = printed;
+    if (!sessionId) return;
+    try {
+      const r = await api(`/api/director/sessions/${sessionId}/receipt`);
+      runState.spendMicros = r.totals.actual_usd_micros;
+    } catch (err) {
+      /* the strip never invents a number */
+    }
+    const sub = runbar.querySelector(".runspend");
+    if (sub) sub.textContent = spendText();
+  }
+  function startRunTicker() {
+    if (!runState.ticker) runState.ticker = setInterval(tickRun, 1000);
+  }
+  function stopRunTicker() {
+    if (runState.ticker) {
+      clearInterval(runState.ticker);
+      runState.ticker = null;
+    }
+  }
+  function tickRun() {
+    const m = activeRun();
+    if (!m) { repaintRun(); return; }
+    const clock = runbar.querySelector(".runclock");
+    if (clock) clock.textContent = elapsedText();
+    const eta = runbar.querySelector(".runeta");
+    if (eta) {
+      eta.textContent = etaText(m);
+      const val = eta.parentElement.querySelector(".fval");
+      if (val) val.textContent = paceText(m);
+    }
+    if (runState.hold) {
+      if (runState.hold.resume_at <= Date.now() / 1000) { repaintRun(); return; }
+      const until = runbar.querySelector(".runhold .holduntil");
+      if (until) until.textContent = untilText(runState.hold.resume_at);
+    }
+  }
+  // the pills the run holds, as words — the route decides which ones matter
+  function configSummary() {
+    const sel = (id) => {
+      const e = $(id);
+      if (!e) return "";
+      const o = e.options ? e.options[e.selectedIndex] : null;
+      return (o ? o.textContent : e.value || "").trim();
+    };
+    const provider = $("provider").value;
+    const bits = [sel("provider"), `${Number($("dur-min").value) || 0}m ${Number($("dur-sec").value) || 0}s`, sel("resolution"), sel("aspect"), sel("style")];
+    const voice = sel("voice");
+    if (voice) bits.push(`voice ${voice}`);
+    if (provider !== "grok") {
+      bits.push(sel("flow-world") || "Baseline");
+      const cam = sel("flow-camera");
+      if (cam && cam !== "Authored") bits.push(`cam ${cam}`);
+    }
+    if (provider !== "google-flow") {
+      const cam = sel("grok-camera");
+      if (cam && cam !== "Authored") bits.push(`grok cam ${cam}`);
+      const atmo = sel("grok-atmosphere");
+      if (atmo && atmo !== "None") bits.push(`atmo ${atmo}`);
+    }
+    const budget = Number($("budget").value) || 0;
+    bits.push(budget ? `ceiling $${budget}` : "no ceiling");
+    return bits.filter(Boolean);
+  }
+  if (new URLSearchParams(location.search).has("qa")) {
+    // the layout QA harness drives the strip without spending: ?qa=1
+    window.dionyRun = {
+      begin: runBegin, update: runUpdate, patch: runPatch, end: runEnd, reset: runReset,
+      single: { begin: singleBegin, set: singleSet },
+      hold(h) { runState.hold = h; repaintRun(); },
+      state: runState,
+      // card builders, so the harness can paint a failed card without an op
+      addOpCard, attachRetry, addMsg,
+    };
   }
 
   async function refreshMeter() {
@@ -1149,7 +1577,7 @@
         retake.disabled = true;
         try {
           await api(`/api/director/ops/${opId}/retry`, { method: "POST" });
-          card.querySelectorAll(".verdict, .verdict-issues, .acceptbtn, video").forEach((el) => el.remove());
+          card.querySelectorAll(".verdict, .verdict-issues, .acceptbtn, .skipbtn, video").forEach((el) => el.remove());
           retake.remove();
           state.textContent = "retaking…";
           state.className = "state";
@@ -1160,12 +1588,45 @@
         }
       });
       card.appendChild(retake);
+      attachSkip(card, opId, state); // or leave the shot out and move on
     }
+  }
+
+  // Skip shot: the way past a clip whose retries keep failing. The shot is
+  // discarded — the cut leaves it out — and the run the user chose resumes
+  // past it: the later links rejoin and open from the last shot that printed.
+  function attachSkip(card, opId, state) {
+    if (card.querySelector(".skipbtn")) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "skipbtn";
+    btn.textContent = "Skip shot";
+    btn.title = "Give up on this shot: the cut leaves it out and the run continues with every other clip — nothing more is spent on it";
+    btn.addEventListener("click", () => {
+      armConfirm(btn, "Confirm — leave this shot out of the cut", async () => {
+        btn.disabled = true;
+        try {
+          const res = await api(`/api/director/ops/${opId}/skip`, { method: "POST" });
+          card.querySelectorAll(".retrybtn, .skipbtn, .acceptbtn, .verdict-issues, video").forEach((el) => el.remove());
+          state.textContent = "skipped — the cut leaves this shot out";
+          state.className = "state skipped";
+          singleSet(opId, "discarded");
+          addMsg("director", res.reply);
+          refreshMeter();
+          resumeRunAfterRetry(res);
+        } catch (err) {
+          state.textContent = String(err.message || err);
+          btn.disabled = false;
+        }
+      });
+    });
+    (card.querySelector(".row") || card).appendChild(btn);
   }
 
   // Failed ops are never dead ends: retry re-proposes at the locked price and
   // rejoins the submit wave — completed clips are never re-spent.
   function attachRetry(card, opId, state) {
+    attachSkip(card, opId, state);
     if (card.querySelector(".retrybtn")) return;
     const btn = document.createElement("button");
     btn.type = "button";
@@ -1177,6 +1638,7 @@
       try {
         const res = await api(`/api/director/ops/${opId}/retry`, { method: "POST" });
         btn.remove();
+        card.querySelectorAll(".skipbtn").forEach((el) => el.remove());
         state.textContent = res.redraw ? "redrawing the opening frame…" : "retrying…";
         state.className = "state";
         if (res.redraw) addMsg("director", res.redraw.note);
@@ -1193,7 +1655,8 @@
         btn.disabled = false;
       }
     });
-    (card.querySelector(".row") || card).appendChild(btn);
+    const skip = card.querySelector(".skipbtn");
+    if (skip) skip.before(btn); else (card.querySelector(".row") || card).appendChild(btn);
   }
 
   // A Retry continues the run the user already chose — Run & Assemble, or
@@ -1220,6 +1683,10 @@
     progress.className = "progress";
     li.appendChild(progress);
     const planIds = new Set(plan.op_ids || []);
+    const strip = runTracker("plan", plan.op_ids || [], [], {
+      title: `Resuming the run${withFinish ? " — finish, then cut" : " — then cut"}`,
+    });
+    strip.begin();
     const tick = async () => {
       let counts;
       try {
@@ -1227,9 +1694,11 @@
       } catch (err) {
         progress.textContent = `lost the room: ${err.message || err}`;
         planResumeActive = false;
+        strip.end();
         return;
       }
       (counts.held || []).forEach((h) => addHeldMsg(h));
+      strip.tick(counts);
       const mine = (counts.ops || []).filter((o) => planIds.has(o.op_id));
       const done = mine.filter((o) => o.status === "completed").length;
       const failed = mine.filter((o) => o.status === "failed").length;
@@ -1246,6 +1715,7 @@
       refreshProduction();
       if (failed) {
         progress.textContent += " — the cut waits for the failed clips; each has a Retry on the SHOTS tab";
+        strip.end();
         return;
       }
       if (withFinish) {
@@ -1261,11 +1731,16 @@
         " — assembling…",
         delivered ? " — film delivered" : " — assembly is holding (see the room)"
       );
+      strip.end();
     };
     setTimeout(tick, 2500);
   }
 
   async function watchRetried(opId, card, state, deadlineTicks = 120) {
+    if (!runState.single.has(opId)) {
+      const num = card.querySelector(".clipnum");
+      singleBegin(opId, num ? num.textContent.trim() : "the retake", 0);
+    }
     for (let i = 0; i < deadlineTicks; i++) {
       await new Promise((r) => setTimeout(r, 2500));
       let body;
@@ -1276,6 +1751,12 @@
       }
       const st = body.op.status;
       attachStyleFrame(card, body);
+      singleSet(opId, st);
+      if (st === "discarded") {
+        state.textContent = "skipped — the cut leaves this shot out";
+        state.className = "state skipped";
+        return;
+      }
       if (st === "completed") {
         state.textContent = "printed";
         state.className = "state done";
@@ -1304,6 +1785,7 @@
     }
     state.textContent = "still not rolling — check the connection and Retry";
     state.className = "state failed";
+    singleSet(opId, "failed");
     attachRetry(card, opId, state);
   }
 
@@ -1312,7 +1794,14 @@
       try {
         const body = await api(`/api/director/ops/${op.id}`);
         const status = body.op.status;
+        if (status === "discarded") {
+          singleSet(op.id, status);
+          state.textContent = "skipped — the cut leaves this shot out";
+          state.className = "state skipped";
+          return;
+        }
         if (status === "completed" || status === "failed") {
+          singleSet(op.id, status);
           refreshMeter();
           if (status === "completed") {
             // set the text BEFORE the verdict chip lands — textContent wipes
@@ -1338,6 +1827,7 @@
         }
         setTimeout(tick, 2500);
       } catch (err) {
+        singleSet(op.id, "failed");
         state.textContent = String(err.message || err);
         state.className = "state failed";
       }
@@ -1365,14 +1855,17 @@
     btn.addEventListener("click", async () => {
       btn.disabled = true;
       state.textContent = "submitting…";
+      singleBegin(op.id, op.clip_id || op.op || "the clip", op.estimate.total_usd_micros);
       try {
         await api(`/api/director/ops/${op.id}/run`, { method: "POST" });
         state.textContent = "generating…";
+        singleSet(op.id, "submitted");
         poller(op, card, state);
       } catch (err) {
         state.textContent = String(err.message || err);
         state.className = "state failed";
         btn.disabled = false;
+        singleSet(op.id, "failed");
       }
       refreshMeter();
     });
@@ -1384,6 +1877,9 @@
   // refuses (naming the takes) while a Flow take still lacks its finish.
   async function assembleNow(allowGaps, opts) {
     const finish = (opts && opts.finish) || "auto";
+    const ownStrip = !runState.flow;
+    if (ownStrip) runBegin("assemble", { phase: "assembling", total: 0 });
+    else runPatch({ phase: "assembling", detail: "", note: "" });
     try {
       const body = allowGaps === true ? { allow_gaps: true } : {};
       if (finish !== "auto") body.finish = finish;
@@ -1393,9 +1889,12 @@
         body: JSON.stringify(body),
       });
       const raster = film.raster ? ` at ${film.raster.replace("x", "×")}` : "";
+      const skipped = film.skipped && film.skipped.length
+        ? ` ${plural(film.skipped.length, "skipped shot")} left out by your call: ${film.skipped.join(", ")}.`
+        : "";
       const done = addMsg(
         "director",
-        `Assembled ${plural(film.clip_count, "clip")} into a ${film.duration_s.toFixed(1)}s cut${raster}, ${film.loudness_target} loudness, ${film.look} look.`
+        `Assembled ${plural(film.clip_count, "clip")} into a ${film.duration_s.toFixed(1)}s cut${raster}, ${film.loudness_target} loudness, ${film.look} look.${skipped}`
       );
       if (film.finish && film.finish.finished && film.finish.finished.length) {
         let line = `${plural(film.finish.finished.length, "take")} cut from the 1080p finish.`;
@@ -1475,6 +1974,7 @@
         return false;
       }
       if (text.includes("allow_gaps")) {
+        if (ownStrip) runEnd("assemble"); // the retake watch below owns its own
         const body = note.querySelector(".body");
         const retry = document.createElement("button");
         retry.type = "button";
@@ -1515,6 +2015,8 @@
             progress.className = "draft-status";
             progress.textContent = `retakes rolling — 0/${targeted.size} printed`;
             rolling.querySelector(".body").appendChild(progress);
+            const strip = runTracker("retakes", res.targeted, res.missing || [], { title: RUN_PHASES.retaking.title });
+            strip.begin({ phase: "retaking" });
             let lastPrinted = -1;
             const tick = async () => {
               let counts;
@@ -1525,9 +2027,11 @@
                 progress.className = "draft-status failed";
                 retry.disabled = false;
                 anyway.disabled = false;
+                strip.end();
                 return;
               }
               (counts.held || []).forEach((h) => addHeldMsg(h));
+              strip.tick(counts, { phase: "retaking" });
               const mine = (counts.ops || []).filter((o) => targeted.has(o.op_id));
               const printed = mine.filter((o) => o.status === "completed").length;
               const failed = mine.filter((o) => o.status === "failed").length;
@@ -1560,6 +2064,7 @@
               refreshMeter();
               refreshProduction();
               await assembleNow();
+              strip.end();
             };
             setTimeout(tick, 2500);
           } catch (e1) {
@@ -1577,6 +2082,8 @@
         body.appendChild(anyway);
       }
       return false;
+    } finally {
+      if (ownStrip) runEnd("assemble");
     }
   }
 
@@ -1649,6 +2156,13 @@
       );
     }
     const targeted = new Set(up.targeted);
+    const finishIds = [...targeted];
+    runPatch({
+      phase: "finishing", note: "",
+      ...countSegments(finishIds.map((id, i) => ({ status: "proposed", label: `finish ${i + 1}` }))),
+      queuedLabel: "Waiting",
+      detail: finishIds.length ? "" : `waiting on ${plural(up.rolling.length, "finish")} already rolling`,
+    });
     return new Promise((resolve) => {
       const tick = async () => {
         let counts;
@@ -1660,6 +2174,18 @@
           return;
         }
         (counts.held || []).forEach((h) => addHeldMsg(h));
+        if (finishIds.length) {
+          const byId = new Map((counts.ops || []).map((o) => [o.op_id, o]));
+          const labels = finishIds.map((id, i) => {
+            const o = byId.get(id);
+            return o && o.clip_id ? `${o.clip_id} ${FINISH_RESOLUTION}` : `finish ${i + 1}`;
+          });
+          runPatch({
+            phase: "finishing", queuedLabel: "Waiting",
+            ...countSegments(segmentsFor(finishIds, labels, counts.ops)),
+            note: (counts.stalled || []).length ? `stalled — ${counts.stalled[0].reason}` : "",
+          });
+        }
         const mine = (counts.ops || []).filter((o) => targeted.has(o.op_id));
         const printed = mine.filter((o) => o.status === "completed").length;
         const failed = mine.filter((o) => o.status === "failed").length;
@@ -1762,6 +2288,12 @@
       const withFinish = !!(opts && opts.upscale);
       allBtn.disabled = true; selBtn.disabled = true; upBtn.disabled = true;
       progress.textContent = "submitting…";
+      const labelOf = new Map(ops.map((op, i) => [op.id, op.clip_id || `clip ${i + 1}`]));
+      const strip = runTracker("batch", ids, ids.map((id) => labelOf.get(id)), {
+        title: withFinish ? "Rolling the clips, then finish and cut" : "Rolling the clips, then the cut",
+        estMicros: sumFor(ids) + bibleCost + (withFinish ? finishCost(ops) : 0),
+      });
+      strip.begin();
       let batch;
       try {
         batch = await api(`/api/director/sessions/${sessionId}/run_batch`, {
@@ -1777,6 +2309,7 @@
       } catch (err) {
         progress.textContent = `batch failed: ${err.message || err}`;
         allBtn.disabled = false; refreshBatchLabels();
+        strip.end();
         return;
       }
       ids.forEach((id) => {
@@ -1801,6 +2334,7 @@
           delivered ? " — film delivered" : " — assembly is holding (see the room)"
         );
         allBtn.disabled = false; refreshBatchLabels();
+        strip.end();
       };
       batch.held.forEach((h) => {
         const c = cards.get(h.op_id);
@@ -1818,6 +2352,7 @@
         }
         progress.textContent = "nothing submitted";
         allBtn.disabled = false; refreshBatchLabels();
+        strip.end();
         return;
       }
 
@@ -1828,6 +2363,7 @@
         } catch (err) {
           progress.textContent = `lost the room: ${err.message || err}`;
           runContinuation.active = false;
+          strip.end();
           return;
         }
         const queued = counts.queued || 0;
@@ -1835,6 +2371,7 @@
         // Hold reasons are drained exactly once — a budget hold or a held
         // scene must reach the room, not vanish into an unread field.
         (counts.held || []).forEach((h) => addHeldMsg(h));
+        strip.tick(counts);
         progress.textContent =
           `${counts.completed} done · ${counts.failed} failed · ${counts.pending} generating` +
           (queued ? ` · ${queued} queued (chained)` : "") +
@@ -1866,6 +2403,9 @@
               c.state.className = "state failed";
               attachRetry(c.card, id, c.state);
               if (body.narration) addMsg("director", body.narration);
+            } else if (body.op.status === "discarded") {
+              c.state.textContent = "skipped — the cut leaves this shot out";
+              c.state.className = "state skipped";
             }
             attachVerdict(c.card, c.state, body.review, id);
           } catch (err) { /* card stays coarse; the film still cuts */ }
@@ -1878,6 +2418,7 @@
           this.active = true;
           allBtn.disabled = true; selBtn.disabled = true; upBtn.disabled = true;
           progress.textContent = "resuming the run — the retake rolls, then the film cuts…";
+          strip.begin({ title: "Resuming the run — the retake rolls, then the cut" });
           setTimeout(tick, 2500);
         },
       };
@@ -2038,6 +2579,12 @@
       allBtn.disabled = true;
       upBtn.disabled = true;
       progress.textContent = "submitting…";
+      const chainIds = ops.map((op) => op.id);
+      const strip = runTracker("chain", chainIds, chainIds.map((id, i) => `clip ${i + 1} / ${ops.length}`), {
+        title: withFinish ? "Rolling the chain in order, then finish and cut" : "Rolling the chain in order, then the cut",
+        estMicros: total + (withFinish ? finishCost(ops) : 0),
+      });
+      strip.begin();
       let batch;
       try {
         batch = await api(`/api/director/sessions/${sessionId}/run_batch`, {
@@ -2054,6 +2601,7 @@
         progress.textContent = `batch failed: ${err.message || err}`;
         allBtn.disabled = false;
         refreshUpLabel();
+        strip.end();
         return;
       }
       ops.forEach((op) => {
@@ -2072,9 +2620,11 @@
           progress.textContent = `lost the room: ${err.message || err}`;
           allBtn.disabled = false;
           runContinuation.active = false;
+          strip.end();
           return;
         }
         (counts.held || []).forEach((h) => addHeldMsg(h));
+        strip.tick(counts);
         const queued = counts.queued || 0;
         progress.textContent =
           `${counts.completed} done · ${counts.failed} failed · ${counts.pending} generating` +
@@ -2107,6 +2657,9 @@
               c.state.textContent = failedText(body);
               c.state.className = "state failed";
               attachRetry(c.card, op.id, c.state);
+            } else if (body.op.status === "discarded") {
+              c.state.textContent = "skipped — the cut leaves this shot out";
+              c.state.className = "state skipped";
             }
             attachVerdict(c.card, c.state, body.review, op.id, { retake: true });
           } catch (err) { /* card stays coarse; the film still cuts */ }
@@ -2123,6 +2676,7 @@
           );
           allBtn.disabled = false;
           refreshUpLabel();
+          strip.end();
           return;
         }
         if (counts.failed > 0) {
@@ -2133,11 +2687,13 @@
             `${plural(counts.failed, "clip")} failed — hit ↻ Retry on the failed card ` +
               "(its reason is printed there). A clip refused for its opening frame gets a fresh " +
               "frame redrawn; the run resumes from the break on its own and cuts the film as you asked. " +
+              "If the retries keep failing, Skip shot leaves it out and the run continues with every other clip. " +
               "Printed clips are never re-spent.",
             "warn"
           );
           allBtn.disabled = false;
           refreshUpLabel();
+          strip.end();
           return;
         }
         if (withFinish) {
@@ -2158,6 +2714,7 @@
         );
         allBtn.disabled = false;
         refreshUpLabel();
+        strip.end();
       };
       runContinuation = {
         active: true,
@@ -2166,6 +2723,7 @@
           allBtn.disabled = true;
           upBtn.disabled = true;
           progress.textContent = "resuming the run — the retake rolls, the chain follows, then the film cuts…";
+          strip.begin({ title: "Resuming the chain — the retake rolls, the chain follows, then the cut" });
           setTimeout(tick, 2500);
         },
       };
@@ -2258,6 +2816,11 @@
         status.className = "draft-status";
         li.appendChild(status);
         let stage = "deriving";
+        const runtime = durationSeconds() || 60;
+        runBegin("draft", {
+          phase: "deriving", total: 0,
+          detail: `${Math.floor(runtime / 60)}m ${runtime % 60}s of screen time from the brief`,
+        });
         const tick = async () => {
           const elapsed = Math.round((Date.now() - started) / 1000);
           status.textContent =
@@ -2272,16 +2835,19 @@
             return;
           }
           if (state.stage) stage = state.stage;
+          runUpdate("draft", { phase: stage === "writing" ? "drafting" : "deriving" });
           if (state.status === "ready") {
             status.remove();
             renderDraft(li, state);
             $("produce").disabled = false;
+            runEnd("draft");
             return;
           }
           if (state.status === "failed") {
             status.textContent = `draft failed: ${state.error} — hit Draft script to let the brain try again`;
             status.classList.add("failed");
             $("produce").disabled = false;
+            runEnd("draft");
             return;
           }
           setTimeout(tick, 3000);
@@ -2294,6 +2860,7 @@
     } catch (err) {
       addMsg("director", `I couldn't draft that: ${err.message || err}`);
       $("produce").disabled = false;
+      runEnd("draft");
     }
   }
 
@@ -2387,7 +2954,10 @@
     try {
       const b = await fetchBoard();
       paintProduction(productionCard, b);
-      if (productionLive(b)) startProductionPoll();
+      const live = productionLive(b);
+      runState.board = live ? modelFromBoard(b) : null;
+      repaintRun();
+      if (live) startProductionPoll();
       else stopProductionPoll();
     } catch (err) {
       const note = productionCard.querySelector(".prodnote");
@@ -2717,7 +3287,7 @@
         `<span class="bt">${esc(c.clip_class)}</span>` +
         `<span class="bt">${c.duration_s}s · ${esc(c.model)}</span>` +
         `<span class="bt">${usd(c.est_usd_micros)}</span>` +
-        `<span class="bstate">${esc(c.status)}</span>${verdict}${accepted}${finishChip(c.finish)}` +
+        `<span class="bstate${c.status === "discarded" ? " skipped" : ""}">${esc(c.status === "discarded" ? "skipped" : c.status)}</span>${verdict}${accepted}${finishChip(c.finish)}` +
         `<span class="bjoin">${join}</span></div>` +
         `<div class="bcam">${esc(c.camera)}</div>`;
       if (c.finish && c.finish.status === "failed" && c.finish.op_id) {
@@ -2778,6 +3348,27 @@
           }
         });
         row.appendChild(retry);
+        const skip = document.createElement("button");
+        skip.type = "button";
+        skip.className = "skipbtn";
+        skip.textContent = "Skip shot";
+        skip.title = "Give up on this shot: the cut leaves it out and the run continues with every other clip";
+        skip.addEventListener("click", () => {
+          armConfirm(skip, "Confirm — leave this shot out of the cut", async () => {
+            skip.disabled = true;
+            retry.disabled = true;
+            try {
+              const res = await api(`/api/director/ops/${c.op_id}/skip`, { method: "POST" });
+              addMsg("director", res.reply);
+              refreshProduction();
+              refreshMeter();
+              resumeRunAfterRetry(res);
+            } catch (err) {
+              skip.textContent = String(err.message || err);
+            }
+          });
+        });
+        row.appendChild(skip);
       }
       if (c.can_upscale) {
         const up = document.createElement("button");
@@ -2866,6 +3457,7 @@
       $("idea").value = "";
       clearRefUploads();
       setDuration(8);
+      runReset();
       refreshMeter();
       addMsg(
         "director",
@@ -2895,7 +3487,7 @@
   ["dragenter", "dragover"].forEach((t) =>
     composerEl.addEventListener(t, (ev) => {
       ev.preventDefault();
-      composerEl.classList.add("dropping");
+      if (!document.body.dataset.running) composerEl.classList.add("dropping");
     })
   );
   ["dragleave", "drop"].forEach((t) =>
@@ -2905,6 +3497,7 @@
     })
   );
   composerEl.addEventListener("drop", (ev) => {
+    if (document.body.dataset.running) return; // the console is inert mid-run
     if (ev.dataTransfer && ev.dataTransfer.files.length) addImageFiles(ev.dataTransfer.files);
   });
   $("idea").addEventListener("paste", (ev) => {

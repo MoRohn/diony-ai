@@ -1246,6 +1246,35 @@ def record_failure(op: DirectorOp, state: str, detail: str) -> dict[str, Any]:
     return entry
 
 
+def skip_op(op: DirectorOp, reason: str = "") -> None:
+    """A shot the director gives up on after its retries: DISCARDED, never a
+    gap. It leaves the batch targets, the cut leaves it out, the resume slot
+    stops counting it, and a chain continues past it — the next link opens
+    from the nearest earlier usable take (previous_completed_clip_op)."""
+    op.status = "discarded"
+    op.job_id = ""
+    op.rationale += " · skipped by the director" + (f": {reason[:160]}" if reason else "")
+    rt = runtime(op.id)
+    for stale in (
+        "handle", "transient_holds", "quota_hold_until", "poll_not_before",
+        "last_poll_state", "last_progress_ts", "advance_error", "advance_failures", "next_op",
+    ):
+        rt.pop(stale, None)
+    rt["skipped"] = {"at": time.time(), "reason": str(reason or "")[:200]}
+    batch_targets(op.session_id).discard(op.id)
+    persist(op.session_id)
+
+
+def skipped_clip_ids(sid: str) -> set[str]:
+    """Scripted clips whose latest take was skipped — a Skip after the
+    retries. A later retake or revision of the same clip un-skips it."""
+    last: dict[str, str] = {}
+    for op in ops_for(sid):
+        if op.clip_id and op.op is not DirectorOpType.UPSCALE:
+            last[op.clip_id] = op.status
+    return {clip_id for clip_id, status in last.items() if status == "discarded"}
+
+
 def failure_is_refusal(failure: dict[str, Any] | None) -> bool:
     """A provider refusal of the picture or the prompt (moderation/filter),
     as opposed to a lost job or a network failure."""
@@ -2898,6 +2927,9 @@ _RUNTIME_KEYS = (
     "failure",
     "retries",
     "frame_redraws",
+    # a shot the director gave up on (Skip shot): when, and why the retries
+    # could not land it — the cut leaves it out, the run continues past it
+    "skipped",
 )
 
 
