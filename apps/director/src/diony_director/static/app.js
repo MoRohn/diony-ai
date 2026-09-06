@@ -566,6 +566,10 @@
     state.className = "state deriving";
     btn.disabled = true;
     const started = Date.now();
+    runBegin("derive", {
+      phase: "deriving", total: 0,
+      detail: `${op.duration_s}s one shot · ${op.provider} · ${op.model}`,
+    });
     const tick = async () => {
       let body;
       try {
@@ -580,6 +584,7 @@
         return;
       }
       landDerivedCard(op, card, body, chain);
+      runEnd("derive");
     };
     setTimeout(tick, 2500);
   }
@@ -1473,6 +1478,10 @@
     if (!idea || !sessionId) return;
     addMsg("user", withRefSuffix(idea));
     $("idea").value = "";
+    runBegin("derive", {
+      phase: "deriving", total: 0, title: "Reading the idea",
+      detail: `${durationSeconds() || 8}s · compiling and pricing the shot`,
+    });
     try {
       const body = await api(`/api/director/sessions/${sessionId}/message`, {
         method: "POST",
@@ -1515,8 +1524,11 @@
           /* the card stands without the artifact panel */
         }
       }
+      // a card or chain still deriving keeps the strip; anything else releases it
+      if (body.op.status !== "deriving") runEnd("derive");
     } catch (err) {
       addMsg("director", `I couldn't price that: ${err.message || err}`);
+      runEnd("derive");
     }
   }
 
@@ -2524,6 +2536,10 @@
       upBtn.disabled = true;
       const started = Date.now();
       progress.textContent = `deriving the master prompt + ${ops.length}-clip split…`;
+      runBegin("derive", {
+        phase: "deriving", total: 0,
+        detail: `${ops.length}-clip split · ${ops[0].provider} · ${ops[0].model}`,
+      });
       const gate = async () => {
         let body;
         try {
@@ -2552,6 +2568,7 @@
           }
           landDerivedCard(op, card, one, { index, count: ops.length });
         }
+        runEnd("derive");
         if (body.op.prompt_version === "v0-provisional") {
           holdChain(body.op);
           return;
