@@ -583,8 +583,8 @@
         setTimeout(tick, 3000);
         return;
       }
-      landDerivedCard(op, card, body, chain);
-      runEnd("derive");
+      if (landDerivedCard(op, card, body, chain)) runPriced("derive", [op]);
+      else runEnd("derive"); // held — the brief may need re-aiming
     };
     setTimeout(tick, 2500);
   }
@@ -699,8 +699,13 @@
   // the loop that owns a run (batch / chain / plan / retakes / draft), the
   // one-off Run buttons, and the Production card's own poll — which is what
   // survives a reload. body[data-running="<phase>"] is the one switch.
+  // A derivation that lands does NOT release the strip: the priced cards
+  // are the next step, and the idea box, stills, and pills are no more
+  // needed there than mid-run. The strip holds as "priced" until a run
+  // takes it over, or "New idea" reopens the brief on purpose.
   const RUN_PHASES = {
     deriving: { tag: "Deriving", title: "Deriving the master prompt" },
+    priced: { tag: "Priced", title: "Priced and ready to roll" },
     drafting: { tag: "Drafting", title: "Writing the screenplay" },
     rolling: { tag: "Rolling", title: "Rolling the clips" },
     retaking: { tag: "Retaking", title: "Rolling the retakes" },
@@ -739,6 +744,29 @@
     if (runState.flow && runState.flow.source === source) runState.flow = null;
     repaintRun();
   }
+  // A derivation landed on `source`: hold the strip as "priced" with the
+  // set's size and locked cost. Any runBegin replaces it; runEnd("priced")
+  // (the strip's own New idea button) releases it.
+  function runPriced(source, ops) {
+    if (runState.flow && runState.flow.source !== source) return;
+    const list = ops.filter(Boolean);
+    const seconds = list.reduce((t, o) => t + (Number(o.duration_s) || 0), 0);
+    const estMicros = list.reduce((t, o) => t + (o.estimate ? o.estimate.total_usd_micros : 0), 0);
+    const lead = list[0] || {};
+    runState.flow = {
+      source: "priced",
+      model: {
+        phase: "priced", total: 0, clips: list.length, seconds, estMicros,
+        detail: list.length > 1
+          ? `${list.length} chained clips · ${lead.provider || ""} · ${lead.model || ""}`
+          : `${lead.duration_s || "?"}s one shot · ${lead.provider || ""} · ${lead.model || ""}`,
+      },
+    };
+    repaintRun();
+  }
+  function releasePriced() {
+    if (runState.flow && runState.flow.source === "priced") runState.flow = null;
+  }
   function runReset() {
     runState.flow = null;
     runState.single.clear();
@@ -751,6 +779,7 @@
   // the last one settles (a terminal entry stays on the track until then).
   const SINGLE_LIVE = new Set(["submitting", "submitted", "proposed", "deriving"]);
   function singleBegin(opId, label, estMicros) {
+    releasePriced(); // a lone Run takes the strip over from the priced hold
     runState.single.set(opId, { status: "submitting", label, est: estMicros || 0 });
     repaintRun();
   }
@@ -861,6 +890,20 @@
       return;
     }
     const now = Date.now();
+    if (m.phase === "priced") {
+      // nothing has rolled: no clock, no pace, no spend — the run's own
+      // clock starts when a run replaces this hold
+      runState.startedAt = 0;
+      runState.phase = "priced";
+      runState.spendMicros = null;
+      runState.spendFor = -1;
+      stopRunTicker();
+      runState.hold = null;
+      document.body.dataset.running = "priced";
+      runbar.hidden = false;
+      paintRunbar(m, false);
+      return;
+    }
     if (!runState.startedAt) {
       runState.startedAt = now;
       runState.lastPrintAt = now;
@@ -909,10 +952,23 @@
     head.appendChild(mk("span", "runtag", holding ? RUN_PHASES.holding.tag : phase.tag));
     head.appendChild(mk("span", "runtitle", m.title || phase.title));
     if (m.detail) head.appendChild(mk("span", "rundetail", m.detail));
-    const clock = mk("span", "runclock", elapsedText());
-    clock.title = "elapsed since the run began";
-    head.appendChild(clock);
+    const priced = m.phase === "priced";
+    if (!priced) {
+      const clock = mk("span", "runclock", elapsedText());
+      clock.title = "elapsed since the run began";
+      head.appendChild(clock);
+    }
     runbar.appendChild(head);
+
+    if (priced) {
+      const facts = mk("div", "runfacts");
+      runFact(facts, "Clips", m.clips || 0, m.clips > 1 ? "roll in order, then the cut" : "one clip", "quiet");
+      if (m.seconds) runFact(facts, "Runtime", durText(m.seconds * 1000), "of screen time booked", "quiet");
+      const locked = runFact(facts, "Locked", usd(m.estMicros || 0), "nothing is spent until you press Run", "cost");
+      locked.querySelector(".fsub").classList.remove("runspend"); // no spend poll rewrites this caption
+      runbar.appendChild(facts);
+      runbar.appendChild(mk("div", "runnote", "Press Run on the priced card above to roll it — the brief stays folded until then."));
+    }
 
     if (total) {
       const track = mk("div", "runtrack" + (total > 60 ? " dense" : ""));
@@ -977,9 +1033,19 @@
       peek.classList.toggle("on", document.body.classList.toggle("peek"));
     });
     foot.appendChild(peek);
+    if (priced) {
+      const reopen = mk("button", "runbtn", "New idea");
+      reopen.type = "button";
+      reopen.title = "Reopen the brief — the priced cards stay; describe another film to price it";
+      reopen.addEventListener("click", () => {
+        runEnd("priced");
+        $("idea").focus();
+      });
+      foot.appendChild(reopen);
+    }
     const jump = mk("button", "runbtn", productionCard && productionCard.isConnected ? "Production ▸" : "Latest ▸");
     jump.type = "button";
-    jump.title = "Scroll to where the run is reporting";
+    jump.title = priced ? "Scroll to the priced cards" : "Scroll to where the run is reporting";
     jump.addEventListener("click", () => {
       if (productionCard && productionCard.isConnected) showProductionCard();
       else if (thread.lastElementChild) thread.lastElementChild.scrollIntoView({ block: "end" });
@@ -1094,6 +1160,7 @@
     // the layout QA harness drives the strip without spending: ?qa=1
     window.dionyRun = {
       begin: runBegin, update: runUpdate, patch: runPatch, end: runEnd, reset: runReset,
+      priced: runPriced,
       single: { begin: singleBegin, set: singleSet },
       hold(h) { runState.hold = h; repaintRun(); },
       state: runState,
@@ -1524,8 +1591,11 @@
           /* the card stands without the artifact panel */
         }
       }
-      // a card or chain still deriving keeps the strip; anything else releases it
-      if (body.op.status !== "deriving") runEnd("derive");
+      // a card or chain still deriving keeps the strip; a priced set holds
+      // it as "priced" (the cards are the next step); a held one releases it
+      if (body.op.status === "deriving") { /* the watch or chain gate lands it */ }
+      else if (body.op.status === "proposed" && body.op.prompt_version !== "v0-provisional") runPriced("derive", chain);
+      else runEnd("derive");
     } catch (err) {
       addMsg("director", `I couldn't price that: ${err.message || err}`);
       runEnd("derive");
@@ -2568,11 +2638,12 @@
           }
           landDerivedCard(op, card, one, { index, count: ops.length });
         }
-        runEnd("derive");
         if (body.op.prompt_version === "v0-provisional") {
+          runEnd("derive");
           holdChain(body.op);
           return;
         }
+        runPriced("derive", ops);
         allBtn.disabled = false;
         refreshUpLabel();
         progress.textContent = "";

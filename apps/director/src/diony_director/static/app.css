@@ -683,6 +683,11 @@ body[data-running].peek .console > .controls {
   border-top: 1px dashed var(--line); margin-top: .35rem;
 }
 body[data-running="holding"] .console { border-color: rgba(232,180,90,.45); }
+/* priced: the derivation landed and the cards wait for Run — the strip
+   holds still (no pulse, no clock) so the fold reads as a rest, not a run */
+body[data-running="priced"] .console { border-color: rgba(123,201,138,.4); box-shadow: var(--shadow-2), 0 0 0 1px rgba(123,201,138,.08); }
+body[data-running="priced"] .runpulse { background: var(--ok); box-shadow: 0 0 6px rgba(123,201,138,.6); animation: none; opacity: 1; transform: none; }
+body[data-running="priced"] .runtag { color: var(--ok); border-color: rgba(123,201,138,.5); background: rgba(123,201,138,.08); }
 
 .runbar { display: flex; flex-direction: column; gap: .6rem; padding: .2rem .3rem .1rem; }
 .runhead { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; min-height: 1.6rem; }
