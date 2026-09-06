@@ -460,11 +460,23 @@ button.armed { outline: 2px solid var(--accent) !important; outline-offset: 2px;
 .entry button:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.08); }
 .entry button:active:not(:disabled) { transform: none; filter: brightness(.96); }
 .entry button:disabled { opacity: .45; cursor: default; box-shadow: none; }
+/* One shot: the same weight as Draft script, on a living blue — the
+   gradient drifts on its own and quickens under the pointer */
 .entry button.alt {
-  background: transparent; color: var(--ink2); box-shadow: none;
-  border: 1px solid var(--line-hi);
+  color: #fff;
+  background: linear-gradient(135deg, #5EB6FF 0%, #2F7BFF 35%, #3D5BFF 65%, #6A5BFF 100%);
+  background-size: 220% 220%;
+  box-shadow: 0 2px 12px rgba(47,123,255,.32);
+  animation: oneshot-drift 6s ease-in-out infinite alternate;
 }
-.entry button.alt:hover:not(:disabled) { color: var(--accent-ink); border-color: rgba(255,122,47,.5); background: rgba(255,122,47,.06); }
+.entry button.alt:hover:not(:disabled) {
+  filter: brightness(1.1) saturate(1.1);
+  box-shadow: 0 4px 18px rgba(47,123,255,.45);
+  animation-duration: 1.6s;
+}
+.entry button.alt:disabled { animation: none; }
+@keyframes oneshot-drift { from { background-position: 0% 0%; } to { background-position: 100% 100%; } }
+@media (prefers-reduced-motion: reduce) { .entry button.alt { animation: none; } }
 .entry button .icon { width: 1.1em; height: 1.1em; }
 
 /* reference stills row */
