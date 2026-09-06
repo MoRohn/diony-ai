@@ -1343,7 +1343,8 @@ select:focus-visible {
   }
 
   .bay,
-  #bay-idea .write {
+  #bay-idea .write,
+  .director-films-grid {
     overflow: visible;
   }
 
@@ -5665,7 +5666,9 @@ body[data-active-bay="gallery"] .sheet {
   --gallery-scrollbar-hover: rgba(255, 64, 47, 0.68);
   --gallery-scrollbar-active: var(--signal);
   min-height: 0;
-  overflow: hidden;
+  /* the inventories scroll inside their own regions; the bay itself scrolls
+     only when a short window cannot fit their minimum rows */
+  overflow: hidden auto;
 }
 
 #bay-gallery #gallery-meta {
@@ -6025,9 +6028,19 @@ button {
 }
 }
 
-/* Director films in the Gallery (cloud engine) */
-.director-films { margin-bottom: 1.2rem; }
-.director-films-title { font: 700 1rem/1.3 var(--display, inherit); margin: 0 0 .6rem; }
+/* Director films in the Gallery (cloud engine). The Gallery bay clips its
+   own overflow (#bay-gallery) and gives each inventory its OWN scroll
+   region: this block is a flex column whose grid scrolls, exactly like the
+   clip grid below it — a long run of finished films no longer collapses
+   the clip grid to nothing and then gets clipped itself. */
+.director-films {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-bottom: 1.2rem;
+}
+.director-films-title { font: 700 1rem/1.3 var(--display, inherit); margin: 0 0 .6rem; flex: 0 0 auto; }
 .director-film-card video { width: 100%; border-radius: 8px; background: #000; display: block; }
 
 /* Surface navigation: back to the Director / Studio */
@@ -6053,7 +6066,32 @@ body.cloud-engine #gallery-title { letter-spacing: .01em; }
 body.cloud-engine .gallery-selection { border-top: 1px solid rgba(246,246,246,.12); padding-top: 1rem; margin-top: 1.4rem; }
 
 /* Director film cards: sized like the gallery's own clip cards */
-.director-films-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(18rem, 100%), 1fr)); gap: 1.25rem; }
+.director-films-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(18rem, 100%), 1fr));
+  grid-auto-rows: max-content;
+  align-items: start;
+  gap: 1.25rem;
+  flex: 1 1 auto;
+  /* never squeezed below one row of film cards: a short window scrolls the
+     bay instead of collapsing the inventory to a sliver */
+  min-height: min(15rem, 42vh);
+  padding: 0.15rem 0.7rem 1rem 0.15rem;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: 0.15rem 1rem;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--gallery-scrollbar-rest) transparent;
+}
+.director-films-grid::-webkit-scrollbar { width: var(--gallery-scrollbar-size); height: var(--gallery-scrollbar-size); }
+.director-films-grid::-webkit-scrollbar-track { background: transparent; }
+.director-films-grid::-webkit-scrollbar-thumb { min-height: 2.8rem; border-radius: 99px; background: var(--gallery-scrollbar-rest); }
+.director-films-grid::-webkit-scrollbar-thumb:hover { background: var(--gallery-scrollbar-hover); }
+.director-films-grid::-webkit-scrollbar-thumb:active { background: var(--gallery-scrollbar-active); }
+/* An empty clip grid (the cloud-engine Gallery, before any classic clip
+   lands) must not claim half the bay's height from the films above it. */
+#bay-gallery .gallery-grid:empty { flex: 0 0 auto; padding: 0; margin: 0; }
 .director-film-card { border: 1px solid rgba(246,246,246,.14); border-radius: 10px; background: rgba(20,19,18,.9); padding: .55rem; }
 .director-film-card video { width: 100%; height: 10.5rem; object-fit: cover; border-radius: 7px; background: #000; display: block; }
 .director-film-card .hint { margin: .45rem 0 0; font: 500 .68rem/1.5 "IBM Plex Mono", ui-monospace, monospace; color: #8f8a82; }
@@ -6065,7 +6103,7 @@ body[data-active-bay="gallery"] .sheet { width: calc(100vw - 1.6rem); }
 .director-film-card .film-receipt { margin-top: .2rem; color: #c9c4bd; }
 
 /* Director film selection + actions */
-.director-films-actions { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; margin: 0 0 .8rem; }
+.director-films-actions { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; margin: 0 0 .8rem; flex: 0 0 auto; }
 .director-films-actions .film-selall { font: 500 .72rem/1 "IBM Plex Mono", ui-monospace, monospace; color: #c9c4bd; display: inline-flex; gap: .4rem; align-items: center; cursor: pointer; }
 .director-films-actions #film-actions-note { font: 500 .7rem/1.5 "IBM Plex Mono", ui-monospace, monospace; color: #8f8a82; }
 .director-film-card { position: relative; }

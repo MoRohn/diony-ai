@@ -43,8 +43,8 @@ def test_producer_floors_are_idea_production_gallery() -> None:
     assert 'class="clap"' in html
     assert 'id="cast"' in html
     assert 'id="site-line"' in html
-    assert 'href="/static/app.css?v=p4"' in html
-    assert 'src="/static/app.js?v=p4"' in html
+    assert 'href="/static/app.css?v=p5"' in html
+    assert 'src="/static/app.js?v=p5"' in html
     assert "v=run30" not in html
     assert "Unsigned" not in html
     assert "Unsigned" not in js
@@ -361,7 +361,8 @@ def test_gallery_extends_to_the_viewport_and_keeps_prompt_copy_with_actions() ->
     gallery_start = css.rindex("#bay-gallery {")
     gallery_rule = css[gallery_start : css.index("}", gallery_start)]
     assert "--gallery-scrollbar-size: 3px;" in gallery_rule
-    assert "overflow: hidden;" in gallery_rule
+    # the bay scrolls only when a short window cannot fit the inventories' minimum rows
+    assert "overflow: hidden auto;" in gallery_rule
     grid_start = css.rindex(".gallery-grid {")
     grid_rule = css[grid_start : css.index("}", grid_start)]
     assert "grid-auto-rows: max-content;" in grid_rule
@@ -448,8 +449,8 @@ def test_production_header_and_idea_body_explain_the_working_state() -> None:
     assert ".reference-hint" in css
     assert ".reference-hint-label" in css
     assert 'stageEl.addEventListener("drop"' in js
-    assert 'href="/static/app.css?v=p4"' in html
-    assert 'src="/static/app.js?v=p4"' in html
+    assert 'href="/static/app.css?v=p5"' in html
+    assert 'src="/static/app.js?v=p5"' in html
     assert "v=run30" not in html
 
 

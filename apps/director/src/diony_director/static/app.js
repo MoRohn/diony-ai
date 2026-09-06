@@ -653,6 +653,9 @@
   }
 
   async function refreshMeter() {
+    // every event that moves money also re-reads the Production card (and
+    // restarts its poll when something is in flight again)
+    refreshProduction();
     try {
       const ledger = await api("/api/director/ledger");
       $("spent-total").textContent = usd(ledger.totals.cost_usd_micros);
@@ -746,12 +749,10 @@
         addMsg(
           "director",
           `Resuming session ${resume.session_id}: ${bits.join(", ")}. ` +
-            "Retries re-roll at their locked price; assemble from the CUT tab when the set is complete. " +
+            "Retries re-roll at their locked price; assemble from the Production card below when the set is complete. " +
             "＋ NEW SESSION starts fresh — the ledger keeps everything."
         );
-        setBoardOpen(true);
-        const shotsBtn = document.querySelector('.btabs button[data-tab="shots"]');
-        if (shotsBtn) shotsBtn.click();
+        showProductionCard();
       } else {
         const created = await api("/api/director/sessions", { method: "POST" });
         sessionId = created.session_id;
@@ -1310,6 +1311,7 @@
       video.controls = true;
       video.src = `/api/director/films/${sessionId}`;
       done.appendChild(video);
+      productionFilm = null; // the Production card loads the new cut
       if (film.narration && film.narration.voice && film.narration.voice.voice_id) {
         const v = film.narration.voice;
         const name = v.voice_id[0].toUpperCase() + v.voice_id.slice(1);
@@ -1331,11 +1333,12 @@
         addMsg("director", `${label} style: ${bits.length ? bits.join("; ") : "no spoken lines in this cut"}.`);
       }
       if (film.deliverables && film.deliverables.length) {
-        let line = `Delivered with ${plural(film.cue_count || 0, "subtitle cue")}: ${film.deliverables.join(", ")} — on the board's CUT tab.`;
+        let line = `Delivered with ${plural(film.cue_count || 0, "subtitle cue")}:`;
         if (film.final_check && film.final_check.verdict !== "pass") {
           line += ` Final master check: ${film.final_check.verdict} (${(film.final_check.issues || []).join("; ")}).`;
         }
-        addMsg("director", line);
+        const li = addMsg("director", line);
+        li.querySelector(".body").appendChild(deliverableLinks(film.deliverables));
       }
       const receipt = await api(`/api/director/sessions/${sessionId}/receipt`);
       addMsg(
@@ -1352,7 +1355,7 @@
       link.textContent = "OPEN PRODUCER ▸";
       link.title = "The Gallery in Producer — watch, download, or stitch the film";
       wrap.querySelector(".body").appendChild(link);
-      refreshBoard();
+      refreshProduction();
       return true;
     } catch (err) {
       const text = String(err.message || err);
@@ -1395,7 +1398,7 @@
               addMsg(
                 "director",
                 res.undrafted && res.undrafted.length
-                  ? `No retake is drafted for ${res.undrafted.join(", ")} — redraft from the board, then assemble again.`
+                  ? `No retake is drafted for ${res.undrafted.join(", ")} — redraft from the Production card, then assemble again.`
                   : "Nothing to retry — the missing shots may already be rolling; assemble again once they settle."
               );
               retry.disabled = false;
@@ -1441,7 +1444,7 @@
               progress.textContent = `retakes — ${parts.join(" · ")}`;
               if (printed !== lastPrinted) {
                 lastPrinted = printed;
-                refreshBoard(); // the SHOTS tab tracks each print as it lands
+                refreshProduction(); // the Production card tracks each print as it lands
               }
               if (counts.pending > 0 || (counts.queued || 0) > 0 || counts.submitting) {
                 setTimeout(tick, 3000);
@@ -1457,7 +1460,7 @@
                 progress.classList.add("done");
               }
               refreshMeter();
-              refreshBoard();
+              refreshProduction();
               await assembleNow();
             };
             setTimeout(tick, 2500);
@@ -1572,12 +1575,12 @@
           setTimeout(tick, 3000);
           return;
         }
-        refreshBoard(); // the SHOTS tab shows each take's finish chip
+        refreshProduction(); // the Production card shows each take's finish chip
         if (failed) {
           addMsg(
             "director",
             `${plural(failed, "finish")} failed — the takes' own prints stay in the cut. ` +
-              "Retry the finish from the board's SHOTS tab, or assemble with the prints that exist.",
+              "Retry the finish on the Production card, or assemble with the prints that exist.",
             "warn"
           );
         }
@@ -2055,7 +2058,6 @@
   }
 
   function renderDraft(li, state) {
-    refreshBoard();
     li.querySelector(".body").textContent = state.reply;
     if (state.warnings && state.warnings.length) {
       const warn = document.createElement("div");
@@ -2064,8 +2066,36 @@
       li.appendChild(warn);
     }
     if (state.master) renderMaster(li, state.master);
-    renderScript(li, state.script);
+    attachScriptSheet(li, state);
     attachLockButton(li);
+  }
+
+  // The script sheet lives IN the draft card: beats, every line and its
+  // authored shot — editable until the lock, read-only after it. The static
+  // preview stands in only when the sheet cannot be fetched.
+  async function attachScriptSheet(li, state) {
+    const box = document.createElement("div");
+    box.className = "sheetcard scriptsheet";
+    li.appendChild(box);
+    try {
+      renderScriptSheet(box, await fetchBoard());
+    } catch (err) {
+      box.remove();
+      renderScript(li, state.script);
+    }
+  }
+
+  async function refreshScriptSheets() {
+    const sheets = document.querySelectorAll(".scriptsheet");
+    if (!sheets.length || !sessionId) return;
+    try {
+      const b = await fetchBoard();
+      sheets.forEach((box) => {
+        if (!box.querySelector("input")) renderScriptSheet(box, b);
+      });
+    } catch (err) {
+      /* the sheet keeps its last paint */
+    }
   }
 
   async function produce() {
@@ -2148,7 +2178,8 @@
           const locked = await api(`/api/director/sessions/${sessionId}/lock_script`, { method: "POST" });
           const reply = addMsg("director", locked.reply);
           setupBatch(reply, locked.ops, locked.bible_ops || []);
-          refreshBoard();
+          refreshScriptSheets(); // the sheet turns read-only
+          showProductionCard(); // bibles (the face gate), shots, and the cut, live
         } catch (err) {
           addMsg("director", `Couldn't lock: ${err.message || err}`);
           lockBtn.disabled = false;
@@ -2157,9 +2188,11 @@
     }
   }
 
-  // --- Production board: script / bibles / shots / cut ----------------------
-  let boardTab = "script";
-  let boardTimer = null;
+  // --- Production sheets, in the flow of the room ---------------------------
+  // The former side board. The script sheet renders inside the draft card;
+  // bibles, shots, and the cut render as ONE live Production card that
+  // refreshes itself every few seconds while anything is still rolling
+  // (a bible still, a take, a finish) and goes quiet when the set settles.
 
   function esc(text) {
     const box = document.createElement("div");
@@ -2167,24 +2200,144 @@
     return box.innerHTML;
   }
 
-  async function refreshBoard() {
-    if ($("board").hidden || !sessionId) return;
-    // Never repaint over an open line/shot editor — the poll would eat the edit.
-    if ($("bpane").querySelector("input")) return;
-    let b;
-    try {
-      b = await api(`/api/director/sessions/${sessionId}/board`);
-    } catch (err) {
-      $("bpane").textContent = `board unavailable: ${err.message || err}`;
-      return;
-    }
-    if (boardTab === "script") renderScriptTab($("bpane"), b);
-    else if (boardTab === "bibles") renderBiblesTab($("bpane"), b);
-    else if (boardTab === "shots") renderShotsTab($("bpane"), b);
-    else renderCutTab($("bpane"), b);
+  function fetchBoard() {
+    return api(`/api/director/sessions/${sessionId}/board`);
   }
 
-  function renderScriptTab(pane, b) {
+  function deliverableLinks(names) {
+    const list = document.createElement("div");
+    list.className = "bdeliv";
+    names.forEach((n, index) => {
+      const a = document.createElement("a");
+      a.href = `/api/director/sessions/${sessionId}/deliverables/${n}`;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = n;
+      list.appendChild(a);
+      if (index < names.length - 1) list.appendChild(document.createTextNode(" · "));
+    });
+    return list;
+  }
+
+  let productionCard = null;
+  let productionTimer = null;
+  let productionInFlight = false;
+  // the cut's player survives repaints: the node is MOVED into each new
+  // paint, so a poll never restarts playback; a new cut drops it
+  let productionFilm = null;
+
+  // in flight = money is moving; "proposed" is drafted and waits for a Run
+  const IN_FLIGHT = new Set(["submitting", "submitted", "deriving"]);
+  function productionLive(b) {
+    return (b.clips || []).some(
+      (c) => IN_FLIGHT.has(c.status) || (c.finish && IN_FLIGHT.has(c.finish.status))
+    );
+  }
+
+  function startProductionPoll() {
+    if (!productionTimer) productionTimer = setInterval(refreshProduction, 5000);
+  }
+  function stopProductionPoll() {
+    if (productionTimer) {
+      clearInterval(productionTimer);
+      productionTimer = null;
+    }
+  }
+
+  async function refreshProduction() {
+    if (!productionCard || !sessionId || productionInFlight) return;
+    if (!productionCard.isConnected) {
+      stopProductionPoll();
+      productionCard = null;
+      return;
+    }
+    productionInFlight = true;
+    try {
+      const b = await fetchBoard();
+      paintProduction(productionCard, b);
+      if (productionLive(b)) startProductionPoll();
+      else stopProductionPoll();
+    } catch (err) {
+      const note = productionCard.querySelector(".prodnote");
+      if (note) note.textContent = `status unavailable: ${err.message || err}`;
+    } finally {
+      productionInFlight = false;
+    }
+  }
+
+  function paintProduction(li, b) {
+    const body = li.querySelector(".body");
+    body.replaceChildren();
+    const head = document.createElement("div");
+    head.className = "prodhead";
+    const title = document.createElement("span");
+    title.className = "bhead";
+    title.textContent = "PRODUCTION";
+    head.appendChild(title);
+    const note = document.createElement("span");
+    note.className = "prodnote";
+    const clips = b.clips || [];
+    if (clips.length) {
+      const printed = clips.filter((c) => c.status === "completed").length;
+      const failed = clips.filter((c) => c.status === "failed").length;
+      const rolling = clips.filter((c) => IN_FLIGHT.has(c.status)).length;
+      const drafted = clips.filter((c) => c.status === "proposed").length;
+      note.textContent =
+        `${printed}/${clips.length} printed` +
+        (failed ? ` · ${failed} failed` : "") +
+        (rolling ? ` · ${rolling} rolling` : "") +
+        (drafted ? ` · ${drafted} drafted` : "") +
+        (b.film_ready ? " · film cut" : "");
+    } else {
+      note.textContent = b.locked ? "locked" : "not locked yet";
+    }
+    head.appendChild(note);
+    const refresh = document.createElement("button");
+    refresh.type = "button";
+    refresh.className = "retrybtn";
+    refresh.textContent = "↻ Refresh";
+    refresh.title = "Re-read the production state now — it refreshes itself while anything rolls";
+    refresh.addEventListener("click", refreshProduction);
+    head.appendChild(refresh);
+    body.appendChild(head);
+
+    const section = (label, paint) => {
+      const sec = document.createElement("div");
+      sec.className = "prodsection";
+      const h = document.createElement("span");
+      h.className = "bhead";
+      h.textContent = label;
+      sec.appendChild(h);
+      const pane = document.createElement("div");
+      paint(pane, b);
+      sec.appendChild(pane);
+      body.appendChild(sec);
+    };
+    if ((b.characters || []).length || (b.settings || []).length) section("BIBLES", renderBiblesSheet);
+    if (clips.length) section("SHOTS", renderShotsSheet);
+    section("CUT", renderCutSheet);
+  }
+
+  // One Production card per room: a second call re-paints and scrolls to it.
+  function showProductionCard() {
+    if (!sessionId) return null;
+    if (productionCard && productionCard.isConnected) {
+      productionCard.scrollIntoView({ block: "end" });
+      refreshProduction();
+      return productionCard;
+    }
+    const li = document.createElement("li");
+    li.className = "msg director production";
+    li.innerHTML = `<div class="who">Director</div><div class="body sheetcard"></div>`;
+    li.querySelector(".body").textContent = "reading the production…";
+    thread.appendChild(li);
+    li.scrollIntoView({ block: "end" });
+    productionCard = li;
+    refreshProduction();
+    return li;
+  }
+
+  function renderScriptSheet(pane, b) {
     pane.replaceChildren();
     if (!b.script) {
       pane.textContent = "No draft yet — Draft script to begin.";
@@ -2350,7 +2503,7 @@
     input.addEventListener("blur", commit);
   }
 
-  function renderBiblesTab(pane, b) {
+  function renderBiblesSheet(pane, b) {
     pane.replaceChildren();
     if (!b.characters.length && !b.settings.length) {
       pane.textContent = "Bibles land at lock — characters with sheets, settings with plates.";
@@ -2380,7 +2533,7 @@
               { method: "POST" }
             );
             addMsg("director", res.reply);
-            refreshBoard();
+            refreshProduction();
           } catch (err) {
             approve.textContent = String(err.message || err);
             approve.disabled = false;
@@ -2403,7 +2556,7 @@
     });
   }
 
-  // Blueprint 30: the take's 1080p finish, beside its verdict on the board
+  // Blueprint 30: the take's 1080p finish, beside its verdict on the sheet
   function finishChip(finish) {
     if (!finish) return "";
     const res = esc(finish.resolution || "1080p");
@@ -2415,10 +2568,10 @@
     return ` <span class="verdict fail" title="${esc(why)}">${res} finish failed</span>`;
   }
 
-  function renderShotsTab(pane, b) {
+  function renderShotsSheet(pane, b) {
     pane.replaceChildren();
     if (!b.clips.length) {
-      pane.textContent = "The shot board fills at lock.";
+      pane.textContent = "The shot list fills at lock.";
       return;
     }
     b.clips.forEach((c) => {
@@ -2446,7 +2599,7 @@
           try {
             await api(`/api/director/ops/${c.finish.op_id}/retry`, { method: "POST" });
             addMsg("director", `${c.clip_id}: the ${c.finish.resolution} finish is rolling again.`);
-            refreshBoard();
+            refreshProduction();
           } catch (err) {
             retry.textContent = String(err.message || err);
           }
@@ -2469,7 +2622,7 @@
           try {
             const res = await api(`/api/director/ops/${c.op_id}/accept`, { method: "POST" });
             addMsg("director", res.reply);
-            refreshBoard();
+            refreshProduction();
           } catch (err) {
             accept.textContent = String(err.message || err);
           }
@@ -2487,7 +2640,7 @@
           try {
             await api(`/api/director/ops/${c.op_id}/retry`, { method: "POST" });
             addMsg("director", `${c.clip_id} re-queued at its locked price.`);
-            refreshBoard();
+            refreshProduction();
           } catch (err) {
             retry.textContent = String(err.message || err);
           }
@@ -2516,7 +2669,7 @@
     });
   }
 
-  function renderCutTab(pane, b) {
+  function renderCutSheet(pane, b) {
     pane.replaceChildren();
     if (!b.film_ready) {
       const printed = (b.clips || []).filter((c) => c.status === "completed").length;
@@ -2536,49 +2689,27 @@
         btn.disabled = true;
         btn.textContent = "assembling…";
         await assembleNow();
-        refreshBoard();
+        refreshProduction();
       });
       pane.appendChild(btn);
       return;
     }
-    const video = document.createElement("video");
-    video.controls = true;
-    video.className = "bfilm";
-    video.src = `/api/director/films/${sessionId}?t=${Date.now()}`;
-    pane.appendChild(video);
+    if (!productionFilm) {
+      productionFilm = document.createElement("video");
+      productionFilm.controls = true;
+      productionFilm.className = "bfilm";
+      productionFilm.preload = "metadata";
+      productionFilm.src = `/api/director/films/${sessionId}?t=${Date.now()}#t=0.001`;
+    }
+    pane.appendChild(productionFilm);
     if (b.deliverables && b.deliverables.length) {
-      const list = document.createElement("div");
-      list.className = "bdeliv";
-      list.innerHTML =
-        "<div class='bhead'>DELIVERABLES</div>" +
-        b.deliverables
-          .map((n) => `<a href="/api/director/sessions/${sessionId}/deliverables/${n}" target="_blank" rel="noopener">${esc(n)}</a>`)
-          .join(" · ");
-      pane.appendChild(list);
+      const head = document.createElement("div");
+      head.className = "bhead";
+      head.textContent = "DELIVERABLES";
+      pane.appendChild(head);
+      pane.appendChild(deliverableLinks(b.deliverables));
     }
   }
-
-  function setBoardOpen(opening) {
-    $("board").hidden = !opening;
-    document.body.classList.toggle("board-open", opening);
-    if (opening) {
-      if (boardTimer) clearInterval(boardTimer); // re-open must not leak a poll
-      refreshBoard();
-      boardTimer = setInterval(refreshBoard, 5000);
-    } else if (boardTimer) {
-      clearInterval(boardTimer);
-      boardTimer = null;
-    }
-  }
-  $("board-toggle").addEventListener("click", () => setBoardOpen($("board").hidden));
-  $("board-close").addEventListener("click", () => setBoardOpen(false));
-  document.querySelectorAll(".btabs button[data-tab]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      boardTab = btn.dataset.tab;
-      document.querySelectorAll(".btabs button[data-tab]").forEach((other) => other.classList.toggle("on", other === btn));
-      refreshBoard();
-    });
-  });
 
   ["dur-min", "dur-sec"].forEach((id) => {
     $(id).addEventListener("change", normalizeDuration);
