@@ -1498,6 +1498,11 @@ def run_batch(sid: str, body: RunBatchIn) -> dict:
     if body.op_ids is not None:
         wanted = set(body.op_ids)
         ops = [op for op in ops if op.id in wanted]
+    # an earlier script's links (retired when a newer script landed in this
+    # room) are named in `held`, never rolled — and never block the batch
+    retired = session.retired_op_ids(sid)
+    retired_asked = {op.id for op in ops if op.id in retired}
+    ops = [op for op in ops if op.id not in retired]
     blocked = [op for op in ops if op.status == "proposed" and session.derivation_block(op)]
     if blocked:
         raise HTTPException(
@@ -1508,7 +1513,7 @@ def run_batch(sid: str, body: RunBatchIn) -> dict:
             ),
         )
     targets = {op.id for op in ops if op.status == "proposed"}
-    all_targets = session.set_batch_targets(sid, targets)
+    all_targets = session.set_batch_targets(sid, targets | retired_asked)
     _kick_submitter(sid)
     return {
         "submitted": [],
@@ -1840,6 +1845,8 @@ def _review_chain_link(op: DirectorOp, rt: dict) -> None:
         spoken_line=(
             str(op.narration or "").strip() if getattr(op, "voicing", "post") == "generated" else ""
         ),
+        # a link scripted to open or close on black is not a dead picture
+        scripted_black=review_mod.scripts_black(op.prompt),
     )
     session.register_review(op.id, result)
     if position == 0:

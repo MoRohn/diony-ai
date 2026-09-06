@@ -9,6 +9,7 @@ itself a clean pass: identity unmeasured caps the verdict at ``warn``.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import uuid
@@ -143,8 +144,28 @@ def _measure_frames(
     _measure_frames_for(path, int(clip.duration_s), families, measured, issues)
 
 
+# A prompt that scripts darkness: the clip is MEANT to open or close on
+# black (a startup chime over a black screen, a cut to black). Its black
+# frames are the script, not a dead picture — advisory, never a hold.
+_SCRIPTED_BLACK = re.compile(
+    r"(?i)\b(?:black (?:frame|screen)|fades? (?:in |up )?from black|cuts? to black|"
+    r"fades? (?:out )?to black|opens? on black|holds? on black|from a black frame)"
+)
+
+
+def scripts_black(prompt: str) -> bool:
+    """Does this prompt script a black frame (an open or close on black)?"""
+    return bool(_SCRIPTED_BLACK.search(prompt or ""))
+
+
 def _measure_frames_for(
-    path: Path, duration_s: int, families: dict[str, str], measured: dict[str, float], issues: list[str]
+    path: Path,
+    duration_s: int,
+    families: dict[str, str],
+    measured: dict[str, float],
+    issues: list[str],
+    *,
+    scripted_black: bool = False,
 ) -> None:
     try:
         from diony_producer.quality import measure_frame_quality
@@ -158,7 +179,15 @@ def _measure_frames_for(
         return
     measured["black_frames"] = float(receipt.black_frames)
     measured["sharpness_min"] = float(receipt.sharpness_min)
-    if receipt.black_frames:
+    if receipt.black_frames and scripted_black:
+        # s-27a8793791 (2026-09-06): "[VISUAL — black screen.] A soft startup
+        # chime." printed exactly as written and was held as a dead picture
+        families["frames"] = "pass"
+        issues.append(
+            f"{receipt.black_frames} sampled frame(s) are black — the script opens or "
+            "closes on black (advisory)"
+        )
+    elif receipt.black_frames:
         families["frames"] = "fail"
         issues.append(
             f"{receipt.black_frames} sampled frame(s) are black — the picture died mid-clip"
@@ -515,6 +544,7 @@ def review_chain_link(
     prev_clip_path: Path | None = None,
     scene_change: bool = False,
     spoken_line: str = "",
+    scripted_black: bool = False,
 ) -> ClipReview:
     """Review one link of a chained one-shot: delivery, duration, frames, and
     look continuity — did it open from the frame it was given, did it hold
@@ -547,7 +577,12 @@ def review_chain_link(
 
     if families["delivery"] == "pass":
         for family_name, measure in (
-            ("frames", lambda: _measure_frames_for(path, duration_s, families, measured, issues)),
+            (
+                "frames",
+                lambda: _measure_frames_for(
+                    path, duration_s, families, measured, issues, scripted_black=scripted_black
+                ),
+            ),
             # a chain link's narration rides its op (Blueprint 28) — its
             # location track is as speechless-by-law as any scripted clip's,
             # unless the link voices its own narration (Blueprint 31)

@@ -181,7 +181,10 @@ def resumable_sessions() -> list[dict[str, Any]]:
     for sid, state in _SESSIONS.items():
         if state.dismissed:
             continue
-        ops = [_OPS[i] for i in state.op_ids if i in _OPS]
+        # a retired chain (an earlier script this room has moved past) never
+        # reclaims the room: its dead links are not unfinished business
+        retired = retired_op_ids(sid)
+        ops = [_OPS[i] for i in state.op_ids if i in _OPS and i not in retired]
         if not ops:
             continue
         counts = {"completed": 0, "failed": 0, "in_flight": 0, "proposed": 0}
@@ -1010,7 +1013,7 @@ def _propose_chain(
         ops.append(op)
     state = _SESSIONS.setdefault(sid, SessionState(id=sid))
     state.op_ids.extend(op.id for op in ops)
-    _register_oneshot_chain(sid, [op.id for op in ops])
+    retired = _register_oneshot_chain(sid, [op.id for op in ops])
     _record_derivation(
         [op.id for op in ops],
         kind="chain",
@@ -1041,6 +1044,8 @@ def _propose_chain(
     total_after = spent_usd_micros + committed_usd_micros(sid) + total_cost
     plan_words = " + ".join(f"{d}s" for d in plan)
     notes: list[str] = []
+    if retired:
+        notes.append(_retired_note(sid, retired))
     if master is not None:
         notes.append(master_mod.summary_line(master))
         notes.append(master_mod.duration_note(master, total_s))
@@ -1347,10 +1352,14 @@ def authored_lines_expected(sid: str) -> int:
     if state is None:
         return 0
     docs: dict[str, dict] = {}
+    retired = retired_op_ids(sid)
     for op_id in state.op_ids:
         doc = _DERIVATIONS.get(op_id)
         if doc is not None:
-            docs[(doc.get("op_ids") or [op_id])[0]] = doc
+            first = (doc.get("op_ids") or [op_id])[0]
+            if first in retired:
+                continue  # an earlier script this room moved past
+            docs[first] = doc
     return sum(int(d.get("authored_lines") or 0) for d in docs.values())
 
 
@@ -2200,14 +2209,17 @@ def next_revision(sid: str, failed_op: DirectorOp, review: ClipReview) -> tuple[
     return op, narration
 
 
-def oneshot_chain_ops(sid: str) -> list[list[DirectorOp]]:
-    """Every chained one-shot's links, in play order, per chain."""
+def oneshot_chain_ops(sid: str, *, include_retired: bool = False) -> list[list[DirectorOp]]:
+    """Every living chained one-shot's links, in play order, per chain. A
+    retired chain — an earlier script this room has moved past — is left out
+    unless asked for: it is never cut, never rolled, never counted."""
     seq = _SEQUENCES.get(sid)
     if seq is None:
         return []
+    retired = set() if include_retired else set(seq.get("retired_scenes") or ())
     chains: list[list[DirectorOp]] = []
     for scene_id, chain in (seq.get("scenes") or {}).items():
-        if not scene_id.startswith("oneshot-"):
+        if not scene_id.startswith("oneshot-") or scene_id in retired:
             continue
         ops = [op for op_id in chain if (op := _OPS.get(op_id)) is not None]
         if ops:
@@ -2345,11 +2357,17 @@ def set_sequence(
     }
 
 
-def _register_oneshot_chain(sid: str, op_ids: list[str]) -> None:
+def _register_oneshot_chain(sid: str, op_ids: list[str]) -> list[str]:
     """A chained one-shot rides the directed-sequencing rails: its links are a
     scene chain, so batch waves order them and every later link bridges from
-    its predecessor's join frame. Registered additively — a production's
-    sequence and a one-shot chain coexist."""
+    its predecessor's join frame. Registered additively beside a production's
+    sequence — but a room holds ONE film: every chained one-shot the room
+    already had is RETIRED by the new one (s-22c294097d, 2026-09-05: a second
+    script pasted into a room was cut AFTER the first script's 23 printed
+    links — the film opened on the previous script, and Run All kept rolling
+    the old chain's leftover links). Retired links stay on the ledger and in
+    the Gallery; they leave the cut, the batch, the narration count, and the
+    resume slot. Returns the retired chains' keys."""
     seq = _SEQUENCES.get(sid)
     key = f"oneshot-{op_ids[0]}"
     if seq is None:
@@ -2359,9 +2377,68 @@ def _register_oneshot_chain(sid: str, op_ids: list[str]) -> None:
             "scenes": {key: list(op_ids)},
             "scene_plates": {},
             "held_scenes": set(),
+            "retired_scenes": set(),
         }
-    else:
-        seq.setdefault("scenes", {})[key] = list(op_ids)
+        return []
+    retired_now: list[str] = []
+    retired: set = seq.setdefault("retired_scenes", set())
+    for scene_id in list((seq.get("scenes") or {}).keys()):
+        if scene_id.startswith("oneshot-") and scene_id not in retired:
+            retired.add(scene_id)
+            retired_now.append(scene_id)
+    seq.setdefault("scenes", {})[key] = list(op_ids)
+    if retired_now:
+        # nothing of an earlier script rolls once the room has moved past it
+        targets = _BATCH_TARGETS.get(sid)
+        if targets:
+            targets.difference_update(retired_op_ids(sid))
+    return retired_now
+
+
+def retired_scenes(sid: str) -> set[str]:
+    """Scene keys of the chained one-shots this room has moved past."""
+    seq = _SEQUENCES.get(sid)
+    if seq is None:
+        return set()
+    return set(seq.get("retired_scenes") or ())
+
+
+def retired_op_ids(sid: str) -> set[str]:
+    """Every link of every retired chain in this room."""
+    seq = _SEQUENCES.get(sid)
+    if seq is None:
+        return set()
+    retired = set(seq.get("retired_scenes") or ())
+    if not retired:
+        return set()
+    ids: set[str] = set()
+    for scene_id, chain in (seq.get("scenes") or {}).items():
+        if scene_id in retired:
+            ids.update(chain)
+    return ids
+
+
+def _retired_note(sid: str, retired_keys: list[str]) -> str:
+    """The reply's account of the film this room just moved past."""
+    seq = _SEQUENCES.get(sid) or {}
+    links = 0
+    printed = 0
+    for scene_id in retired_keys:
+        for op_id in (seq.get("scenes") or {}).get(scene_id, []):
+            op = _OPS.get(op_id)
+            if op is None:
+                continue
+            links += 1
+            if op.status == "completed":
+                printed += 1
+    films = _n(len(retired_keys), "earlier film")
+    return (
+        f"This room already held {films} ({_n(printed, 'printed clip')} of {links}) — "
+        "retired: this script is the room's film now. The cut, Run All, and the "
+        "narration follow it alone; the earlier prints stay in the Gallery and on "
+        "the ledger. To keep rolling the earlier film instead, start a new session "
+        "for this script."
+    )
 
 
 def sequence_for(sid: str) -> dict[str, Any] | None:
@@ -2376,6 +2453,21 @@ def set_batch_targets(sid: str, op_ids: set[str]) -> set[str]:
         op_id for op_id in op_ids
         if not ((op := _OPS.get(op_id)) is not None and op.artifact_refs.get("style_frame"))
     }
+    retired = retired_op_ids(sid) & targets
+    if retired:
+        # an earlier script's links never roll in a room that moved past them
+        targets -= retired
+        log_held(
+            sid,
+            [{
+                "op_id": sorted(retired)[0],
+                "reason": (
+                    f"{_n(len(retired), 'clip')} belong to an earlier script this room "
+                    "has moved past — retired, not rolled; start a new session to keep "
+                    "rolling that film"
+                ),
+            }],
+        )
     for bible_id in seq["bible"]:
         op = _OPS.get(bible_id)
         if op is not None and not _terminal(op):
@@ -2433,7 +2525,10 @@ def ready_ops(sid: str) -> list[DirectorOp]:
                 blocked = True
     if bible_pending:
         return ready
+    retired = set(seq.get("retired_scenes") or ())
     for scene_id, chain in seq["scenes"].items():
+        if scene_id in retired:
+            continue  # an earlier script this room moved past
         if _plate_failed(sid, seq, scene_id, chain):
             continue
         if _oneshot_broken(sid, seq, scene_id, chain):
@@ -2714,7 +2809,11 @@ def persist(sid: str) -> None:
     seq = _SEQUENCES.get(sid)
     seq_doc = None
     if seq is not None:
-        seq_doc = {**seq, "held_scenes": sorted(seq.get("held_scenes", set()))}
+        seq_doc = {
+            **seq,
+            "held_scenes": sorted(seq.get("held_scenes", set())),
+            "retired_scenes": sorted(seq.get("retired_scenes", set())),
+        }
     doc = {
         "version": 1,
         "session_id": sid,
@@ -2793,6 +2892,7 @@ def _load_state(sid: str, doc: dict) -> None:
     if doc.get("sequence"):
         seq = dict(doc["sequence"])
         seq["held_scenes"] = set(seq.get("held_scenes") or [])
+        seq["retired_scenes"] = set(seq.get("retired_scenes") or [])
         _SEQUENCES[sid] = seq
     if doc.get("batch_targets"):
         _BATCH_TARGETS[sid] = set(doc["batch_targets"])
