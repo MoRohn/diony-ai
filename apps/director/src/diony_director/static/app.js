@@ -1403,9 +1403,19 @@
   // the split, the sheets, and the keyframes read it at lock. A locked script
   // refuses it, and the room says so.
   const CAST_NOTES = {
-    standard: "character prose on each prompt, a five-angle sheet, references where the lane allows.",
-    locked: "identity cards ride every prompt verbatim; anchor + turnaround board measured against each other; every clip with people opens from a keyframe composed off the sheet; Flow characters register themselves.",
+    standard:
+      "Cast lock: Standard.\n"
+      + "Each shot describes its characters in words, from a five-angle sheet.",
+    locked:
+      "Cast lock: Locked.\n"
+      + "Each character gets one identity card, and every shot is written from it.\n"
+      + "Their sheet is an anchor portrait and a turnaround board, checked against each other.\n"
+      + "Every clip with people opens from a frame drawn from that sheet.",
   };
+  const FACE_MODELS_NOTE =
+    "Face checks are off on this desk. Sheets still build, but they won't be scored.\n"
+    + "To turn scoring on, run this once in a terminal:\n"
+    + "diony-director-check --stage-face-models";
   async function pushCast() {
     const el = $("cast");
     if (!el || !sessionId) return;
@@ -1415,12 +1425,10 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cast: el.value }),
       });
-      const label = [...el.options].find((o) => o.value === res.cast_lock)?.textContent || res.cast_lock;
-      let note = CAST_NOTES[res.cast_lock] || "";
+      addMsg("director", CAST_NOTES[res.cast_lock] || `Cast lock: ${res.cast_lock}.`);
       if (res.cast_lock === "locked" && castCatalog && castCatalog.face_models_staged === false) {
-        note += " This desk cannot measure faces yet — run `diony-director-check --stage-face-models` so sheets and takes are scored, not eyeballed.";
+        addMsg("director", FACE_MODELS_NOTE, "warn");
       }
-      addMsg("director", `Cast lock: ${label} — ${note}`);
     } catch (err) {
       addMsg("director", `Couldn't set the cast lock: ${err.message || err}`, "warn");
       syncSessionSettings();
