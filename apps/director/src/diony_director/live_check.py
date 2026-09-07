@@ -193,7 +193,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--cdp", default="", help="--reconnect: browser CDP port or ws URL")
     parser.add_argument("--profile", default="", help="--reconnect: Chrome profile name/path")
+    parser.add_argument(
+        "--stage-face-models",
+        action="store_true",
+        help="download OpenCV Zoo's YuNet + SFace (Apache-2.0, ~37 MB) into the desk's "
+        "vault so Cast Lock can MEASURE sheets and faces here (Blueprint 32)",
+    )
     args = parser.parse_args(argv)
+
+    if args.stage_face_models:
+        from diony_director import cast as cast_mod
+
+        detector, recognizer = cast_mod.stage_face_models()
+        print(json.dumps({"face_models": {"detector": str(detector), "recognizer": str(recognizer)}}, indent=2))
+        return 0
 
     report = readiness_report()
     print(json.dumps(report, indent=2))

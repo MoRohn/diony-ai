@@ -788,3 +788,16 @@ body[data-running="assembling"] .runtag { color: var(--ok); border-color: rgba(1
   .runclock { margin-left: 0; width: 100%; }
   .runfacts .fact { min-width: 4.6rem; padding: .42rem .6rem; }
 }
+
+/* Blueprint 32 — Cast Lock: the identity card, the measured sheet, redraw, O.S. */
+.bcard-id { font: 400 .7rem/1.45 var(--mono); color: var(--ink-2); margin: .3em 0; padding: .4em .55em; border-left: 2px solid var(--accent); background: rgba(255,255,255,.03); white-space: pre-wrap; }
+.bsheet { font: 600 .66rem/1.3 var(--mono); letter-spacing: .04em; margin: .2em 0; color: var(--ink-3); }
+.bsheet.ok { color: var(--ok); }
+.bsheet.bad { color: var(--warn, #f0a53a); }
+.bstill { position: relative; display: inline-flex; flex-direction: column; align-items: center; gap: .2em; }
+.bstill.bad img { border-color: var(--warn, #f0a53a); box-shadow: 0 0 0 1px var(--warn, #f0a53a); }
+.bstill .redraw { font: 600 .58rem/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; padding: .2em .45em; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--ink-3); cursor: pointer; }
+.bstill .redraw:hover { color: var(--accent-ink); border-color: var(--accent); }
+.bline .ostoggle { margin-left: .6em; font: 600 .58rem/1 var(--mono); letter-spacing: .08em; padding: .15em .4em; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--ink-3); cursor: pointer; vertical-align: middle; }
+.bline .ostoggle.on, .bline .ostoggle:hover { color: var(--accent-ink); border-color: var(--accent); }
+.acceptbtn.alt { opacity: .85; }

@@ -109,7 +109,7 @@ def _load_image_rgb(path: Path):
 
 def measure_face_identity(negative: Path, reference: Path, *, frame_count: int) -> FaceIdentityReceipt:
     """Cosine similarity between reference faces and each sampled frame's main face."""
-    models = face_models()
+    models = staged_face_models()
     if models is None:
         return FaceIdentityReceipt(False, error="face models are not staged")
     threshold = face_threshold()
@@ -166,3 +166,97 @@ def measure_face_identity(negative: Path, reference: Path, *, frame_count: int) 
 
 
 __all__ = ["DEFAULT_FACE_SIMILARITY_MIN", "FACE_IDENTITY_VERSION", "FaceIdentityReceipt", "face_models", "face_threshold", "measure_face_identity"]
+
+
+# --------------------------------------------------------------------------
+# Blueprint 32 — still-to-still identity (the character sheet's own coherence)
+# and a desk-side home for the models. The Director runs on a laptop, where
+# the GPU host's /models tree does not exist: without a default location the
+# identity family stays "unmeasured" on every desk forever.
+# --------------------------------------------------------------------------
+
+DETECTOR_FILENAME = "face_detection_yunet_2023mar.onnx"
+RECOGNIZER_FILENAME = "face_recognition_sface_2021dec.onnx"
+
+
+def default_face_model_dir() -> Path | None:
+    """Where staged models live when no env var names them: ``DIONY_FACE_ID_DIR``,
+    else ``<vault>/models/opencv-zoo`` (the Director/Producer vault)."""
+    explicit = os.environ.get("DIONY_FACE_ID_DIR", "").strip()
+    if explicit:
+        return Path(explicit)
+    vault = os.environ.get("DIONY_VAULT", "").strip() or os.environ.get("DIONY_PRODUCER_VAULT", "").strip()
+    if not vault:
+        try:
+            from diony_contracts.cluster import cluster_root
+
+            return cluster_root() / "models" / "opencv-zoo"
+        except Exception:  # noqa: BLE001 - contracts may be absent on a bare host
+            return None
+    return Path(vault) / "models" / "opencv-zoo"
+
+
+def staged_face_models() -> tuple[Path, Path] | None:
+    """The env-named models, else the pair staged in the default directory."""
+    named = face_models()
+    if named is not None:
+        return named
+    folder = default_face_model_dir()
+    if folder is None:
+        return None
+    paths = (folder / DETECTOR_FILENAME, folder / RECOGNIZER_FILENAME)
+    if all(path.is_file() for path in paths):
+        return paths
+    return None
+
+
+def measure_still_identity(reference: Path, candidate: Path) -> FaceIdentityReceipt:
+    """Cosine similarity between the main face in ``reference`` and the main
+    face in ``candidate`` — two stills, no video. Unmeasurable never raises."""
+    models = staged_face_models()
+    if models is None:
+        return FaceIdentityReceipt(False, error="face models are not staged")
+    threshold = face_threshold()
+    try:
+        import cv2  # type: ignore[import-not-found]
+
+        yunet, sface = _engines(str(models[0]), str(models[1]))
+        pairs = []
+        for path in (reference, candidate):
+            bgr = _bgr(_load_image_rgb(path))
+            faces = _detect(yunet, bgr)
+            if not faces:
+                pairs.append(None)
+                continue
+            main = max(faces, key=lambda row: float(row[2]) * float(row[3]))
+            pairs.append(_embed(sface, bgr, main))
+        if pairs[0] is None:
+            return FaceIdentityReceipt(True, reference_faces=0, threshold=threshold, notes=["no face in the reference still"])
+        if pairs[1] is None:
+            return FaceIdentityReceipt(
+                True, reference_faces=1, frames_sampled=1, frames_with_face=0, threshold=threshold,
+                notes=["no usable face in the candidate still"],
+            )
+        score = round(float(sface.match(pairs[0], pairs[1], cv2.FaceRecognizerSF_FR_COSINE)), 4)
+    except Exception as exc:  # noqa: BLE001 - unmeasurable identity never fails a still
+        return FaceIdentityReceipt(False, error=str(exc)[:300], threshold=threshold)
+    return FaceIdentityReceipt(
+        True,
+        reference_faces=1,
+        frames_sampled=1,
+        frames_with_face=1,
+        similarities=(score,),
+        similarity_min=score,
+        similarity_mean=score,
+        verified=score >= threshold,
+        threshold=threshold,
+    )
+
+
+__all__ += [
+    "DETECTOR_FILENAME",
+    "RECOGNIZER_FILENAME",
+    "default_face_model_dir",
+    "measure_still_identity",
+    "staged_face_models",
+]

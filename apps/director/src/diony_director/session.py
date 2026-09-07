@@ -118,6 +118,9 @@ _VOICES: dict[str, str] = {}
 # the clips), or "mix" (on-camera dialogue in the clip, voice-over in post).
 # Resolved into a per-clip/per-op `voicing` at draft and lock time.
 _STYLES: dict[str, str] = {}
+# Blueprint 32: the session's cast-lock mode ("locked" only — Standard is the
+# absent default), fixed at the split like the production style
+_CAST: dict[str, str] = {}
 # The inputs every master derivation was made from, keyed by op id (a chain's
 # links share one record). s-16d2e6e5e0: a failed derivation released the
 # chain with the raw idea and no way back but a re-paste — the idea was
@@ -150,6 +153,7 @@ def reset() -> None:
         _ASPECTS,
         _VOICES,
         _STYLES,
+        _CAST,
         _DERIVATIONS,
         _RUN_PLANS,
     ):
@@ -405,7 +409,7 @@ def apply_uploads_to_refs(
     merged = uploads + [r for r in (refs.get("references") or []) if r not in uploads]
     refs["references"] = merged[:3]
     refs.pop("start_image", None)
-    return refs
+    return compiler.reference_roles(refs, clip, package)
 
 
 def _idea_with_uploads(sid: str, idea: str) -> str:
@@ -1159,6 +1163,122 @@ def _plan_style_frames(sid: str, ops: list[DirectorOp], master: MasterPrompt) ->
     return created
 
 
+def _plan_cast_keyframes(sid: str, ops: list[DirectorOp], package: ProductionPackage) -> list[DirectorOp]:
+    """Blueprint 32: every scripted clip that shows a packed character opens
+    from a CAST KEYFRAME — a still the image lane composes from the
+    character's board, the setting plate, and (when the clip continues the
+    scene) the previous clip's last frame. Priced image ops tied to their
+    clip through the same runtime key a chain link's style frame uses, so
+    they roll inside the clip's submit and become its opening frame.
+    Idempotent: a clip that already has its frame op keeps it."""
+    from diony_director import artifacts, cast as cast_mod
+
+    lane_provider, lane_model = artifacts.sheet_lane()
+    resolution = "2k" if lane_provider is CloudProvider.GROK else "image"
+    state = _SESSIONS.setdefault(sid, SessionState(id=sid))
+    look = package.master_prompt.look if package.master_prompt is not None else None
+    created: list[DirectorOp] = []
+    for op in ops:
+        clip = clip_for_op(op)
+        if clip is None or op.mode is CloudGenerationMode.IMAGE:
+            continue
+        chars = compiler._characters_in(clip, package)
+        if not chars:
+            continue
+        rt = runtime(op.id)
+        if rt.get("style_frame_op") in _OPS:
+            continue
+        try:
+            setting = package.setting(str(clip.continuity.setting_plate.get("setting_id") or ""))
+        except KeyError:
+            continue
+        est = estimate_mod.estimate_op(
+            provider=lane_provider,
+            model=lane_model,
+            mode=CloudGenerationMode.IMAGE,
+            duration_s=1,
+            resolution=resolution,
+        )
+        frame_op = DirectorOp(
+            id=f"op-{uuid.uuid4().hex[:10]}",
+            session_id=sid,
+            op=DirectorOpType.REIMAGE,
+            provider=lane_provider,
+            model=lane_model,
+            mode=CloudGenerationMode.IMAGE,
+            prompt=cast_mod.keyframe_prompt(
+                camera=clip.camera_idea,
+                action=compiler._action_text(clip, package),
+                chars=chars,
+                setting=setting,
+                look=look,
+            ),
+            prompt_version="v1",
+            duration_s=1,
+            resolution=resolution,
+            artifact_refs={
+                "style_frame": {
+                    "for_op": op.id,
+                    "clip_index": clip.order,
+                    "keyframe": True,
+                    "clip_id": clip.clip_id,
+                }
+            },
+            estimate=est,
+            rationale=(
+                f"cast keyframe · {clip.clip_id} — {', '.join(c.name for c in chars)} composed "
+                "from the sheet before the clip rolls"
+            ),
+        )
+        _OPS[frame_op.id] = frame_op
+        state.op_ids.append(frame_op.id)
+        rt["style_frame_op"] = frame_op.id
+        if "opens from a cast keyframe" not in op.rationale:
+            op.rationale += " · opens from a cast keyframe (Cast Lock)"
+        created.append(frame_op)
+    return created
+
+
+def keyframe_ops_for(sid: str) -> list[DirectorOp]:
+    """The cast keyframes a Locked package composes (Blueprint 32) — priced
+    stills that roll inside their clips' submits, never batch targets."""
+    state = _SESSIONS.get(sid)
+    if state is None:
+        return []
+    return [
+        op for op_id in state.op_ids
+        if (op := _OPS.get(op_id)) is not None
+        and bool((op.artifact_refs.get("style_frame") or {}).get("keyframe"))
+    ]
+
+
+def add_bible_op(sid: str, op: DirectorOp, *, chain_key: str = "") -> DirectorOp:
+    """A bible still planned AFTER the lock — a redrawn sheet slot — joins
+    the sequence's bible gate and its character's chain, and the running
+    batch when one is under way, so the clips it guards keep waiting for it
+    exactly as they wait for the originals."""
+    register_op(sid, op)
+    seq = _SEQUENCES.get(sid)
+    if seq is not None:
+        seq.setdefault("bible", []).append(op.id)
+        chains = seq.setdefault("bible_chains", [])
+        placed = False
+        if chain_key:
+            for chain in chains:
+                head = _OPS.get(chain[0]) if chain else None
+                bible = (head.artifact_refs.get("bible") or {}) if head is not None else {}
+                if str(bible.get("char_id", "")) == chain_key:
+                    chain.append(op.id)
+                    placed = True
+                    break
+        if not placed:
+            chains.append([op.id])
+    if _BATCH_TARGETS.get(sid):
+        _BATCH_TARGETS[sid].add(op.id)
+    persist(sid)
+    return op
+
+
 def _style_frames_note(frames: list[DirectorOp]) -> str:
     if not frames:
         return ""
@@ -1760,6 +1880,27 @@ def set_style(sid: str, style: str) -> str:
     return resolved
 
 
+def cast_mode_for(sid: str) -> str:
+    """The session's cast-lock mode (Blueprint 32); "standard" by default."""
+    from diony_director import cast as cast_mod
+
+    return _CAST.get(sid, cast_mod.DEFAULT_MODE)
+
+
+def set_cast_mode(sid: str, mode: str) -> str:
+    """Choose the film's cast lock. Unknown names raise ValueError."""
+    from diony_director import cast as cast_mod
+
+    resolved = cast_mod.normalize_mode(mode)
+    if resolved == cast_mod.DEFAULT_MODE:
+        _CAST.pop(sid, None)
+    else:
+        _CAST[sid] = resolved
+    if sid in _SESSIONS:
+        persist(sid)
+    return resolved
+
+
 def oneshot_voicing(sid: str) -> str:
     """Who voices a one-shot's narration under the session's style: a
     one-shot's words are voice-over by nature, so Dialogue voices them in
@@ -2099,7 +2240,12 @@ SHOT_LINE_KINDS = {"action", "dialogue", "vo"}
 
 
 def edit_draft_line(
-    sid: str, line_id: str, text: str | None = None, *, shot: str | None = None
+    sid: str,
+    line_id: str,
+    text: str | None = None,
+    *,
+    shot: str | None = None,
+    off_screen: bool | None = None,
 ) -> dict[str, Any]:
     """Change one line of a READY, UNLOCKED draft — the writer's pass before
     the money pass. Headings and cues hold the structure and stay fixed.
@@ -2113,8 +2259,14 @@ def edit_draft_line(
     if draft.script.locked:
         raise DraftLocked("the script is locked — nothing changes after the lock")
     line = draft.script.line(line_id)  # KeyError → 404 upstream
-    if text is None and shot is None:
-        raise ValueError("nothing to edit — send text, shot, or both")
+    if text is None and shot is None and off_screen is None:
+        raise ValueError("nothing to edit — send text, shot, off_screen, or a combination")
+    if off_screen is not None:
+        # Blueprint 32: only a character's dialogue line can be heard from
+        # outside the frame — narration already is, and action never speaks
+        if line.kind != "dialogue":
+            raise ValueError(f"a {line.kind} line cannot be off-screen — only dialogue is")
+        line.off_screen = bool(off_screen)
     if text is not None:
         if line.kind not in EDITABLE_LINE_KINDS:
             raise ValueError(f"a {line.kind} line holds the structure and cannot be edited")
@@ -2172,6 +2324,7 @@ def lock_script(
             draft,
             provider_policy=policy,
             production_style=style_for(sid),
+            cast_lock=cast_mode_for(sid),
         )
         _PACKAGES[sid] = package
         ops = [_op_from_clip(sid, clip, package) for clip in package.clips]
@@ -2225,8 +2378,13 @@ def lock_script(
         scene_plates=scene_plates,
     )
 
+    # Blueprint 32: under Locked every clip that shows the cast opens from a
+    # keyframe the image lane composes from the sheet — priced now, rolled
+    # inside each clip's submit, never a batch target of its own.
+    keyframes = _plan_cast_keyframes(sid, ops, package) if package.cast_lock == "locked" else []
     bible_cost = sum(b.estimate.total_usd_micros for b in bible_ops if b.estimate)
     packagebuilder.add_bible_line(package, bible_ops)
+    packagebuilder.add_keyframe_line(package, keyframes)
     total = package.estimate.total_usd_micros if package.estimate else 0
     clips_cost = sum(op.estimate.total_usd_micros for op in ops if op.estimate)
     allowance = package.estimate.revision_allowance_usd_micros if package.estimate else 0
@@ -2241,6 +2399,12 @@ def lock_script(
     if bible_ops:
         lines.append(
             f"   · {_n(len(bible_ops), 'plate & character sheet still')} — {_usd(bible_cost)}"
+        )
+    if keyframes:
+        keyframe_cost = sum(k.estimate.total_usd_micros for k in keyframes if k.estimate)
+        lines.append(
+            f"   · {_n(len(keyframes), 'cast keyframe')} (Cast Lock: each clip with people "
+            f"opens from a frame composed off the sheet) — {_usd(keyframe_cost)}"
         )
     lines.append(
         f"   · revision allowance ({package.revision_allowance_bp / 100:.0f}% of clips) "
@@ -3039,6 +3203,7 @@ def persist(sid: str) -> None:
         "aspect": _ASPECTS.get(sid),
         "voice": _VOICES.get(sid) or None,
         "style": _STYLES.get(sid) or None,
+        "cast_lock": _CAST.get(sid) or None,
         "flow_template": _flow_template_raw(sid),
         "grok_template": _grok_template_raw(sid),
         "uploads": list(_UPLOADS.get(sid) or []),
@@ -3114,6 +3279,8 @@ def _load_state(sid: str, doc: dict) -> None:
         _VOICES[sid] = str(doc["voice"])
     if doc.get("style"):
         _STYLES[sid] = str(doc["style"])
+    if doc.get("cast_lock"):
+        _CAST[sid] = str(doc["cast_lock"])
     if doc.get("flow_template"):
         from diony_director import flow_lexicon
 

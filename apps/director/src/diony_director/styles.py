@@ -77,15 +77,18 @@ def normalize_style(value: str | None) -> ProductionStyle:
         ) from exc
 
 
-def voicing_for(style: ProductionStyle | str, *, on_camera: bool) -> str:
+def voicing_for(style: ProductionStyle | str, *, on_camera: bool, off_screen: bool = False) -> str:
     """Who voices a line under this style: the post narrator or the
     provider inside the clip. ``on_camera`` is a scripted dialogue line
     (a character speaking in frame); False is a voice-over or a one-shot's
-    narration — which Mix keeps on the narrator by doctrine."""
+    narration — which Mix keeps on the narrator by doctrine. ``off_screen``
+    (Blueprint 32) is a character's dialogue line spoken from outside the
+    frame: still that character's line, so Mix voices it in the clip the
+    way it voices their on-camera lines — one voice per character."""
     resolved = normalize_style(str(style))
     if resolved is ProductionStyle.DIALOGUE:
         return "generated"
-    if resolved is ProductionStyle.MIX and on_camera:
+    if resolved is ProductionStyle.MIX and (on_camera or off_screen):
         return "generated"
     return "post"
 

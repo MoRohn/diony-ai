@@ -91,6 +91,23 @@ def _video_input(value: str) -> dict:
     return {"url": value}
 
 
+def _with_legend(prompt: str, op: DirectorOp, sent_references: int) -> str:
+    """Blueprint 32: name what each <IMAGE_n> IS (docs.x.ai reference-to-video
+    tags images in the prompt). Appended only when roles rode the op and the
+    references actually ship; dropped whole when it would not fit — the
+    stills still carry the identity, the words are the courtesy."""
+    roles = list(op.artifact_refs.get("reference_roles") or [])[:sent_references]
+    if not roles or sent_references == 0:
+        return prompt
+    from diony_director import cast as cast_mod
+
+    legend = cast_mod.legend(roles, "grok")
+    if not legend:
+        return prompt
+    candidate = f"{prompt} {legend}"
+    return candidate if len(candidate) <= base.prompt_limit(PROVIDER_ID) else prompt
+
+
 def submit(op: DirectorOp) -> base.CloudJobHandle:
     base.ensure_prompt_fits(op.prompt, PROVIDER_ID)
     payload: dict = {
@@ -115,6 +132,7 @@ def submit(op: DirectorOp) -> base.CloudJobHandle:
         payload["reference_images"] = [
             {"url": _data_uri(str(ref))} for ref in references[:MAX_REFERENCE_IMAGES]
         ]
+        payload["prompt"] = _with_legend(op.prompt, op, len(payload["reference_images"]))
     voices = op.artifact_refs.get("grok_voices") or []
     if voices:
         payload["reference_audios"] = [
@@ -229,6 +247,62 @@ def submit_image(
         mode="image",
         duration_s=0,
         metadata={"sync_result_url": url},
+    )
+
+
+MAX_EDIT_IMAGES = 5  # docs.x.ai multi-image editing: up to five source images
+
+
+def submit_image_edit(
+    prompt: str,
+    images: list[str],
+    *,
+    model: str = IMAGE_MODEL,
+    aspect_ratio: str = "",
+    resolution: str = "",
+) -> base.CloudJobHandle:
+    """xAI image EDITING (`/v1/images/edits`), synchronous like generation.
+
+    Blueprint 32's board sheet and cast keyframes are drawn FROM stills — an
+    edit preserves the identity in the source pixels where a generation
+    with one loose reference re-imagines it. Wire shape per docs.x.ai
+    (image editing / multi-image editing): one source rides as ``image``
+    ``{url, type}``; several ride as ``image_urls`` (max five); the output
+    aspect follows the first image unless ``aspect_ratio`` overrides it.
+    NOT yet verified against the live API — a 4xx here names the field."""
+    base.ensure_prompt_fits(prompt, PROVIDER_ID, what="image edit prompt")
+    sources = [_data_uri(str(image)) for image in images[:MAX_EDIT_IMAGES] if image]
+    if not sources:
+        raise base.CloudAdapterError("an image edit needs at least one source image")
+    payload: dict = {"model": model, "prompt": prompt, "response_format": "url"}
+    if len(sources) == 1:
+        payload["image"] = {"url": sources[0], "type": "image_url"}
+    else:
+        payload["image_urls"] = sources
+    if aspect_ratio in {"16:9", "9:16", "1:1"}:
+        payload["aspect_ratio"] = aspect_ratio
+    if resolution in {"1k", "2k"}:
+        payload["resolution"] = resolution
+    response = base.post_with_retries(
+        f"{api_base()}/v1/images/edits",
+        what="xAI image edit submit",
+        json=payload,
+        headers=_headers(),
+        timeout=CALL_TIMEOUT_S,
+    )
+    _guard(response)
+    body = response.json()
+    data = body.get("data") or []
+    url = str((data[0] if data else {}).get("url") or body.get("url") or "")
+    if not url:
+        raise base.CloudAdapterError(f"Grok returned no image URL for the edit: {body}")
+    return base.CloudJobHandle(
+        provider_id=PROVIDER_ID,
+        external_id=f"img-{abs(hash(url)) % 10**10}",
+        model=model,
+        mode="image",
+        duration_s=0,
+        metadata={"sync_result_url": url, "kind": "image_edit", "sources": len(sources)},
     )
 
 

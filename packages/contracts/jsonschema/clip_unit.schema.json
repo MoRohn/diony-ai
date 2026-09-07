@@ -15,9 +15,7 @@
         },
         "script_excerpt": {
           "items": {
-            "additionalProperties": {
-              "type": "string"
-            },
+            "additionalProperties": true,
             "type": "object"
           },
           "title": "Script Excerpt",

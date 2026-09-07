@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="/static/app.css?v=p44">
+<link rel="stylesheet" href="/static/app.css?v=p45">
 </head>
 <body>
 
@@ -152,6 +152,13 @@
               <option value="mix">Mix</option>
             </select>
           </label>
+          <label class="pill" title="Cast lock — how character identity holds across the film (Blueprint 32). Standard: character prose on each prompt and a five-angle sheet. Locked: an identity card rides every prompt verbatim, the sheet is an anchor portrait plus a turnaround board measured against it, every clip with people opens from a keyframe composed off the sheet, references are tagged for the provider, and Flow characters register themselves. Fixed once the script locks.">
+            <span class="plabel">Cast</span>
+            <select id="cast">
+              <option value="standard" selected>Standard</option>
+              <option value="locked">Locked</option>
+            </select>
+          </label>
           <label class="pill" title="Narrator voice for the whole film — recorded in post, one voice per film (Blueprint 28). Auto lets the Director cast from the film's tone and speaker; a name pins one Grok voice. Changeable any time before the cut. Under the Dialogue style the narrator only speaks a line the clip left unvoiced.">
             <span class="plabel">Voice</span>
             <select id="voice">
@@ -171,6 +178,6 @@
     </footer>
   </div>
 </div>
-<script src="/static/app.js?v=p44"></script>
+<script src="/static/app.js?v=p45"></script>
 </body>
 </html>

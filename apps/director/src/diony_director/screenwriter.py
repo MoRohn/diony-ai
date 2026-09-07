@@ -347,9 +347,10 @@ _BRAIN_INSTRUCTIONS = (
     "logline (str), beats (list of {beat, story_time}), settings (list of "
     "{setting_id, name, kind: INT|EXT, room_tone, time_weather, grade_language, "
     "camera_kit}), characters (list of {char_id, name, role?, age_body_notes, "
-    "wardrobe}), scenes (list of {heading, setting_ref, story_time, cast, "
-    "emotional_job, lines: list of {kind: action|dialogue|vo|parenthetical|"
-    "sound, text, speaker?, shot?}}).\n\n"
+    "wardrobe, identity: {anchor, features, negatives}}), scenes (list of "
+    "{heading, setting_ref, story_time, cast, emotional_job, lines: list of "
+    "{kind: action|dialogue|vo|parenthetical|sound, text, speaker?, shot?, "
+    "off_screen?}}).\n\n"
     "SHOTS — every action, dialogue, and vo line carries 'shot': the exact "
     "frame in one sentence — size, angle, movement, and what dominates the "
     "picture (e.g. 'Low-angle medium close-up; the camera arcs slowly left as "
@@ -372,7 +373,18 @@ _BRAIN_INSTRUCTIONS = (
     "build, skin, hair texture and length, one distinguishing physical detail. "
     "wardrobe is one specific outfit worn for the whole film (garments, "
     "colors, fabrics — 'worn grey wool coat over a black turtleneck, dark "
-    "denim').\n\n"
+    "denim'). identity is the character's IDENTITY CARD, the text that will "
+    "ride every shot they appear in verbatim: anchor = one clause of age, "
+    "build, and face geometry ('34, lean, oval face, strong brow'); features "
+    "= 3 to 5 non-negotiables a viewer would notice missing (hair colour and "
+    "length, eye colour, skin tone, one mark — scar, freckles, grey streak); "
+    "negatives = what must never change. Concrete nouns, no mood words.\n\n"
+    "OFF-SCREEN LINES: a character who is in the scene but out of frame "
+    "may speak — set off_screen: true on that dialogue line (screenplay "
+    "'(O.S.)'). Use it when the shot should hold on the listener's reaction, "
+    "or when the speaker is behind a door, in the next room, or behind the "
+    "camera. The line's shot then frames who HEARS it, never the speaker. "
+    "Keep it rare and deliberate.\n\n"
     "SETTINGS: time_weather names the light ('Night 1, sodium streetlight, "
     "light rain'); grade_language the palette and contrast ('warm practicals "
     "against teal shadow'); camera_kit the glass and movement grammar "
@@ -790,12 +802,22 @@ def _from_brain(
         )
         for i, c in enumerate(body["characters"])
     ]
+    # Blueprint 32: the brain's identity card, when it wrote one; the
+    # deterministic derivation fills the rest at lock under Locked
+    from diony_director import cast as _cast
+
+    for char, raw_char in zip(characters, body["characters"]):
+        card = _cast.parse_brain_identity(raw_char.get("identity"), char)
+        if card is not None:
+            char.identity = card
 
     lines: list[ScriptLine] = []
     scenes: list[Scene] = []
     counter = 0
 
-    def _add(kind: str, text: str, scene_id: str, speaker: str = "", shot: str = "") -> str:
+    def _add(
+        kind: str, text: str, scene_id: str, speaker: str = "", shot: str = "", *, off_screen: bool = False
+    ) -> str:
         nonlocal counter
         counter += 1
         line = ScriptLine(
@@ -805,6 +827,7 @@ def _from_brain(
             speaker=speaker,
             scene_id=scene_id,
             shot=shot,
+            off_screen=off_screen,
         )
         lines.append(line)
         return line.line_id
@@ -814,11 +837,17 @@ def _from_brain(
         line_ids = [_add("heading", str(scene_body["heading"]), scene_id)]
         for raw in scene_body["lines"]:
             kind = str(raw["kind"])
-            speaker = str(raw.get("speaker", ""))
+            # Blueprint 32: a screenplay cue tag on the speaker — "MARA (O.S.)"
+            # — or the brain's off_screen flag marks the line as heard, not
+            # seen; "(V.O.)" on a dialogue line is a voice-over line.
+            speaker, tag = _cast.parse_speaker(str(raw.get("speaker", "")))
+            if kind == "dialogue" and tag == "vo":
+                kind = "vo"
+            off_screen = kind == "dialogue" and (tag == "os" or bool(raw.get("off_screen")))
             shot = str(raw.get("shot", "") or "").strip()
             if kind == "dialogue" and speaker:
                 line_ids.append(_add("cue", speaker, scene_id, speaker))
-            line_ids.append(_add(kind, str(raw["text"]), scene_id, speaker, shot))
+            line_ids.append(_add(kind, str(raw["text"]), scene_id, speaker, shot, off_screen=off_screen))
         scenes.append(
             Scene(
                 scene_id=scene_id,

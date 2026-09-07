@@ -191,11 +191,21 @@ def _delivery_clause(clip: ClipUnit) -> str:
     moving mid-conversation — so the post-recorded narration lands on a body
     that is visibly speaking. The authored words themselves never enter the
     prompt: a provider voice is the wrong voice, and its own pacing fights
-    the booked clip length. A voice-over clip needs no performance at all."""
+    the booked clip length. A voice-over clip needs no performance at all.
+    An off-screen line (Blueprint 32) is performed by the LISTENERS: the
+    speaker is out of frame and no mouth on screen forms words."""
     excerpt = clip.audio_packet.script_excerpt
-    if not excerpt or not clip.audio_packet.on_camera:
+    if not excerpt:
         return ""
     entry = excerpt[0]
+    if entry.get("off_screen"):
+        from diony_director import cast as cast_mod
+
+        return cast_mod.offscreen_delivery_clause(
+            str(entry.get("speaker", "") or "The speaker"), list(entry.get("listeners") or [])
+        )
+    if not clip.audio_packet.on_camera:
+        return ""
     parenthetical = entry.get("parenthetical", "")
     delivery = ", ".join(f"{k}: {v}" for k, v in clip.audio_packet.delivery.items())
     direction = "; ".join(x for x in (parenthetical, delivery) if x)
@@ -237,6 +247,11 @@ def _spoken_clause(clip: ClipUnit) -> str:
     delivery = ", ".join(f"{k}: {v}" for k, v in clip.audio_packet.delivery.items())
     direction = "; ".join(x for x in (parenthetical, delivery) if x)
     read = f" — delivered {direction}" if direction else ""
+    if entry.get("off_screen"):
+        # Blueprint 32: the character's own voice, from beyond the frame edge
+        from diony_director import cast as cast_mod
+
+        return cast_mod.offscreen_spoken_clause(who, line, read, list(entry.get("listeners") or []))
     if clip.audio_packet.on_camera:
         return (
             f'{who} speaks aloud, on camera, lips in sync with the words, exactly '
@@ -429,7 +444,18 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
     setting = package.setting(str(clip.continuity.setting_plate["setting_id"]))
     scene = package.script.scene(clip.scene_id)
     chars = _characters_in(clip, package)
-    char_text = " ".join(_character_block(c, scene.story_time) for c in chars)
+    locked = getattr(package, "cast_lock", "standard") == "locked"
+    if locked:
+        # Blueprint 32: the identity card, byte-identical on every prompt that
+        # shows the character, untouchable under length pressure, and placed
+        # BEFORE scene and style so atmosphere never dilutes the face.
+        from diony_director import cast as cast_mod
+
+        char_text = " ".join(cast_mod.identity_block(c) for c in chars)
+    else:
+        char_text = " ".join(_character_block(c, scene.story_time) for c in chars)
+    identity_early = (char_text, 0) if locked else ("", 0)
+    identity_late = ("", 3) if locked else (char_text, 3)
     action = _action_text(clip, package)
     continuity = CONTINUITY_CLAUSE if _continues_scene(clip, package) else ""
     master = _master_pieces(clip, package)
@@ -474,6 +500,7 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
             [
                 (f"{camera_text}." if camera_text else "", 0),
                 (_blocking_locks(clip, char_text, action, camera_text=camera_text), 0),
+                identity_early,
                 (continuity, 1),
                 (master["anchors"], 1),
                 (
@@ -490,7 +517,7 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 (_realism_clause(package), 1),
                 (_sound_clause(clip, setting, continues=bool(continuity)), 2),
                 voice[1],
-                (char_text, 3),
+                identity_late,
                 (master["ending"], 1),
                 (master["constraints"], 1),
                 (ANTI_ARTIFACT, 0),
@@ -532,6 +559,7 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 # lock on every dialect — the s-2e0a74644b regression class
                 # doesn't care which lane the clip rides
                 (_blocking_locks(clip, char_text, action, camera_text=camera_text), 0),
+                identity_early,
                 (continuity, 1),
                 (master["anchors"], 1),
                 # the whole Flow package rides omni now, picture clips
@@ -550,7 +578,7 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 (look_block, 0),
                 (master["lighting"], 2),
                 (omni_style, 2),
-                (char_text, 3),
+                identity_late,
                 voice[0],
                 (_sound_clause(clip, setting, continues=bool(continuity)), 2),
                 voice[1],
@@ -571,6 +599,7 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
         [
             (f"{camera_text}." if camera_text else "", 0),
             (_blocking_locks(clip, char_text, action, camera_text=camera_text), 0),
+            identity_early,
             (continuity, 1),
             (master["anchors"], 1),
             (f"{action or scene.emotional_job or 'a held cinematic moment'}.", 3),
@@ -582,7 +611,7 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
             voice[0],
             (_sound_clause(clip, setting, continues=bool(continuity)), 2),
             voice[1],
-            (char_text, 3),
+            identity_late,
             (master["ending"], 1),
             (master["constraints"], 1),
             (ANTI_ARTIFACT, 0),
@@ -657,11 +686,79 @@ def _live_plate_asset(clip: ClipUnit, package: ProductionPackage) -> str:
     return ""
 
 
+def _locked_identity_images(chars: list[CharacterProfile], budget: int) -> list[str]:
+    """Blueprint 32: one best still per character first (the board packs
+    four views into one slot), then second stills while the budget allows."""
+    from diony_director import cast as cast_mod
+
+    packs = [cast_mod.identity_refs(c) for c in chars]
+    images: list[str] = []
+    for depth in range(max((len(pack) for pack in packs), default=0)):
+        for pack in packs:
+            if depth < len(pack) and pack[depth] not in images and len(images) < budget:
+                images.append(pack[depth])
+    return images
+
+
+def reference_roles(refs: dict, clip: ClipUnit, package: ProductionPackage, *, frames: list[str] | None = None) -> dict:
+    """Blueprint 32: label every reference the op will send with what it IS,
+    so the adapters can tag them the way the providers document. Classified
+    by path, so late binding can reorder or add references freely. Only a
+    Locked package earns roles — Standard payloads stay byte-identical."""
+    if getattr(package, "cast_lock", "standard") != "locked":
+        refs.pop("reference_roles", None)
+        refs.pop("character_names", None)
+        return refs
+    from diony_director import cast as cast_mod
+
+    chars = _characters_in(clip, package)
+    by_still: dict[str, str] = {}
+    for char in chars:
+        for still in cast_mod.identity_refs(char):
+            by_still.setdefault(still, char.name)
+    plate = _live_plate_asset(clip, package)
+    look = look_for(package)
+    anchors = set(look.anchor_assets) if look is not None else set()
+    from diony_director import session as _session
+
+    uploads = set(_session.all_upload_paths(package.session_id))
+    frame_set = set(frames or [])
+    roles: list[dict[str, str]] = []
+    for ref in refs.get("references") or []:
+        if ref in by_still:
+            roles.append(cast_mod.role("character", by_still[ref]))
+        elif plate and ref == plate:
+            roles.append(cast_mod.role("plate"))
+        elif ref in frame_set or "/frames/" in str(ref):
+            roles.append(cast_mod.role("bridge"))
+        elif ref in anchors:
+            roles.append(cast_mod.role("look"))
+        elif ref in uploads:
+            roles.append(cast_mod.role("upload"))
+        else:
+            roles.append(cast_mod.role("look"))
+    if roles:
+        refs["reference_roles"] = roles
+    else:
+        refs.pop("reference_roles", None)
+    if refs.get("characters"):
+        names = [c.name for c in chars if c.flow_character_ref]
+        refs["character_names"] = names[: len(refs["characters"])]
+    else:
+        refs.pop("character_names", None)
+    return refs
+
+
 def provider_artifact_refs(clip: ClipUnit, package: ProductionPackage) -> dict:
     refs: dict = {}
     chars = _characters_in(clip, package)
+    locked = getattr(package, "cast_lock", "standard") == "locked"
     if clip.provider is CloudProvider.GROK:
-        images = [asset for c in chars for asset in c.grok_ref_pack]
+        images = (
+            _locked_identity_images(chars, 3)
+            if locked
+            else [asset for c in chars for asset in c.grok_ref_pack]
+        )
         plate_asset = _live_plate_asset(clip, package)
         if clip.continuity.lock_recipe == "still" and plate_asset:
             if chars and images:
@@ -682,7 +779,7 @@ def provider_artifact_refs(clip: ClipUnit, package: ProductionPackage) -> dict:
             refs["references"] = pack[:3]
         if clip.clip_class == "silent-picture" and not speaks_in_clip(clip):
             refs["generate_audio"] = False
-        return refs
+        return reference_roles(refs, clip, package)
 
     from diony_director import capabilities
 
@@ -709,4 +806,12 @@ def provider_artifact_refs(clip: ClipUnit, package: ProductionPackage) -> dict:
             refs.setdefault("references", []).append(plate_asset)
         # A model with no reference lane (veo-3.1-quality) carries the look
         # through i2v chaining and the prompt — never an illegal payload.
-    return refs
+    if locked and max_refs and not refs.get("characters"):
+        # Blueprint 32: no Flow character object yet (the sheet is still
+        # landing, or the lane has no character budget) — the identity
+        # stills ride as references beside the plate, never nothing.
+        budget = max(0, max_refs - len(refs.get("references") or []))
+        for still in _locked_identity_images(chars, budget):
+            if still not in (refs.get("references") or []):
+                refs.setdefault("references", []).append(still)
+    return reference_roles(refs, clip, package)

@@ -273,6 +273,7 @@ def submit(op: DirectorOp) -> base.CloudJobHandle:
     source_video = op.artifact_refs.get("source_video")
     if source_video and op.mode is not None and op.mode.value == "v2v_edit":
         payload["referenceVideo_1"] = _media_ref(source_video, what="referenceVideo_1")
+    payload["prompt"] = _with_markers(op)
 
     response = _post(
         f"{api_base()}/videos", what="video submit", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
@@ -347,13 +348,47 @@ def submit_image(
     return handle
 
 
-def register_character(name: str, image_media_ids: list[str]) -> str:
+def _with_markers(op: DirectorOp) -> str:
+    """Blueprint 32: useapi's inline markers — `@character_n` / `@referenceImage_n`
+    — name what each supplied slot IS. Every marker must match a body slot
+    (a dangling one 400s), so only the slots this payload carries are named;
+    dropped whole when it would not fit."""
+    roles = list(op.artifact_refs.get("reference_roles") or [])
+    names = list(op.artifact_refs.get("character_names") or [])
+    references = list(op.artifact_refs.get("references") or [])
+    characters = list(op.artifact_refs.get("characters") or [])
+    if not references and not characters:
+        return op.prompt
+    roles = roles[: len(references)]
+    names = names[: len(characters)]
+    if not roles and not names:
+        return op.prompt
+    from diony_director import cast as cast_mod
+
+    legend = cast_mod.legend(roles, "google-flow", characters=names)
+    if not legend:
+        return op.prompt
+    candidate = f"{op.prompt} {legend}"
+    return candidate if len(candidate) <= base.prompt_limit(PROVIDER_ID) else op.prompt
+
+
+MAX_CHARACTER_IMAGES = 2  # POST /characters: imageReference_1..2 ("max two per character")
+
+
+def register_character(
+    name: str, image_media_ids: list[str], *, voice: str = "", notes: str = ""
+) -> str:
     # /characters dialect (docs, aligned with the /images correction):
-    # displayName + imageReference_N, synchronous, returns entityId.
+    # displayName + imageReference_N (max two), optional personalityNotes and a
+    # system voice preset; synchronous, returns entityId.
     payload: dict = {"displayName": name}
     if account_email():
         payload["email"] = account_email()
-    for index, ref in enumerate(image_media_ids, start=1):
+    if notes:
+        payload["personalityNotes"] = notes[:2000]
+    if voice:
+        payload["voice"] = voice
+    for index, ref in enumerate(image_media_ids[:MAX_CHARACTER_IMAGES], start=1):
         payload[f"imageReference_{index}"] = _media_ref(ref, what=f"imageReference_{index}")
     response = _post(
         f"{api_base()}/characters", what="character register", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S

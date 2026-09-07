@@ -85,6 +85,8 @@ def build_deliverables(
         ):
             excerpt = clip.audio_packet.script_excerpt[0]
             speaker = str(excerpt.get("speaker", ""))
+            if excerpt.get("off_screen") and speaker:
+                speaker = f"{speaker} (O.S.)"  # Blueprint 32: heard, not seen
             line = str(excerpt.get("line", "")).strip()
             cue_key = clip.clip_id
         elif str(getattr(op, "narration", "") or "").strip():

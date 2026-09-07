@@ -15,9 +15,7 @@
         },
         "script_excerpt": {
           "items": {
-            "additionalProperties": {
-              "type": "string"
-            },
+            "additionalProperties": true,
             "type": "object"
           },
           "title": "Script Excerpt",
@@ -129,6 +127,29 @@
             "type": "string"
           },
           "title": "Hero Stills",
+          "type": "object"
+        },
+        "identity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IdentityCard"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "sheet_receipt": {
+          "additionalProperties": true,
+          "title": "Sheet Receipt",
+          "type": "object"
+        },
+        "sheet_retries": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Sheet Retries",
           "type": "object"
         },
         "wardrobe": {
@@ -503,6 +524,47 @@
         "usd_micros"
       ],
       "title": "CostEstimateLine",
+      "type": "object"
+    },
+    "IdentityCard": {
+      "description": "Blueprint 32 \u2014 the character's identity contract, written once and\ncarried byte-identical on every prompt, plate, sheet, and keyframe that\nshows the character. Prose re-derived per clip is how a face drifts; a\nlocked card is how it holds. ``anchor`` is the one-line casting read\n(age, build, face geometry), ``features`` the non-negotiables a viewer\nwould notice missing (hair, eyes, skin, one distinguishing mark),\n``wardrobe_lock`` the outfit worn for the whole film, ``negatives`` what\nmust never change. ``source`` says who wrote it: the brain, the\ndeterministic derivation from the character's notes, or the user.",
+      "properties": {
+        "anchor": {
+          "default": "",
+          "title": "Anchor",
+          "type": "string"
+        },
+        "features": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Features",
+          "type": "array"
+        },
+        "wardrobe_lock": {
+          "default": "",
+          "title": "Wardrobe Lock",
+          "type": "string"
+        },
+        "negatives": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Negatives",
+          "type": "array"
+        },
+        "source": {
+          "default": "derived",
+          "enum": [
+            "brain",
+            "derived",
+            "user"
+          ],
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "title": "IdentityCard",
       "type": "object"
     },
     "LookBible": {
@@ -980,6 +1042,11 @@
           "default": "",
           "title": "Shot",
           "type": "string"
+        },
+        "off_screen": {
+          "default": false,
+          "title": "Off Screen",
+          "type": "boolean"
         }
       },
       "required": [
@@ -1195,6 +1262,15 @@
     "production_style": {
       "$ref": "#/$defs/ProductionStyle",
       "default": "narrated"
+    },
+    "cast_lock": {
+      "default": "standard",
+      "enum": [
+        "standard",
+        "locked"
+      ],
+      "title": "Cast Lock",
+      "type": "string"
     },
     "created_at": {
       "format": "date-time",

@@ -22,10 +22,18 @@ def build_package(
     split: bool = True,
     provider_policy: str = "auto",
     production_style: str = "narrated",
+    cast_lock: str = "standard",
 ) -> ProductionPackage:
+    from diony_director import cast as cast_mod
     from diony_director import styles
 
     style = styles.normalize_style(production_style)
+    lock_mode = cast_mod.normalize_mode(cast_lock)
+    if lock_mode == "locked":
+        # Blueprint 32: every character carries a card before any prompt is
+        # compiled — the brain's when it wrote one, derived otherwise
+        for char in draft.characters:
+            cast_mod.ensure_identity(char)
     clips = (
         splitter.split_script(
             draft.script,
@@ -33,6 +41,7 @@ def build_package(
             draft.settings,
             provider_policy=provider_policy,
             production_style=style.value,
+            cast_lock=lock_mode,
         )
         if split
         else []
@@ -49,6 +58,7 @@ def build_package(
         # compiled clip inherits its lighting, physics, anchors, constraints
         master_prompt=getattr(draft, "master", None),
         production_style=style,
+        cast_lock=lock_mode,
     )
     if split:
         price_package(package)
@@ -118,6 +128,41 @@ def add_bible_line(package: ProductionPackage, bible_ops: list) -> CostEstimate 
                 for line in op.estimate.lines
             ),
             usd_micros=bible_cost,
+        )
+    )
+    package.estimate = CostEstimate(
+        id=package.estimate.id,
+        workspace_id=package.estimate.workspace_id,
+        lines=lines,
+        revision_allowance_usd_micros=package.estimate.revision_allowance_usd_micros,
+        rate_cards_stale=package.estimate.rate_cards_stale,
+    )
+    return package.estimate
+
+
+def add_keyframe_line(package: ProductionPackage, keyframes: list) -> CostEstimate | None:
+    """Blueprint 32: the cast keyframes a Locked package composes before its
+    clips roll — one line, so the locked total covers them like the sheets."""
+    if package.estimate is None or not keyframes:
+        return package.estimate
+    cost = sum(op.estimate.total_usd_micros for op in keyframes if op.estimate)
+    if not cost:
+        return package.estimate
+    lines = list(package.estimate.lines)
+    lines.append(
+        CostEstimateLine(
+            label=f"cast keyframes × {len(keyframes)}",
+            provider_id=keyframes[0].provider.value if keyframes[0].provider else "",
+            model="cast-keyframes",
+            unit="stills",
+            quantity_microunits=len(keyframes) * 1_000_000,
+            internal_credits=sum(
+                line.internal_credits
+                for op in keyframes
+                if op.estimate
+                for line in op.estimate.lines
+            ),
+            usd_micros=cost,
         )
     )
     package.estimate = CostEstimate(

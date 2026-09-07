@@ -1311,6 +1311,7 @@
       if (s.aspect) set("aspect", s.aspect);
       set("voice", s.voice || "");
       set("style", s.style || "narrated");
+      set("cast", s.cast_lock || "standard");
       if (s.flow_template) {
         set("flow-world", s.flow_template.world || "baseline");
         set("flow-camera", s.flow_template.camera || "");
@@ -1368,6 +1369,7 @@
       grok_atmosphere: fieldOrKeep("grok-atmosphere"),
       voice: fieldOrKeep("voice"),
       style: fieldOrKeep("style"),
+      cast: fieldOrKeep("cast"),
     };
   }
 
@@ -1394,6 +1396,42 @@
       addMsg("director", `Couldn't set the production style: ${err.message || err}`, "warn");
       // the server kept its style — put the pill back where the session is
       syncSessionSettings();
+    }
+  }
+
+  // Cast lock (Blueprint 32): lands on the session at once, like the style —
+  // the split, the sheets, and the keyframes read it at lock. A locked script
+  // refuses it, and the room says so.
+  const CAST_NOTES = {
+    standard: "character prose on each prompt, a five-angle sheet, references where the lane allows.",
+    locked: "identity cards ride every prompt verbatim; anchor + turnaround board measured against each other; every clip with people opens from a keyframe composed off the sheet; Flow characters register themselves.",
+  };
+  async function pushCast() {
+    const el = $("cast");
+    if (!el || !sessionId) return;
+    try {
+      const res = await api(`/api/director/sessions/${sessionId}/cast`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cast: el.value }),
+      });
+      const label = [...el.options].find((o) => o.value === res.cast_lock)?.textContent || res.cast_lock;
+      let note = CAST_NOTES[res.cast_lock] || "";
+      if (res.cast_lock === "locked" && castCatalog && castCatalog.face_models_staged === false) {
+        note += " This desk cannot measure faces yet — run `diony-director-check --stage-face-models` so sheets and takes are scored, not eyeballed.";
+      }
+      addMsg("director", `Cast lock: ${label} — ${note}`);
+    } catch (err) {
+      addMsg("director", `Couldn't set the cast lock: ${err.message || err}`, "warn");
+      syncSessionSettings();
+    }
+  }
+  let castCatalog = null;
+  async function loadCastCatalog() {
+    try {
+      castCatalog = await api("/api/director/cast/modes");
+    } catch (err) {
+      castCatalog = null;
     }
   }
 
@@ -2964,7 +3002,9 @@
         try {
           const locked = await api(`/api/director/sessions/${sessionId}/lock_script`, { method: "POST" });
           const reply = addMsg("director", locked.reply);
-          setupBatch(reply, locked.ops, locked.bible_ops || []);
+          // cast keyframes (Cast Lock) are stills priced with the sheets — they
+          // roll inside each clip's submit, never as targets of their own
+          setupBatch(reply, locked.ops, [...(locked.bible_ops || []), ...(locked.keyframe_ops || [])]);
           refreshScriptSheets(); // the sheet turns read-only
           showProductionCard(); // bibles (the face gate), shots, and the cut, live
         } catch (err) {
@@ -3181,6 +3221,7 @@
     list.className = "blines";
     const editable = new Set(["action", "dialogue", "vo", "parenthetical"]);
     const shotKinds = new Set(["action", "dialogue", "vo"]);
+    let lastCue = null;
     b.script.lines.forEach((l) => {
       const row = document.createElement("div");
       row.className = `bline ${l.kind}`;
@@ -3189,6 +3230,37 @@
         row.classList.add("editable");
         row.title = "click to rewrite";
         row.addEventListener("click", () => editLine(row, l));
+      }
+      if (l.kind === "cue") lastCue = row;
+      if (l.kind === "dialogue") {
+        // Blueprint 32: a line heard from outside the frame wears the
+        // screenplay tag on its cue; directable until the lock
+        if (l.off_screen && lastCue) lastCue.textContent = `      ${lastCue.textContent.trim()} (O.S.)`;
+        if (!b.locked) {
+          const os = document.createElement("button");
+          os.type = "button";
+          os.className = `ostoggle${l.off_screen ? " on" : ""}`;
+          os.textContent = "O.S.";
+          os.title = l.off_screen
+            ? "Heard from off-screen — the shot holds on who hears it. Click to put the speaker back in frame."
+            : "Make this line off-screen: the speaker is out of frame and the shot holds on who hears it.";
+          os.addEventListener("click", async (ev) => {
+            ev.stopPropagation();
+            os.disabled = true;
+            try {
+              await api(`/api/director/sessions/${sessionId}/draft/line`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ line_id: l.line_id, off_screen: !l.off_screen }),
+              });
+              renderScriptSheet(pane, await fetchBoard());
+            } catch (err) {
+              os.disabled = false;
+              addMsg("director", `Couldn't change that line: ${err.message || err}`);
+            }
+          });
+          row.appendChild(os);
+        }
       }
       list.appendChild(row);
       // The authored frame for the beat. Directable until the lock; on the
@@ -3302,14 +3374,74 @@
     b.characters.forEach((c) => {
       const card = document.createElement("div");
       card.className = "bcard";
+      const receipt = c.sheet_receipt || {};
+      const sheetClass = receipt.measured ? (receipt.verified ? "bsheet ok" : "bsheet bad") : "bsheet";
       card.innerHTML =
         `<div class="bhead">${esc(c.name)} <span class="bt">${esc(c.role)}</span>` +
         `${c.face_approved ? ' <span class="bok">FACE ✓</span>' : ""}` +
-        `${c.flow_registered ? ' <span class="bok">FLOW ✓</span>' : ""}</div>` +
+        `${c.flow_registered ? ' <span class="bok">FLOW ✓</span>' : ""}` +
+        `${receipt.measured && receipt.verified ? ' <span class="bok">SHEET ✓</span>' : ""}</div>` +
         `<div class="bward">${esc(c.wardrobe || "wardrobe pending")}</div>` +
+        // Blueprint 32: the identity card as it rides every prompt — the
+        // text to read before approving a face, because it is the law the
+        // clips are shot under
+        `${c.identity_block ? `<div class="bcard-id" title="Identity card — rides every prompt that shows ${esc(c.name)} (Cast Lock: Locked)">${esc(c.identity_block)}</div>` : ""}` +
+        `${c.sheet ? `<div class="${sheetClass}">${esc(c.sheet)}</div>` : ""}` +
         `<div class="bstills">${c.stills
-          .map((s) => `<img src="/api/director/sessions/${sessionId}/bible/media/${encodeURIComponent(c.char_id)}/${encodeURIComponent(s)}" alt="${esc(c.name)} ${esc(s)}" title="${esc(s)}">`)
+          .map((s) => {
+            const failed = (receipt.failed || []).includes(s);
+            return `<span class="bstill${failed ? " bad" : ""}" data-slot="${esc(s)}"><img src="/api/director/sessions/${sessionId}/bible/media/${encodeURIComponent(c.char_id)}/${encodeURIComponent(s)}" alt="${esc(c.name)} ${esc(s)}" title="${esc(s)}${failed ? " — reads as another person" : ""}"></span>`;
+          })
           .join("")}</div>`;
+      if (b.locked && c.stills.length) {
+        // one still can be thrown away and drawn again from the anchor
+        card.querySelectorAll(".bstill").forEach((box) => {
+          const slot = box.dataset.slot;
+          if (slot === "front" && c.stills.length > 1) return;
+          const redraw = document.createElement("button");
+          redraw.type = "button";
+          redraw.className = "redraw";
+          redraw.textContent = "redraw";
+          redraw.title = `Throw ${c.name}'s ${slot} away and draw it again from the anchor`;
+          redraw.addEventListener("click", async () => {
+            redraw.disabled = true;
+            try {
+              const res = await api(
+                `/api/director/sessions/${sessionId}/bible/redraw/${encodeURIComponent(c.char_id)}/${encodeURIComponent(slot)}`,
+                { method: "POST" }
+              );
+              addMsg("director", res.reply);
+              refreshProduction();
+            } catch (err) {
+              redraw.textContent = String(err.message || err);
+              redraw.disabled = false;
+            }
+          });
+          box.appendChild(redraw);
+        });
+      }
+      if (b.locked && !c.flow_registered && c.stills.length && b.cast_lock === "locked") {
+        const reg = document.createElement("button");
+        reg.type = "button";
+        reg.className = "acceptbtn alt";
+        reg.textContent = `Register ${c.name} on Flow`;
+        reg.title = "Build the reusable Flow character object from the anchor and the board — the clips then carry it as @character";
+        reg.addEventListener("click", async () => {
+          reg.disabled = true;
+          try {
+            const res = await api(
+              `/api/director/sessions/${sessionId}/bible/register_character/${encodeURIComponent(c.char_id)}`,
+              { method: "POST" }
+            );
+            addMsg("director", res.reply);
+            refreshProduction();
+          } catch (err) {
+            reg.textContent = String(err.message || err);
+            reg.disabled = false;
+          }
+        });
+        card.appendChild(reg);
+      }
       if (!c.face_approved && c.stills.length) {
         const approve = document.createElement("button");
         approve.type = "button";
@@ -3614,6 +3746,8 @@
   { const a = $("aspect"); if (a) a.addEventListener("change", () => markDirty("aspect")); }
   { const v = $("voice"); if (v) v.addEventListener("change", () => { markDirty("voice"); pushVoice(); }); }
   { const st = $("style"); if (st) st.addEventListener("change", () => { markDirty("style"); pushStyle(); }); }
+  { const ct = $("cast"); if (ct) ct.addEventListener("change", () => { markDirty("cast"); pushCast(); }); }
+  loadCastCatalog();
   $("idea").addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" && !ev.shiftKey) {
       ev.preventDefault();

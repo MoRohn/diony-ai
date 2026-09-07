@@ -63,10 +63,10 @@ def _face_receipt(clip_path: Path, still_path: Path, frame_count: int):
     """Producer's YuNet+SFace evidence, when the models are staged on this host."""
 
     try:
-        from diony_producer.face_identity import face_models, measure_face_identity
+        from diony_producer.face_identity import measure_face_identity, staged_face_models
     except ImportError:
         return None
-    if face_models() is None:
+    if staged_face_models() is None:
         return None
     return measure_face_identity(clip_path, still_path, frame_count=frame_count)
 
@@ -81,6 +81,12 @@ def _measure_identity(
 ) -> None:
     if package is None or not clip.continuity.character_packs:
         return
+    # Blueprint 32: EVERY packed character is measured — the pre-32 loop
+    # returned on the first drifted face, so a two-hander's second lead was
+    # never checked once the first failed. One fail fails the family; a
+    # character whose face the frames never show stays unmeasured, never
+    # a pass by absence.
+    verdicts: list[str] = []
     for pack in clip.continuity.character_packs:
         try:
             char = package.character(str(pack.get("char_id", "")))
@@ -94,18 +100,23 @@ def _measure_identity(
             continue  # this character unmeasurable; the rest of the cast still gets checked
         if receipt.verified is None:
             issues.append(f"identity: no usable face found for {char.name} — check framing")
-            families["identity"] = "unmeasured"
+            verdicts.append("unmeasured")
             continue
         measured[f"identity_min:{char.char_id}"] = float(receipt.similarity_min or 0)
         if receipt.verified:
-            families["identity"] = "pass"
+            verdicts.append("pass")
         else:
-            families["identity"] = "fail"
+            verdicts.append("fail")
             issues.append(
                 f"{char.name} reads {receipt.similarity_min} against the sheet "
                 f"(threshold {receipt.threshold}) — the face drifted"
             )
-            return
+    if "fail" in verdicts:
+        families["identity"] = "fail"
+    elif "pass" in verdicts and "unmeasured" not in verdicts:
+        families["identity"] = "pass"
+    elif verdicts:
+        families["identity"] = "unmeasured"
 
 
 # Measured clusters (s-1b80548c4d): healthy bridge joins sit under 0.005; a

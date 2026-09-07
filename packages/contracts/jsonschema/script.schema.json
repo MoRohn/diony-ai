@@ -84,6 +84,11 @@
           "default": "",
           "title": "Shot",
           "type": "string"
+        },
+        "off_screen": {
+          "default": false,
+          "title": "Off Screen",
+          "type": "boolean"
         }
       },
       "required": [

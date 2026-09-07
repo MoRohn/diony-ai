@@ -186,6 +186,10 @@ class MessageIn(BaseModel):
     # Production style (Blueprint 31): None = keep; "narrated" (default),
     # "dialogue", or "mix". Fixed once the script locks.
     style: str | None = None
+    # Cast lock (Blueprint 32): None = keep; "standard" (default) or
+    # "locked". Fixed once the script locks — the split packs, sheets, and
+    # keyframes from it.
+    cast: str | None = None
 
 
 # Each program-setting change is PLANNED (validated, never mutating) before
@@ -320,6 +324,32 @@ def _plan_style(sid: str, style: str | None) -> Callable[[], None] | None:
     return lambda: session.set_style(sid, resolved)
 
 
+def _plan_cast(sid: str, cast: str | None) -> Callable[[], None] | None:
+    """Validate a cast-lock change (Blueprint 32). None keeps; a key sets it.
+    Refused once THIS session's script is locked: the package was split,
+    sheeted, and keyframed under the mode it carries."""
+    from diony_director import cast as cast_mod
+
+    if cast is None:
+        return None
+    try:
+        resolved = cast_mod.normalize_mode(cast)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    if resolved == session.cast_mode_for(sid):
+        return None
+    if session.script_locked(sid):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "the script is locked and the cast was packed, sheeted, and keyframed "
+                "under its cast lock — the mode cannot change mid-production; start a "
+                f"new session for a {cast_mod.describe(resolved)} cast"
+            ),
+        )
+    return lambda: session.set_cast_mode(sid, resolved)
+
+
 def _apply_program_settings(sid: str, body: "MessageIn | ProduceIn") -> None:
     """Validate every program-setting change, then commit them together — so
     a request the caller sees rejected never half-mutates the session."""
@@ -328,6 +358,7 @@ def _apply_program_settings(sid: str, body: "MessageIn | ProduceIn") -> None:
         _plan_flow_template(sid, body.flow_world, body.flow_camera),
         _plan_grok_template(sid, body.grok_camera, body.grok_atmosphere),
         _plan_voice(sid, body.voice),
+        _plan_cast(sid, getattr(body, "cast", None)),
         _plan_style(sid, body.style),
     ]
     for commit in committers:  # every planner validated first; none raise here
@@ -376,6 +407,7 @@ def session_settings(sid: str) -> dict:
         "aspect": session.aspect_for(sid),
         "voice": session.voice_for(sid),
         "style": session.style_for(sid),
+        "cast_lock": session.cast_mode_for(sid),
         "flow_template": session.flow_template_for(sid),
         "grok_template": session.grok_template_for(sid),
     }
@@ -423,6 +455,38 @@ def style_catalog() -> dict:
     from diony_director import styles
 
     return {"default": styles.DEFAULT_STYLE.value, "styles": styles.catalog()}
+
+
+@app.get("/api/director/cast/modes")
+def cast_catalog() -> dict:
+    """The cast locks the console offers (Blueprint 32): Standard (the
+    pre-32 platform) and Locked (identity cards, a measured board sheet,
+    cast keyframes, provider identity markers, Flow characters). Reports
+    whether the desk can MEASURE faces — without the models the sheet and
+    the identity family stay honestly unmeasured."""
+    from diony_director import cast as cast_mod
+
+    return {
+        "default": cast_mod.DEFAULT_MODE,
+        "modes": cast_mod.catalog(),
+        "face_models_staged": cast_mod.face_models_staged(),
+    }
+
+
+class CastIn(BaseModel):
+    cast: str = ""  # "" = the Standard default
+
+
+@app.post("/api/director/sessions/{sid}/cast")
+def set_session_cast(sid: str, body: CastIn) -> dict:
+    """Choose the film's cast lock. Refused (409) once the script is locked."""
+    _boot()
+    if not session.session_exists(sid):
+        raise HTTPException(status_code=404, detail=f"unknown session {sid}")
+    commit = _plan_cast(sid, body.cast)
+    if commit is not None:
+        commit()
+    return {"session_id": sid, "cast_lock": session.cast_mode_for(sid)}
 
 
 class StyleIn(BaseModel):
@@ -723,6 +787,15 @@ def _late_bind_locks(op: DirectorOp) -> None:
         else:
             refs["start_image"] = frame
             refs.pop("references", None)
+    keyframe = str(session.runtime(op.id).get("style_frame") or "")
+    if keyframe and Path(keyframe).is_file() and not frame_conflicts_with_lock:
+        # Blueprint 32: the cast keyframe IS the opening frame — composed
+        # from the sheet, the plate, and the bridge frame, so opening from it
+        # loses no identity and no continuity. The references it was drawn
+        # from need not ride again (frames and refs are exclusive anyway).
+        refs["start_image"] = keyframe
+        refs.pop("references", None)
+    refs = compiler.reference_roles(refs, clip, package, frames=[frame] if frame else None)
     start = str(refs.get("start_image") or "")
     if start and Path(start).is_file() and Path(start).parent.name != "frames":
         # A plate start still is conformed to the program raster before it
@@ -823,7 +896,21 @@ def _roll_style_frame(op: DirectorOp) -> None:
     rt = session.runtime(op.id)
     if frame_op.status == "completed" and rt.get("style_frame"):
         return
-    position = session.chain_position(op.session_id, op.id) or 0
+    info = frame_op.artifact_refs.get("style_frame") or {}
+    keyframe = bool(info.get("keyframe"))
+    if keyframe and _keyframe_yields_to_lock(op):
+        # Blueprint 32: on Flow a registered character (or a voice) rides the
+        # clip and frames are exclusive with it — the keyframe is never
+        # spent on a clip that could not open from it
+        rt["style_frame_skipped"] = "the Flow character object carries the identity"
+        return
+    if keyframe:
+        label = f"clip {info.get('clip_id') or op.clip_id}"
+        what = "cast keyframe"
+    else:
+        position = session.chain_position(op.session_id, op.id) or 0
+        label = f"clip {position + 1}"
+        what = "style frame"
     if frame_op.status in {"proposed", "approved"}:
         _run_approved(frame_op)  # raises HTTPException with the reason
     if frame_op.status == "submitted":
@@ -831,23 +918,37 @@ def _roll_style_frame(op: DirectorOp) -> None:
     if frame_op.status == "submitted":
         raise HTTPException(
             status_code=503,
-            detail=f"the style frame for clip {position + 1} is still rendering",
+            detail=f"the {what} for {label} is still rendering",
         )
     if frame_op.status != "completed" or not rt.get("style_frame"):
         why = session.runtime(frame_op.id).get("submit_error") or frame_op.status
         raise HTTPException(
             status_code=409,
             detail=(
-                f"the style frame for clip {position + 1} did not print ({why}) — "
+                f"the {what} for {label} did not print ({why}) — "
                 "retry the frame before the clip can open from it"
             ),
         )
 
 
+def _keyframe_yields_to_lock(op: DirectorOp) -> bool:
+    """Whether the clip's late-bound refs carry a Flow character or voice
+    lock — frames are exclusive with those, and a lock outranks a frame."""
+    from diony_director import compiler
+
+    clip = session.clip_for_op(op)
+    package = session.package_for(op.session_id)
+    if clip is None or package is None or op.provider is None or op.provider.value != "google-flow":
+        return False
+    refs = compiler.provider_artifact_refs(clip, package)
+    return bool(refs.get("characters") or refs.get("voices"))
+
+
 def _run_link_or_op(op: DirectorOp) -> dict:
-    """Run an op; a chain link that cuts to a new place prints its style
-    frame first (its opening frame), then rolls."""
-    if _is_chain_link(op):
+    """Run an op; a chain link that cuts to a new place — or, under Cast
+    Lock, a scripted clip that shows the cast — prints its opening frame
+    first (style frame / cast keyframe), then rolls."""
+    if _is_chain_link(op) or session.style_frame_op_for(op) is not None:
         _roll_style_frame(op)
     return _run_approved(op)
 
@@ -1066,6 +1167,19 @@ def _dispatch_submit(op: DirectorOp) -> provider_base.CloudJobHandle:
             ]
         aspect = session.aspect_for(op.session_id)
         if op.provider.value == "grok":
+            # Blueprint 32: a board is drawn FROM its anchor and a keyframe FROM
+            # its references — the edit lane keeps the identity in the source
+            # pixels (up to five), where generation takes one loose reference
+            bible_slot = str((op.artifact_refs.get("bible") or {}).get("slot") or "")
+            keyframe = bool((op.artifact_refs.get("style_frame") or {}).get("keyframe"))
+            if references and (keyframe or bible_slot == "board"):
+                return grok.submit_image_edit(
+                    op.prompt,
+                    references[:grok.MAX_EDIT_IMAGES],
+                    model=op.model,
+                    aspect_ratio="1:1" if bible_slot == "board" else aspect,
+                    resolution=op.resolution if op.resolution in {"1k", "2k"} else "",
+                )
             return grok.submit_image(
                 op.prompt,
                 model=op.model,
@@ -1137,6 +1251,38 @@ def _style_frame_references(op: DirectorOp) -> list[str]:
     def _add(path: str) -> None:
         if path and Path(path).is_file() and path not in refs:
             refs.append(path)
+
+    if info.get("keyframe"):
+        # Blueprint 32: a cast keyframe composes from the character boards
+        # (identity), the setting plate (the room), and — when the clip
+        # continues its scene — the previous clip's last frame (the pose and
+        # light to continue from). Identity first: it is what the frame is for.
+        from diony_director import cast as cast_mod, compiler
+
+        clip = session.clip_for_op(link)
+        package = session.package_for(link.session_id)
+        if clip is None or package is None:
+            return []
+        for char in compiler._characters_in(clip, package):
+            for still in cast_mod.identity_refs(char)[:1]:
+                _add(still)
+        _add(compiler._live_plate_asset(clip, package))
+        for path in session.all_upload_paths(link.session_id):
+            _add(path)  # the director's own stills shape the frame too
+        prev = session.previous_completed_clip_op(link.session_id, link)
+        prev_clip = session.clip_for_op(prev) if prev is not None else None
+        if prev is not None and prev_clip is not None and prev_clip.scene_id == clip.scene_id:
+            stored = session.runtime(prev.id).get("clip")
+            if stored is not None:
+                _add(
+                    _last_frame(
+                        Path(stored.path),
+                        cluster_root() / "director" / link.session_id / "frames" / f"{prev.id}.jpg",
+                        at_s=_cut_point_s(prev, Path(stored.path)),
+                        sid=link.session_id,
+                    )
+                )
+        return refs
 
     # A REDRAW after a refusal composes from less each time: the first safe
     # redraw drops the previous link's last frame (the likeliest carrier of
@@ -1937,6 +2083,69 @@ def _review_finish(op: DirectorOp, rt: dict) -> None:
         )
 
 
+def _after_sheet_still(op: DirectorOp, package, char, slot: str) -> str:
+    """Blueprint 32, after a sheet still lands: measure the sheet against its
+    anchor, redraw a slot that reads as another person (at most
+    MAX_SLOT_REDRAWS times), and — once a Locked sheet is complete and
+    coheres (or cannot be measured) — register the Flow character object
+    from the anchor and the board so the clips can carry it. Every outcome
+    is a sentence on the op's narration; nothing here can fail the still."""
+    from diony_director import artifacts, cast as cast_mod
+
+    notes: list[str] = []
+    if slot == "front":
+        return ""
+    receipt = cast_mod.measure_sheet(char)
+    char.sheet_receipt = receipt
+    notes.append(" " + cast_mod.sheet_summary(char).capitalize() + ".")
+    if receipt.get("measured") and slot in (receipt.get("failed") or []):
+        tries = int(char.sheet_retries.get(slot, 0))
+        if tries < cast_mod.MAX_SLOT_REDRAWS:
+            still = char.hero_stills.pop(slot, "")
+            if still in char.grok_ref_pack:
+                char.grok_ref_pack.remove(still)
+            char.flow_media_ids.pop(slot, None)
+            char.sheet_retries[slot] = tries + 1
+            redraws = [
+                o for o in artifacts.plan_sheet_ops(op.session_id, package)
+                if (o.artifact_refs.get("bible") or {}).get("char_id") == char.char_id
+                and (o.artifact_refs.get("bible") or {}).get("slot") == slot
+            ]
+            for redraw in redraws:
+                session.add_bible_op(op.session_id, redraw, chain_key=char.char_id)
+            notes.append(
+                f" Redrawing {char.name}'s {slot} from the anchor "
+                f"(attempt {tries + 2} of {cast_mod.MAX_SLOT_REDRAWS + 1})."
+            )
+        else:
+            notes.append(
+                f" {char.name}'s {slot} was redrawn {tries} time(s) and still reads as "
+                "another person — approve by eye or rewrite the identity card."
+            )
+        return "".join(notes)
+    if getattr(package, "cast_lock", "standard") != "locked":
+        return "".join(notes)
+    complete = all(s in char.hero_stills for s in artifacts.sheet_slots(package))
+    if complete and not char.flow_character_ref and receipt.get("verified") is not False:
+        media = cast_mod.flow_character_media(char)
+        if media and flow.configured():
+            try:
+                voice = ""
+                if char.voice is not None and char.voice.engine == "omni_preset":
+                    voice = char.voice.engine_ref
+                card = cast_mod.ensure_identity(char)
+                char.flow_character_ref = flow.register_character(
+                    char.name, media, voice=voice, notes=card.anchor
+                )
+                notes.append(
+                    f" {char.name} registered as a Flow character ({char.flow_character_ref}) "
+                    "from the anchor and the board — the clips carry it as @character."
+                )
+            except provider_base.CloudAdapterError as err:
+                notes.append(f" Flow character registration failed ({err}) — the stills ride as references instead.")
+    return "".join(notes)
+
+
 def _review_and_maybe_revise(op: DirectorOp, rt: dict, *, allow_spend: bool = False) -> None:
     stored = rt.get("clip")
     if stored is None:
@@ -1980,10 +2189,13 @@ def _review_and_maybe_revise(op: DirectorOp, rt: dict, *, allow_spend: bool = Fa
                 media_generation_id=rt.get("media_generation_id", ""),
             )
             slot = op.artifact_refs["bible"]["slot"]
+            slots = artifacts.sheet_slots(package)
             rt["narration"] = (
                 f"Sheet still landed: {char.name} · {slot}. "
-                f"{len(char.hero_stills)}/{len(artifacts.SHEET_SLOTS)} angles done."
+                f"{len([s for s in slots if s in char.hero_stills])}/{len(slots)} angles done."
             )
+            rt["narration"] += _after_sheet_still(op, package, char, slot)
+            session.persist(op.session_id)
         return
     clip_unit = session.clip_for_op(op)
     if clip_unit is None:
@@ -2119,6 +2331,7 @@ class ProduceIn(BaseModel):
     voice: str | None = None
     # Production style (Blueprint 31) — None = keep
     style: str | None = None
+    cast: str | None = None
 
 
 @app.post("/api/director/sessions/{sid}/produce")
@@ -2180,13 +2393,17 @@ class DraftLineIn(BaseModel):
     line_id: str
     text: str | None = None
     shot: str | None = None
+    # Blueprint 32: heard from outside the frame (dialogue lines only)
+    off_screen: bool | None = None
 
 
 @app.post("/api/director/sessions/{sid}/draft/line")
 def edit_draft_line(sid: str, body: DraftLineIn) -> dict:
     _boot()
     try:
-        state = session.edit_draft_line(sid, body.line_id, body.text, shot=body.shot)
+        state = session.edit_draft_line(
+            sid, body.line_id, body.text, shot=body.shot, off_screen=body.off_screen
+        )
         if body.shot:
             from diony_contracts.cluster import read_engine_choice
             from diony_director import flow_lexicon, grok_lexicon
@@ -2272,6 +2489,8 @@ def board(sid: str) -> dict:
 
         source_chars = [CharacterProfile.model_validate(c) for c in draft.get("characters") or []]
         source_settings = [SettingProfile.model_validate(s) for s in draft.get("settings") or []]
+    from diony_director import cast as cast_mod
+
     for char in source_chars:
         characters.append(
             {
@@ -2282,6 +2501,12 @@ def board(sid: str) -> dict:
                 "face_approved": char.face_approved,
                 "stills": sorted(char.hero_stills.keys()),
                 "flow_registered": bool(char.flow_character_ref),
+                # Blueprint 32: the identity card as it will ride the prompts,
+                # and the sheet's measured coherence (honest when unmeasured)
+                "identity": char.identity.model_dump(mode="json") if char.identity is not None else None,
+                "identity_block": cast_mod.identity_block(char) if char.identity is not None else "",
+                "sheet": cast_mod.sheet_summary(char) if char.hero_stills else "",
+                "sheet_receipt": dict(char.sheet_receipt or {}),
             }
         )
     for setting in source_settings:
@@ -2309,6 +2534,7 @@ def board(sid: str) -> dict:
         "script": draft.get("script"),
         "beats": (draft.get("script") or {}).get("beats", []),
         "locked": bool((draft.get("script") or {}).get("locked")),
+        "cast_lock": package.cast_lock if package is not None else session.cast_mode_for(sid),
         "characters": characters,
         "settings": settings,
         "clips": clips,
@@ -2399,6 +2625,8 @@ def lock_script(sid: str) -> dict:
         "package": package.model_dump(mode="json"),
         "ops": [op.model_dump(mode="json") for op in ops],
         "bible_ops": [b.model_dump(mode="json") for b in bible_ops],
+        # Blueprint 32: priced with the stills on the batch bar, never targeted
+        "keyframe_ops": [k.model_dump(mode="json") for k in session.keyframe_ops_for(sid)],
         "targeted": targeted,
         "submitted": [],
         "held": [],
@@ -3071,14 +3299,20 @@ def register_flow_character(sid: str, char_id: str) -> dict:
         char = package.character(char_id)
     except KeyError as err:
         raise HTTPException(status_code=404, detail=f"unknown character {char_id}") from err
-    media_ids = list(char.flow_media_ids.values())
+    from diony_director import cast as cast_mod
+
+    media_ids = cast_mod.flow_character_media(char)
     if not media_ids:
         raise HTTPException(
             status_code=409,
             detail=f"{char.name} has no Flow-hosted stills yet — generate the sheet first",
         )
+    voice = ""
+    if char.voice is not None and char.voice.engine == "omni_preset":
+        voice = char.voice.engine_ref
+    notes = char.identity.anchor if char.identity is not None else ""
     try:
-        ref = flow.register_character(char.name, media_ids[:7])
+        ref = flow.register_character(char.name, media_ids, voice=voice, notes=notes)
     except provider_base.CloudAdapterError as err:
         raise HTTPException(status_code=502, detail=str(err)) from err
     char.flow_character_ref = ref
@@ -3086,6 +3320,59 @@ def register_flow_character(sid: str, char_id: str) -> dict:
     return {
         "reply": f"{char.name} is registered as a reusable Flow character ({ref}).",
         "flow_character_ref": ref,
+    }
+
+
+@app.post("/api/director/sessions/{sid}/bible/redraw/{char_id}/{slot}")
+def redraw_sheet_slot(sid: str, char_id: str, slot: str) -> dict:
+    """Blueprint 32: throw one sheet still away and draw it again from the
+    anchor — the human's version of the measured redraw. The new still
+    joins the bible gate and the running batch like the original did."""
+    from diony_director import artifacts
+
+    _boot()
+    package = session.package_for(sid)
+    if package is None:
+        raise HTTPException(status_code=404, detail=f"session {sid} has no locked package")
+    try:
+        char = package.character(char_id)
+    except KeyError as err:
+        raise HTTPException(status_code=404, detail=f"unknown character {char_id}") from err
+    if slot not in artifacts.sheet_slots(package):
+        raise HTTPException(status_code=422, detail=f"{slot} is not a sheet slot of this package")
+    if slot == "front":
+        others_landed = [s for s in char.hero_stills if s != "front"]
+        others_pending = [
+            o for o in session.ops_for(sid)
+            if (o.artifact_refs.get("bible") or {}).get("char_id") == char_id
+            and (o.artifact_refs.get("bible") or {}).get("slot") not in {"", "front"}
+            and o.status not in {"completed", "failed", "discarded"}
+        ]
+        if others_landed or others_pending:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{char.name}'s anchor seeds every other still — redraw the others first, "
+                    "or start the sheet over with a new anchor once nothing else is drawing from it"
+                ),
+            )
+    still = char.hero_stills.pop(slot, "")
+    if still in char.grok_ref_pack:
+        char.grok_ref_pack.remove(still)
+    char.flow_media_ids.pop(slot, None)
+    char.face_approved = False
+    char.sheet_retries[slot] = int(char.sheet_retries.get(slot, 0)) + 1
+    planned = [
+        o for o in artifacts.plan_sheet_ops(sid, package)
+        if (o.artifact_refs.get("bible") or {}).get("char_id") == char_id
+        and (o.artifact_refs.get("bible") or {}).get("slot") == slot
+    ]
+    for op in planned:
+        session.add_bible_op(sid, op, chain_key=char_id)
+    session.persist(sid)
+    return {
+        "ops": [op.model_dump(mode="json") for op in planned],
+        "reply": f"Redrawing {char.name}'s {slot} from the anchor." if planned else "Nothing to redraw.",
     }
 
 

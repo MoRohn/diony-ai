@@ -81,6 +81,7 @@ def split_script(
     *,
     provider_policy: str = "auto",
     production_style: str = "narrated",
+    cast_lock: str = "standard",
 ) -> list[ClipUnit]:
     """Provider policy comes from Studio's engine choice; the production
     style (Blueprint 31) decides each spoken clip's voicing — post narrator
@@ -247,14 +248,25 @@ def split_script(
                 duration = quantize_duration(
                     dialogue_provider, dialogue_model, math.ceil(raw)
                 )
-                on_camera = line.kind == "dialogue"
-                clip_class = "sync-dialogue" if on_camera else "vo-over"
+                # Blueprint 32: an (O.S.) dialogue line is the character's
+                # line spoken from outside the frame — the picture holds on
+                # who hears it, and the speaker is never in the shot.
+                off_screen = bool(line.kind == "dialogue" and getattr(line, "off_screen", False))
+                on_camera = line.kind == "dialogue" and not off_screen
+                clip_class = "sync-dialogue" if line.kind == "dialogue" else "vo-over"
                 listener = next(
                     (c for c in cast_chars if c.char_id != char.char_id), None
                 )
+                visible_cast = [c for c in cast_chars if c.char_id != char.char_id]
                 authored = (line.shot or "").strip().rstrip(".")
                 if authored:
                     camera = authored
+                elif off_screen:
+                    from diony_director import cast as cast_mod
+
+                    camera = cast_mod.offscreen_camera(
+                        char.name, [c.name for c in visible_cast], setting.name
+                    )
                 elif not on_camera:
                     camera = f"Picture under voice-over, drifting through {setting.name}"
                 elif listener is not None:
@@ -264,6 +276,16 @@ def split_script(
                     )
                 else:
                     camera = f"Close-up on {char.name}, eye level"
+                # Who the identity references are for: the people IN the
+                # frame. An off-screen speaker's sheet must never ride a shot
+                # they are not in (the model puts them in it); under Locked a
+                # named listener in the frame carries their own card too.
+                if off_screen:
+                    packed_chars = visible_cast
+                elif cast_lock == "locked" and on_camera and listener is not None:
+                    packed_chars = [char, listener]
+                else:
+                    packed_chars = [char]
                 clip = ClipUnit(
                     clip_id=f"cl-{scene_index}-{clip_no}",
                     scene_id=scene.scene_id,
@@ -282,6 +304,7 @@ def split_script(
                                 "speaker": line.speaker or char.name,
                                 "line": line.text,
                                 "parenthetical": pending_parenthetical,
+                                **({"off_screen": True, "listeners": [c.name for c in visible_cast]} if off_screen else {}),
                             }
                         ],
                         voice_ref=(
@@ -291,7 +314,7 @@ def split_script(
                         if on_camera
                         else {"pace": "measured", "distance": "close, dry"},
                         on_camera=on_camera,
-                        voicing=styles.voicing_for(style, on_camera=on_camera),
+                        voicing=styles.voicing_for(style, on_camera=on_camera, off_screen=off_screen),
                         room_tone_id=tone,
                         score="in" if scene_score else "none",
                         score_desc=scene_score,
@@ -300,12 +323,13 @@ def split_script(
                         lock_recipe="character_asset" if dialogue_voice_locked else "ref",
                         character_packs=[
                             {
-                                "char_id": char.char_id,
-                                "sheet_version": char.sheet_version,
+                                "char_id": packed.char_id,
+                                "sheet_version": packed.sheet_version,
                                 "pack_kind": "flow_character"
                                 if dialogue_voice_locked
                                 else "grok_refs",
                             }
+                            for packed in packed_chars
                         ],
                         setting_plate=_plate(setting),
                     ),

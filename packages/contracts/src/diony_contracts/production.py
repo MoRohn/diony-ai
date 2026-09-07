@@ -51,6 +51,53 @@ class VoiceProfile(BaseModel):
     approved: bool = False
 
 
+def _as_noun(negative: str) -> str:
+    """A stored "no hair restyle" reads back as the noun it forbids."""
+    text = negative.strip().rstrip(".")
+    lowered = text.lower()
+    for lead in ("never ", "no ", "not "):
+        if lowered.startswith(lead):
+            return text[len(lead):].strip()
+    return text
+
+
+class IdentityCard(BaseModel):
+    """Blueprint 32 — the character's identity contract, written once and
+    carried byte-identical on every prompt, plate, sheet, and keyframe that
+    shows the character. Prose re-derived per clip is how a face drifts; a
+    locked card is how it holds. ``anchor`` is the one-line casting read
+    (age, build, face geometry), ``features`` the non-negotiables a viewer
+    would notice missing (hair, eyes, skin, one distinguishing mark),
+    ``wardrobe_lock`` the outfit worn for the whole film, ``negatives`` what
+    must never change. ``source`` says who wrote it: the brain, the
+    deterministic derivation from the character's notes, or the user."""
+
+    anchor: str = ""
+    features: list[str] = Field(default_factory=list)
+    wardrobe_lock: str = ""
+    negatives: list[str] = Field(default_factory=list)
+    source: Literal["brain", "derived", "user"] = "derived"
+
+    def block(self, name: str) -> str:
+        """The verbatim IDENTITY LOCK clause. Deterministic from the fields:
+        two cards with the same fields render the same bytes."""
+        parts: list[str] = []
+        head = f"IDENTITY LOCK — {name}"
+        if self.anchor:
+            head += f": {self.anchor.strip().rstrip('.')}"
+        parts.append(head + ".")
+        features = [f.strip().rstrip(".") for f in self.features if f and f.strip()]
+        if features:
+            parts.append("Non-negotiable: " + "; ".join(features) + ".")
+        if self.wardrobe_lock.strip():
+            parts.append(f"Wardrobe, unchanged in every shot: {self.wardrobe_lock.strip().rstrip('.')}.")
+        negatives = [_as_noun(n) for n in self.negatives if n and n.strip()]
+        if negatives:
+            parts.append("Never: " + "; ".join(negatives) + ".")
+        parts.append(f"{name} is the same person in every frame — same face, same build, same hair.")
+        return " ".join(parts)
+
+
 class CharacterProfile(BaseModel):
     schema_version: int = 1
     char_id: str
@@ -58,6 +105,13 @@ class CharacterProfile(BaseModel):
     role: str = ""
     sheet_version: int = Field(default=1, ge=1)
     hero_stills: dict[str, str] = Field(default_factory=dict)
+    # Blueprint 32: the locked identity contract (None = the pre-32 prose
+    # block), the measured self-consistency of the sheet (slot → cosine vs
+    # the front still; empty = unmeasured), and how many times each slot
+    # was redrawn after failing that measure.
+    identity: IdentityCard | None = None
+    sheet_receipt: dict[str, Any] = Field(default_factory=dict)
+    sheet_retries: dict[str, int] = Field(default_factory=dict)
     wardrobe: dict[str, str] = Field(default_factory=dict)
     age_body_notes: str = ""
     forbidden_drift: list[str] = Field(
@@ -96,6 +150,11 @@ class ScriptLine(BaseModel):
     # dominates the picture — written by the screenwriter, not synthesized by
     # a coverage rotation. Empty means the splitter falls back to its grammar.
     shot: str = ""
+    # Blueprint 32: a dialogue line spoken by a character who is in the scene
+    # but OUT OF FRAME (screenplay "(O.S.)") — the picture holds on who hears
+    # it, the voice comes from beyond the frame edge, and no mouth on screen
+    # forms the words. Meaningless on any kind but dialogue.
+    off_screen: bool = False
 
 
 class Scene(BaseModel):
@@ -152,7 +211,9 @@ class Script(BaseModel):
 
 class AudioPacket(BaseModel):
     clip_class: ClipClass
-    script_excerpt: list[dict[str, str]] = Field(default_factory=list)
+    # {speaker, line, parenthetical} — plus, since Blueprint 32, off_screen
+    # (bool) and listeners (list) when the line is heard from outside the frame
+    script_excerpt: list[dict[str, Any]] = Field(default_factory=list)
     voice_ref: str = ""
     delivery: dict[str, str] = Field(default_factory=dict)
     on_camera: bool = True
@@ -461,6 +522,10 @@ class ProductionPackage(BaseModel):
     # Blueprint 31: the production style the package was split under — the
     # record of why each clip carries the voicing it does.
     production_style: ProductionStyle = ProductionStyle.NARRATED
+    # Blueprint 32: the cast-lock mode the package was split under —
+    # "standard" (the pre-32 platform) or "locked" (identity cards on every
+    # prompt, a measured sheet, cast keyframes, provider identity markers).
+    cast_lock: Literal["standard", "locked"] = "standard"
     created_at: datetime = Field(default_factory=_utc_now)
 
     @model_validator(mode="after")

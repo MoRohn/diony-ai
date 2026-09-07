@@ -26,6 +26,16 @@ SHEET_MODEL = "nano-banana-2"
 GROK_SHEET_MODEL = "grok-imagine-image-2.0"
 
 
+def sheet_slots(package: ProductionPackage | None) -> tuple[str, ...]:
+    """Blueprint 32: a Locked package casts with the anchor portrait and ONE
+    turnaround board drawn from it; Standard keeps the five chained angles."""
+    from diony_director import cast as cast_mod
+
+    if package is not None and getattr(package, "cast_lock", "standard") == "locked":
+        return cast_mod.LOCKED_SHEET_SLOTS
+    return SHEET_SLOTS
+
+
 def sheet_lane() -> tuple[CloudProvider, str]:
     """Flow's nano-banana when available (server-hosted ingredients); Grok images otherwise."""
 
@@ -55,6 +65,27 @@ def _look_of(package: ProductionPackage | None):
 def _sheet_prompt(char: CharacterProfile, slot: str, package: ProductionPackage | None = None) -> str:
     wardrobe = next(iter(char.wardrobe.values()), "practical, lived-in wardrobe")
     look = _look_of(package)
+    if package is not None and getattr(package, "cast_lock", "standard") == "locked":
+        # Blueprint 32: the identity card is the casting brief — verbatim on
+        # the anchor portrait, verbatim on the board drawn from it, verbatim
+        # on every clip that shows the face. One text, one person.
+        from diony_director import cast as cast_mod
+
+        if slot == cast_mod.BOARD_SLOT:
+            return cast_mod.board_prompt(char, look)
+        card = cast_mod.identity_block(char)
+        if look is not None and not look.photoreal:
+            return (
+                f"Anchor portrait of {char.name} ({char.role or 'principal cast'}) in the film's "
+                f"medium: {_SLOT_DIRECTION['front']}. {card} Plain mid-grey backdrop, nothing in "
+                f"the hands, no props, no text. {look.block()}"
+            )
+        return (
+            f"Anchor casting photograph of {char.name} ({char.role or 'principal cast'}): "
+            f"{_SLOT_DIRECTION['front']}. {card} Soft neutral studio light, plain mid-grey "
+            "backdrop, nothing in the hands, no props, no text, sharp focus on the face, "
+            f"photorealistic.{(' ' + look.block()) if look is not None else ''}"
+        )
     if look is not None and not look.photoreal:
         # An animated film casts in its own medium — a photographic head
         # shot as the identity anchor of a 2.5D character is a different
@@ -104,7 +135,7 @@ def references_for(package: ProductionPackage, op: DirectorOp) -> list[str]:
         return []
     slot = str(bible.get("slot", ""))
     refs: list[str] = []
-    for earlier in SHEET_SLOTS:
+    for earlier in sheet_slots(package):
         if earlier == slot:
             break
         if op.provider is CloudProvider.GROK:
@@ -125,7 +156,7 @@ def plan_sheet_ops(sid: str, package: ProductionPackage) -> list[DirectorOp]:
     for char in package.characters:
         if char.face_approved:
             continue
-        for slot in SHEET_SLOTS:
+        for slot in sheet_slots(package):
             if slot in char.hero_stills:
                 continue
             est = estimate_mod.estimate_op(
