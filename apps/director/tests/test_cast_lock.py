@@ -281,20 +281,47 @@ def test_stage_face_models_lands_both_files_where_the_producer_looks(tmp_path, m
     monkeypatch.delenv("DIONY_FACE_ID_DETECTOR_MODEL", raising=False)
     monkeypatch.delenv("DIONY_FACE_ID_RECOGNIZER_MODEL", raising=False)
     monkeypatch.setenv("DIONY_FACE_ID_DIR", str(tmp_path / "zoo"))
+    import hashlib
+
     fetched: list[str] = []
+    payload = b"onnx-bytes"
+    monkeypatch.setattr(cast, "FACE_MODEL_SHA256", {name: hashlib.sha256(payload).hexdigest() for name in cast.FACE_MODEL_SOURCES})
 
     def fetch(url: str) -> bytes:
         fetched.append(url)
-        return b"onnx-bytes"
+        return payload
 
     detector, recognizer = cast.stage_face_models(fetch=fetch)
     assert detector.name == face_identity.DETECTOR_FILENAME and recognizer.name == face_identity.RECOGNIZER_FILENAME
-    assert len(fetched) == 2 and all(u.startswith("https://raw.githubusercontent.com/opencv/opencv_zoo/") for u in fetched)
+    # the zoo keeps its weights in Git LFS — only the media host serves the model itself
+    assert len(fetched) == 2 and all(u.startswith("https://media.githubusercontent.com/media/opencv/opencv_zoo/") for u in fetched)
     assert face_identity.staged_face_models() == (detector, recognizer)
     assert cast.face_models_staged() is True
     # a second staging keeps the files and fetches nothing
     cast.stage_face_models(fetch=fetch)
     assert len(fetched) == 2
+
+
+def test_staging_refuses_an_lfs_pointer_or_a_wrong_hash_and_replaces_a_bad_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("DIONY_FACE_ID_DETECTOR_MODEL", raising=False)
+    monkeypatch.delenv("DIONY_FACE_ID_RECOGNIZER_MODEL", raising=False)
+    monkeypatch.setenv("DIONY_FACE_ID_DIR", str(tmp_path / "zoo"))
+    pointer = b"version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 232589\n"
+    with pytest.raises(RuntimeError, match="Git LFS pointer"):
+        cast.stage_face_models(fetch=lambda url: pointer)
+    with pytest.raises(RuntimeError, match="SHA-256 does not match"):
+        cast.stage_face_models(fetch=lambda url: b"not the model")
+    assert cast.face_models_staged() is False
+    # a pointer left behind by an earlier attempt is replaced, never trusted
+    import hashlib
+
+    real = b"onnx-bytes"
+    monkeypatch.setattr(cast, "FACE_MODEL_SHA256", {name: hashlib.sha256(real).hexdigest() for name in cast.FACE_MODEL_SOURCES})
+    (tmp_path / "zoo").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "zoo" / "face_detection_yunet_2023mar.onnx").write_bytes(pointer)
+    cast.stage_face_models(fetch=lambda url: real)
+    assert (tmp_path / "zoo" / "face_detection_yunet_2023mar.onnx").read_bytes() == real
+    assert cast.face_models_staged() is True
 
 
 def test_the_sheet_verdict_names_the_slot_that_reads_as_another_person(monkeypatch, tmp_path) -> None:

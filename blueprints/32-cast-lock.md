@@ -53,7 +53,7 @@ When a still lands, `app._after_sheet_still` scores it against the anchor with t
 
 Honesty rule: no models → `measured: false` with the staging command named; a still with no usable face is named in `notes` and never counts as a pass.
 
-**Desk staging.** `diony-director-check --stage-face-models` downloads the two OpenCV Zoo files into `<vault>/models/opencv-zoo/` (or `DIONY_FACE_ID_DIR`); `face_identity.staged_face_models()` finds them there when the env vars are unset, so review's identity family and the sheet measure work on a laptop, not only on the GPU host. `GET /api/director/cast/modes` reports `face_models_staged`; the console says so when Locked is chosen on an unstaged desk.
+**Desk staging.** `diony-director-check --stage-face-models` downloads the two OpenCV Zoo files (from `media.githubusercontent.com` — the zoo keeps its weights in Git LFS and the raw host serves 130-byte pointers, which cv2 refuses; each file is pinned to its published SHA-256 and a pointer or wrong hash is refused, a bad earlier file replaced) into `<vault>/models/opencv-zoo/` (or `DIONY_FACE_ID_DIR`); `face_identity.staged_face_models()` finds them there when the env vars are unset, so review's identity family and the sheet measure work on a laptop, not only on the GPU host. `GET /api/director/cast/modes` reports `face_models_staged`; the console says so when Locked is chosen on an unstaged desk.
 
 ## 5. Cast keyframes
 

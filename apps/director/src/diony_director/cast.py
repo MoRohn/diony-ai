@@ -336,11 +336,35 @@ def sheet_summary(char: CharacterProfile) -> str:
 # Staging the face models on the desk
 # --------------------------------------------------------------------------
 
-OPENCV_ZOO_RAW = "https://raw.githubusercontent.com/opencv/opencv_zoo/main/models"
+# The zoo keeps its weights in Git LFS: raw.githubusercontent.com serves the
+# 130-byte POINTER, not the model (staged 2026-09-07, cv2 refused to parse it).
+# media.githubusercontent.com serves the LFS object itself; each file is pinned
+# to the SHA-256 the pointer publishes so a wrong or truncated download never
+# lands as a "staged" model.
+OPENCV_ZOO_MEDIA = "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models"
 FACE_MODEL_SOURCES = {
-    "face_detection_yunet_2023mar.onnx": f"{OPENCV_ZOO_RAW}/face_detection_yunet/face_detection_yunet_2023mar.onnx",
-    "face_recognition_sface_2021dec.onnx": f"{OPENCV_ZOO_RAW}/face_recognition_sface/face_recognition_sface_2021dec.onnx",
+    "face_detection_yunet_2023mar.onnx": f"{OPENCV_ZOO_MEDIA}/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+    "face_recognition_sface_2021dec.onnx": f"{OPENCV_ZOO_MEDIA}/face_recognition_sface/face_recognition_sface_2021dec.onnx",
 }
+FACE_MODEL_SHA256 = {
+    "face_detection_yunet_2023mar.onnx": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+    "face_recognition_sface_2021dec.onnx": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+}
+_LFS_POINTER = b"version https://git-lfs.github.com/spec/v1"
+
+
+def _model_payload_ok(name: str, payload: bytes) -> str:
+    """Empty string when the bytes are the model; otherwise why not."""
+    import hashlib
+
+    if not payload:
+        return "empty download"
+    if payload.startswith(_LFS_POINTER):
+        return "a Git LFS pointer, not the model"
+    expected = FACE_MODEL_SHA256.get(name, "")
+    if expected and hashlib.sha256(payload).hexdigest() != expected:
+        return "SHA-256 does not match the published model"
+    return ""
 
 
 def stage_face_models(dest: Path | None = None, *, fetch=None) -> tuple[Path, Path]:
@@ -366,10 +390,13 @@ def stage_face_models(dest: Path | None = None, *, fetch=None) -> tuple[Path, Pa
     paths: list[Path] = []
     for name, url in FACE_MODEL_SOURCES.items():
         target = folder / name
-        if not target.is_file() or target.stat().st_size == 0:
+        # a file already staged is kept only if it IS the model — a pointer
+        # or a truncated download from an earlier attempt is replaced
+        if not target.is_file() or _model_payload_ok(name, target.read_bytes()):
             payload = fetch(url)
-            if not payload:
-                raise RuntimeError(f"empty download for {name}")
+            problem = _model_payload_ok(name, payload)
+            if problem:
+                raise RuntimeError(f"{name}: {problem} ({url})")
             tmp = target.with_suffix(".part")
             tmp.write_bytes(payload)
             tmp.replace(target)
