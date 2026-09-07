@@ -342,9 +342,8 @@ def _plan_cast(sid: str, cast: str | None) -> Callable[[], None] | None:
         raise HTTPException(
             status_code=409,
             detail=(
-                "the script is locked and the cast was packed, sheeted, and keyframed "
-                "under its cast lock — the mode cannot change mid-production; start a "
-                f"new session for a {cast_mod.describe(resolved)} cast"
+                "the cast lock is fixed once the script locks. Start a new session "
+                f"to shoot with a {cast_mod.describe(resolved)} cast."
             ),
         )
     return lambda: session.set_cast_mode(sid, resolved)

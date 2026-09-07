@@ -271,7 +271,7 @@ def test_an_unstaged_desk_reports_an_honest_unmeasured_sheet(tmp_path, monkeypat
     assert receipt["measured"] is False
     assert any("stage-face-models" in note for note in receipt["notes"])
     char.sheet_receipt = receipt
-    assert cast.sheet_summary(char).startswith("sheet unmeasured")
+    assert cast.sheet_summary(char) == "sheet not scored — face checks are off on this desk"
     assert cast.face_models_staged() is False
 
 
@@ -343,7 +343,7 @@ def test_the_sheet_verdict_names_the_slot_that_reads_as_another_person(monkeypat
     assert receipt["measured"] and receipt["verified"] is False
     assert receipt["failed"] == ["full"] and receipt["min"] == 0.21
     char.sheet_receipt = receipt
-    assert "full read as another person" in cast.sheet_summary(char)
+    assert cast.sheet_summary(char) == "sheet does not cohere — the full-body view 0.21 reads as another person (0.36 needed)"
 
 
 def test_the_identity_family_measures_every_packed_character(monkeypatch, tmp_path) -> None:
@@ -643,7 +643,7 @@ def test_the_cast_lock_is_a_session_setting_fixed_at_the_lock() -> None:
     client.post(f"/api/director/sessions/{sid}/produce", json={"idea": IDEA})
     client.post(f"/api/director/sessions/{sid}/lock_script")
     res = client.post(f"/api/director/sessions/{sid}/cast", json={"cast": "standard"})
-    assert res.status_code == 409 and "cannot change mid-production" in res.json()["detail"]
+    assert res.status_code == 409 and "fixed once the script locks" in res.json()["detail"]
     # a message that omits the field keeps it; the same value is a no-op
     assert client.post(f"/api/director/sessions/{sid}/message", json={"text": "a lone car on a wet road", "cast": "locked"}).status_code == 200
 

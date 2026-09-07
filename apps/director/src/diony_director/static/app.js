@@ -1412,10 +1412,22 @@
       + "Their sheet is an anchor portrait and a turnaround board, checked against each other.\n"
       + "Every clip with people opens from a frame drawn from that sheet.",
   };
-  const FACE_MODELS_NOTE =
-    "Face checks are off on this desk. Sheets still build, but they won't be scored.\n"
-    + "To turn scoring on, run this once in a terminal:\n"
-    + "diony-director-check --stage-face-models";
+  // The desk cannot score faces until the OpenCV Zoo models are staged: a
+  // two-line advisory with the one command to run, styled as a command.
+  function addFaceModelsNote() {
+    const li = addMsg("director", "", "warn");
+    const body = li.querySelector(".body");
+    body.replaceChildren();
+    const line1 = document.createElement("div");
+    line1.textContent = "Face checks are off on this desk. Sheets still build, but they won't be scored.";
+    const line2 = document.createElement("div");
+    line2.textContent = "To turn scoring on, run this once in a terminal:";
+    const cmd = document.createElement("code");
+    cmd.className = "cmd";
+    cmd.textContent = "diony-director-check --stage-face-models";
+    body.append(line1, line2, cmd);
+    return li;
+  }
   async function pushCast() {
     const el = $("cast");
     if (!el || !sessionId) return;
@@ -1427,10 +1439,10 @@
       });
       addMsg("director", CAST_NOTES[res.cast_lock] || `Cast lock: ${res.cast_lock}.`);
       if (res.cast_lock === "locked" && castCatalog && castCatalog.face_models_staged === false) {
-        addMsg("director", FACE_MODELS_NOTE, "warn");
+        addFaceModelsNote();
       }
     } catch (err) {
-      addMsg("director", `Couldn't set the cast lock: ${err.message || err}`, "warn");
+      addMsg("director", `Cast lock unchanged — ${err.message || err}`, "warn");
       syncSessionSettings();
     }
   }
@@ -3373,6 +3385,36 @@
     input.addEventListener("blur", commit);
   }
 
+  // Blueprint 32: the identity card as labelled rows — the text the clips are
+  // shot under, readable at a glance; the exact prompt clause sits in the title.
+  // Sheet slots in the order they are drawn: the anchor first, then what is
+  // drawn from it. Standard's five angles keep their own order.
+  const SLOT_ORDER = ["front", "board", "q34l", "q34r", "profile", "full"];
+  const SLOT_LABELS = { front: "anchor", board: "turnaround board", q34l: "¾ left", q34r: "¾ right", profile: "profile", full: "full body" };
+  function orderedSlots(slots) {
+    return [...(slots || [])].sort((a, b) => {
+      const ia = SLOT_ORDER.indexOf(a), ib = SLOT_ORDER.indexOf(b);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    });
+  }
+
+  function renderIdentityCard(c) {
+    const id = c.identity || {};
+    const rows = [
+      ["anchor", id.anchor],
+      ["features", (id.features || []).join(" · ")],
+      ["wardrobe", id.wardrobe_lock],
+      ["never", (id.negatives || []).map((n) => n.replace(/^(no|never|not)\s+/i, "")).join(" · ")],
+    ].filter(([, v]) => v);
+    const source = id.source === "brain" ? "written by the brain" : id.source === "user" ? "written by you" : "derived from the casting notes";
+    return (
+      `<div class="bcard-id" title="${esc(c.identity_block || "")}">` +
+      `<div class="bidhead">Identity card <span class="bt">${esc(source)} · rides every shot</span></div>` +
+      rows.map(([k, v]) => `<div class="bidrow"><span class="bidkey">${esc(k)}</span><span class="bidval">${esc(v)}</span></div>`).join("") +
+      `</div>`
+    );
+  }
+
   function renderBiblesSheet(pane, b) {
     pane.replaceChildren();
     if (!b.characters.length && !b.settings.length) {
@@ -3393,12 +3435,13 @@
         // Blueprint 32: the identity card as it rides every prompt — the
         // text to read before approving a face, because it is the law the
         // clips are shot under
-        `${c.identity_block ? `<div class="bcard-id" title="Identity card — rides every prompt that shows ${esc(c.name)} (Cast Lock: Locked)">${esc(c.identity_block)}</div>` : ""}` +
-        `${c.sheet ? `<div class="${sheetClass}">${esc(c.sheet)}</div>` : ""}` +
-        `<div class="bstills">${c.stills
+        `${c.identity ? renderIdentityCard(c) : ""}` +
+        `${c.sheet ? `<div class="${sheetClass}">${esc(c.sheet)}</div>` : (b.cast_lock === "locked" && b.locked ? `<div class="bsheet">sheet pending — the anchor portrait first, then the turnaround board drawn from it</div>` : "")}` +
+        `<div class="bstills">${orderedSlots(c.stills)
           .map((s) => {
             const failed = (receipt.failed || []).includes(s);
-            return `<span class="bstill${failed ? " bad" : ""}" data-slot="${esc(s)}"><img src="/api/director/sessions/${sessionId}/bible/media/${encodeURIComponent(c.char_id)}/${encodeURIComponent(s)}" alt="${esc(c.name)} ${esc(s)}" title="${esc(s)}${failed ? " — reads as another person" : ""}"></span>`;
+            const label = SLOT_LABELS[s] || s;
+            return `<span class="bstill${failed ? " bad" : ""}${s === "board" ? " board" : ""}" data-slot="${esc(s)}"><img src="/api/director/sessions/${sessionId}/bible/media/${encodeURIComponent(c.char_id)}/${encodeURIComponent(s)}" alt="${esc(c.name)} ${esc(label)}" title="${esc(label)}${failed ? " — reads as another person" : ""}"><span class="bslot">${esc(label)}${failed ? " ✕" : ""}</span></span>`;
           })
           .join("")}</div>`;
       if (b.locked && c.stills.length) {

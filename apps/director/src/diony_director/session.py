@@ -2403,8 +2403,8 @@ def lock_script(
     if keyframes:
         keyframe_cost = sum(k.estimate.total_usd_micros for k in keyframes if k.estimate)
         lines.append(
-            f"   · {_n(len(keyframes), 'cast keyframe')} (Cast Lock: each clip with people "
-            f"opens from a frame composed off the sheet) — {_usd(keyframe_cost)}"
+            f"   · {_n(len(keyframes), 'cast keyframe')} — the opening frame of every clip "
+            f"with people, drawn from the sheet — {_usd(keyframe_cost)}"
         )
     lines.append(
         f"   · revision allowance ({package.revision_allowance_bp / 100:.0f}% of clips) "

@@ -127,7 +127,9 @@ def derive_identity(char: CharacterProfile) -> IdentityCard:
                 anchor = anchor[:MAX_ANCHOR_CHARS].rsplit(" ", 1)[0]
             features = [p for p in pieces[1:] if len(p) >= 3][:MAX_FEATURES]
     if not anchor:
-        anchor = "one consistent, castable person"
+        # no casting notes yet — the role is the only read there is
+        role = " ".join(str(char.role or "").split()).strip().rstrip(".")
+        anchor = f"the {role}, one consistent, castable person" if role else "one consistent, castable person"
     wardrobe = next(iter(char.wardrobe.values()), "").strip()
     return IdentityCard(
         anchor=anchor,
@@ -313,23 +315,28 @@ def measure_sheet(char: CharacterProfile) -> dict[str, Any]:
     return receipt
 
 
+def _slot_word(slot: str) -> str:
+    return {"front": "the anchor", "board": "the turnaround board", "q34l": "the ¾-left view",
+            "q34r": "the ¾-right view", "profile": "the profile", "full": "the full-body view"}.get(slot, slot)
+
+
 def sheet_summary(char: CharacterProfile) -> str:
-    """One line for the console and the bible card."""
+    """One plain sentence for the console and the bible card."""
     receipt = char.sheet_receipt or {}
     if not receipt.get("measured"):
-        note = "; ".join(receipt.get("notes") or []) or "unmeasured"
-        return f"sheet unmeasured ({note})"
+        notes = receipt.get("notes") or []
+        if any("not staged" in n for n in notes):
+            return "sheet not scored — face checks are off on this desk"
+        note = "; ".join(notes) or "nothing to score yet"
+        return f"sheet not scored — {note}"
     scores = receipt.get("scores") or {}
+    threshold = receipt.get("threshold")
     if receipt.get("verified"):
-        return (
-            f"sheet coheres — {len(scores)}/{len(scores)} views read as {char.name} "
-            f"(min {receipt.get('min')}, threshold {receipt.get('threshold')})"
-        )
-    failed = ", ".join(receipt.get("failed") or [])
-    return (
-        f"sheet does NOT cohere — {failed} read as another person "
-        f"(min {receipt.get('min')}, threshold {receipt.get('threshold')})"
-    )
+        views = ", ".join(f"{_slot_word(s)} {v:.2f}" for s, v in scores.items())
+        return f"sheet coheres — {views} against the anchor (0.{int(round((threshold or 0) * 100)):02d} needed)"
+    failed = receipt.get("failed") or []
+    views = ", ".join(f"{_slot_word(s)} {scores[s]:.2f}" for s in failed if s in scores)
+    return f"sheet does not cohere — {views} reads as another person (0.{int(round((threshold or 0) * 100)):02d} needed)"
 
 
 # --------------------------------------------------------------------------
