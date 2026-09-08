@@ -1232,6 +1232,9 @@
       state: runState,
       // card builders, so the harness can paint a failed card without an op
       addOpCard, attachRetry, addMsg,
+      // the cast dock, painted from a board payload without a locked film
+      paintCastDock: (b) => paintCastDock(b),
+      setSession: (sid) => { sessionId = sid; },
     };
   }
 
@@ -1322,7 +1325,15 @@
       } catch (err) {
         /* no resume — fresh room */
       }
-      if (resume) {
+      if (resume && resume.stage === "priced") {
+        // Blueprint 33 §5: a script locked and priced but never rolled comes
+        // back whole — the draft card with its read-only sheet, the priced
+        // cards with the batch bar, and the Production card with the dock
+        sessionId = resume.session_id;
+        refreshMeter();
+        await syncSessionSettings();
+        await resumePricedRoom(resume);
+      } else if (resume) {
         sessionId = resume.session_id;
         refreshMeter();
         await syncSessionSettings();
@@ -1348,6 +1359,37 @@
     } catch (err) {
       addMsg("director", `The service isn't ready: ${err.message || err}`);
     }
+  }
+
+  async function resumePricedRoom(resume) {
+    let state = null;
+    try {
+      state = await api(`/api/director/sessions/${sessionId}/draft`);
+    } catch (err) {
+      /* the draft card is a courtesy — the priced cards are the point */
+    }
+    if (state && state.status === "ready") {
+      const li = addMsg("director", "");
+      renderDraft(li, state);
+    }
+    let locked = null;
+    try {
+      locked = await api(`/api/director/sessions/${sessionId}/lock`);
+    } catch (err) {
+      addMsg("director", `Resuming session ${sessionId}, but the locked set could not be read: ${err.message || err}`);
+      showProductionCard();
+      return;
+    }
+    const n = (locked.ops || []).length;
+    const reply = addMsg(
+      "director",
+      `Resuming session ${sessionId}: the script is locked and priced — ${n} clip${n === 1 ? "" : "s"} ` +
+        `across ${locked.scenes} scene${locked.scenes === 1 ? "" : "s"}, ${durText((locked.planned_s || 0) * 1000)} of picture, ` +
+        `${usd(locked.estimate_usd_micros || 0)} locked. Nothing has rolled: press Run & Assemble All when you are ready, ` +
+        "or ＋ NEW SESSION to start fresh — the ledger keeps everything."
+    );
+    setupBatch(reply, locked.ops || [], [...(locked.bible_ops || []), ...(locked.keyframe_ops || [])]);
+    showProductionCard();
   }
 
   let flowLex = null;
@@ -2969,7 +3011,8 @@
     }
     if (state.master) renderMaster(li, state.master);
     attachScriptSheet(li, state);
-    attachLockButton(li);
+    // a script that is already locked (a resumed room) never offers a second lock
+    if (!(state.script && state.script.locked)) attachLockButton(li);
   }
 
   // The script sheet lives IN the draft card: beats, every line and its
@@ -3232,6 +3275,171 @@
     if ((b.characters || []).length || (b.settings || []).length) section("BIBLES", renderBiblesSheet);
     if (clips.length) section("SHOTS", renderShotsSheet);
     section("CUT", renderCutSheet);
+    body.querySelectorAll(".prodsection").forEach((sec) => {
+      const label = sec.querySelector(".bhead");
+      if (label) sec.dataset.section = label.textContent.toLowerCase();
+    });
+    paintCastDock(b);
+  }
+
+  // --- the cast dock (Blueprint 33 §3) --------------------------------------
+  // Approving a face never means scrolling the thread for the Production
+  // card. While a locked film has a face awaiting approval, the console
+  // carries a compact dock: one row per character — anchor still, name, the
+  // measured sheet's verdict, Approve — plus Approve all and a jump to the
+  // BIBLES section. It stays visible while the run strip folds the console,
+  // repaints with every Production re-read, and goes away once every face
+  // is approved (the FACE ✓ stays on the card).
+  const castdock = $("castdock");
+  function castThumbSlot(c) {
+    const stills = c.stills || [];
+    if (stills.includes("front")) return "front";
+    return stills[0] || "";
+  }
+  function castStateOf(c) {
+    const receipt = c.sheet_receipt || {};
+    if (c.face_approved) return { cls: "ok", text: c.sheet || "approved" };
+    if (!(c.stills || []).length) {
+      if (c.sheet_state === "failed") return { cls: "bad", text: "sheet failed — Retry it on the Production card" };
+      if (c.sheet_state === "waiting") return { cls: "", text: "sheet waits for Run — the anchor portrait draws first" };
+      return { cls: "drawing", text: "sheet drawing — the anchor portrait first" };
+    }
+    if (receipt.measured) {
+      return { cls: receipt.verified ? "ok" : "bad", text: c.sheet || (receipt.verified ? "sheet coheres" : "sheet does not cohere") };
+    }
+    const n = (c.stills || []).length;
+    return { cls: "", text: c.sheet || `${n} still${n === 1 ? "" : "s"} on the sheet — approve by eye` };
+  }
+  function jumpToBibles() {
+    if (!(productionCard && productionCard.isConnected)) {
+      showProductionCard(); // a room without its card gets one, then the jump lands next paint
+      return;
+    }
+    const sec = productionCard.querySelector('.prodsection[data-section="bibles"]');
+    (sec || productionCard).scrollIntoView({ block: "start", behavior: "smooth" });
+  }
+  async function approveFace(c, btn) {
+    btn.disabled = true;
+    btn.textContent = "approving…";
+    try {
+      const res = await api(
+        `/api/director/sessions/${sessionId}/bible/approve/${encodeURIComponent(c.char_id)}`,
+        { method: "POST" }
+      );
+      addMsg("director", res.reply);
+      refreshProduction();
+    } catch (err) {
+      btn.textContent = String(err.message || err);
+      btn.disabled = false;
+    }
+  }
+  function paintCastDock(b) {
+    if (!castdock) return;
+    const chars = (b && b.characters) || [];
+    const locked = !!(b && b.locked);
+    const pending = chars.filter((c) => !c.face_approved);
+    if (!sessionId || !locked || !chars.length || !pending.length) {
+      castdock.hidden = true;
+      castdock.replaceChildren();
+      return;
+    }
+    const ready = pending.filter((c) => (c.stills || []).length);
+    const drawing = pending.filter((c) => !(c.stills || []).length && c.sheet_state !== "waiting");
+    // nothing to act on and nothing moving: one quiet line, no rows — the
+    // console keeps its room until the sheets start landing
+    const quiet = !ready.length && !drawing.length;
+    castdock.replaceChildren();
+    castdock.classList.toggle("settled", !ready.length);
+    castdock.classList.toggle("quiet", quiet);
+    const head = mk("div", "casthead");
+    head.appendChild(mk("span", "bhead", "CAST"));
+    const n = pending.length;
+    head.appendChild(
+      mk(
+        "span",
+        "castcount",
+        ready.length
+          ? `${ready.length} face${ready.length === 1 ? "" : "s"} to approve`
+          : quiet
+            ? `${n} sheet${n === 1 ? "" : "s"} wait for Run — faces come here to be approved`
+            : `${drawing.length} sheet${drawing.length === 1 ? "" : "s"} drawing`
+      )
+    );
+    if (ready.length > 1) {
+      const all = mk("button", "runbtn approveall", `Approve all ${ready.length}`);
+      all.type = "button";
+      all.title = "Freeze every face whose sheet has landed — a sheet still drawing waits for the next press";
+      all.addEventListener("click", () => {
+        armConfirm(all, `Confirm — approve ${ready.length} faces`, async () => {
+          all.disabled = true;
+          all.textContent = "approving…";
+          try {
+            const res = await api(`/api/director/sessions/${sessionId}/bible/approve_all`, { method: "POST" });
+            addMsg("director", res.reply);
+            refreshProduction();
+          } catch (err) {
+            addMsg("director", `Couldn't approve the cast: ${err.message || err}`);
+            all.disabled = false;
+            all.textContent = `Approve all ${ready.length}`;
+          }
+        });
+      });
+      head.appendChild(all);
+    }
+    const jump = mk("button", "runbtn", "Cast ▸");
+    jump.type = "button";
+    jump.title = "Scroll to the BIBLES section — identity cards, every still, redraw and Flow registration";
+    jump.addEventListener("click", jumpToBibles);
+    head.appendChild(jump);
+    castdock.appendChild(head);
+    if (quiet) {
+      castdock.hidden = false;
+      return;
+    }
+
+    const rows = mk("div", "castrows");
+    chars.forEach((c) => {
+      const row = mk("div", "castrow" + (c.face_approved ? " approved" : ""));
+      const slot = castThumbSlot(c);
+      if (slot) {
+        const img = document.createElement("img");
+        img.className = "castthumb";
+        img.alt = `${c.name} ${slot}`;
+        img.src = `/api/director/sessions/${sessionId}/bible/media/${encodeURIComponent(c.char_id)}/${encodeURIComponent(slot)}`;
+        // a still that cannot be read never shows a broken-image glyph
+        img.addEventListener("error", () => img.replaceWith(mk("span", "castthumb empty", "…")), { once: true });
+        row.appendChild(img);
+      } else {
+        row.appendChild(mk("span", "castthumb empty", "…"));
+      }
+      const name = mk("div", "castname");
+      name.appendChild(mk("b", "", c.name));
+      if (c.role) name.appendChild(mk("span", "bt", c.role));
+      row.appendChild(name);
+      const state = castStateOf(c);
+      const st = mk("span", "caststate" + (state.cls ? ` ${state.cls}` : ""), state.text);
+      st.title = state.text;
+      row.appendChild(st);
+      const acts = mk("div", "castacts");
+      if (c.face_approved) {
+        acts.appendChild(mk("span", "bok", "FACE ✓"));
+      } else {
+        const btn = mk("button", "acceptbtn", "Approve");
+        btn.type = "button";
+        if (!(c.stills || []).length) {
+          btn.disabled = true;
+          btn.title = "Waits for the anchor still to land";
+        } else {
+          btn.title = `Approve ${c.name}'s face — frozen at this sheet for every clip`;
+          btn.addEventListener("click", () => approveFace(c, btn));
+        }
+        acts.appendChild(btn);
+      }
+      row.appendChild(acts);
+      rows.appendChild(row);
+    });
+    castdock.appendChild(rows);
+    castdock.hidden = false;
   }
 
   // One Production card per room: a second call re-paints and scrolls to it.
@@ -3622,7 +3830,7 @@
       row.innerHTML =
         `<div class="bshotrow"><span class="bid">${esc(c.clip_id)}</span>` +
         `<span class="bt">${esc(c.clip_class)}</span>` +
-        `<span class="bt">${c.duration_s}s · ${esc(c.model)}</span>` +
+        `<span class="bt">${c.duration_s}s · ${c.beats > 1 ? `${c.beats} beats · ` : ""}${esc(c.model)}</span>` +
         `<span class="bt">${usd(c.est_usd_micros)}</span>` +
         `<span class="bstate${c.status === "discarded" ? " skipped" : ""}">${esc(c.status === "discarded" ? "skipped" : c.status)}</span>${verdict}${accepted}${finishChip(c.finish)}` +
         `<span class="bjoin">${join}</span></div>` +
@@ -3791,6 +3999,9 @@
       const created = await api("/api/director/sessions", { method: "POST" });
       sessionId = created.session_id;
       thread.replaceChildren();
+      productionCard = null;
+      stopProductionPoll();
+      paintCastDock(null); // the dock belongs to the room we just left
       $("idea").value = "";
       clearRefUploads();
       setDuration(8);

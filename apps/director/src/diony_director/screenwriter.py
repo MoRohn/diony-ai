@@ -534,11 +534,32 @@ def master_brief(master: MasterPrompt | None) -> str:
     return "\n".join(parts)
 
 
+def take_brief(take_units: dict[str, int] | None) -> str:
+    """Blueprint 33: tell the screenwriter how long a take runs on the route,
+    so it writes beats that flow as continuous motion instead of fragments
+    the splitter would have to pack four at a time."""
+    if not take_units:
+        return ""
+    from diony_director.splitter import take_units_phrase
+
+    return (
+        f"TAKES: the engine shoots continuous takes of {take_units_phrase(take_units)}, "
+        "and consecutive beats are packed into takes that long — a 16-20 second "
+        "scene plays as one or two takes, not five clips. Write each beat as "
+        "continuous physical motion inside ONE camera setup that can hold for "
+        "several seconds; change the setup only when the story needs a new angle; "
+        "never write a string of one-second fragments. A spoken line and the "
+        "action around it share a take, so the beat before a line sets it up "
+        "and the beat after it is the reaction, in the same frame."
+    )
+
+
 def _from_brain(
     idea: str,
     runtime_target_s: int,
     reference_images: list[str] | None = None,
     master: MasterPrompt | None = None,
+    take_units: dict[str, int] | None = None,
 ) -> ScreenplayDraft:
     scene_target = max(2, round((runtime_target_s - 18) / 16))
     authored = authored_breakdown(idea)
@@ -576,6 +597,9 @@ def _from_brain(
             "action; not every scene needs dialogue. Vary settings, escalate "
             "stakes, and author every shot."
         )
+    takes = take_brief(take_units)
+    if takes:
+        user_text += "\n\n" + takes
     brief = master_brief(master)
     if brief:
         user_text += "\n\n" + brief
@@ -1297,14 +1321,17 @@ def write_script(
     *,
     reference_images: list[str] | None = None,
     master: MasterPrompt | None = None,
+    take_units: dict[str, int] | None = None,
 ) -> ScreenplayDraft:
     """`master` is the pre-split finalized artifact (Blueprint 27): when given,
-    the screenplay realizes it — brain or template — and carries it forward."""
+    the screenplay realizes it — brain or template — and carries it forward.
+    `take_units` (Blueprint 33) is the route's take length, {"picture": s,
+    "spoken": s}, so the brain writes beats that fill long takes."""
     if brain_url():
         last_error: Exception | None = None
         for _attempt in range(BRAIN_ATTEMPTS):
             try:
-                return _from_brain(idea, runtime_target_s, reference_images, master)
+                return _from_brain(idea, runtime_target_s, reference_images, master, take_units)
             except Exception as err:  # noqa: BLE001 — retried, then raised as a named state
                 last_error = err
         raise BrainUnavailable(

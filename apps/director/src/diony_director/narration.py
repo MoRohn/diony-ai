@@ -486,6 +486,7 @@ def cue_sheet(entries: list[dict]) -> list[NarrationCue]:
         speaker = ""
         direction = ""
         voice_ref = ""
+        line_at_s = 0.0
         voicing = str(
             getattr(clip.audio_packet, "voicing", "post")
             if clip is not None
@@ -511,6 +512,12 @@ def cue_sheet(entries: list[dict]) -> list[NarrationCue]:
                 x for x in (str(excerpt.get("parenthetical", "")), delivery) if x
             )
             voice_ref = str(clip.audio_packet.voice_ref or "")
+            # Blueprint 33: the line begins where the take's picture beats
+            # put it, never past the clip's own end
+            line_at_s = min(
+                max(0.0, float(getattr(clip.audio_packet, "line_at_s", 0.0) or 0.0)),
+                max(0.0, duration - 0.5),
+            )
         elif getattr(op, "narration", ""):
             line = str(op.narration).strip()
         if not line:
@@ -524,8 +531,8 @@ def cue_sheet(entries: list[dict]) -> list[NarrationCue]:
                 line=line,
                 direction=direction,
                 voice_ref=voice_ref,
-                start_s=round(timeline_s + CUE_LEAD_IN_S, 3),
-                window_s=round(duration, 3),
+                start_s=round(timeline_s + line_at_s + CUE_LEAD_IN_S, 3),
+                window_s=round(duration - line_at_s, 3),
             )
         )
         timeline_s += duration

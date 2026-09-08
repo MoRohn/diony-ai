@@ -208,7 +208,16 @@ def resumable_sessions() -> list[dict[str, Any]]:
             elif op.status == "proposed":
                 counts["proposed"] += 1
         if counts["failed"] or counts["in_flight"]:
-            rows.append({"session_id": sid, **counts})
+            rows.append({"session_id": sid, "stage": "running", **counts})
+        elif (
+            _PACKAGES.get(sid) is not None
+            and counts["proposed"]
+            and not counts["completed"]
+        ):
+            # Blueprint 33 §5: a script locked and priced but never rolled —
+            # the room comes back with its draft, its priced cards, and the
+            # batch bar, instead of a fresh room over a package on disk
+            rows.append({"session_id": sid, "stage": "priced", **counts})
 
     def _mtime(row: dict[str, Any]) -> float:
         try:
@@ -216,7 +225,8 @@ def resumable_sessions() -> list[dict[str, Any]]:
         except OSError:
             return 0.0
 
-    rows.sort(key=_mtime, reverse=True)
+    # a run in progress outranks a priced-but-unrun room; newest first within each
+    rows.sort(key=lambda row: (row["stage"] != "running", -_mtime(row)))
     return rows
 
 
@@ -2198,10 +2208,13 @@ def _draft_reply(draft: ScreenplayDraft, runtime_s: int) -> str:
                 f"The master action as derived plays about {_runtime(master.estimated_duration_s)}; "
                 f"the screenplay fills your {_runtime(runtime_s)} target from it. "
             )
+    from diony_director import splitter as splitter_mod
+
     reply += (
         f"Script drafted: {_n(scenes, 'scene')}, {_n(speaking, 'spoken line')}, "
         f"targeting {_runtime(runtime_s)}. Review it — lock the script and I'll "
-        f"split it into priced clips. Nothing rolls before the lock."
+        f"pack it into priced takes of "
+        f"{splitter_mod.take_units_phrase(draft_take_units())}. Nothing rolls before the lock."
     )
     usage = getattr(draft, "brain_usage", None) or {}
     if usage.get("prompt_tokens") or usage.get("completion_tokens"):
@@ -2225,6 +2238,16 @@ def _derive_master_for_draft(sid: str, idea: str, runtime_s: int) -> MasterPromp
     )
 
 
+def draft_take_units() -> dict[str, int]:
+    """Blueprint 33: the take length the session's engine choice packs
+    toward — read at draft time from the same choice the lock reads."""
+    from diony_contracts.cluster import read_engine_choice
+    from diony_director import splitter
+
+    choice = read_engine_choice()
+    return splitter.take_units(choice if choice in {"grok", "google-flow"} else "auto")
+
+
 def start_production(sid: str, idea: str, runtime_s: int) -> tuple[ScreenplayDraft, str]:
     """Synchronous draft (template path and tests). Stores ready state."""
     master = _derive_master_for_draft(sid, idea, runtime_s)
@@ -2233,6 +2256,7 @@ def start_production(sid: str, idea: str, runtime_s: int) -> tuple[ScreenplayDra
         runtime_target_s=runtime_s,
         reference_images=[u["path"] for u in (_UPLOADS.get(sid) or [])],
         master=master,
+        take_units=draft_take_units(),
     )
     reply = _draft_reply(draft, runtime_s)
     _DRAFTS[sid] = {
@@ -2275,6 +2299,7 @@ def begin_draft(sid: str, idea: str, runtime_s: int) -> dict[str, Any]:
                 runtime_target_s=runtime_s,
                 reference_images=[u["path"] for u in (_UPLOADS.get(sid) or [])],
                 master=master,
+                take_units=draft_take_units(),
             )
             _DRAFTS[sid] = {
                 "status": "ready",
@@ -2571,10 +2596,13 @@ def lock_script(
     clips_cost = sum(op.estimate.total_usd_micros for op in ops if op.estimate)
     allowance = package.estimate.revision_allowance_usd_micros if package.estimate else 0
     planned_s = sum(clip.duration_s for clip in package.clips)
+    from diony_director import splitter as splitter_mod
+
     lines = [
         f"Script locked — {_n(len(ops), 'clip')} across "
         f"{_n(len(package.script.scenes), 'scene')}, about {_runtime(planned_s)} "
-        "of picture planned.",
+        f"of picture planned, in takes of "
+        f"{splitter_mod.take_units_phrase(splitter_mod.take_units(policy))}.",
         f"Locked estimate {_usd(total)}:",
         f"   · {_n(len(ops), 'clip')} — {_usd(clips_cost)}",
     ]

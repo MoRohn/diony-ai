@@ -161,12 +161,20 @@ def _two_beat_script() -> tuple[Script, list, list]:
     return script, draft.characters, draft.settings
 
 
-def test_each_action_beat_becomes_its_own_clip() -> None:
+def test_beats_pack_into_long_takes_never_one_clip_per_line() -> None:
+    """Blueprint 33: two action beats + a line + its reaction are ~16.7s of
+    beats — two takes on the omni grid, never four clips of four seconds."""
     script, characters, settings = _two_beat_script()
     clips = splitter.split_script(script, characters, settings)
-    picture = [c for c in clips if c.clip_class in {"silent-picture", "ambience-led", "score-led"}]
-    assert len(picture) == 3, "two action beats before dialogue + one after = three picture clips"
-    assert all(len(c.script_line_ids) == 1 for c in picture)
+    assert len(clips) == 2, "a 16-second scene is two takes"
+    picture, spoken = clips
+    assert picture.clip_class == "ambience-led" and spoken.clip_class == "sync-dialogue"
+    assert picture.script_line_ids == ["ln-2", "ln-3"], "the two setup beats share the opener take"
+    assert spoken.script_line_ids == ["ln-4", "ln-5"], "the line and its reaction share a take"
+    # both takes pace to the scene's even share (8.35s): the picture take
+    # books 9s on Grok's per-second range, the spoken take 10s on the omni grid
+    assert picture.natural_s == spoken.natural_s == 8.35
+    assert picture.duration_s == 9 and spoken.duration_s == 10
 
 
 def test_camera_language_is_sentences_never_truncated_prose() -> None:
@@ -179,20 +187,31 @@ def test_camera_language_is_sentences_never_truncated_prose() -> None:
     assert len(openers) == 1
 
 
-def test_two_hander_dialogue_gets_over_the_shoulder_coverage() -> None:
+def test_two_hander_dialogue_gets_over_the_shoulder_coverage_then_the_reaction() -> None:
     script, characters, settings = _two_beat_script()
     clips = splitter.split_script(script, characters, settings)
     dialogue = next(c for c in clips if c.clip_class == "sync-dialogue")
     assert "Over-the-shoulder" in dialogue.camera_idea
     assert "LEAD" in dialogue.camera_idea and "SECOND" in dialogue.camera_idea
-    reaction = clips[clips.index(dialogue) + 1]
-    assert "Reaction close-up on SECOND" in reaction.camera_idea, "the listener reacts, not the speaker"
+    # the reaction beat rides the SAME take as the line it answers — the
+    # camera reads as a progression, and the listener reacts, not the speaker
+    assert "then reaction close-up on SECOND" in dialogue.camera_idea
+    assert dialogue.audio_packet.line_at_s == 0.0, "the take opens on the line"
 
 
 def test_joins_are_authored_bridge_reaction_cut_and_scene_cut() -> None:
     script, characters, settings = _two_beat_script()
+    # a line long enough to fill its own take pushes the reaction into the
+    # next take — which is where a reaction CUT still lives
+    long_line = next(l for l in script.lines if l.kind == "dialogue")
+    long_line.text = (
+        "Tonight we drive and we do not stop for anyone until the county line is "
+        "an hour behind us and the sun is coming up."
+    )
     clips = splitter.split_script(script, characters, settings)
     dialogue = next(c for c in clips if c.clip_class == "sync-dialogue")
+    reaction = clips[clips.index(dialogue) + 1]
+    assert reaction.camera_idea.startswith("Reaction close-up on SECOND")
     assert dialogue.join_next == "reaction_cut"
     assert clips[-1].join_next == "cut", "the last clip of a scene is a hard cut"
     assert clips[0].join_next == "bridge"
@@ -257,7 +276,25 @@ def test_wardrobe_reaches_the_prompt_now() -> None:
 
 def test_score_direction_reaches_score_led_clips() -> None:
     package = _package()
-    scored = next(c for c in package.clips if c.clip_class == "score-led")
+    # a picture-only scene long enough for two takes (line ids unique to it —
+    # the template's own ln-2 must not shadow these): the second take is
+    # coverage under score, never a plate reset
+    lines = [
+        ScriptLine(line_id="ln-91", kind="heading", text="INT. NEON DINER - NIGHT", scene_id="sc-9"),
+        ScriptLine(line_id="ln-92", kind="action", text="LEAD counts the keys twice.", scene_id="sc-9"),
+        ScriptLine(line_id="ln-93", kind="action", text="SECOND slides the map across.", scene_id="sc-9"),
+        ScriptLine(line_id="ln-94", kind="action", text="LEAD folds the map into a coat pocket.", scene_id="sc-9"),
+        ScriptLine(line_id="ln-95", kind="action", text="SECOND nods once.", scene_id="sc-9"),
+        ScriptLine(line_id="ln-96", kind="action", text="The door swings shut behind them.", scene_id="sc-9"),
+    ]
+    package.script.lines.extend(lines)
+    package.script.scenes.append(Scene(
+        scene_id="sc-9", heading="INT. NEON DINER - NIGHT", setting_ref=package.settings[0].setting_id,
+        cast=[c.char_id for c in package.characters], line_ids=[l.line_id for l in lines],
+    ))
+    clips = splitter.split_script(package.script, package.characters, package.settings)
+    package.clips = clips
+    scored = next(c for c in clips if c.scene_id == "sc-9" and c.clip_class == "score-led")
     version = compiler.compile_clip_prompt(scored, package)
     # a scored clip names its music as one continuing piece — and never also
     # says "no music" (the s-1b80548c4d contradiction that produced a ringtone)

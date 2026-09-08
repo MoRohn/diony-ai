@@ -225,19 +225,48 @@ def _script_with_shots():
 def test_authored_shots_become_the_camera_verbatim() -> None:
     draft = _draft()
     clips = splitter.split_script(_script_with_shots(), draft.characters, draft.settings)
-    action = clips[0]
-    spoken = next(c for c in clips if c.clip_class in {"sync-dialogue", "vo-over"})
-    assert action.camera_idea.startswith("Overhead top-shot")
-    assert spoken.camera_idea.startswith("Low-angle close-up")
+    # Blueprint 33: the opener beat and the line share one take — both
+    # authored shots reach the camera verbatim, as a progression, in order
+    assert len(clips) == 1
+    take = clips[0]
+    assert take.clip_class == "sync-dialogue"
+    assert take.camera_idea.startswith("Overhead top-shot, the rag carving clean arcs through spilt sugar")
+    assert "; then low-angle close-up, jukebox glow under her jaw" in take.camera_idea
+    assert take.audio_packet.line_at_s > 0, "the words sit after the opening beat"
+
+
+def _picture_only_script(opener_shot: str):
+    lines = [
+        ScriptLine(line_id="ln-1", kind="heading", text="INT. DINER - NIGHT", scene_id="sc-1"),
+        ScriptLine(line_id="ln-2", kind="action", text="Mara wipes the counter.", scene_id="sc-1", shot=opener_shot),
+        ScriptLine(line_id="ln-3", kind="action", text="She folds the rag once.", scene_id="sc-1",
+                   shot="Low-angle close-up, jukebox glow under her jaw"),
+    ]
+    return Script(
+        id="scr-pic", runtime_target_s=30,
+        scenes=[Scene(scene_id="sc-1", heading="INT. DINER - NIGHT", setting_ref="set-primary",
+                      cast=["chr-lead"], line_ids=[l.line_id for l in lines])],
+        lines=lines,
+    )
+
+
+def test_a_wide_authored_opener_lets_the_plate_open_the_take() -> None:
+    draft = _draft()
+    clips = splitter.split_script(
+        _picture_only_script("Overhead top-shot, the rag carving clean arcs through spilt sugar"),
+        draft.characters, draft.settings,
+    )
+    assert len(clips) == 1 and clips[0].camera_idea.startswith("Overhead top-shot")
     # a top-shot opener reads as the room — the plate may open it
-    assert action.continuity.lock_recipe == "still"
+    assert clips[0].continuity.lock_recipe == "still"
 
 
 def test_non_wide_authored_opener_releases_the_plate_first_frame() -> None:
     draft = _draft()
-    script = _script_with_shots()
-    script.lines[1].shot = "Macro insert on a sugar spoon, everything else falling away"
-    clips = splitter.split_script(script, draft.characters, draft.settings)
+    clips = splitter.split_script(
+        _picture_only_script("Macro insert on a sugar spoon, everything else falling away"),
+        draft.characters, draft.settings,
+    )
     assert clips[0].continuity.lock_recipe == "ref", (
         "a macro opener generated FROM a wide plate first-frame fights itself"
     )

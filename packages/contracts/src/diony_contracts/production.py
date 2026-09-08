@@ -222,6 +222,11 @@ class AudioPacket(BaseModel):
     # speech (Blueprint 28). "generated" — the excerpt rides the prompt and
     # the character voices it in the clip; the track IS the voice.
     voicing: Voicing = "post"
+    # Blueprint 33: where the spoken line begins inside its take, in seconds
+    # from the clip's head — 0 when the take opens on the line. A take that
+    # packs picture beats before the line puts the words where the body
+    # speaks them, and the post narrator's cue lands there.
+    line_at_s: float = Field(default=0.0, ge=0.0)
     room_tone_id: str = ""
     foley: list[dict[str, Any]] = Field(default_factory=list)
     score: Literal["in", "out", "none"] = "none"
@@ -456,6 +461,11 @@ class ClipUnit(BaseModel):
     script_line_ids: list[str] = Field(default_factory=list)
     clip_class: ClipClass
     duration_s: int = Field(gt=0)
+    # Blueprint 33: the length the take is paced to play — its scene's even
+    # share when the beats can meet it, else the beats' own length — before
+    # the provider grid rounded it up. The assembly trims the round-up
+    # beyond it on spoken takes; picture takes play what they booked.
+    natural_s: float = Field(default=0.0, ge=0.0)
     camera_idea: str
     # How this clip meets the NEXT one: "bridge" (last-frame chain inside the
     # scene), "reaction_cut" (dialogue into its reaction), "extend" (a

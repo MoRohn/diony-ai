@@ -279,12 +279,16 @@ def test_the_cue_sheet_skips_clips_that_voice_their_own_line_unless_rescued() ->
     ]
     cues = narration.cue_sheet(entries)
     assert [c.clip_id for c in cues] == [voice_over.clip_id]
-    assert cues[0].start_s == pytest.approx(6.0 + narration.CUE_LEAD_IN_S)
+    # Blueprint 33: the cue lands where the take puts its words (never past
+    # the clip's own end), after the clip before it
+    at_s = min(voice_over.audio_packet.line_at_s, 6.0 - 0.5)
+    assert cues[0].start_s == pytest.approx(6.0 + at_s + narration.CUE_LEAD_IN_S)
     # a rescued spoken clip is narrated after all — placed on its own mark
     entries[0]["narrate_anyway"] = True
     rescued = narration.cue_sheet(entries)
     assert [c.clip_id for c in rescued] == [on_camera.clip_id, voice_over.clip_id]
-    assert rescued[0].start_s == pytest.approx(narration.CUE_LEAD_IN_S)
+    on_at_s = min(on_camera.audio_packet.line_at_s, 6.0 - 0.5)
+    assert rescued[0].start_s == pytest.approx(on_at_s + narration.CUE_LEAD_IN_S)
 
 
 def test_assembly_balances_a_spoken_clip_to_the_narrator_level() -> None:

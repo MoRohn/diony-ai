@@ -2614,6 +2614,8 @@ def board(sid: str) -> dict:
                     "clip_class": clip.clip_class,
                     "camera": clip.camera_idea,
                     "duration_s": clip.duration_s,
+                    # Blueprint 33: how many script beats the take packs
+                    "beats": len(clip.script_line_ids),
                     "join_next": clip.join_next,
                     "provider": clip.provider.value if clip.provider else "",
                     "model": clip.model,
@@ -2642,6 +2644,28 @@ def board(sid: str) -> dict:
         source_settings = [SettingProfile.model_validate(s) for s in draft.get("settings") or []]
     from diony_director import cast as cast_mod
 
+    # Blueprint 33 §3: what the cast dock says about a sheet that has not
+    # landed — waiting for Run, drawing at the provider, or failed — read
+    # from the sheet ops themselves, never guessed from the empty stills
+    sheet_ops: dict[str, list[DirectorOp]] = {}
+    for op in session.ops_for(sid):
+        bible = op.artifact_refs.get("bible") or {}
+        if bible.get("char_id"):
+            sheet_ops.setdefault(str(bible["char_id"]), []).append(op)
+
+    def _sheet_state(char) -> str:
+        ops = sheet_ops.get(char.char_id) or []
+        statuses = {o.status for o in ops}
+        if statuses & {"submitting", "submitted", "deriving"}:
+            return "drawing"
+        if char.hero_stills and not (statuses & {"proposed"}):
+            return "landed"
+        if statuses & {"proposed"}:
+            return "drawing" if char.hero_stills else "waiting"
+        if "failed" in statuses and not char.hero_stills:
+            return "failed"
+        return "landed" if char.hero_stills else "waiting"
+
     for char in source_chars:
         characters.append(
             {
@@ -2650,6 +2674,7 @@ def board(sid: str) -> dict:
                 "role": char.role,
                 "wardrobe": _wardrobe_line(char),
                 "face_approved": char.face_approved,
+                "sheet_state": _sheet_state(char),
                 "stills": sorted(char.hero_stills.keys()),
                 "flow_registered": bool(char.flow_character_ref),
                 # Blueprint 32: the identity card as it will ride the prompts,
@@ -2781,6 +2806,39 @@ def lock_script(sid: str) -> dict:
         "targeted": targeted,
         "submitted": [],
         "held": [],
+    }
+
+
+@app.get("/api/director/sessions/{sid}/lock")
+def get_lock(sid: str) -> dict:
+    """The locked set as lock_script handed it over — the clip ops (latest
+    take per clip), the plate & sheet stills, the cast keyframes — so a
+    resumed room can rebuild its priced cards and batch bar (Blueprint 33 §5)."""
+    _boot()
+    package = session.package_for(sid)
+    if package is None:
+        raise HTTPException(status_code=404, detail=f"session {sid} has no locked package")
+    latest: dict[str, DirectorOp] = {}
+    bible_ops: list[DirectorOp] = []
+    keyframe_ids = {k.id for k in session.keyframe_ops_for(sid)}
+    for op in session.ops_for(sid):
+        if op.artifact_refs.get("bible"):
+            bible_ops.append(op)
+        elif op.clip_id and op.op is not DirectorOpType.UPSCALE and op.id not in keyframe_ids:
+            latest[op.clip_id] = op
+    order = {clip.clip_id: clip.order for clip in package.clips}
+    ops = sorted(latest.values(), key=lambda o: order.get(o.clip_id or "", 0))
+    planned_s = sum(clip.duration_s for clip in package.clips)
+    return {
+        "session_id": sid,
+        "locked": bool(package.script.locked),
+        "clips": len(package.clips),
+        "scenes": len(package.script.scenes),
+        "planned_s": planned_s,
+        "estimate_usd_micros": package.estimate.total_usd_micros if package.estimate else 0,
+        "ops": [op.model_dump(mode="json") for op in ops],
+        "bible_ops": [b.model_dump(mode="json") for b in bible_ops],
+        "keyframe_ops": [k.model_dump(mode="json") for k in session.keyframe_ops_for(sid)],
     }
 
 
@@ -2924,9 +2982,12 @@ def _assembly_spec(op: DirectorOp) -> dict:
         and clip.audio_packet.voicing != "generated"
     ):
         words = len(str(clip.audio_packet.script_excerpt[0].get("line", "")).split())
-        spec["needed_s"] = round(
-            max(1, words) / WORDS_PER_SECOND + PRE_HANDLE_S + TAIL_HANDLE_S + 0.25, 3
-        )
+        speech_s = max(1, words) / WORDS_PER_SECOND + PRE_HANDLE_S + TAIL_HANDLE_S
+        # Blueprint 33: a take that packs picture beats around its line needs
+        # the beats too — the trim follows the take's natural length, never
+        # the words alone (which would cut the beats the words sit inside)
+        natural_s = float(getattr(clip, "natural_s", 0.0) or 0.0)
+        spec["needed_s"] = round(max(speech_s, natural_s) + 0.25, 3)
     return spec
 
 
@@ -3438,6 +3499,39 @@ def approve_face(sid: str, char_id: str) -> dict:
     char.face_approved = True
     session.persist(sid)  # an approval is a decision; decisions survive restarts
     return {"reply": f"{char.name}'s face is approved and frozen at sheet v{char.sheet_version}."}
+
+
+@app.post("/api/director/sessions/{sid}/bible/approve_all")
+def approve_all_faces(sid: str) -> dict:
+    """Blueprint 33 §3: every character whose sheet has landed is approved in
+    one press from the cast dock — a character with no still yet is left
+    for the next press, named in the reply, never silently approved."""
+    _boot()
+    package = session.package_for(sid)
+    if package is None:
+        raise HTTPException(status_code=404, detail=f"session {sid} has no locked package")
+    approved: list[str] = []
+    waiting: list[str] = []
+    for char in package.characters:
+        if char.face_approved:
+            continue
+        if not char.hero_stills:
+            waiting.append(char.name)
+            continue
+        char.face_approved = True
+        approved.append(char.name)
+    if not approved:
+        if waiting:
+            raise HTTPException(
+                status_code=409,
+                detail=f"no sheet has landed yet for {', '.join(waiting)} — nothing to approve",
+            )
+        return {"approved": [], "waiting": [], "reply": "Every face is already approved."}
+    session.persist(sid)  # approvals are decisions; decisions survive restarts
+    reply = f"Approved {', '.join(approved)} — {len(approved)} face(s) frozen at their sheets."
+    if waiting:
+        reply += f" Still drawing: {', '.join(waiting)}."
+    return {"approved": approved, "waiting": waiting, "reply": reply}
 
 
 @app.post("/api/director/sessions/{sid}/bible/register_character/{char_id}")

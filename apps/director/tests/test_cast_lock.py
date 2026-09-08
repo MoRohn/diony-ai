@@ -19,6 +19,7 @@ from diony_contracts.production import (
     SettingProfile,
 )
 from diony_director import (
+    splitter,
     app as app_module,
     artifacts,
     cast,
@@ -236,13 +237,36 @@ def test_identity_refs_lead_with_the_board_and_flow_media_is_capped_at_two() -> 
     assert cast.flow_character_media(char) == ["user:f", "user:b"]
 
 
+def _picture_scene(*, cast_lock: str, policy: str):
+    """Two picture-only takes with people in both (Blueprint 33 packs a
+    two-hander's line and its beats into one spoken take, so the reference
+    ordering of PICTURE takes needs a scene with no line in it)."""
+    package = _two_hander(off_screen=False, cast_lock=cast_lock, policy=policy)
+    lines = [
+        ScriptLine(line_id="ln-1", kind="heading", text="INT. NEON DINER - NIGHT", scene_id="sc-1"),
+        ScriptLine(line_id="ln-2", kind="action", text="Jon wipes the counter.", scene_id="sc-1", shot="Wide shot, chest height, the counter running to the door"),
+        ScriptLine(line_id="ln-3", kind="action", text="Mara counts the keys twice.", scene_id="sc-1", shot="Medium shot on Mara at the counter"),
+        ScriptLine(line_id="ln-4", kind="action", text="Jon sets the rag down and does not turn around.", scene_id="sc-1", shot="Medium close-up on Jon, still"),
+        ScriptLine(line_id="ln-5", kind="action", text="Mara pockets the keys.", scene_id="sc-1", shot="Insert on the keys disappearing into the coat"),
+        ScriptLine(line_id="ln-6", kind="action", text="The door swings shut behind her.", scene_id="sc-1", shot="Wide shot from the counter, the door closing"),
+    ]
+    package.script.lines = lines
+    package.script.scenes[0].line_ids = [l.line_id for l in lines]
+    package.clips = splitter.split_script(
+        package.script, package.characters, package.settings,
+        provider_policy=policy, cast_lock=cast_lock,
+    )
+    return package
+
+
 def test_grok_reference_pack_under_locked_leads_with_each_boards_then_the_plate() -> None:
-    package = _two_hander(off_screen=False, cast_lock="locked", policy="grok")
+    package = _picture_scene(cast_lock="locked", policy="grok")
     for char in package.characters:
         char.hero_stills = {"front": f"/{char.char_id}-front.png", "board": f"/{char.char_id}-board.png"}
         char.grok_ref_pack = list(char.hero_stills.values())
     package.settings[0].plate_asset_id = "/plate.png"
     pictures = [c for c in package.clips if not c.audio_packet.script_excerpt]
+    assert len(pictures) == 2, "22s of beats on Grok is two takes"
     # a scene opener with people composes INTO the plate (the plate leads —
     # the s-1b80548c4d doctrine); every later shot leads with the boards
     opener, later = pictures[0], pictures[-1]
@@ -617,7 +641,7 @@ def test_a_dialogue_line_can_be_made_off_screen_until_the_lock() -> None:
     client.post(f"/api/director/sessions/{sid}/lock_script")
     assert client.post(f"/api/director/sessions/{sid}/draft/line", json={"line_id": dialogue["line_id"], "off_screen": False}).status_code == 409
     package = session.package_for(sid)
-    spoken = next(c for c in package.clips if c.script_line_ids == [dialogue["line_id"]])
+    spoken = next(c for c in package.clips if dialogue["line_id"] in c.script_line_ids)
     assert spoken.audio_packet.script_excerpt[0]["off_screen"] is True
 
 

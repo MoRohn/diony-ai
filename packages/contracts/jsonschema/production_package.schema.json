@@ -47,6 +47,12 @@
           "title": "Voicing",
           "type": "string"
         },
+        "line_at_s": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Line At S",
+          "type": "number"
+        },
         "room_tone_id": {
           "default": "",
           "title": "Room Tone Id",
@@ -261,6 +267,12 @@
           "exclusiveMinimum": 0,
           "title": "Duration S",
           "type": "integer"
+        },
+        "natural_s": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Natural S",
+          "type": "number"
         },
         "camera_idea": {
           "title": "Camera Idea",

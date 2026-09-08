@@ -20,15 +20,22 @@ def test_every_scene_opens_with_an_establishing_clip() -> None:
         by_scene.setdefault(clip.scene_id, []).append(clip)
     for scene_clips in by_scene.values():
         first = min(scene_clips, key=lambda c: c.order)
+        opener_line = lines[first.script_line_ids[0]]
+        if opener_line.kind != "action":
+            continue  # a scene that opens on a line buys no empty establishing clip
+        authored = (opener_line.shot or "").rstrip(".")
+        if first.audio_packet.script_excerpt:
+            # Blueprint 33: the opener beat and the scene's first line share a
+            # take — the take rides the voice lane, and the authored opener
+            # still leads its camera
+            if authored:
+                assert first.camera_idea.startswith(authored)
+            continue
         assert first.clip_class in {"ambience-led", "silent-picture", "score-led"}
-        authored = next(
-            (lines[i].shot for i in first.script_line_ids if lines.get(i) and lines[i].shot),
-            "",
-        )
         if authored:
             # the screenwriter's frame IS the opener; and a non-wide authored
             # opener must not force the wide plate as its first frame
-            assert first.camera_idea == authored.rstrip(".")
+            assert first.camera_idea.startswith(authored)
             lowered = authored.lower()
             wide_ish = any(
                 w in lowered for w in ("wide", "establish", "master", "aerial", "overhead", "top-")

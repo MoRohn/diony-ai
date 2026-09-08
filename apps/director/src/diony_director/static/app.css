@@ -820,3 +820,62 @@ body[data-running="assembling"] .runtag { color: var(--ok); border-color: rgba(1
 .bline .ostoggle { margin-left: .6em; font: 600 .58rem/1 var(--mono); letter-spacing: .08em; padding: .15em .4em; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--ink-3); cursor: pointer; vertical-align: middle; }
 .bline .ostoggle.on, .bline .ostoggle:hover { color: var(--accent-ink); border-color: var(--accent); }
 .acceptbtn.alt { opacity: .85; }
+
+/* ------------------------------------------- the cast dock (Blueprint 33) */
+/* Approving a face never means scrolling the thread for the Production
+   card: while a locked film has a face awaiting approval, the console
+   carries a compact dock — one row per character (anchor still, name, the
+   measured sheet's verdict, Approve), Approve all, and a jump to the full
+   BIBLES section. It stays visible while the run strip folds the console. */
+.castdock {
+  display: flex; flex-direction: column; gap: .35rem;
+  margin: .1rem .1rem .45rem; padding: .5rem .65rem .55rem;
+  border: 1px solid rgba(123,201,138,.35); border-radius: var(--r-md);
+  background: rgba(123,201,138,.05);
+}
+.castdock.settled { border-color: var(--line); background: rgba(255,255,255,.02); }
+.castdock.quiet { padding: .3rem .65rem; margin-bottom: .35rem; }
+.castdock.quiet .casthead { min-height: 1.5rem; }
+.casthead { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.casthead .bhead { color: var(--ok); }
+.castdock.settled .casthead .bhead { color: var(--accent-ink); }
+.castcount { color: var(--mut); font: 500 .7rem/1.4 var(--mono); letter-spacing: .04em; }
+.casthead .runbtn { margin-left: auto; }
+.casthead .runbtn + .runbtn { margin-left: 0; }
+.castrows { display: flex; flex-direction: column; gap: .3rem; }
+.castrow {
+  display: grid; grid-template-columns: 2.3rem minmax(7rem, 1fr) minmax(0, 2fr) auto;
+  gap: .3rem .7rem; align-items: center;
+  padding: .22rem .45rem; border-radius: var(--r-sm); background: rgba(0,0,0,.22);
+}
+.castrow.approved { opacity: .72; }
+.castthumb {
+  width: 2.3rem; height: 2.3rem; border-radius: 8px; object-fit: cover;
+  border: 1px solid var(--line); background: rgba(255,255,255,.04); display: block;
+}
+.castthumb.empty { display: flex; align-items: center; justify-content: center; color: var(--mut); font: 600 .58rem/1 var(--mono); letter-spacing: .06em; }
+.castname { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+.castname b { font-size: .82rem; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.castname .bt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.caststate { min-width: 0; font: 500 .68rem/1.4 var(--mono); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.caststate.ok { color: var(--ok); }
+.caststate.bad { color: var(--warn, #f0a53a); }
+.caststate.drawing { color: var(--accent-ink); animation: draftpulse 1.2s ease-in-out infinite alternate; }
+@media (prefers-reduced-motion: reduce) { .caststate.drawing { animation: none; } }
+.castacts { display: flex; gap: .35rem; align-items: center; justify-self: end; }
+.castacts .acceptbtn {
+  padding: .32em .8em; border-radius: 999px; border: 1px solid var(--line-hi); background: transparent;
+  color: var(--ink); font: 600 .72rem/1.2 var(--sans, inherit); cursor: pointer; white-space: nowrap;
+}
+.castacts .acceptbtn:hover:not(:disabled) { background: rgba(123,201,138,.12); border-color: var(--ok); }
+.castacts .acceptbtn:disabled { opacity: .55; cursor: default; }
+.castacts .bok { white-space: nowrap; }
+.casthead .runbtn.approveall { color: var(--ok); border-color: rgba(123,201,138,.5); }
+.casthead .runbtn.approveall:hover:not(:disabled) { background: rgba(123,201,138,.12); }
+.casthead .runbtn.approveall.armed { color: #0b1a10; background: var(--ok); border-color: var(--ok); }
+.casthead .runbtn:disabled { opacity: .6; cursor: default; }
+@media (max-width: 880px) {
+  .castrow { grid-template-columns: 2.3rem 1fr auto; }
+  .castacts { grid-row: 1; grid-column: 3; }
+  .caststate { grid-column: 1 / -1; white-space: normal; }
+}

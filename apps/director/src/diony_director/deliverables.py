@@ -78,12 +78,18 @@ def build_deliverables(
         speaker = ""
         line = ""
         cue_key = ""
+        line_at_s = 0.0
         if (
             clip is not None
             and clip.clip_class in {"sync-dialogue", "vo-over"}
             and clip.audio_packet.script_excerpt
         ):
             excerpt = clip.audio_packet.script_excerpt[0]
+            # Blueprint 33: the words sit where the take's beats put them
+            line_at_s = min(
+                max(0.0, float(getattr(clip.audio_packet, "line_at_s", 0.0) or 0.0)),
+                max(0.0, duration - 0.5),
+            )
             speaker = str(excerpt.get("speaker", ""))
             if excerpt.get("off_screen") and speaker:
                 speaker = f"{speaker} (O.S.)"  # Blueprint 32: heard, not seen
@@ -95,7 +101,7 @@ def build_deliverables(
             line = str(op.narration).strip()
             cue_key = op.id
         if line:
-            start = timeline_s + CUE_LEAD_IN_S
+            start = timeline_s + line_at_s + CUE_LEAD_IN_S
             if measured.get(cue_key, 0) > 0:
                 # the narrator's real take times the cue — a line may breathe
                 # past its clip's cut, and the subtitle follows the voice
