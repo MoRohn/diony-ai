@@ -989,7 +989,7 @@
       runFact(facts, "Printed", `${printed} / ${total}`, `${pct}% of the set`, "ok");
       runFact(facts, "Rolling", m.rolling || 0, m.rolling ? "at the provider now" : "none in flight", m.rolling ? "hot" : "quiet");
       runFact(facts, m.queuedLabel || "Queued", m.queued || 0, m.queued ? "roll in order" : "", "quiet");
-      if (m.failed) runFact(facts, "Failed", m.failed, "Retry or Skip on the card", "bad");
+      if (m.failed) runFact(facts, "Failed", m.failed, priced ? "" : "Retry all below, or Skip on the card", "bad");
       if (m.skipped) runFact(facts, "Skipped", m.skipped, "left out of the cut", "quiet");
       runFact(facts, "Pace", paceText(m), etaText(m), "quiet");
       if (m.estMicros) runFact(facts, "Locked", usd(m.estMicros), spendText(), "cost");
@@ -1033,6 +1033,7 @@
       peek.classList.toggle("on", document.body.classList.toggle("peek"));
     });
     foot.appendChild(peek);
+    if (!priced && m.failed) foot.appendChild(retryAllButton(m.failed));
     if (priced) {
       const reopen = mk("button", "runbtn", "New idea");
       reopen.type = "button";
@@ -1052,6 +1053,71 @@
     });
     foot.appendChild(jump);
     runbar.appendChild(foot);
+  }
+
+  // Retry all: every failed clip re-queued from the strip — one press at
+  // the bottom, no scrolling the board for each card's Retry. The price is
+  // the sum of the failed clips' locked estimates, quoted once per count;
+  // the two-step confirm survives the strip's repaint between advance ticks.
+  let failedQuote = null; // { sid, count, total_usd_micros }
+  let retryAllArm = null; // { sid, count, at } — armed confirm across repaints
+  function retryAllButton(count) {
+    const btn = mk("button", "runbtn retryall", "");
+    btn.type = "button";
+    btn.title = "Re-queue every failed clip at its locked price — completed clips are never re-spent";
+    const quoted = () => failedQuote && failedQuote.sid === sessionId && failedQuote.count === count;
+    const restLabel = () => (quoted() ? `↻ Retry all ${count} — ${usd(failedQuote.total_usd_micros)}` : `↻ Retry all ${count}`);
+    const confirmLabel = () =>
+      `Confirm — retry ${count} clip${count === 1 ? "" : "s"}${quoted() ? ` for ${usd(failedQuote.total_usd_micros)}` : ""}`;
+    btn.textContent = restLabel();
+    if (!quoted()) {
+      api(`/api/director/sessions/${sessionId}/failed`)
+        .then((q) => {
+          failedQuote = { sid: sessionId, count: q.count, total_usd_micros: q.total_usd_micros };
+          if (!btn.isConnected) return;
+          if (btn.dataset.armed === "1") btn.dataset.restLabel = restLabel();
+          else btn.textContent = restLabel();
+        })
+        .catch(() => { /* the strip never invents a number */ });
+    }
+    const fire = async () => {
+      retryAllArm = null;
+      btn.disabled = true;
+      btn.textContent = "re-queuing…";
+      try {
+        const res = await api(`/api/director/sessions/${sessionId}/retry-all`, { method: "POST" });
+        failedQuote = null;
+        addMsg("director", res.reply);
+        refreshProduction();
+        refreshMeter();
+        resumeRunAfterRetry(res);
+      } catch (err) {
+        addMsg("director", `Retry all failed: ${err.message || err}`);
+        btn.disabled = false;
+        btn.textContent = restLabel();
+      }
+    };
+    const arm = retryAllArm;
+    if (arm && arm.sid === sessionId && arm.count === count && Date.now() - arm.at < 6000) {
+      // repainted while armed: stay armed for what is left of the window
+      btn.dataset.restLabel = restLabel();
+      btn.dataset.armed = "1";
+      btn.classList.add("armed");
+      btn.textContent = confirmLabel();
+      setTimeout(() => {
+        if (btn.dataset.armed === "1") {
+          btn.dataset.armed = "";
+          btn.classList.remove("armed");
+          btn.textContent = btn.dataset.restLabel;
+          if (retryAllArm === arm) retryAllArm = null;
+        }
+      }, Math.max(0, 6000 - (Date.now() - arm.at)));
+    }
+    btn.addEventListener("click", () => {
+      if (btn.dataset.armed !== "1") retryAllArm = { sid: sessionId, count, at: Date.now() };
+      armConfirm(btn, confirmLabel(), fire);
+    });
+    return btn;
   }
 
   // pace: wall time per print within the current phase; ETA counts down

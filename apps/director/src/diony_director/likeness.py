@@ -28,6 +28,24 @@ Three layers, one law:
 Only people are touched. Brands (Volvo FM), places, on-screen titles
 (PRECISION), and the user's own invented characters (Mara, ELIAS) are left
 exactly as written — the brain decides who is real, the code never guesses.
+
+2026-09-07, the fourth layer — NAMES BESIDE A PICTURE (s-9c2f04d993): a
+satirical campaign ad with an entirely fictional candidate, "Grant
+Merriweather", and an AI-drawn poster of him as the reference still. Nobody
+real anywhere; real_people was rightly empty. Google Flow still refused
+clip 1 three times with PROMINENT_PERSON. Five live probes on omni-flash
+isolated it: the full prompt WITHOUT the poster rendered; the poster with a
+neutral prompt rendered; the prompt naming him WITH the poster was refused;
+the same prompt with "the candidate" in place of the name, with the poster,
+rendered; and a spoken line saying his name beside the poster rendered too.
+So Google's filter fires whenever the PROSE names a person — real or
+invented — next to a reference picture of a face; the name alone and the
+picture alone are fine, and quoted speech is not read as a name. The brain
+therefore also confesses ``characters`` (every named person it wrote, same
+shape), and the last gate before a Flow submit (``scrub_pictured``) describes
+every person, real or invented, in a prompt that rides beside a picture —
+outside quoted speech, which stays verbatim. A Flow prompt with no picture
+keeps its character names.
 """
 
 from __future__ import annotations
@@ -65,7 +83,16 @@ BRAIN_LAW = (
     "words, e.g. 'the broad-shouldered man in sunglasses and a leather vest'), "
     "label (a 1–3 word character label, e.g. 'The Splitter')}; an empty list "
     "when none. The system verifies: any name that still appears is replaced "
-    "by its descriptor."
+    "by its descriptor.\n"
+    "NAMED CHARACTERS\n"
+    "Also return characters: a list, one entry per invented or fictional person "
+    "you named anywhere in your output (from the idea or your own invention), "
+    "in the same shape {name, aliases, descriptor, label}, where descriptor is "
+    "the definite visual noun phrase that can replace the name in any sentence "
+    "(e.g. 'the silver-haired candidate in the pale blue Oxford'); an empty list "
+    "when you named no one. Video providers refuse a prompt that names ANY "
+    "person beside a reference picture, so the system replaces those names with "
+    "their descriptors when a picture rides along."
 )
 
 # One entry of real_people, normalized.
@@ -275,6 +302,42 @@ def scrub_label(text: str, people: list[Person]) -> tuple[str, bool]:
     return text, False
 
 
+# Quoted speech: a spoken line that says a name beside a picture rendered
+# on the live probe (2026-09-07); it is the user's own words and stays.
+_QUOTED = re.compile(r'"[^"\n]*"|“[^”\n]*”')
+
+
+def scrub_pictured(text: str, people: list[Person]) -> tuple[str, int]:
+    """The pictured-prompt guard: every person — real or an invented
+    character — described, never named, in the prose of a prompt that rides
+    beside a reference picture. Quoted speech is left verbatim."""
+    if not text or not people:
+        return text, 0
+    hits = 0
+    out: list[str] = []
+    cursor = 0
+    for match in _QUOTED.finditer(text):
+        prose, n = scrub(text[cursor:match.start()], people)
+        out.append(prose)
+        out.append(match.group(0))
+        hits += n
+        cursor = match.end()
+    prose, n = scrub(text[cursor:], people)
+    out.append(prose)
+    hits += n
+    return "".join(out), hits
+
+
+def pictured_note(hits: int, people: list[Person]) -> str:
+    """The rationale line the card shows — descriptors, never names."""
+    described = "; ".join(p.get("descriptor") or p.get("label") or "a person" for p in people)
+    return (
+        f"names beside a picture: Google Flow refuses a prompt that names anyone next to a "
+        f"reference picture, so {hits} mention{'s' if hits != 1 else ''} became the "
+        f"description ({described}); spoken lines stay verbatim"
+    )
+
+
 def mentions(text: str, people: list[Person]) -> bool:
     return any(
         _pattern(p.get("aliases") or [p["name"]]).search(text or "") for p in people
@@ -343,8 +406,10 @@ AUDIT_SYSTEM = (
     'refers to them, "descriptor": a definite noun phrase of at most 10 words '
     "describing them as they appear in THIS prompt — build, apparent age, hair, "
     "wardrobe — usable in place of the name in any sentence and never hinting "
-    'at who they are, "label": a 1–3 word character label}. '
-    '{"people": []} when no candidate is a real person.'
+    'at who they are, "label": a 1–3 word character label}, and "characters": '
+    "one entry in the same shape per candidate phrase that names an INVENTED "
+    "or fictional person (a character of the story, not a real one). "
+    '{"people": [], "characters": []} when no candidate names anyone.'
 )
 
 
@@ -352,6 +417,14 @@ def audit(prompt_text: str, phrases: list[str], *, has_reference: bool = False) 
     """Ask the brain, text only, which candidate phrases name a real person.
     Raises on transport or contract failure — the caller turns that into a
     warning."""
+    return audit_all(prompt_text, phrases, has_reference=has_reference)[0]
+
+
+def audit_all(
+    prompt_text: str, phrases: list[str], *, has_reference: bool = False
+) -> tuple[list[Person], list[Person]]:
+    """One text-only brain call: (real people, invented characters) among the
+    candidate phrases. A phrase the brain lists under both is a real person."""
     from diony_director import screenwriter
     from diony_director.providers import base as provider_base
 
@@ -388,7 +461,42 @@ def audit(prompt_text: str, phrases: list[str], *, has_reference: bool = False) 
             if mentions(phrase, [person]) and phrase not in person["aliases"]:
                 person["aliases"].append(phrase)
         person["aliases"] = _all_aliases(person)
-    return people
+    characters = without(
+        normalize_people(body.get("characters") or [], has_reference=has_reference), people
+    )
+    return people, characters
+
+
+def without(characters: list[Person], people: list[Person]) -> list[Person]:
+    """The characters that are not (and do not contain) a real person — a
+    real person cast under a character's name is the real person's entry."""
+    return [c for c in characters if not mentions(c["name"], people)]
+
+
+def people_from_profiles(profiles: Iterable[Any]) -> list[Person]:
+    """A screenplay's cast, as the pictured-prompt guard needs it: each
+    CharacterProfile's name → its role as the descriptor (the visual head
+    of its age/body notes when the role is empty or names the character)."""
+    raw: list[dict] = []
+    for profile in profiles or []:
+        name = _clean(getattr(profile, "name", ""))
+        if not name:
+            continue
+        descriptor = _clean(getattr(profile, "role", ""))
+        notes = _clean(getattr(profile, "age_body_notes", ""))
+        if not descriptor or name.lower() in descriptor.lower():
+            descriptor = notes.split(";")[0].split(",")[0] if notes else ""
+        if descriptor:
+            # a definite phrase, whatever the profile wrote: "a weathered
+            # farmer" → "the weathered farmer"
+            lowered = descriptor.lower()
+            for article in _ARTICLES:
+                if lowered.startswith(article):
+                    descriptor = descriptor[len(article):]
+                    break
+            descriptor = "the " + descriptor[:1].lower() + descriptor[1:]
+        raw.append({"name": name, "descriptor": descriptor})
+    return normalize_people(raw)
 
 
 def merge(*groups: Iterable[Person] | None) -> list[Person]:
@@ -618,6 +726,7 @@ __all__ = [
     "BRAIN_LAW",
     "Person",
     "audit",
+    "audit_all",
     "audit_enabled",
     "candidates",
     "default_label",
@@ -628,7 +737,11 @@ __all__ = [
     "merge",
     "normalize_people",
     "note",
+    "people_from_profiles",
+    "pictured_note",
     "script_texts",
     "scrub",
     "scrub_label",
+    "scrub_pictured",
+    "without",
 ]

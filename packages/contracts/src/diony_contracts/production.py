@@ -419,6 +419,15 @@ class MasterPrompt(BaseModel):
     # label}. A name never reaches a generator; every later compile of this
     # artifact (clip prompts, revisions, screenplay) holds to the same list.
     real_people: list[dict[str, Any]] = Field(default_factory=list)
+    # The named characters the derivation wrote — invented or the idea's own —
+    # in the same shape. Names are fine in a prompt on their own; beside a
+    # reference picture Google Flow refuses ANY named person (verified live
+    # 2026-09-07), so the submit gate describes them there.
+    characters: list[dict[str, Any]] = Field(default_factory=list)
+    # Whether a text-only audit has read this artifact for names the brain did
+    # not confess (at derivation, or once at the first pictured submit for an
+    # artifact derived before the characters contract existed).
+    characters_audited: bool = False
     word_count: int = Field(default=0, ge=0)
     source: Literal["brain", "template"] = "template"
     warnings: list[str] = Field(default_factory=list)

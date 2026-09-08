@@ -1604,6 +1604,188 @@ def master_for_op(op_id: str) -> MasterPrompt | None:
     return _MASTERS.get(op_id)
 
 
+# --------------------------------------------------------------------------
+# Names beside a picture (2026-09-07)
+# --------------------------------------------------------------------------
+
+# The pictured-prompt guard's mark on the rationale — written once per op.
+PICTURED_GUARD_MARK = "names beside a picture"
+
+
+def audit_master_characters(op: DirectorOp, master: MasterPrompt) -> None:
+    """One text-only audit per artifact for names the brain did not confess —
+    the rung for a film derived before the characters contract existed
+    (s-9c2f04d993's master knew no one, so the gate would have had nothing to
+    describe). Runs at the first pictured submit, marks the artifact audited,
+    and persists it; a brain that is off or failing leaves the mark unset and
+    the submit goes on — the audit is a net, never a gate."""
+    from diony_director import likeness
+
+    if master.characters_audited or not likeness.audit_enabled():
+        return
+    if not screenwriter.brain_url():
+        return
+    known = likeness.merge(master.real_people, master.characters)
+    texts = likeness.master_texts(master) + [op.prompt or ""]
+    phrases = likeness.candidates(texts, known)
+    try:
+        if phrases:
+            found, invented = likeness.audit_all(
+                " ".join(texts), phrases, has_reference=master.reference_image
+            )
+            if found:
+                master.real_people = [dict(p) for p in likeness.merge(master.real_people, found)]
+            if invented:
+                master.characters = [
+                    dict(c)
+                    for c in likeness.without(
+                        likeness.merge(master.characters, invented), master.real_people
+                    )
+                ]
+        master.characters_audited = True
+    except Exception as err:  # noqa: BLE001 — the audit is a net, not a gate
+        mark = "names beside a picture: audit unavailable"
+        if mark not in op.rationale:
+            op.rationale += f" · {mark} ({type(err).__name__}); the prompt ships as written"
+        return
+    persist(op.session_id)
+
+
+def pictured_people(op: DirectorOp, *, audit: bool = False) -> list[dict[str, Any]]:
+    """Everyone the room knows by name for this op: the master derivation's
+    real people and named characters, and the screenplay's cast. With
+    `audit`, an artifact never audited for unconfessed names is read once
+    by the brain first."""
+    from diony_director import likeness
+
+    master = master_for_op(op.id) or master_for_session(op.session_id)
+    package = package_for(op.session_id)
+    if audit and master is not None:
+        audit_master_characters(op, master)
+    return likeness.merge(
+        getattr(master, "real_people", None) if master is not None else None,
+        getattr(master, "characters", None) if master is not None else None,
+        likeness.people_from_profiles(package.characters) if package is not None else None,
+    )
+
+
+def pictures_set_aside(op: DirectorOp) -> bool:
+    """Whether a Retry set the op's reference pictures aside: the prompt
+    went out name-clean beside them and Google still refused it, so the
+    pictures — not the words — are what the filter matches."""
+    return bool(runtime(op.id).get("pictures_set_aside"))
+
+
+def guard_pictured_prompt(op: DirectorOp, *, pictured: bool) -> int:
+    """The last gate before a Google Flow submit. A prompt that rides beside
+    a picture (an uploaded still, an opening or closing frame, a style frame,
+    a cast reference) names no one: every real person and every named
+    character becomes their description, outside quoted speech (verified live
+    2026-09-07 — the name beside the poster was the whole refusal; the same
+    prompt described rendered). The op's prompt is rewritten in place so the
+    card shows what was sent; the runtime records that the guard ran, so a
+    refusal after it is read as the picture's. Returns mentions replaced."""
+    from diony_director import likeness
+
+    if op.provider is None or op.provider.value != "google-flow" or not pictured:
+        fit_op_prompt(op, [])
+        return 0
+    people = pictured_people(op, audit=True)
+    rt = runtime(op.id)
+    if not people:
+        rt["pictured_guard"] = {"hits": 0, "at": time.time()}
+        fit_op_prompt(op, [])
+        return 0
+    scrubbed, hits = likeness.scrub_pictured(op.prompt or "", people)
+    if hits:
+        op.prompt = scrubbed
+        if PICTURED_GUARD_MARK not in op.rationale:
+            op.rationale += " · " + likeness.pictured_note(hits, people)
+    rt["pictured_guard"] = {"hits": hits, "at": time.time()}
+    # A description is longer than a name: the prompt that fitted at compile
+    # time may not fit now — refit it here, where the provider limit is law.
+    fit_op_prompt(op, people)
+    return hits
+
+
+PROMPT_REFIT_MARK = "refit to the"
+
+
+def fit_op_prompt(op: DirectorOp, people: list[dict[str, Any]]) -> bool:
+    """The last fitting before a provider sees the prompt (s-8a4239727b:
+    fifteen clips held at 4100–4258 chars, every one a description that
+    outgrew the name it replaced AFTER the compiler had fitted the prompt).
+    A clip op is recompiled with the people described before the fit, so
+    the compiler's priorities decide what gives; a one-shot or chain link is
+    recompiled from its master body the same way; anything else (a prompt
+    persisted by an earlier build, a still) is refitted sentence by
+    sentence. Returns whether the prompt was rewritten."""
+    from diony_director import compiler
+
+    if op.provider is None:
+        return False
+    limit = compiler.prompt_limit(op.provider)
+    before = len(op.prompt or "")
+    if before <= limit:
+        return False
+    rebuilt = _recompiled_prompt(op, people)
+    if rebuilt is None or len(rebuilt) > limit:
+        rebuilt = compiler.refit_text(rebuilt or op.prompt or "", limit)
+    op.prompt = rebuilt
+    provider = {"google-flow": "Google Flow", "grok": "Grok"}.get(op.provider.value, op.provider.value)
+    if PROMPT_REFIT_MARK not in op.rationale:
+        op.rationale += (
+            f" · {PROMPT_REFIT_MARK} {provider} prompt limit: {before} chars became "
+            f"{len(rebuilt)} (the description that replaced a name outgrew it)"
+        )
+    runtime(op.id)["prompt_refit"] = {"before": before, "after": len(rebuilt), "at": time.time()}
+    return True
+
+
+def _recompiled_prompt(op: DirectorOp, people: list[dict[str, Any]]) -> str | None:
+    """The op's prompt compiled again with `people` described before the fit
+    — or None when nothing behind the op can compile it."""
+    from diony_director import compiler, likeness
+
+    if op.op is not DirectorOpType.GENERATE or op.mode is CloudGenerationMode.IMAGE:
+        return None
+    if op.clip_id:
+        package = package_for(op.session_id)
+        clip = clip_for_op(op)
+        if package is None or clip is None:
+            return None
+        version = str(op.prompt_version or "v1")
+        note = version.split("-", 1)[1] if "-" in version else ""
+        try:
+            if note:
+                return compiler.revise_prompt(
+                    clip, package, note=note, pictured_people=people
+                ).prompt
+            return compiler.compile_clip_prompt(clip, package, pictured_people=people).prompt
+        except compiler.CompileError:
+            return None
+    master = master_for_op(op.id)
+    if master is None or not master.prompt:
+        return None
+    index = chain_position(op.session_id, op.id)
+    body = master.prompt
+    if index is not None and master.clips and index < len(master.clips):
+        body = str(master.clips[index].get("prompt") or "") or body
+    doc = derivation_for(op.id) or {}
+    merged = likeness.merge(master.real_people, people)
+    return compile_master_body(
+        body,
+        str(doc.get("idea") or ""),
+        op.provider,
+        op.session_id,
+        has_start_image=bool(op.artifact_refs.get("start_image")) or bool(index),
+        narration=op.narration,
+        look=master.look,
+        voicing=op.voicing,
+        people=merged,
+    )
+
+
 def authored_narration_plan(breakdown: dict, count: int) -> list[str]:
     """The user's own narration lines, dealt across `count` clips in play
     order. Scene-structured input maps scene→clip when the counts agree;
@@ -3091,6 +3273,11 @@ _RUNTIME_KEYS = (
     "failure",
     "retries",
     "frame_redraws",
+    # names beside a picture (2026-09-07): that the pictured-prompt guard ran
+    # on the last attempt, and the pictures a Retry set aside after a refusal
+    # of a name-clean prompt — read by the ladder and by the next submit
+    "pictured_guard",
+    "pictures_set_aside",
     # a shot the director gave up on (Skip shot): when, and why the retries
     # could not land it — the cut leaves it out, the run continues past it
     "skipped",

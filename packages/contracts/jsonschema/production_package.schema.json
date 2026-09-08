@@ -790,6 +790,19 @@
           "title": "Real People",
           "type": "array"
         },
+        "characters": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Characters",
+          "type": "array"
+        },
+        "characters_audited": {
+          "default": false,
+          "title": "Characters Audited",
+          "type": "boolean"
+        },
         "word_count": {
           "default": 0,
           "minimum": 0,

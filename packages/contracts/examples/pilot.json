@@ -223,9 +223,9 @@
         "settled_best_of": null,
         "settled_score": null,
         "notes": "Identity drift vs still-mara-wide. Retake.",
-        "created_at": "2026-09-07T18:43:49.066911Z"
+        "created_at": "2026-09-07T20:25:52.918773Z"
       },
-      "created_at": "2026-09-07T18:43:49.066923Z",
+      "created_at": "2026-09-07T20:25:52.918783Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -253,7 +253,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-09-07T18:43:49.066763Z"
+          "created_at": "2026-09-07T20:25:52.918640Z"
         }
       ],
       "voice_package": null,
@@ -327,9 +327,9 @@
         "settled_best_of": null,
         "settled_score": null,
         "notes": "",
-        "created_at": "2026-09-07T18:43:49.066935Z"
+        "created_at": "2026-09-07T20:25:52.918793Z"
       },
-      "created_at": "2026-09-07T18:43:49.066938Z",
+      "created_at": "2026-09-07T20:25:52.918796Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -357,7 +357,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-09-07T18:43:49.066928Z"
+          "created_at": "2026-09-07T20:25:52.918787Z"
         },
         {
           "id": "art-sh-010-t2-1080",
@@ -379,7 +379,7 @@
           "height": 1080,
           "fps": 23.976,
           "duration_frames": 120,
-          "created_at": "2026-09-07T18:43:49.066931Z"
+          "created_at": "2026-09-07T20:25:52.918789Z"
         }
       ],
       "voice_package": null,
@@ -453,9 +453,9 @@
         "settled_best_of": null,
         "settled_score": null,
         "notes": "Paper stock slightly modern. Usable.",
-        "created_at": "2026-09-07T18:43:49.066945Z"
+        "created_at": "2026-09-07T20:25:52.918802Z"
       },
-      "created_at": "2026-09-07T18:43:49.066948Z",
+      "created_at": "2026-09-07T20:25:52.918805Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -483,7 +483,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 72,
-          "created_at": "2026-09-07T18:43:49.066941Z"
+          "created_at": "2026-09-07T20:25:52.918799Z"
         }
       ],
       "voice_package": null,
@@ -557,9 +557,9 @@
         "settled_best_of": null,
         "settled_score": null,
         "notes": "",
-        "created_at": "2026-09-07T18:43:49.066953Z"
+        "created_at": "2026-09-07T20:25:52.918809Z"
       },
-      "created_at": "2026-09-07T18:43:49.066956Z",
+      "created_at": "2026-09-07T20:25:52.918813Z",
       "parent_take_id": null,
       "version": 1,
       "lineage": [],
@@ -587,7 +587,7 @@
           "height": 720,
           "fps": 23.976,
           "duration_frames": 168,
-          "created_at": "2026-09-07T18:43:49.066950Z"
+          "created_at": "2026-09-07T20:25:52.918807Z"
         }
       ],
       "voice_package": null,
@@ -599,7 +599,7 @@
       "id": "n-human-010",
       "author": "human",
       "body": "Hold her eyes on the nick in the case. Don't blink off it.",
-      "created_at": "2026-09-07T18:43:49.066966Z",
+      "created_at": "2026-09-07T20:25:52.918822Z",
       "shot_id": "sh-010",
       "take_id": null
     }
@@ -701,8 +701,8 @@
     "exception_by": "",
     "exception_at": null
   },
-  "created_at": "2026-09-07T18:43:49.066991Z",
-  "updated_at": "2026-09-07T18:43:49.066992Z",
+  "created_at": "2026-09-07T20:25:52.918849Z",
+  "updated_at": "2026-09-07T20:25:52.918849Z",
   "deleted_at": null,
   "production_started_at": null,
   "production_ended_at": null,

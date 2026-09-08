@@ -386,7 +386,9 @@ def test_poll_names_the_filter_behind_all_operations_failed(monkeypatch) -> None
     assert "All operations failed" not in status.detail
     assert "prominent-people filter" in status.detail
     assert "PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED" in status.detail
-    assert "rewrite" in status.detail.lower()
+    # the verified doctrine (2026-09-07): a name beside a picture, real or
+    # invented; the words are scrubbed at submit, Retry sets the picture aside
+    assert "any named character" in status.detail and "sets the picture aside" in status.detail
     assert status.metadata["credits_after"] == 10000
 
 

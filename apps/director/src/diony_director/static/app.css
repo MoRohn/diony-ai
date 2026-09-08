@@ -781,6 +781,10 @@ body[data-running="assembling"] .runtag { color: var(--ok); border-color: rgba(1
 }
 .runbtn:hover { color: var(--accent-ink); border-color: rgba(255,122,47,.5); background: rgba(255,122,47,.06); }
 .runbtn.on { color: var(--accent-ink); border-color: rgba(255,122,47,.5); }
+.runbtn.retryall { color: var(--accent-ink); border-color: rgba(255,122,47,.55); background: rgba(255,122,47,.08); }
+.runbtn.retryall:hover:not(:disabled) { background: rgba(255,122,47,.16); }
+.runbtn.retryall.armed { color: #fff; background: var(--accent); border-color: var(--accent); }
+.runbtn.retryall:disabled { opacity: .6; cursor: default; }
 @media (prefers-reduced-motion: reduce) {
   .runpulse, .runtrack .seg.rolling { animation: none; }
 }

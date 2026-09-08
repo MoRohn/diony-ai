@@ -8,6 +8,8 @@ lock that cannot be expressed on the selected provider fails compilation loudly
 
 from __future__ import annotations
 
+import re
+
 from diony_contracts.director import CloudProvider
 from diony_contracts.production import (
     CharacterProfile,
@@ -440,7 +442,18 @@ def _flow_style_slot(package: ProductionPackage, inline_world: str) -> str:
     return ""
 
 
-def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
+def _base_prompt(
+    clip: ClipUnit,
+    package: ProductionPackage,
+    *,
+    pictured_people: list[dict] | None = None,
+    limit: int | None = None,
+) -> str:
+    """The clip's prompt, fitted to `limit` (the provider's, unless a caller
+    reserves room for a rider). The likeness guard runs on the PIECES, before
+    the fit: a name that becomes a forty-character description after the
+    fit is a prompt the provider refuses (s-8a4239727b: fifteen clips held at
+    4100–4258 chars against Flow's 4096)."""
     setting = package.setting(str(clip.continuity.setting_plate["setting_id"]))
     scene = package.script.scene(clip.scene_id)
     chars = _characters_in(clip, package)
@@ -464,7 +477,12 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
     # performance, or the quoted line the character voices in the clip.
     voice = _voice_pieces(clip)
 
-    limit = prompt_limit(clip.provider)
+    if limit is None:
+        limit = prompt_limit(clip.provider)
+
+    def _fit(pieces: list[tuple[str, int]], cap: int) -> str:
+        return _fit_prompt(_described(pieces, package, pictured_people), cap)
+
     if clip.provider is CloudProvider.GROK:
         # The Grok dialect alone speaks the Grok lexicon: /shorthand in the
         # authored shot expands with the guide's reliable phrasings, unreliable
@@ -496,7 +514,7 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
                 weather=str(getattr(setting, "time_weather", "") or ""),
             )
         )
-        return _fit_prompt(
+        return _fit(
             [
                 (f"{camera_text}." if camera_text else "", 0),
                 (_blocking_locks(clip, char_text, action, camera_text=camera_text), 0),
@@ -552,7 +570,7 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
         omni_style = ""
         if world and world != flow_lexicon.BASELINE_WORLD:
             omni_style = flow_lexicon.worlds().get(world, {}).get("clause", "")
-        return _fit_prompt(
+        return _fit(
             [
                 (f"{camera_text}." if camera_text else "", 0),
                 # a "back to camera" / concealment cue arms the same hard
@@ -595,7 +613,7 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
     # every other dialect — an undirected soundtrack is an invented soundtrack.
     # The session's world template fills the style slot; an inline /world on
     # the shot beats the template — authorship wins.
-    return _fit_prompt(
+    return _fit(
         [
             (f"{camera_text}." if camera_text else "", 0),
             (_blocking_locks(clip, char_text, action, camera_text=camera_text), 0),
@@ -620,7 +638,13 @@ def _base_prompt(clip: ClipUnit, package: ProductionPackage) -> str:
     )
 
 
-def compile_clip_prompt(clip: ClipUnit, package: ProductionPackage) -> PromptVersion:
+def compile_clip_prompt(
+    clip: ClipUnit, package: ProductionPackage, *, pictured_people: list[dict] | None = None
+) -> PromptVersion:
+    """`pictured_people` (the submit gate's list — real people, named
+    characters, the cast) are described, never named, outside quoted speech,
+    BEFORE the prompt is fitted, so the description costs the shrinkable
+    pieces their length, never the provider limit."""
     from diony_director import capabilities
 
     if clip.provider is None or not clip.model:
@@ -637,38 +661,97 @@ def compile_clip_prompt(clip: ClipUnit, package: ProductionPackage) -> PromptVer
             f"clip {clip.clip_id} books {clip.duration_s}s, which is not on the "
             f"{clip.model} duration grid"
         )
-    return PromptVersion(version="v1", prompt=_guarded(_base_prompt(clip, package), package))
+    return PromptVersion(
+        version="v1",
+        prompt=_base_prompt(clip, package, pictured_people=pictured_people),
+    )
 
 
-def _guarded(prompt: str, package: ProductionPackage) -> str:
-    """The likeness guard at the last gate before a provider: whoever the
+def _described(
+    pieces: list[tuple[str, int]],
+    package: ProductionPackage,
+    pictured_people: list[dict] | None = None,
+) -> list[tuple[str, int]]:
+    """The likeness guard, piece by piece and before the fit: whoever the
     master derivation recognized stays described, never named, whatever a
-    later note, authored shot, or character block carried in."""
+    later note, authored shot, or character block carried in (Blueprint 27
+    §3a); beside a picture, every named character too, outside quoted
+    speech (the submit gate's rule, applied where the length still has
+    somewhere to go)."""
     master = package.master_prompt
-    people = list(master.real_people or []) if master is not None else []
-    if not people:
-        return prompt
-    scrubbed, _ = likeness.scrub(prompt, people)
-    return scrubbed
+    real = list(master.real_people or []) if master is not None else []
+    pictured = list(pictured_people or [])
+    if not real and not pictured:
+        return pieces
+    out: list[tuple[str, int]] = []
+    for text, rank in pieces:
+        if text and real:
+            text, _ = likeness.scrub(text, real)
+        if text and pictured:
+            text, _ = likeness.scrub_pictured(text, pictured)
+        out.append((text, rank))
+    return out
 
 
-def revise_prompt(clip: ClipUnit, package: ProductionPackage, *, note: str) -> PromptVersion:
+def _guarded(
+    prompt: str, package: ProductionPackage, pictured_people: list[dict] | None = None
+) -> str:
+    return _described([(prompt, 0)], package, pictured_people)[0][0]
+
+
+def revise_prompt(
+    clip: ClipUnit,
+    package: ProductionPackage,
+    *,
+    note: str,
+    pictured_people: list[dict] | None = None,
+) -> PromptVersion:
     # A spoken clip (Blueprint 31) never gets the "remove all speech" audio
     # fix — its track IS the voice; the fix is the line, clearly, once.
     key = note
     if speaks_in_clip(clip) and (note == "fix-audio" or note.startswith("fix-audio-")):
         key = "fix-line"
     directive = _guarded(
-        f"Revision: {REVISION_DIRECTIVES.get(key, f'Address precisely: {note}.')}", package
+        f"Revision: {REVISION_DIRECTIVES.get(key, f'Address precisely: {note}.')}",
+        package,
+        pictured_people,
     )
     limit = prompt_limit(clip.provider)
-    base = _guarded(_base_prompt(clip, package), package)
+    # The base is fitted against what the directive leaves: priorities hold
+    # (camera, identity, look, the guard) — never the whole base capped to
+    # 400 chars because a 90-char rider pushed it over.
+    base = _base_prompt(
+        clip,
+        package,
+        pictured_people=pictured_people,
+        limit=max(limit // 2, limit - len(directive) - 1),
+    )
     n = len(clip.prompt_versions) + 1
     return PromptVersion(
         version=f"v{n}-{note}",
         prompt=_fit_prompt([(base, 1), (directive, 0)], limit),
         note=note,
     )
+
+
+_SENTENCE_BREAK = re.compile(r'(?<=[.!?])\s+(?=[A-Z"“(@])')
+
+
+def refit_text(text: str, limit: int) -> str:
+    """The net for a finished prompt with no pieces left to weigh (a prompt
+    persisted by an earlier build, a still's prompt): the opening sentence
+    (the camera) and the closing one (the guard) hold; the sentences between
+    give way from the end, one at a time, gently first."""
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    parts = [s for s in _SENTENCE_BREAK.split(text) if s]
+    if len(parts) < 3:
+        return _shrink(text, limit)
+    pieces = [(parts[0], 0)]
+    pieces += [(s, 1 + index) for index, s in enumerate(parts[1:-1])]
+    pieces.append((parts[-1], 0))
+    return _fit_prompt(pieces, limit)
 
 
 def _live_plate_asset(clip: ClipUnit, package: ProductionPackage) -> str:

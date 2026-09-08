@@ -221,6 +221,7 @@ constraints (list of 3–6 short imperatives),
 {key},
 {look_mod.LOOK_CONTRACT}
 real_people (list of {{name, aliases, descriptor, label}} — every real, identifiable person you recognized in the idea or the images and described instead of naming, per the LIKENESS LAW; an empty list when none),
+characters (list of {{name, aliases, descriptor, label}} — every invented or fictional person you named anywhere in your output, per NAMED CHARACTERS; an empty list when none),
 estimated_duration_s (integer),
 prompt (the finished generator-ready prompt, following FINAL GENERATOR-READY PROMPT STRUCTURE, after the OPTIMIZATION PASS).
 """
@@ -516,6 +517,10 @@ def _parse(
         real_people=likeness_mod.normalize_people(
             body.get("real_people"), has_reference=has_reference
         ),
+        characters=likeness_mod.without(
+            likeness_mod.normalize_people(body.get("characters"), has_reference=has_reference),
+            likeness_mod.normalize_people(body.get("real_people"), has_reference=has_reference),
+        ),
         prompt=prompt,
         clips=clips,
         source="brain",
@@ -533,10 +538,14 @@ def guard_likeness(master: MasterPrompt, *, brain: bool) -> MasterPrompt:
     where = "reference image" if master.reference_image else "idea"
     hits = likeness_mod.enforce_master(master, people) if people else 0
     if brain and likeness_mod.audit_enabled():
-        phrases = likeness_mod.candidates(likeness_mod.master_texts(master), people)
+        # the audit skips the characters already confessed: they are people
+        # the guard knows, and their names are welcome in an unpictured prompt
+        known = likeness_mod.merge(people, master.characters)
+        phrases = likeness_mod.candidates(likeness_mod.master_texts(master), known)
+        master.characters_audited = True
         if phrases:
             try:
-                found = likeness_mod.audit(
+                found, invented = likeness_mod.audit_all(
                     master.prompt, phrases, has_reference=master.reference_image
                 )
             except Exception as err:  # noqa: BLE001 — the audit is a net, not a gate
@@ -544,11 +553,21 @@ def guard_likeness(master: MasterPrompt, *, brain: bool) -> MasterPrompt:
                     f"master: likeness audit unavailable ({type(err).__name__}) — "
                     "the brain's own real_people list was enforced; review names by eye"
                 )
-                found = []
+                found, invented = [], []
+                master.characters_audited = False
             if found:
                 people = likeness_mod.merge(people, found)
                 hits += likeness_mod.enforce_master(master, found)
                 master.real_people = [dict(p) for p in people]
+            if invented:
+                # a named character the brain wrote but did not confess: the
+                # pictured-prompt gate needs to know them by name
+                master.characters = [
+                    dict(c)
+                    for c in likeness_mod.without(
+                        likeness_mod.merge(master.characters, invented), people
+                    )
+                ]
     if people:
         master.warnings.append(likeness_mod.note(hits, people, owner="master", where=where))
     return master

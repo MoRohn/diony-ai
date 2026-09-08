@@ -1153,6 +1153,10 @@ def _dispatch_submit(op: DirectorOp) -> provider_base.CloudJobHandle:
             )
     adapter = _ADAPTERS[op.provider.value]
     source = str(op.artifact_refs.get("source_video") or "")
+    if session.pictures_set_aside(op) and op.artifact_refs.pop("references", None):
+        # a Retry set the uploaded pictures aside for this op: after late
+        # binding (which re-applies uploads to a clip), so it holds
+        op.artifact_refs.pop("reference_roles", None)
     if op.mode is CloudGenerationMode.IMAGE:
         from diony_director import artifacts
 
@@ -1164,6 +1168,9 @@ def _dispatch_submit(op: DirectorOp) -> provider_base.CloudJobHandle:
             references = _style_frame_references(op) + [
                 r for r in references if r not in _style_frame_references(op)
             ]
+        # a still drawn FROM pictures names no one either (the same filter
+        # reads the image lane — the poster rode every style frame)
+        session.guard_pictured_prompt(op, pictured=bool(references))
         aspect = session.aspect_for(op.session_id)
         if op.provider.value == "grok":
             # Blueprint 32: a board is drawn FROM its anchor and a keyframe FROM
@@ -1192,6 +1199,15 @@ def _dispatch_submit(op: DirectorOp) -> provider_base.CloudJobHandle:
             references=references[:7],
             aspect_ratio="portrait" if aspect == "9:16" else "landscape",
         )
+    session.guard_pictured_prompt(
+        op,
+        pictured=any(
+            op.artifact_refs.get(key)
+            for key in ("start_image", "end_image", "references", "characters")
+        )
+        or op.mode is CloudGenerationMode.EXTENSION
+        or op.op is DirectorOpType.EDIT,
+    )
     if op.provider.value == "grok":
         if op.mode is CloudGenerationMode.EXTENSION:
             return grok.submit_extension(
@@ -1428,6 +1444,38 @@ class RetryIn(BaseModel):
     fresh_frame: bool | None = None
 
 
+def _plan_picture_setaside(op: DirectorOp) -> tuple[bool, str]:
+    """The opener's rung of the refusal ladder (2026-09-07, clip 1/15 of
+    s-9c2f04d993, refused three times with the poster riding as a reference).
+    A Google Flow refusal of an op that opens the film — no frame to redraw —
+    while its uploaded pictures ride as references: when the pictured-prompt
+    guard already ran on the refused attempt, the words were clean and the
+    picture is what the filter matches, so the Retry sets the pictures aside
+    and the clip rolls from the prompt alone (the prompt alone rendered on the
+    live probe). An op the guard never saw (proposed before it existed) just
+    retries — the guard now scrubs it on the way out."""
+    if op.provider is None or op.provider.value != "google-flow":
+        return False, ""
+    if _opens_from_a_frame(op) or not (op.artifact_refs or {}).get("references"):
+        return False, ""
+    rt = session.runtime(op.id)
+    failure = rt.get("failure") or {}
+    if not failure.get("detail"):
+        detail = _failure_detail(op)
+        if detail:
+            failure = {**failure, "detail": detail}
+    if not session.failure_is_refusal(failure):
+        return False, ""
+    if not rt.get("pictured_guard") and session.pictured_people(op):
+        # the refused attempt went out before the guard existed and the room
+        # knows names to describe: the guard scrubs this retry on the way out
+        return False, ""
+    return True, (
+        "the provider refused the clip although its prompt named no one — "
+        "the reference picture itself is what the filter matches"
+    )
+
+
 def _failure_detail(op: DirectorOp) -> str:
     """Why the op failed, in the words the room showed: the recorded failure,
     else the plane's job row (ops that failed before failures were recorded),
@@ -1537,6 +1585,17 @@ def retry_op(op_id: str, body: RetryIn | None = None) -> dict:
         rt.pop(stale, None)
     rt["retries"] = int(rt.get("retries") or 0) + 1
     redraw_note = None
+    set_aside, aside_why = _plan_picture_setaside(op)
+    if set_aside:
+        pictures = list(op.artifact_refs.get("references") or [])
+        rt["pictures_set_aside"] = {"paths": pictures, "at": time.time(), "why": aside_why}
+        op.artifact_refs.pop("references", None)
+        op.artifact_refs.pop("reference_roles", None)
+        op.rationale += (
+            f" · retry {rt['retries']}: {len(pictures)} reference "
+            f"picture{'s' if len(pictures) != 1 else ''} set aside — {aside_why}; "
+            "the clip rolls from the prompt alone"
+        )
     if redraw:
         reason = _failure_detail(op) or why
         frame_op = session.redraw_opening_frame(op, reason=reason, safe=safe)
@@ -1586,8 +1645,101 @@ def retry_op(op_id: str, body: RetryIn | None = None) -> dict:
     return {
         "op": op.model_dump(mode="json"),
         "redraw": redraw_note,
+        "set_aside": (
+            {"pictures": rt["pictures_set_aside"]["paths"], "note": aside_why} if set_aside else None
+        ),
         "retargeted": retargeted,
         "run_plan": session.run_plan(op.session_id),
+    }
+
+
+def _failed_for_retry(sid: str) -> list[DirectorOp]:
+    """The room's failed clips in shot order — the ones a Retry on the card
+    would take, minus the links of a script the room moved past."""
+    retired = session.retired_op_ids(sid)
+    return [
+        op
+        for op in session.ops_for(sid)
+        if op.status == "failed" and op.id not in retired
+    ]
+
+
+@app.get("/api/director/sessions/{sid}/failed")
+def failed_ops(sid: str) -> dict:
+    """What a Retry all would re-queue, priced: the strip's button shows the
+    sum before anything is pressed."""
+    ops = _failed_for_retry(sid)
+    rows = [
+        {
+            "op_id": op.id,
+            "clip_id": op.clip_id or "",
+            "est_usd_micros": op.estimate.total_usd_micros if op.estimate else 0,
+        }
+        for op in ops
+    ]
+    return {
+        "ops": rows,
+        "count": len(rows),
+        "total_usd_micros": sum(int(r["est_usd_micros"]) for r in rows),
+    }
+
+
+@app.post("/api/director/sessions/{sid}/retry-all")
+def retry_all_failed(sid: str, body: RetryIn | None = None) -> dict:
+    """Every failed clip of the room's film re-queued in shot order with one
+    press from the run strip — no scrolling the board for each card's Retry.
+    Each clip takes the same ladder its own Retry would (a redrawn opening
+    frame, pictures set aside); a clip the ladder refuses stays failed with
+    the reason, and the rest roll. The run re-arms once, behind them all."""
+    retried: list[dict] = []
+    held: list[dict] = []
+    for op in _failed_for_retry(sid):
+        try:
+            res = retry_op(op.id, body)
+        except HTTPException as err:
+            held.append({"op_id": op.id, "clip_id": op.clip_id or "", "detail": str(err.detail)})
+            continue
+        retried.append(
+            {
+                "op_id": op.id,
+                "clip_id": op.clip_id or "",
+                "est_usd_micros": op.estimate.total_usd_micros if op.estimate else 0,
+                "redraw": (res.get("redraw") or {}).get("note"),
+                "set_aside": (res.get("set_aside") or {}).get("note"),
+            }
+        )
+    total = sum(int(r["est_usd_micros"]) for r in retried)
+    if not retried and not held:
+        reply = "Nothing is failed — every clip is printed, rolling, or queued."
+    else:
+        labels = [r["clip_id"] or r["op_id"] for r in retried]
+        shown = ", ".join(labels[:6]) + (f" +{len(labels) - 6} more" if len(labels) > 6 else "")
+        reply = (
+            f"{len(retried)} failed clip{'s' if len(retried) != 1 else ''} re-queued at "
+            f"{'their' if len(retried) != 1 else 'its'} locked price ({session._usd(total)})"
+            + (f": {shown}" if shown else "")
+            + "; they roll in shot order behind the clips already rolling."
+            if retried
+            else "No clip could be re-queued."
+        )
+        redraws = [r for r in retried if r.get("redraw")]
+        if redraws:
+            reply += f" {len(redraws)} roll{'s' if len(redraws) == 1 else ''} again from a redrawn opening frame."
+        aside = [r for r in retried if r.get("set_aside")]
+        if aside:
+            reply += f" {len(aside)} roll{'s' if len(aside) == 1 else ''} from the prompt alone, pictures set aside."
+        if held:
+            reply += " Still held: " + "; ".join(
+                f"{h['clip_id'] or h['op_id']} — {h['detail']}" for h in held
+            )
+    if retried:
+        session.persist(sid)
+    return {
+        "retried": retried,
+        "held": held,
+        "total_usd_micros": total,
+        "run_plan": session.run_plan(sid),
+        "reply": reply,
     }
 
 

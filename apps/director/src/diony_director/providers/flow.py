@@ -543,11 +543,19 @@ def _first_media(body: dict) -> dict:
 _GENERIC_ERRORS = {"all operations failed", "operation failed", "generation failed", "failed"}
 
 _FILTER_REASONS: dict[str, str] = {
+    # Verified live 2026-09-07 (five omni-flash probes, s-9c2f04d993): the
+    # filter fires when the PROSE names any person — real, or an invented
+    # character — beside a reference picture of a face. The name alone
+    # renders; the picture alone renders; a quoted spoken line saying the
+    # name renders. The submit gate describes every named person in a
+    # pictured prompt; a refusal after that means the picture itself.
     "PROMINENT_PERSON": (
-        "Google Flow refused the clip: its prominent-people filter matched a "
-        "recognizable real person in the prompt or the reference image. Retry "
-        "fails the same way — rewrite without naming or depicting the person "
-        "(describe the role, suit, and setting instead)."
+        "Google Flow refused the clip: its prominent-people filter fires when the "
+        "prompt names a person — a real one, or any named character — beside a "
+        "reference picture of a face, or when the picture itself reads as a "
+        "public figure. The Director describes every named person in a pictured "
+        "prompt before submit; Retry sets the picture aside and rolls the clip "
+        "from the prompt alone."
     ),
     "MINOR": "Google Flow refused the clip: its filter matched a depiction of a minor.",
     "VIOLENCE": "Google Flow refused the clip: its safety filter matched violent content.",
