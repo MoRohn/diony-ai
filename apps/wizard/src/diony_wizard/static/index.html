@@ -52,7 +52,13 @@
   .foot a:hover{color:var(--accent-ink)}
   :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   .keys{margin-top:2.2rem;padding-top:1.4rem;border-top:1px solid var(--line);color:var(--ink2);font-size:.9rem}
-  .keys h2{font:700 .72rem/1 "IBM Plex Mono",monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);margin:0 0 .7rem}
+  .keys summary{display:flex;align-items:center;gap:.55rem;cursor:pointer;list-style:none;font:700 .72rem/1 "IBM Plex Mono",monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);user-select:none}
+  .keys summary::-webkit-details-marker{display:none}
+  .keys summary:hover{color:var(--ink2)}
+  .keys summary:focus-visible{outline:2px solid var(--accent);outline-offset:4px;border-radius:4px}
+  .keys .chev{width:.9rem;height:.9rem;flex:none;color:var(--accent);transition:transform .18s ease}
+  .keys[open] .chev{transform:rotate(90deg)}
+  .keys[open] summary{margin-bottom:.9rem}
   .keys p{margin:0 0 .6rem;max-width:46rem}
   .keys a{color:var(--accent-ink);text-decoration:none;border-bottom:1px solid rgba(255,176,102,.35)}
   .keys a:hover{border-bottom-color:var(--accent-ink)}
@@ -124,8 +130,8 @@
       <button id="continue" type="button" disabled>Continue</button>
       <span class="hint" id="hint">Keys load from ~/.diony/keys.env</span>
     </div>
-    <section class="keys" aria-labelledby="keys-title">
-      <h2 id="keys-title">A key is required</h2>
+    <details class="keys" id="keys">
+      <summary id="keys-title"><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>A key is required</summary>
       <p>Every shot rolls on a cloud camera you pay for directly, so the Studio needs at least one key before the Director can shoot. Diony never asks for a key in the app: put the lines you have in <code>~/.diony/keys.env</code> and reopen this page.</p>
       <div class="cols">
         <div>
@@ -139,7 +145,7 @@
 USEAPI_TOKEN=user:...
 DIONY_FLOW_EMAIL=you@gmail.com   # the linked Google account
 DIONY_FLOW_PLAN=pro              # plus | pro | ultra-99 | ultra-199</pre>
-    </section>
+    </details>
   </div>
 </main>
 

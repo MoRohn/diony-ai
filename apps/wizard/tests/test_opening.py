@@ -75,6 +75,9 @@ def test_there_is_no_automatic_route() -> None:
 def test_the_opening_explains_the_keys_and_names_useapi() -> None:
     html = _client().get("/").text
     assert "A key is required" in html
+    # collapsed by default: a native <details> whose summary carries the chevron
+    assert '<details class="keys" id="keys">' in html and "<details class=\"keys\" id=\"keys\" open" not in html
+    assert '<summary id="keys-title"><svg class="chev"' in html
     assert "~/.diony/keys.env" in html
     assert 'href="https://console.x.ai/"' in html
     assert 'href="https://useapi.net/"' in html
