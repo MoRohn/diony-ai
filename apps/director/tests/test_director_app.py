@@ -26,6 +26,7 @@ def test_status_reports_cloud_engine_and_configured_providers() -> None:
     assert body["providers"]["grok"] is True
     assert body["providers"]["google-flow"] is True
     assert body["flow_plan"] == "pro"
+    assert body["engine_choice"] == "grok"  # the conftest's Studio choice
 
 
 def test_full_guided_loop_persists_the_clip_and_reconciles_the_ledger(
@@ -494,13 +495,17 @@ def test_the_header_meter_reads_in_the_routes_currency() -> None:
     assert 'route === "google-flow"' in js and 'route === "grok"' in js
     assert "Director's choice" not in js and 'value="auto"' not in html
     assert "renderMeter(); // the meter reads in the route's currency" in js
+    # the pill mirrors Studio at boot and the meter re-renders right then; the
+    # ledger carries the choice so the meter never defaults to dollars
+    assert "renderMeter(); // the meter reads in the camera's currency" in js
+    assert "lastLedger.engine_choice" in js
     assert "plan credits for Google Flow" in html
 
 
 def test_the_console_and_its_api_are_never_browser_cached() -> None:
     """A console index cached across a desktop rebuild showed the previous UI."""
     client = _client()
-    for path in ("/", "/api/director/status", "/static/app.js?v=p53"):
+    for path in ("/", "/api/director/status", "/static/app.js?v=p54"):
         res = client.get(path)
         assert res.status_code == 200, path
         assert res.headers["cache-control"] == "no-store, max-age=0", path

@@ -59,7 +59,7 @@ ruff check . && ruff format --check .    # the pinned rule set in pyproject.toml
 - Never run two pytest invocations at once: the desk's instance-lock tests deadlock across processes.
 - Tests that cut real media skip without ffmpeg.
 - Package conftests' autouse fixtures bleed across packages in a multi-directory run; never set a shared-scope `DIONY_CONTROL_PLANE_DB`, and keep test basenames unique across packages.
-- UI stamps are pinned: Producer `?v=p7` by tests, the Director `?v=p53` by presence only. Bump the Director stamp on every UI change; update the pins when you bump the others. The desk reads the stamp at runtime to detect a stale build.
+- UI stamps are pinned: Producer `?v=p8` by tests, the Director `?v=p54` by presence only. Bump the Director stamp on every UI change; update the pins when you bump the others. The desk reads the stamp at runtime to detect a stale build.
 - A test that pins a literal (a stamp, a boot copy line, a rate) is documentation; update it in the same change and say why.
 
 ## Human gates (do not automate away)

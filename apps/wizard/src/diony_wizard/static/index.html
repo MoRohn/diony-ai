@@ -182,6 +182,14 @@ DIONY_FLOW_PLAN=pro              # plus | pro | ultra-99 | ultra-199</pre>
       setChip("flow-chip", ready["google-flow"], "TOKEN READY", "NO TOKEN");
       if (state.director_url) document.getElementById("director-link").href = state.director_url;
       if (state.producer_url) document.getElementById("producer-link").href = state.producer_url;
+      ["director-link", "producer-link"].forEach((id) => {
+        const a = document.getElementById(id);
+        a.addEventListener("click", () => {
+          const url = new URL(a.href);
+          url.searchParams.set("fresh", String(Date.now()));
+          a.href = url.toString();
+        });
+      });
       if (state.engine) select(state.engine);
     })
     .catch(() => {
@@ -199,7 +207,9 @@ DIONY_FLOW_PLAN=pro              # plus | pro | ultra-99 | ultra-199</pre>
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.detail || res.status);
-      window.location.assign(body.next);
+      const next = new URL(body.next);
+      next.searchParams.set("fresh", String(Date.now()));
+      window.location.assign(next.toString());
     } catch (err) {
       hint.textContent = "Could not save the choice: " + (err.message || err);
       go.disabled = false;

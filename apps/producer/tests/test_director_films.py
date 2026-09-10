@@ -274,7 +274,7 @@ def test_stitch_joins_in_gallery_order_newest_first(tmp_path, monkeypatch) -> No
 def test_the_console_and_its_api_are_never_browser_cached() -> None:
     """A Producer index cached across a desktop rebuild showed the previous UI."""
     client = _client()
-    for path in ("/", "/api/engine", "/api/gallery", "/static/app.js?v=p7"):
+    for path in ("/", "/api/engine", "/api/gallery", "/static/app.js?v=p8"):
         res = client.get(path)
         assert res.status_code == 200, path
         assert res.headers["cache-control"] == "no-store, max-age=0", path

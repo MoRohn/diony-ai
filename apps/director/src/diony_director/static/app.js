@@ -1251,7 +1251,7 @@
     const by = lastLedger.by_provider || {};
     const grok = by.grok || {};
     const flow = by["google-flow"] || {};
-    const route = $("provider") ? $("provider").value : "";
+    const route = ($("provider") && $("provider").value) || (lastLedger.engine_choice || "");
     const chip = $("spent-chip");
     if (route === "google-flow") {
       $("spent-total").textContent = credits(flow.credits);
@@ -1282,6 +1282,21 @@
     }
   }
 
+  function freshLinks() {
+    // A console index cached by the browser once showed a previous build; a
+    // surface link always lands on a fresh fetch.
+    ["studio-link", "producer-link"].forEach((id) => {
+      const a = document.getElementById(id);
+      if (!a || a.dataset.fresh) return;
+      a.dataset.fresh = "1";
+      a.addEventListener("click", () => {
+        const url = new URL(a.href);
+        url.searchParams.set("fresh", String(Date.now()));
+        a.href = url.toString();
+      });
+    });
+  }
+
   async function boot() {
     try {
       const status = await api("/api/director/status");
@@ -1297,8 +1312,10 @@
       }
       if (status.studio_url) document.getElementById("studio-link").href = status.studio_url;
       if (status.producer_url) document.getElementById("producer-link").href = status.producer_url;
+      freshLinks();
       if (status.engine_choice === "grok" || status.engine_choice === "google-flow") {
         $("provider").value = status.engine_choice;
+        renderMeter(); // the meter reads in the camera's currency the moment the pill mirrors Studio
       }
       // The Flow lexicon (Google route only): worlds fill the style slot,
       // cameras direct one-shot drafts. Custom entries in flow_lexicon.json

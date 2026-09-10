@@ -12,6 +12,7 @@ import threading
 import uuid
 from datetime import UTC, datetime
 
+from diony_contracts.cluster import read_engine_choice
 from diony_contracts.director import CloudProvider, DirectorOp
 from diony_contracts.launch import (
     CostBreakdown,
@@ -352,6 +353,7 @@ def snapshot(plane: ControlPlane, workspace_id: str, *, committed_usd_micros: in
         "today_usd_micros": sum(row["today_usd_micros"] for row in providers.values()),
         "by_provider": providers,
         "flow_plan": ratecards.flow_plan(),
+        "engine_choice": read_engine_choice(),
         "providers": summary["rollups"]["providers"],
         "models": summary["rollups"]["models"],
         "committed_usd_micros": committed_usd_micros,

@@ -1229,6 +1229,15 @@ async function load() {
     const engine = await fetch("/api/engine").then(responseJson);
     const directorLink = document.getElementById("director-link");
     if (directorLink && engine.director_url) directorLink.href = engine.director_url;
+    ["director-link", "studio-surface-link"].forEach((id) => {
+      const a = document.getElementById(id);
+      if (!a) return;
+      a.addEventListener("click", () => {
+        const url = new URL(a.href);
+        url.searchParams.set("fresh", String(Date.now()));
+        a.href = url.toString();
+      });
+    });
   } catch (error) {
     /* the static default href stands */
   }

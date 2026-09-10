@@ -60,8 +60,8 @@ def test_the_gallery_is_the_finished_clips_inventory() -> None:
 
 def test_the_static_stamp_is_pinned() -> None:
     html = (STATIC / "index.html").read_text()
-    assert 'href="/static/app.css?v=p7"' in html
-    assert 'src="/static/app.js?v=p7"' in html
+    assert 'href="/static/app.css?v=p8"' in html
+    assert 'src="/static/app.js?v=p8"' in html
 
 
 def test_producer_uses_the_diony_chorus_design_system() -> None:
