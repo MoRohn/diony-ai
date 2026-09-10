@@ -36,42 +36,10 @@ class MembershipRole(StrEnum):
         }[self]
 
 
-class AdmissionPolicy(StrEnum):
-    INVITE_ADMITS = "invite_admits"
-    ADMIN_APPROVAL = "admin_approval"
-    CLOSED = "closed"
-
-
 class MembershipStatus(StrEnum):
     ACTIVE = "active"
     SUSPENDED = "suspended"
     REMOVED = "removed"
-
-
-class InvitationStatus(StrEnum):
-    DRAFT = "draft"
-    ACTIVE = "active"
-    PARTIALLY_USED = "partially_used"
-    USED = "used"
-    EXPIRED = "expired"
-    REVOKED = "revoked"
-
-
-class EmailDeliveryStatus(StrEnum):
-    QUEUED = "queued"
-    SENT = "sent"
-    DELIVERED = "delivered"
-    DELIVERY_UNCONFIRMED = "delivery_unconfirmed"
-    BOUNCED = "bounced"
-    COMPLAINED = "complained"
-    FAILED = "failed"
-
-
-class JoinRequestStatus(StrEnum):
-    PENDING = "pending"
-    APPROVED = "approved"
-    DENIED = "denied"
-    WITHDRAWN = "withdrawn"
 
 
 class User(BaseModel):
@@ -92,7 +60,6 @@ class Workspace(BaseModel):
     slug: str
     owner_user_id: str = ""
     local_first: bool = True
-    admission_policy: AdmissionPolicy = AdmissionPolicy.INVITE_ADMITS
     controller_origin: str = ""
     controller_fingerprint: str = ""
     created_at: datetime = Field(default_factory=utc_now)
@@ -185,67 +152,6 @@ class Membership(BaseModel):
         return (
             self.status == MembershipStatus.ACTIVE and self.role.rank >= MembershipRole.ADMIN.rank
         )
-
-
-class StudioInvitation(BaseModel):
-    schema_version: int = 1
-    id: str
-    workspace_id: str
-    token_hash: str
-    email: str
-    email_key: str
-    role: MembershipRole = MembershipRole.CREATOR
-    proposed_profile_name: str = ""
-    note: str = ""
-    admission_policy: AdmissionPolicy = AdmissionPolicy.INVITE_ADMITS
-    status: InvitationStatus = InvitationStatus.ACTIVE
-    use_limit: int = Field(default=1, ge=1, le=100)
-    use_count: int = Field(default=0, ge=0)
-    created_by: str
-    expires_at: datetime
-    accepted_user_id: str = ""
-    accepted_membership_id: str = ""
-    join_request_id: str = ""
-    created_at: datetime = Field(default_factory=utc_now)
-    updated_at: datetime = Field(default_factory=utc_now)
-    revoked_at: datetime | None = None
-
-
-class InvitationEmailDelivery(BaseModel):
-    schema_version: int = 1
-    id: str
-    workspace_id: str
-    invitation_id: str
-    kind: str = "studio_invitation"
-    recipient_mask: str
-    subject: str
-    status: EmailDeliveryStatus = EmailDeliveryStatus.QUEUED
-    transport: str = ""
-    provider_message_id: str = ""
-    attempts: int = Field(default=0, ge=0)
-    error: str = ""
-    created_at: datetime = Field(default_factory=utc_now)
-    updated_at: datetime = Field(default_factory=utc_now)
-    sent_at: datetime | None = None
-
-
-class StudioJoinRequest(BaseModel):
-    schema_version: int = 1
-    id: str
-    workspace_id: str
-    invitation_id: str
-    user_id: str
-    email_key: str
-    requested_profile_name: str
-    requested_profile_name_key: str
-    requested_role: MembershipRole = MembershipRole.CREATOR
-    status: JoinRequestStatus = JoinRequestStatus.PENDING
-    maker_note: str = ""
-    admin_note: str = ""
-    decided_by: str = ""
-    created_at: datetime = Field(default_factory=utc_now)
-    updated_at: datetime = Field(default_factory=utc_now)
-    decided_at: datetime | None = None
 
 
 class ProviderCapability(StrEnum):

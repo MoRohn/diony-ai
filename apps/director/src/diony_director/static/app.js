@@ -1282,6 +1282,62 @@
     }
   }
 
+  // The brain: Auto follows the camera (Gemini on Google Flow, Grok on Grok
+  // Imagine); a named brain is offered only when its key is on this desk.
+  function paintBrain(brain) {
+    const chip = $("brain-chip");
+    if (chip) {
+      const house = brain.provider === "gemini" ? "Gemini" : brain.provider === "grok" ? "Grok" : "";
+      chip.textContent = brain.configured
+        ? `brain ${house ? house + " · " : ""}${brain.model}`
+        : "brain off (template)";
+      chip.title = brain.reason || "";
+      chip.className = `chip ${brain.configured ? "on" : "off"}`;
+    }
+    const pill = $("brain");
+    if (!pill) return;
+    const available = brain.available || {};
+    const entries = [];
+    if (available.grok) entries.push({ key: "grok", label: "Grok", hint: "grok-4.6 on the xAI key" });
+    if (available.gemini) entries.push({ key: "gemini", label: "Gemini", hint: "gemini-2.5-pro on the Gemini key" });
+    pill.replaceChildren();
+    const auto = document.createElement("option");
+    auto.value = "auto";
+    auto.textContent = "Auto";
+    pill.appendChild(auto);
+    entries.forEach((e) => {
+      const opt = document.createElement("option");
+      opt.value = e.key;
+      opt.textContent = e.label;
+      opt.title = e.hint;
+      pill.appendChild(opt);
+    });
+    pill.value = brain.choice || "auto";
+    // one house on the desk: the choice is not a choice, the chip says it all
+    $("brain-pill").hidden = entries.length < 2;
+  }
+
+  async function pushBrain() {
+    const el = $("brain");
+    if (!el) return;
+    try {
+      const res = await api("/api/director/brain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brain: el.value }),
+      });
+      paintBrain(res);
+      addMsg(
+        "director",
+        res.configured
+          ? `Brain: ${res.provider === "gemini" ? "Gemini" : "Grok"} · ${res.model} (${res.reason}).`
+          : `Brain off — ${res.reason}. The template writer drafts until a key lands.`
+      );
+    } catch (err) {
+      addMsg("director", `Couldn't set the brain: ${err.message || err}`, "warn");
+    }
+  }
+
   function freshLinks() {
     // A console index cached by the browser once showed a previous build; a
     // surface link always lands on a fresh fetch.
@@ -1304,12 +1360,7 @@
       $("grok-chip").className = `chip ${status.providers.grok ? "on" : "off"}`;
       $("flow-chip").textContent = `flow ${status.providers["google-flow"] ? "ready" : "no token"}`;
       $("flow-chip").className = `chip ${status.providers["google-flow"] ? "on" : "off"}`;
-      if (status.brain) {
-        $("brain-chip").textContent = status.brain.configured
-          ? `brain ${status.brain.model}`
-          : "brain off (template)";
-        $("brain-chip").className = `chip ${status.brain.configured ? "on" : "off"}`;
-      }
+      if (status.brain) paintBrain(status.brain);
       if (status.studio_url) document.getElementById("studio-link").href = status.studio_url;
       if (status.producer_url) document.getElementById("producer-link").href = status.producer_url;
       freshLinks();
@@ -1352,11 +1403,12 @@
       // pins one Grok voice for the whole film.
       try {
         const cat = await api("/api/director/voices");
+        const house = cat.backend === "gemini" ? "Gemini" : cat.backend === "grok" ? "Grok" : "";
         fillLexSelect(
           $("voice"),
           (cat.voices || []).map((v) => ({ key: v.key, label: v.label, hint: v.hint })),
           "",
-          cat.pinned ? `Auto (site pin: ${cat.pinned})` : "Auto"
+          cat.pinned ? `Auto (site pin: ${cat.pinned})` : house ? `Auto (${house} casts)` : "Auto"
         );
       } catch (err) {
         /* the static Auto option keeps the pill usable */
@@ -4122,6 +4174,7 @@
   });
   { const a = $("aspect"); if (a) a.addEventListener("change", () => markDirty("aspect")); }
   { const v = $("voice"); if (v) v.addEventListener("change", () => { markDirty("voice"); pushVoice(); }); }
+  { const b = $("brain"); if (b) b.addEventListener("change", pushBrain); }
   { const st = $("style"); if (st) st.addEventListener("change", () => { markDirty("style"); pushStyle(); }); }
   { const ct = $("cast"); if (ct) ct.addEventListener("change", () => { markDirty("cast"); pushCast(); }); }
   loadCastCatalog();

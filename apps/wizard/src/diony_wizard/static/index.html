@@ -39,6 +39,9 @@
   .card .logo svg{height:1.9rem;width:auto;display:block}
   .card h2{font-family:Archivo,Inter,sans-serif;font-weight:700;font-stretch:108%;font-size:1.02rem;margin:0 0 .3rem}
   .card p{margin:0;color:var(--ink2);font-size:.86rem}
+  .card .house{margin-top:.7rem;font:500 .7rem/1.4 "IBM Plex Mono",monospace;letter-spacing:.04em;color:var(--mut)}
+  .card .house.on{color:var(--ok)}
+  .card .house.warn{color:var(--accent-ink)}
   .chip{position:absolute;top:.9rem;right:.9rem;font:500 .64rem/1 "IBM Plex Mono",monospace;letter-spacing:.08em;border:1px solid var(--line2);border-radius:99px;padding:.3em .6em;color:var(--ink2)}
   .chip.on{border-color:var(--ok);color:var(--ok)}
   .chip.off{border-color:var(--bad);color:var(--bad)}
@@ -66,6 +69,15 @@
   .keys pre{margin:.6rem 0 0;padding:.8rem 1rem;background:var(--bg2);border:1px solid var(--line);border-radius:10px;font:500 .78rem/1.6 "IBM Plex Mono",monospace;color:var(--ink);overflow-x:auto}
   .keys .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:1.2rem}
   .go .hint.warn{color:var(--bad)}
+  .platform{display:flex;align-items:center;gap:.8rem;margin:0 0 1.4rem;flex-wrap:wrap}
+  .platform .plabel{font:700 .7rem/1 "IBM Plex Mono",monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--mut)}
+  .seg{display:inline-flex;border:1px solid var(--line2);border-radius:99px;padding:.2rem;background:var(--bg2)}
+  .seg button{font:600 .82rem/1 Inter,sans-serif;color:var(--ink2);background:transparent;border:0;border-radius:99px;padding:.5em 1em;cursor:pointer;display:inline-flex;align-items:center;gap:.4em}
+  .seg button[aria-pressed="true"]{background:var(--grad);color:#0D0D0D}
+  .seg button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .platform .detected{font:500 .7rem/1 "IBM Plex Mono",monospace;color:var(--mut)}
+  .keys [data-platform]{display:none}
+  .keys[data-platform="mac"] [data-platform="mac"],.keys[data-platform="windows"] [data-platform="windows"]{display:block}
 </style>
 </head>
 <body>
@@ -101,6 +113,14 @@
   <div class="panel">
     <h1>Choose your <span class="grad">camera</span>.</h1>
     <p class="dek">Studio configures the shoot; the Director runs it; Producer monitors the production and holds the Gallery. Every shot of a film rolls on the camera you pick here — you can change it any time.</p>
+    <div class="platform" role="group" aria-label="This computer">
+      <span class="plabel">This computer</span>
+      <div class="seg" id="platform-seg">
+        <button type="button" data-platform="mac" aria-pressed="false" title="Paths, commands, and launcher names read as a Mac"><span aria-hidden="true"></span>Mac</button>
+        <button type="button" data-platform="windows" aria-pressed="false" title="Paths, commands, and launcher names read as Windows"><span aria-hidden="true">⊞</span>Windows</button>
+      </div>
+      <span class="detected" id="platform-detected"></span>
+    </div>
     <div class="cards" role="radiogroup" aria-label="Production engine">
       <button class="card" type="button" data-engine="grok" aria-pressed="false">
         <span class="chip" id="grok-chip">checking…</span>
@@ -111,6 +131,7 @@
         </span>
         <h2>Grok Imagine</h2>
         <p>xAI’s metered camera. Native audio, edits, extensions. Exact per-second pricing.</p>
+        <p class="house" id="grok-house">Script and narrator: Grok, on the same key.</p>
       </button>
       <button class="card" type="button" data-engine="google-flow" aria-pressed="false">
         <span class="chip" id="flow-chip">checking…</span>
@@ -124,6 +145,7 @@
         </span>
         <h2>Google Flow</h2>
         <p>Veo 3.1 and Omni Flash via useapi.net. Locked voices, characters, first/last frames, 4K upscale.</p>
+        <p class="house" id="flow-house">checking the Google brain…</p>
       </button>
     </div>
     <div class="go">
@@ -132,19 +154,34 @@
     </div>
     <details class="keys" id="keys">
       <summary id="keys-title"><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>A key is required</summary>
-      <p>Every shot rolls on a cloud camera you pay for directly, so the Studio needs at least one key before the Director can shoot. Diony never asks for a key in the app: put the lines you have in <code>~/.diony/keys.env</code> and reopen this page.</p>
+      <p>Every shot rolls on a cloud camera you pay for directly, so the Studio needs at least one key before the Director can shoot. Diony never asks for a key in the app: put the lines you have in <code id="keys-path">~/.diony/keys.env</code> and reopen this page.</p>
+      <div data-platform="mac">
+        <p><strong>On a Mac</strong> — in Terminal, make the folder and the file, then paste the lines and keep it private. ffmpeg is required for every cut: <code>brew install ffmpeg</code>. First open: double-click <code>Open Diony AI.command</code> (or the built <code>Diony.app</code>); macOS asks for your password once to lay the <code>.diony.local</code> names.</p>
+<pre>mkdir -p ~/.diony &amp;&amp; chmod 700 ~/.diony
+nano ~/.diony/keys.env
+chmod 600 ~/.diony/keys.env
+brew install ffmpeg</pre>
+      </div>
+      <div data-platform="windows">
+        <p><strong>On Windows</strong> — in PowerShell, make the folder, open the file in Notepad, paste the lines and save. ffmpeg is required for every cut: <code>winget install Gyan.FFmpeg</code>, then reopen the app. First open: double-click <code>Open Diony AI.bat</code> (or the installer build); Windows asks once (User Account Control) to lay the <code>.diony.local</code> names.</p>
+<pre>New-Item -ItemType Directory -Force $env:USERPROFILE\.diony | Out-Null
+notepad $env:USERPROFILE\.diony\keys.env
+winget install Gyan.FFmpeg</pre>
+      </div>
       <div class="cols">
         <div>
           <p><strong>Grok Imagine</strong> — an xAI API key from <a href="https://console.x.ai/" target="_blank" rel="noopener">console.x.ai</a>. Metered per second of video; the same key powers the narrator voice and the screenwriter.</p>
         </div>
         <div>
           <p><strong>Google Flow</strong> — a <a href="https://useapi.net/" target="_blank" rel="noopener">useapi.net</a> token. useapi.net is a relay that gives API access to Google Flow: you link a Google account that has a Google AI plan (Plus, Pro, or Ultra), and Flow charges that plan's monthly credits per generation while useapi.net bills a flat subscription. See the <a href="https://useapi.net/docs/api-google-flow-v1" target="_blank" rel="noopener">Google Flow API docs</a>.</p>
+          <p><strong>Gemini</strong> — a Gemini API key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>. On the Google Flow camera it writes the script (Gemini 2.5 Pro) and narrates the film (Gemini speech), so the whole path is Google. It is separate from the useapi.net token and bills on its own.</p>
         </div>
       </div>
 <pre>XAI_API_KEY=xai-...
 USEAPI_TOKEN=user:...
 DIONY_FLOW_EMAIL=you@gmail.com   # the linked Google account
-DIONY_FLOW_PLAN=pro              # plus | pro | ultra-99 | ultra-199</pre>
+DIONY_FLOW_PLAN=pro              # plus | pro | ultra-99 | ultra-199
+GEMINI_API_KEY=AIza...           # the Google brain and narrator</pre>
     </details>
   </div>
 </main>
@@ -157,6 +194,37 @@ DIONY_FLOW_PLAN=pro              # plus | pro | ultra-99 | ultra-199</pre>
   let chosen = "";
 
   let ready = { grok: false, "google-flow": false };
+  let platform = { chosen: "mac", detected: "mac", hints: null };
+  const keysPath = () => (platform.hints && platform.hints.keys_path) || "~/.diony/keys.env";
+  function paintPlatform() {
+    document.querySelectorAll("#platform-seg button").forEach((b) => {
+      b.setAttribute("aria-pressed", String(b.dataset.platform === platform.chosen));
+    });
+    document.getElementById("keys").dataset.platform = platform.chosen;
+    document.getElementById("keys-path").textContent = keysPath();
+    const detected = document.getElementById("platform-detected");
+    detected.textContent =
+      platform.detected === platform.chosen
+        ? `detected: ${platform.chosen === "windows" ? "Windows" : platform.detected === "linux" ? "Linux (Unix paths)" : "Mac"}`
+        : `this desk was detected as ${platform.detected === "windows" ? "Windows" : platform.detected === "linux" ? "Linux" : "Mac"} — showing ${platform.chosen === "windows" ? "Windows" : "Mac"} instructions`;
+    if (chosen || !go.disabled) select(chosen);
+    else hint.textContent = `Keys load from ${keysPath()}`;
+  }
+  document.querySelectorAll("#platform-seg button").forEach((b) => {
+    b.addEventListener("click", async () => {
+      platform.chosen = b.dataset.platform;
+      paintPlatform();
+      try {
+        const res = await fetch("/api/opening/platform", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ platform: platform.chosen }),
+        });
+        const body = await res.json();
+        if (res.ok) { platform.hints = body.hints; paintPlatform(); }
+      } catch (err) { /* the toggle still paints; the choice persists next time */ }
+    });
+  });
   function select(engine) {
     chosen = engine;
     cards.forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.engine === engine)));
@@ -165,12 +233,12 @@ DIONY_FLOW_PLAN=pro              # plus | pro | ultra-99 | ultra-199</pre>
     go.textContent = "Continue to the Director";
     hint.classList.toggle("warn", Boolean(engine) && !ok);
     hint.textContent = ok
-      ? "Keys load from ~/.diony/keys.env"
+      ? `Keys load from ${keysPath()}`
       : engine === "grok"
-        ? "Add XAI_API_KEY to ~/.diony/keys.env, then reopen this page."
+        ? `Add XAI_API_KEY to ${keysPath()}, then reopen this page.`
         : engine === "google-flow"
-          ? "Add USEAPI_TOKEN to ~/.diony/keys.env, then reopen this page."
-          : "Keys load from ~/.diony/keys.env";
+          ? `Add USEAPI_TOKEN to ${keysPath()}, then reopen this page.`
+          : `Keys load from ${keysPath()}`;
   }
 
   cards.forEach((c) => c.addEventListener("click", () => select(c.dataset.engine)));
@@ -186,6 +254,24 @@ DIONY_FLOW_PLAN=pro              # plus | pro | ultra-99 | ultra-199</pre>
       ready = { grok: Boolean(state.providers.grok), "google-flow": Boolean(state.providers["google-flow"]) };
       setChip("grok-chip", ready.grok, "KEY READY", "NO KEY");
       setChip("flow-chip", ready["google-flow"], "TOKEN READY", "NO TOKEN");
+      // The Google camera's own house: Gemini writes the script and narrates
+      // on GEMINI_API_KEY. Without it the desk borrows Grok when the xAI key
+      // exists, and says so; with neither, the template writer drafts.
+      const house = document.getElementById("flow-house");
+      if (state.providers.gemini) {
+        house.textContent = "Script and narrator: Gemini, on GEMINI_API_KEY — all Google.";
+        house.className = "house on";
+      } else if (ready.grok) {
+        house.textContent = "No GEMINI_API_KEY — the script and narrator borrow Grok.";
+        house.className = "house warn";
+      } else {
+        house.textContent = "No GEMINI_API_KEY — add one so Gemini writes and narrates.";
+        house.className = "house warn";
+      }
+      if (state.platform) {
+        platform = { chosen: state.platform.chosen, detected: state.platform.detected, hints: state.platform.hints };
+        paintPlatform();
+      }
       if (state.director_url) document.getElementById("director-link").href = state.director_url;
       if (state.producer_url) document.getElementById("producer-link").href = state.producer_url;
       ["director-link", "producer-link"].forEach((id) => {

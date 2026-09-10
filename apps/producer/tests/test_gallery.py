@@ -164,3 +164,35 @@ def test_stitching_selected_clips_makes_a_new_film_session() -> None:
         client.post("/api/gallery/stitch", json={"items": ["s-eeee5555:job-555501"]}).status_code
         == 422
     )
+
+
+def test_ffmpeg_is_found_in_the_windows_homes_too(tmp_path, monkeypatch) -> None:
+    import importlib
+
+    from diony_producer import media_tools
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "pf"))
+    monkeypatch.setenv("ChocolateyInstall", str(tmp_path / "choco"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    module = importlib.reload(media_tools)
+    homes = {str(p) for p in module.MEDIA_TOOL_DIRS}
+    assert str(tmp_path / "local" / "Microsoft" / "WinGet" / "Links") in homes
+    assert str(tmp_path / "pf" / "ffmpeg" / "bin") in homes
+    assert str(tmp_path / "choco" / "bin") in homes
+    assert str(tmp_path / "home" / "scoop" / "shims") in homes
+    assert "/opt/homebrew/bin" in homes  # the Mac homes stay
+    importlib.reload(media_tools)
+
+
+def test_the_missing_ffmpeg_hint_follows_the_platform_choice(monkeypatch) -> None:
+    from diony_contracts.cluster import write_platform_choice
+    from diony_producer import gallery
+
+    monkeypatch.setattr(gallery, "resolve_media_tool", lambda name: "")
+    write_platform_choice("windows")
+    with pytest.raises(RuntimeError, match="winget install Gyan.FFmpeg"):
+        gallery.stitch_items(["s-a:job-1", "s-a:job-2"])
+    write_platform_choice("mac")
+    with pytest.raises(RuntimeError, match="brew install ffmpeg"):
+        gallery.stitch_items(["s-a:job-1", "s-a:job-2"])

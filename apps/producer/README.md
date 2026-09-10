@@ -1,6 +1,6 @@
 # Producer
 
-The Gallery and the launch control plane. Generation happens in the Director; nothing here renders a frame.
+The Finished Clips gallery and the cost ledger's plumbing. Generation happens in the Director; nothing here renders a frame.
 
 ```bash
 pip install -e packages/contracts -e apps/producer
@@ -10,8 +10,8 @@ python -m pytest apps/producer
 
 | Part | Job |
 |---|---|
-| `app.py` | The Gallery API: `/api/director-films` (list with receipts, stitch, delete, serve), `/api/cloud-production`, `/api/engine`; the correlation and token-auth middlewares |
-| `launch_api.py`, `control_plane.py`, `costs.py`, `workflow.py`, `providers.py`, `worker.py` | Blueprint 16: workspaces, members, invitations, Cost Centers, BYOK secrets, durable workflows, the cost ledger the Director's receipts read, `/metrics` |
-| `studio_invites.py`, `studio_email.py`, `studio_entry_api.py`, `security.py` | Blueprint 18: invitations, verification, the join surface, signed tokens |
+| `app.py` | The Gallery API: `/api/gallery` (every clip and film with its record: file, thumbnail, details, delete, stitch), `/api/director-films`, `/api/cloud-production`, `/api/engine`; the correlation and token-auth middlewares |
+| `gallery.py` | The Finished Clips inventory read from each Director session's own record in the vault |
+| `launch_api.py`, `control_plane.py`, `costs.py`, `workflow.py`, `providers.py`, `worker.py`, `security.py` | Blueprint 16: the durable control plane and cost ledger the Director's receipts read, BYOK secrets, workflows, `/metrics` |
 | `face_identity.py`, `quality.py`, `speech_transcript.py`, `semantic_qc.py`, `media_tools.py` | The review services the Director imports: YuNet + SFace identity, sampled-frame quality, whisper transcripts, CLIP adherence, ffmpeg discovery |
-| `static/` | The console: the Director films inventory and the Studio governance drawer; bump `?v=` on every UI change |
+| `static/` | The console: the Finished Clips grid, viewer and details; bump `?v=` on every UI change |

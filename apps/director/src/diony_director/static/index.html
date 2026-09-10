@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="/static/app.css?v=p54">
+<link rel="stylesheet" href="/static/app.css?v=p55">
 </head>
 <body>
 
@@ -165,6 +165,12 @@
               <option value="" selected>Auto</option>
             </select>
           </label>
+          <label class="pill" id="brain-pill" title="Which model writes the script, derives the master prompt, and audits likeness. Auto follows the camera — Gemini on Google Flow, Grok on Grok Imagine — and borrows the other house when the camera's own key is missing. A named brain needs its key.">
+            <span class="plabel">Brain</span>
+            <select id="brain">
+              <option value="auto" selected>Auto</option>
+            </select>
+          </label>
           <label class="pill" title="Ceiling for this session's scripted production — holds anything that would breach it. Empty = no ceiling.">
             <span class="plabel">Budget $</span>
             <input id="budget" type="number" min="0" step="1" inputmode="numeric" placeholder="∞">
@@ -178,6 +184,6 @@
     </footer>
   </div>
 </div>
-<script src="/static/app.js?v=p54"></script>
+<script src="/static/app.js?v=p55"></script>
 </body>
 </html>

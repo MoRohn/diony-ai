@@ -25,6 +25,10 @@ You need no GPU. You need two things: a provider account and ffmpeg.
        2. A useapi.net subscription and token
           https://useapi.net/  →  Google Flow  →  link your Google account
        3. Note the email of the linked Google account.
+       4. A Gemini API key from Google AI Studio
+          https://aistudio.google.com/apikey
+          It writes the script and narrates the film, so the Google
+          camera is Google end to end. Billed on its own by Google.
 
   Pick A if you want exact per-second pricing and 15-second takes.
   Pick B if you want native voices, locked characters, and a free 1080p
@@ -54,6 +58,7 @@ Windows: C:\Users\YOUR_USER\.diony\keys.env
   USEAPI_TOKEN=user:...
   DIONY_FLOW_EMAIL=you@gmail.com
   DIONY_FLOW_PLAN=pro
+  GEMINI_API_KEY=AIza...
 
 Only the lines for the accounts you have. DIONY_FLOW_PLAN is one of
 plus, pro, ultra-99, ultra-199 and prices Flow credits in dollars.

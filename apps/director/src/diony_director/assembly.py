@@ -14,6 +14,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from diony_contracts.cluster import ffmpeg_install_hint
+
 FPS = 24
 WIDTH, HEIGHT = 1280, 720
 LOUDNESS = {"streaming": "-16", "broadcast": "-24"}
@@ -47,8 +49,7 @@ def _ffmpeg() -> str:
     binary = resolve_media_tool("ffmpeg") or shutil.which("ffmpeg")
     if not binary:
         raise AssemblyUnavailable(
-            "ffmpeg is required for assembly and was not found — install it "
-            "(brew install ffmpeg) or set DIONY_FFMPEG to its path"
+            "ffmpeg is required for assembly and was not found — " + ffmpeg_install_hint()
         )
     return binary
 
@@ -59,8 +60,8 @@ def _probe(path: Path) -> dict:
     ffprobe = resolve_media_tool("ffprobe") or shutil.which("ffprobe")
     if not ffprobe:
         raise AssemblyUnavailable(
-            "ffprobe is required for assembly and was not found — install it "
-            "(brew install ffmpeg) or set DIONY_FFPROBE to its path"
+            "ffprobe is required for assembly and was not found — "
+            + ffmpeg_install_hint().replace("DIONY_FFMPEG", "DIONY_FFPROBE")
         )
     raw = subprocess.run(
         [

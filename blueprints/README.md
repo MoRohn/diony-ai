@@ -2,7 +2,7 @@
 
 Numbered operational constitution for Diony AI. Coding agents: implement these; do not contradict them.
 
-**Blueprints 25–33 are the cloud era**, in force since the Director pivot of 2026-08-31: read `25` first, then `00` for the gates and `10` for the quality bar. The numbers 01–09, 11–14, and 19–23 described the local-cluster lane that was removed on 2026-09-10; they are retired and never reused.
+**Blueprints 25–33 are the cloud era**, in force since the Director pivot of 2026-08-31: read `25` first, then `00` for the gates and `10` for the quality bar. The numbers 01–09, 11–14, 18, and 19–23 described the local-cluster lane and its Studio governance, removed on 2026-09-10; they are retired and never reused.
 
 ## Cloud era (the product)
 
@@ -25,7 +25,6 @@ Numbered operational constitution for Diony AI. Coding agents: implement these; 
 | 00 | [00-product-constitution.md](00-product-constitution.md) | Product, gates, locked truths — read with the 2026-08-31 amendment at its head |
 | 10 | [10-quality-mandate.md](10-quality-mandate.md) | The quality constitution: reject-and-retake, no previz as master |
 | 15 | [15-creative-design-system.md](15-creative-design-system.md) | The bar-mark brand, type, motion, accessibility, surface density |
-| 16 | [16-launch-control-plane.md](16-launch-control-plane.md) | Durable workflows, the cost ledger, providers, Cost Centers, BYOK, export |
+| 16 | [16-launch-control-plane.md](16-launch-control-plane.md) | Durable workflows, the cost ledger, providers, BYOK secrets — the plumbing under the Director's receipts (the Studio governance UI it once fronted is gone) |
 | 17 | [17-desktop-distribution.md](17-desktop-distribution.md) | Self-contained Mac/Windows install, startup, signing, downloads |
-| 18 | [18-studio-entry-and-governance.md](18-studio-entry-and-governance.md) | Start/Join entry, Profile Names, Cost Centers, membership governance |
 | 24 | [24-montage-intelligence.md](24-montage-intelligence.md) | Rundown variety review, prompt lint, sampled-frame QC, decision log, look and chain colour match, final review, subtitle sidecars, the offline test guard |

@@ -20,8 +20,12 @@ from pydantic import BaseModel
 from diony_contracts.cluster import (
     bind_host,
     cluster_root,
+    detected_platform,
+    platform_hints,
     read_engine_choice,
+    read_platform_choice,
     write_engine_choice,
+    write_platform_choice,
 )
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -71,11 +75,32 @@ def opening_state() -> dict:
         "providers": {
             "grok": bool(os.environ.get("XAI_API_KEY", "").strip()),
             "google-flow": bool(os.environ.get("USEAPI_TOKEN", "").strip()),
+            "gemini": bool(os.environ.get("GEMINI_API_KEY", "").strip()),
         },
         "flow_plan": os.environ.get("DIONY_FLOW_PLAN", "pro").strip() or "pro",
         "director_url": DIRECTOR_URL,
         "producer_url": PRODUCER_URL,
+        "platform": {
+            "detected": detected_platform(),
+            "chosen": read_platform_choice(),
+            "hints": platform_hints(),
+        },
     }
+
+
+class PlatformChoiceBody(BaseModel):
+    platform: str
+
+
+@app.post("/api/opening/platform")
+def choose_platform(body: PlatformChoiceBody) -> dict:
+    """The computer the product speaks for: every path, command, and launcher
+    name on this page and in the Director's hints follows it."""
+    try:
+        write_platform_choice(body.platform)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    return {"platform": read_platform_choice(), "hints": platform_hints()}
 
 
 @app.post("/api/opening/engine")

@@ -16,10 +16,10 @@ North Star deliverable: a finished program, 1920×1080 (1080×1920 portrait), Re
 |---|---|
 | `apps/director` | The Director service (`diony-director`, `:8790`, `director.diony.local`) and its console. Sessions, screenwriter, master prompt, splitter, compiler (three dialects), `providers/{grok,flow}`, capabilities matrix, review, revisions, assembly, narration, deliverables, ledger, rate cards, cast lock, likeness guard. `diony-director-check` is the readiness CLI. |
 | `apps/wizard` | Studio (`diony-wizard`, `:8787`, `studio.diony.local`): the opening page (camera choice, key chips) and `gateway.py`, the `:80` name router that lays all three product names. |
-| `apps/producer` | Producer (`diony-producer`, `:8788`, `producer.diony.local`): the Gallery of Director films, the launch control plane API (Blueprint 16), and the services the Director imports: `control_plane`, `costs` (the ledger), `face_identity`, `quality`, `speech_transcript`, `semantic_qc`, `media_tools`. |
+| `apps/producer` | Producer (`diony-producer`, `:8788`, `producer.diony.local`): the Finished Clips gallery, the launch control plane API (Blueprint 16: the ledger's plumbing, no governance UI), and the services the Director imports: `control_plane`, `costs` (the ledger), `face_identity`, `quality`, `speech_transcript`, `semantic_qc`, `media_tools`. |
 | `apps/desk` | First open: the lobby, service supervision, stale-build detection by UI stamp, the packaged-app payload (`release.py`). |
 | `packages/contracts` | Pydantic v2 contracts and JSON Schema. Cloud core: `director.py` (DirectorOp, CostEstimate, EngineMode), `production.py` (Script, ClipUnit, AudioPacket, ContinuityLock, ClipReview, ProductionPackage), `launch.py` (control plane, cost ledger), `cluster.py` (engine choice, vault root). |
-| `blueprints/` | The constitution. 25–33 are the cloud era; 00, 10, 15–18, and 24 are the foundations that still apply. Retired numbers are not reused. |
+| `blueprints/` | The constitution. 25–33 are the cloud era; 00, 10, 15–17, and 24 are the foundations that still apply. Retired numbers (01–09, 11–14, 18–23) are not reused. |
 | `packaging/`, `scripts/release/` | PyInstaller payload, Mac/Windows installers, signed release builders. |
 | `pyproject.toml` (root) | Repo-wide ruff and pytest configuration only. Each app and package has its own manifest. |
 
@@ -27,7 +27,7 @@ North Star deliverable: a finished program, 1920×1080 (1080×1920 portrait), Re
 
 - Python 3.11+, FastAPI, uvicorn, httpx, Pydantic v2. Static HTML/CSS/JS consoles, no SPA framework.
 - Providers over REST: xAI (`https://api.x.ai`), useapi.net Google Flow (`https://api.useapi.net/v1/google-flow`). Module-level `httpx` in each adapter is the seam tests monkeypatch.
-- The brain is any OpenAI-compatible chat endpoint; default `grok-4.6` on the xAI key.
+- The brain is any OpenAI-compatible chat endpoint, resolved by `diony_director.brain`: Gemini 2.5 Pro on the Google Flow camera (`GEMINI_API_KEY`), Grok 4.6 on Grok Imagine (`XAI_API_KEY`), the desk's Brain pill or `DIONY_DIRECTOR_BRAIN_URL` overriding. The narrator follows the same house (Gemini speech or the Grok voice API) unless a voice id names the other.
 - Host tools: ffmpeg/ffprobe (required); OpenCV Zoo YuNet + SFace (optional, staged by `diony-director-check --stage-face-models`); faster-whisper (optional, `DIONY_WHISPER_MODEL`).
 - Ledger and control plane: SQLite under `{vault}/.control/`.
 
@@ -59,7 +59,7 @@ ruff check . && ruff format --check .    # the pinned rule set in pyproject.toml
 - Never run two pytest invocations at once: the desk's instance-lock tests deadlock across processes.
 - Tests that cut real media skip without ffmpeg.
 - Package conftests' autouse fixtures bleed across packages in a multi-directory run; never set a shared-scope `DIONY_CONTROL_PLANE_DB`, and keep test basenames unique across packages.
-- UI stamps are pinned: Producer `?v=p8` by tests, the Director `?v=p54` by presence only. Bump the Director stamp on every UI change; update the pins when you bump the others. The desk reads the stamp at runtime to detect a stale build.
+- UI stamps are pinned: Producer `?v=p9` by tests, the Director `?v=p55` by presence only. Bump the Director stamp on every UI change; update the pins when you bump the others. The desk reads the stamp at runtime to detect a stale build.
 - A test that pins a literal (a stamp, a boot copy line, a rate) is documentation; update it in the same change and say why.
 
 ## Human gates (do not automate away)

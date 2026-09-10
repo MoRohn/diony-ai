@@ -4,7 +4,6 @@ import pytest
 from pydantic import ValidationError
 
 from diony_contracts.launch import (
-    AdmissionPolicy,
     AuditEvent,
     CostAllocationEntry,
     CostBreakdown,
@@ -12,82 +11,16 @@ from diony_contracts.launch import (
     CostGovernance,
     CostRateCard,
     Department,
-    EmailDeliveryStatus,
     GenerationJob,
-    InvitationEmailDelivery,
-    InvitationStatus,
     JobStatus,
-    JoinRequestStatus,
-    Membership,
-    MembershipRole,
-    MembershipStatus,
     ProgressEvent,
     ProviderCapability,
     RenderVersion,
-    StudioInvitation,
-    StudioJoinRequest,
     UsageEvent,
     WorkflowRun,
     WorkflowStage,
     WorkflowStageState,
-    Workspace,
 )
-
-
-def test_studio_invitation_membership_and_email_contracts_are_explicit() -> None:
-    workspace = Workspace(
-        id="ws-studio",
-        name="Northlight Pictures",
-        slug="northlight",
-        admission_policy=AdmissionPolicy.INVITE_ADMITS,
-        controller_origin="https://producer.northlight.example",
-        controller_fingerprint="DIONY 7A4F 92C1",
-    )
-    invitation = StudioInvitation(
-        id="invite-one",
-        workspace_id=workspace.id,
-        token_hash="a" * 64,
-        email="maya@example.com",
-        email_key="maya@example.com",
-        role=MembershipRole.CREATOR,
-        proposed_profile_name="Maya Chen",
-        created_by="owner-one",
-        expires_at=datetime(2030, 1, 1, tzinfo=UTC),
-    )
-    delivery = InvitationEmailDelivery(
-        id="delivery-one",
-        workspace_id=workspace.id,
-        invitation_id=invitation.id,
-        recipient_mask="m•••@example.com",
-        subject="Rohn invited you to Northlight Pictures in Diony AI",
-    )
-    request = StudioJoinRequest(
-        id="request-one",
-        workspace_id=workspace.id,
-        invitation_id=invitation.id,
-        user_id="user-maya",
-        email_key=invitation.email_key,
-        requested_profile_name="Maya Chen",
-        requested_profile_name_key="maya chen",
-        requested_role=MembershipRole.CREATOR,
-    )
-    membership = Membership(
-        id="ws-studio:user-maya",
-        user_id="user-maya",
-        workspace_id=workspace.id,
-        role=MembershipRole.CREATOR,
-        profile_name="Maya Chen",
-        profile_name_key="maya chen",
-        personal_cost_center_id="cc-maya",
-        assigned_cost_center_ids=["cc-maya", "cc-show-one"],
-        status=MembershipStatus.ACTIVE,
-    )
-    assert invitation.status == InvitationStatus.ACTIVE
-    assert delivery.status == EmailDeliveryStatus.QUEUED
-    assert request.status == JoinRequestStatus.PENDING
-    assert membership.personal_cost_center_id == "cc-maya"
-    assert membership.assigned_cost_center_ids == ["cc-maya", "cc-show-one"]
-    assert workspace.admission_policy == AdmissionPolicy.INVITE_ADMITS
 
 
 def test_generation_job_carries_cost_forecast_lineage_and_retry_state() -> None:

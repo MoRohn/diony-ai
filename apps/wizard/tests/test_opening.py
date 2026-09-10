@@ -53,6 +53,7 @@ def test_opening_state_reports_provider_readiness(monkeypatch, tmp_path) -> None
     state = _client().get("/api/opening").json()
     assert state["providers"]["grok"] is True
     assert state["providers"]["google-flow"] is False
+    assert state["providers"]["gemini"] is False
     assert state["director_url"] == "http://director.diony.local"
     assert state["producer_url"] == "http://producer.diony.local"
 
@@ -76,7 +77,10 @@ def test_the_opening_explains_the_keys_and_names_useapi() -> None:
     html = _client().get("/").text
     assert "A key is required" in html
     # collapsed by default: a native <details> whose summary carries the chevron
-    assert '<details class="keys" id="keys">' in html and "<details class=\"keys\" id=\"keys\" open" not in html
+    assert (
+        '<details class="keys" id="keys">' in html
+        and '<details class="keys" id="keys" open' not in html
+    )
     assert '<summary id="keys-title"><svg class="chev"' in html
     assert "~/.diony/keys.env" in html
     assert 'href="https://console.x.ai/"' in html
@@ -87,4 +91,48 @@ def test_the_opening_explains_the_keys_and_names_useapi() -> None:
     assert "Google AI plan" in html and "monthly credits" in html
     # a camera without its key cannot be chosen
     assert "ready[engine] === true" in html
-    assert "Add USEAPI_TOKEN to ~/.diony/keys.env" in html
+    assert "Add USEAPI_TOKEN to ${keysPath()}" in html
+
+
+def test_the_opening_names_the_google_house(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("DIONY_KEYS_FILE", str(tmp_path / "keys.env"))
+    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    client = _client()
+    assert client.get("/api/opening").json()["providers"]["gemini"] is True
+    html = client.get("/").text
+    assert 'id="flow-house"' in html and 'id="grok-house"' in html
+    assert "Script and narrator: Gemini, on GEMINI_API_KEY" in html
+    assert "the script and narrator borrow Grok" in html
+    assert 'href="https://aistudio.google.com/apikey"' in html
+    assert "GEMINI_API_KEY=" in html
+
+
+def test_the_opening_carries_the_mac_windows_toggle_and_follows_it(monkeypatch) -> None:
+    from diony_contracts.cluster import read_platform_choice
+
+    client = _client()
+    state = client.get("/api/opening").json()["platform"]
+    assert state["detected"] in {"mac", "windows", "linux"}
+    assert state["chosen"] in {"mac", "windows"}
+    assert state["hints"]["keys_path"] and state["hints"]["ffmpeg_install"]
+    html = client.get("/").text
+    assert 'id="platform-seg"' in html
+    assert 'data-platform="mac"' in html and 'data-platform="windows"' in html
+    assert "winget install Gyan.FFmpeg" in html and "brew install ffmpeg" in html
+    assert "Open Diony AI.bat" in html and "Open Diony AI.command" in html
+    assert "User Account Control" in html
+    assert 'fetch("/api/opening/platform"' in html
+    chosen = client.post("/api/opening/platform", json={"platform": "windows"}).json()
+    assert chosen["platform"] == "windows"
+    assert (
+        chosen["hints"]["keys_path"].startswith("C:\\Users")
+        and "winget" in chosen["hints"]["ffmpeg_install"]
+    )
+    assert read_platform_choice() == "windows"
+    assert client.get("/api/opening").json()["platform"]["chosen"] == "windows"
+    assert client.post("/api/opening/platform", json={"platform": "amiga"}).status_code == 422
+    back = client.post("/api/opening/platform", json={"platform": "mac"}).json()
+    assert (
+        back["hints"]["keys_path"] == "~/.diony/keys.env"
+        and "brew" in back["hints"]["ffmpeg_install"]
+    )

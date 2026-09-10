@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from diony_contracts.cluster import cluster_root
+from diony_contracts.cluster import cluster_root, ffmpeg_install_hint
 from diony_producer.media_tools import resolve_media_tool
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -361,9 +361,7 @@ def stitch_items(item_ids: list[str], *, title: str = "") -> dict:
         raise ValueError("select at least two clips to stitch")
     ffmpeg = resolve_media_tool("ffmpeg")
     if not ffmpeg:
-        raise RuntimeError(
-            "ffmpeg was not found — install it (brew install ffmpeg) or set DIONY_FFMPEG"
-        )
+        raise RuntimeError("ffmpeg was not found — " + ffmpeg_install_hint())
     sources = [_resolve(item_id)[1] for item_id in item_ids]
     join_id = f"join-{uuid.uuid4().hex[:8]}"
     dest_dir = director_root() / join_id

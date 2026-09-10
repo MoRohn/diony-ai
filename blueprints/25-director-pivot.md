@@ -53,11 +53,14 @@ beside the other two by the same router.
 | Pricing basis | metered, USD per second and per still | credits per generation from Google's published table, converted to USD from the declared plan (`DIONY_FLOW_PLAN`); never presented as Google's meter |
 | Video models | `grok-imagine-video-1.5` (shoots; t2v, i2v, up to 3 refs, native audio, 1–15 s, 480p/720p/1080p), `grok-imagine-video` (extension and edit lanes) | `omni-flash` (default; audio-native, voices, characters, first+last frame, v2v edit, 4/6/8/10 s at 360p/720p), `veo-3.1-lite` / `-fast` / `-quality` (8 s; 4 and 6 s on Ultra; extension lane) |
 | Stills | `grok-imagine-image-2.0` | `nano-banana-2` (included in the plan) |
-| Voice | the Grok voice API (`/v1/tts`), the default narrator on every lane | Omni's native voices under the Dialogue and Mix styles |
+| Brain | Grok 4.6 on the xAI key (`diony_director.brain`) | Gemini 2.5 Pro on `GEMINI_API_KEY` through Gemini's OpenAI-compatible endpoint; borrows Grok when the Gemini key is missing and says so |
+| Voice | the Grok voice API (`/v1/tts`) | Gemini speech (`generateContent` with `responseModalities: AUDIO`, prebuilt voices `gemini:Kore` and company) on the same Gemini key; Omni's native voices under the Dialogue and Mix styles |
 | Finish | conformed up at the cut | `POST /videos/upscale`, free at 1080p, 50 credits at 4K (Ultra) |
 | Prompt limit | 4096 characters (live 400 otherwise) | 4096 characters, conservative |
 | Pacing | none needed | one process-wide gate, requests never overlap, `DIONY_FLOW_REQUEST_GAP_S` (5 s) between them |
 | Quota | 429 pauses the run until the window resets | 429 pauses the run; the documented reasons are translated to plain words |
+
+**Each camera is a house.** The camera's own brain and narrator are the default (Gemini on Google Flow, Grok on Grok Imagine), resolved by `diony_director.brain` and `narration.backend()`; the desk's Brain pill (`{vault}/.cluster/brain.json`) and a voice id that names a house (`gemini:Kore`, or a Grok roster name) may cross houses when both keys exist. A missing house key borrows the other with a stated reason; nothing guesses a key.
 
 **One camera per film.** Studio requires an explicit choice and there is no automatic route: the camera Studio chose shoots every clip of the film, picture and dialogue alike, so one look holds. A repeat failure on one provider may swap a single retake to the other by the fix ladder; the film's camera does not change.
 

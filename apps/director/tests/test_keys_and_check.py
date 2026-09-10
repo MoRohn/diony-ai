@@ -46,6 +46,8 @@ def test_offline_report_covers_keys_engine_and_ratecards() -> None:
     assert report["engine"] == "cloud"
     assert report["keys"]["grok"] is True  # conftest sets test keys
     assert report["keys"]["google-flow"] is True
+    assert report["keys"]["gemini"] is False  # the conftest holds no Gemini key
+    assert report["brain"]["configured"] is False  # the conftest turns the brain off
     assert report["rate_cards"]["grok"]["fetched_at"]
     assert report["rate_cards"]["google-flow"]["stale"] in {True, False}
     assert report["flow_plan"] == "pro"

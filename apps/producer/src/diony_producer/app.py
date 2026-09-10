@@ -23,7 +23,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.requests import Request
 
-from diony_contracts.cluster import bind_host, cluster_root, engine_is_cloud, read_engine_choice
+from diony_contracts.cluster import (
+    bind_host,
+    cluster_root,
+    engine_is_cloud,
+    ffmpeg_install_hint,
+    read_engine_choice,
+)
 from diony_contracts.launch import MembershipRole
 from diony_producer.control_plane import ControlPlane, WorkspaceAccessDenied
 from diony_producer.gallery import (
@@ -40,7 +46,6 @@ from diony_producer.launch_api import router as launch_router
 from diony_producer.media_tools import resolve_media_tool
 from diony_producer.observability import bind_correlation, log_event, reset_correlation
 from diony_producer.security import verify_token
-from diony_producer.studio_entry_api import router as studio_entry_router
 
 STATIC = Path(__file__).resolve().parent / "static"
 DIRECTOR_URL = "http://director.diony.local"
@@ -49,7 +54,6 @@ _SESSION_ACTIVE = {"queued", "running", "waiting_provider", "retry_wait"}
 app = FastAPI(title="Diony Producer", version="0.9.0")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 app.include_router(launch_router)
-app.include_router(studio_entry_router)
 app.add_api_route("/metrics", prometheus_metrics, methods=["GET"], include_in_schema=False)
 
 
@@ -105,7 +109,6 @@ async def mutation_auth(request: Request, call_next):
         os.environ.get("DIONY_AUTH_MODE", "local").strip().lower() == "token"
         and path.startswith("/api/")
         and not path.startswith("/api/v1/")
-        and not path.startswith("/api/studio-entry/")
         and request.method not in {"GET", "HEAD", "OPTIONS"}
     )
     if guarded:
@@ -338,7 +341,7 @@ def stitch_director_films(body: StitchFilmsBody) -> dict:
     if not ffmpeg:
         raise HTTPException(
             status_code=409,
-            detail="ffmpeg was not found — install it (brew install ffmpeg) or set DIONY_FFMPEG",
+            detail="ffmpeg was not found — " + ffmpeg_install_hint(),
         )
     root = _films_root()
     sources: list[Path] = []

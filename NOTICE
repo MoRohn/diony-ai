@@ -103,6 +103,14 @@ Google Flow (Veo 3.1, Omni Flash, Nano Banana) reached through useapi.net.
   useapi.net's terms for its relay subscription. Captcha solving may involve a
   third-party solver configured by the licensee.
 
+Google Gemini API (Google AI Studio) — the Gemini brain (script, master prompt,
+likeness audit) and Gemini speech generation (the narrator) on the Google Flow
+camera.
+  Service: https://ai.google.dev/  ·  Keys: https://aistudio.google.com/apikey
+  Terms: the Gemini API Terms of Service and Google's Generative AI Prohibited
+  Use Policy. Billed by Google on the licensee's Google AI Studio project,
+  separately from the Google AI plan Flow credits come from.
+
 Generated content remains the licensee's responsibility under each provider's
 content and likeness policies. Diony's likeness guard (Blueprint 27 §3a) is a
 best-effort control, not a licence.

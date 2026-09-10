@@ -1,15 +1,4 @@
 {
-  "$defs": {
-    "AdmissionPolicy": {
-      "enum": [
-        "invite_admits",
-        "admin_approval",
-        "closed"
-      ],
-      "title": "AdmissionPolicy",
-      "type": "string"
-    }
-  },
   "properties": {
     "schema_version": {
       "default": 1,
@@ -37,10 +26,6 @@
       "default": true,
       "title": "Local First",
       "type": "boolean"
-    },
-    "admission_policy": {
-      "$ref": "#/$defs/AdmissionPolicy",
-      "default": "invite_admits"
     },
     "controller_origin": {
       "default": "",

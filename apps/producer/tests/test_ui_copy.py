@@ -17,6 +17,9 @@ def test_the_legacy_bays_are_not_shipped() -> None:
         'id="start-over"',
         'id="join-workspace"',
         'id="director-films"',
+        'id="studio-control"',
+        'id="studio-drawer"',
+        'id="join-studio"',
         'id="production-stop-dialog"',
     ):
         assert legacy not in html, legacy
@@ -52,7 +55,7 @@ def test_the_gallery_is_the_finished_clips_inventory() -> None:
     assert "item.remove_url" in js and "item.details_url" in js and "item.thumbnail_url" in js
     assert "function renderGallery" in js and "function openGalleryViewer" in js
     assert "function renderGalleryDetails" in js and "function copyGalleryPrompt" in js
-    assert "function armConfirm" in js and "function askInline" in js
+    assert "function armConfirm" in js
     assert "window.confirm" not in js and "window.prompt" not in js
     assert 'fetch("/api/engine")' in js
     assert "director-films" not in html
@@ -60,8 +63,8 @@ def test_the_gallery_is_the_finished_clips_inventory() -> None:
 
 def test_the_static_stamp_is_pinned() -> None:
     html = (STATIC / "index.html").read_text()
-    assert 'href="/static/app.css?v=p8"' in html
-    assert 'src="/static/app.js?v=p8"' in html
+    assert 'href="/static/app.css?v=p9"' in html
+    assert 'src="/static/app.js?v=p9"' in html
 
 
 def test_producer_uses_the_diony_chorus_design_system() -> None:
@@ -92,59 +95,18 @@ def test_producer_uses_the_diony_chorus_design_system() -> None:
     assert "background: transparent;" in mast_brand_rule
     assert "overflow: visible;" in mast_brand_rule
     assert "clip-path" not in mast_brand_rule
-    # the Team button is never hidden: governance is a feature, not a legacy bay
-    assert "#studio-control,\n" not in css
     assert "body.cloud-engine" not in css
 
 
-def test_studio_invitation_uses_a_distinct_resilient_primary_action() -> None:
+def test_the_team_governance_surface_is_gone() -> None:
     html = (STATIC / "index.html").read_text()
-    css = (STATIC / "app.css").read_text()
     js = (STATIC / "app.js").read_text()
-
-    assert 'class="word invite-send invite-send-action"' in html
-    assert "data-invite-action-label>Send invitation</strong>" in html
-    assert 'class="invite-send-arrow" aria-hidden="true">→</span>' in html
-    assert ".invite-send-action {" in css
-    assert ".invite-send-action:hover:not(:disabled)" in css
-    assert ".invite-send-action:focus-visible" in css
-    assert ".invite-send-action:disabled" in css
-    assert 'submit.querySelector("[data-invite-action-label]")' in js
-    assert 'submit.textContent = "Sending…"' not in js
-
-
-def test_producer_contains_complete_studio_invitation_and_accept_surfaces() -> None:
-    html = (STATIC / "index.html").read_text()
-    css = (STATIC / "app.css").read_text()
-    js = (STATIC / "app.js").read_text()
-    assert 'id="studio-control"' in html
-    assert 'id="studio-drawer"' in html
-    assert 'id="invite-maker"' in html
-    assert 'id="invite-email"' in html
-    assert 'id="invite-preview"' in html
-    assert "Send invitation" in html
-    assert 'id="cost-center-form"' in html
-    assert 'id="cost-center-name"' in html
-    assert 'id="cost-center-member"' in html
-    assert 'id="cost-center-list"' in html
-    assert "Create &amp; assign Cost Center" in html
-    assert "member-admin-only" in html
-    assert "cost-admin-only" in html
-    assert 'id="join-studio"' in html
-    assert 'class="join-brand"' in html
-    assert 'href="http://studio.diony.local"' in html
-    assert "wizard" + ".diony.local" not in html
-    assert "The Studio checks this invitation. Diony cloud does not." in html
-    assert ".join-brand .diony-mark" in css
-    assert "WHAT DIONY AI IS" in html
-    assert "cloud video engines" in html
-    assert "Accept invitation" in html
-    assert "Enter Producer" in html
-    assert "/api/v1/studio/invitations" in js
-    assert "/api/v1/cost-centers" in js
-    assert "/cost-centers`" in js
-    assert "assigned_cost_center_ids" in js
-    assert "governanceCanManageCosts" in js
-    assert "/api/studio-entry/discover" in js
-    assert "/api/studio-entry/verification/request" in js
-    assert "/api/studio-entry/join" in js
+    assert "Team" not in html.split("<header", 1)[1].split("</header>", 1)[0]
+    for endpoint in (
+        "/api/v1/studio",
+        "/api/studio-entry",
+        "/api/v1/cost-centers",
+        "/api/v1/members",
+    ):
+        assert endpoint not in js, endpoint
+    assert "askInline" not in js and "loadStudioGovernance" not in js

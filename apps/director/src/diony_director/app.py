@@ -31,6 +31,7 @@ from diony_director import (
     ratecards,
     session,
 )
+from diony_director import brain as brain_mod
 from diony_director import (
     review as review_mod,
 )
@@ -153,14 +154,7 @@ def status() -> dict:
         "boot": boot_info,
         "providers": {"grok": grok.configured(), "google-flow": flow.configured()},
         "flow_plan": ratecards.flow_plan(),
-        "brain": {
-            "configured": bool(
-                __import__("diony_director.screenwriter", fromlist=["brain_url"]).brain_url()
-            ),
-            "model": __import__(
-                "diony_director.screenwriter", fromlist=["brain_model"]
-            ).brain_model(),
-        },
+        "brain": brain_mod.status(),
         "workspace": ctx.workspace.id,
         "studio_url": "http://studio.diony.local",
         "producer_url": "http://producer.diony.local",
@@ -446,6 +440,32 @@ def session_settings(sid: str) -> dict:
     }
 
 
+class BrainIn(BaseModel):
+    brain: str = "auto"  # auto = the camera's own house; grok | gemini
+
+
+@app.get("/api/director/brain")
+def brain_state() -> dict:
+    """Which brain writes, what it is resolved from, and what else is available."""
+    return brain_mod.status()
+
+
+@app.post("/api/director/brain")
+def set_brain(body: BrainIn) -> dict:
+    """Choose the desk's brain — a named brain needs its key; Auto follows the camera."""
+    try:
+        brain_mod.write_brain_choice(body.brain)
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    chosen = brain_mod.read_brain_choice()
+    if chosen != "auto" and not brain_mod.available().get(chosen):
+        key = "GEMINI_API_KEY" if chosen == "gemini" else "XAI_API_KEY"
+        raise HTTPException(
+            status_code=409, detail=f"{chosen} is chosen but {key} is not set on this desk"
+        )
+    return brain_mod.status()
+
+
 @app.get("/api/director/voices")
 def voice_catalog() -> dict:
     """The narrator voices the console offers: Auto (the Director casts from
@@ -454,11 +474,14 @@ def voice_catalog() -> dict:
 
     from diony_director import narration as narration_mod
 
+    which = narration_mod.backend() if narration_mod.narrator_configured() else ""
+    pin_env = narration_mod.GEMINI_VOICE_ENV if which == "gemini" else narration_mod.GROK_VOICE_ENV
     return {
         "default": "",
         "voices": narration_mod.roster_catalog(),
-        "pinned": _os.environ.get(narration_mod.GROK_VOICE_ENV, "").strip(),
-        "backend": narration_mod.backend() if narration_mod.narrator_configured() else "",
+        "pinned": _os.environ.get(pin_env, "").strip(),
+        "backend": which,
+        "backends": narration_mod.available_backends(),
     }
 
 

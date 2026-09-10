@@ -37,7 +37,6 @@ from diony_producer.control_plane import (
 from diony_producer.costs import CostAnalyticsService
 from diony_producer.providers import ProviderRegistry
 from diony_producer.security import Actor, SecretVault, verify_token
-from diony_producer.studio_invites import StudioInvitationService
 from diony_producer.workflow import DurableWorkflowEngine
 
 router = APIRouter(prefix="/api/v1", tags=["launch-control-plane"])
@@ -87,10 +86,6 @@ class CostCenterRename(BaseModel):
     name: str = Field(min_length=1, max_length=120)
 
 
-class MemberCostCentersWrite(BaseModel):
-    cost_center_ids: list[str] = Field(min_length=1, max_length=100)
-
-
 class CostRateCardCreate(BaseModel):
     capability: ProviderCapability
     provider_id: str = Field(min_length=1, max_length=160)
@@ -113,22 +108,6 @@ class MemberWrite(BaseModel):
     email: str = Field(default="", max_length=320)
     role: MembershipRole = MembershipRole.CREATOR
     team_ids: list[str] = Field(default_factory=list, max_length=100)
-
-
-class StudioInvitationCreate(BaseModel):
-    email: str = Field(min_length=3, max_length=320)
-    role: MembershipRole = MembershipRole.CREATOR
-    proposed_profile_name: str = Field(default="", max_length=60)
-    note: str = Field(default="", max_length=500)
-    expires_hours: int = Field(default=72, ge=1, le=720)
-
-
-class JoinDecisionBody(BaseModel):
-    note: str = Field(default="", max_length=500)
-
-
-class MemberRemoveBody(BaseModel):
-    confirmation: str = Field(min_length=1, max_length=160)
 
 
 class _RateWindow:
@@ -302,209 +281,6 @@ def create_team(body: TeamCreate, request: Request, actor: ActorDep, plane: Plan
 def members(actor: ActorDep, plane: Plane) -> dict[str, Any]:
     _require(plane, actor, MembershipRole.VIEWER)
     return {"members": plane.list_documents("membership", actor.workspace_id)}
-
-
-@router.get("/studio")
-def studio_context(actor: ActorDep, plane: Plane) -> dict[str, Any]:
-    membership = _membership(plane, actor)
-    workspace = plane.get_document("workspace", actor.workspace_id, actor.workspace_id)
-    return {
-        "studio": workspace,
-        "membership": membership.model_dump(mode="json"),
-        "can_manage_members": membership.can_manage,
-        "cost_scope": (
-            "organization"
-            if CostAnalyticsService(plane).is_organization_admin(membership)
-            else "assigned"
-        ),
-    }
-
-
-@router.get("/studio/invitations")
-def studio_invitations(actor: ActorDep, plane: Plane) -> dict[str, Any]:
-    _require(plane, actor, MembershipRole.ADMIN)
-    return {"invitations": StudioInvitationService(plane).list_invitations(actor.workspace_id)}
-
-
-@router.post("/studio/invitations", status_code=status.HTTP_201_CREATED)
-def create_studio_invitation(
-    body: StudioInvitationCreate,
-    request: Request,
-    actor: ActorDep,
-    plane: Plane,
-):
-    _require(plane, actor, MembershipRole.ADMIN)
-    try:
-        return StudioInvitationService(plane).create_invitation(
-            workspace_id=actor.workspace_id,
-            actor_user_id=actor.user_id,
-            email=body.email,
-            role=body.role,
-            proposed_profile_name=body.proposed_profile_name,
-            note=body.note,
-            expires_hours=body.expires_hours,
-            correlation_id=_correlation(request),
-        )
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-
-
-@router.post("/studio/invitations/{invitation_id}/revoke")
-def revoke_studio_invitation(
-    invitation_id: str,
-    request: Request,
-    actor: ActorDep,
-    plane: Plane,
-):
-    _require(plane, actor, MembershipRole.ADMIN)
-    try:
-        return StudioInvitationService(plane).revoke_invitation(
-            workspace_id=actor.workspace_id,
-            invitation_id=invitation_id,
-            actor_user_id=actor.user_id,
-            correlation_id=_correlation(request),
-        )
-    except (ValueError, DocumentNotFound) as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-
-
-@router.get("/studio/join-requests")
-def studio_join_requests(actor: ActorDep, plane: Plane) -> dict[str, Any]:
-    _require(plane, actor, MembershipRole.ADMIN)
-    return {"requests": plane.list_documents("studio_join_request", actor.workspace_id)}
-
-
-@router.post("/studio/join-requests/{request_id}/approve")
-def approve_studio_join_request(
-    request_id: str,
-    request: Request,
-    actor: ActorDep,
-    plane: Plane,
-):
-    _require(plane, actor, MembershipRole.ADMIN)
-    try:
-        return StudioInvitationService(plane).approve_request(
-            workspace_id=actor.workspace_id,
-            request_id=request_id,
-            actor_user_id=actor.user_id,
-            correlation_id=_correlation(request),
-        )
-    except (ValueError, DocumentNotFound) as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-
-
-@router.post("/studio/join-requests/{request_id}/deny")
-def deny_studio_join_request(
-    request_id: str,
-    body: JoinDecisionBody,
-    request: Request,
-    actor: ActorDep,
-    plane: Plane,
-):
-    _require(plane, actor, MembershipRole.ADMIN)
-    try:
-        return StudioInvitationService(plane).deny_request(
-            workspace_id=actor.workspace_id,
-            request_id=request_id,
-            actor_user_id=actor.user_id,
-            note=body.note,
-            correlation_id=_correlation(request),
-        )
-    except (ValueError, DocumentNotFound) as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-
-
-@router.post("/studio/members/{membership_id}/remove")
-def remove_studio_member(
-    membership_id: str,
-    body: MemberRemoveBody,
-    request: Request,
-    actor: ActorDep,
-    plane: Plane,
-):
-    _require(plane, actor, MembershipRole.ADMIN)
-    try:
-        return StudioInvitationService(plane).remove_member(
-            workspace_id=actor.workspace_id,
-            membership_id=membership_id,
-            actor_user_id=actor.user_id,
-            confirmation=body.confirmation,
-            correlation_id=_correlation(request),
-        )
-    except (ValueError, DocumentNotFound) as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-
-
-@router.put("/studio/members/{membership_id}/cost-centers")
-def assign_member_cost_centers(
-    membership_id: str,
-    body: MemberCostCentersWrite,
-    request: Request,
-    actor: ActorDep,
-    plane: Plane,
-):
-    _require_cost_admin(plane, actor)
-    try:
-        membership = Membership.model_validate(
-            plane.get_document("membership", membership_id, actor.workspace_id)
-        )
-    except DocumentNotFound as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
-
-    center_ids = list(dict.fromkeys(body.cost_center_ids))
-    if membership.personal_cost_center_id not in center_ids:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "A member's personal Cost Center must remain assigned.",
-        )
-    known_centers = {
-        str(row["id"]): CostCenter.model_validate(row)
-        for row in plane.list_documents("cost_center", actor.workspace_id)
-    }
-    unknown = set(center_ids).difference(known_centers)
-    if unknown:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            f"Unknown Cost Center IDs: {', '.join(sorted(unknown))}",
-        )
-    inactive = [center_id for center_id in center_ids if not known_centers[center_id].active]
-    if inactive:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            f"Inactive Cost Centers cannot be assigned: {', '.join(sorted(inactive))}",
-        )
-
-    before = membership.model_copy(deep=True)
-    membership.assigned_cost_center_ids = center_ids
-    membership.team_ids = list(
-        dict.fromkeys(
-            [
-                *membership.team_ids,
-                *(
-                    team_id
-                    for center_id in center_ids
-                    for team_id in known_centers[center_id].team_ids
-                ),
-            ]
-        )
-    )
-    plane.put_document(
-        "membership",
-        membership.id,
-        actor.workspace_id,
-        membership.model_dump(mode="json"),
-    )
-    plane.audit(
-        workspace_id=actor.workspace_id,
-        actor_user_id=actor.user_id,
-        action="membership.cost_centers_assigned",
-        object_type="membership",
-        object_id=membership.id,
-        correlation_id=_correlation(request),
-        before=before,
-        after=membership,
-    )
-    return membership
 
 
 @router.put("/members/{user_id}")

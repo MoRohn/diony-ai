@@ -59,3 +59,40 @@ def test_local_legacy_is_retired(tmp_path, monkeypatch) -> None:
     engine_choice_path().parent.mkdir(parents=True, exist_ok=True)
     engine_choice_path().write_text('{"engine": "local_legacy"}')
     assert read_engine_choice() == ""
+
+
+def test_the_platform_choice_defaults_to_the_detected_desk_and_persists(
+    tmp_path, monkeypatch
+) -> None:
+    from diony_contracts import cluster
+
+    _isolate(tmp_path, monkeypatch)
+    detected = cluster.detected_platform()
+    assert detected in {"mac", "windows", "linux"}
+    assert cluster.read_platform_choice() == ("windows" if detected == "windows" else "mac")
+    cluster.write_platform_choice("windows")
+    assert cluster.read_platform_choice() == "windows"
+    hints = cluster.platform_hints()
+    assert hints["platform"] == "windows" and hints["launcher"] == "Open Diony AI.bat"
+    assert (
+        "winget" in cluster.ffmpeg_install_hint() and "ffmpeg.exe" in cluster.ffmpeg_install_hint()
+    )
+    cluster.write_platform_choice("mac")
+    assert cluster.platform_hints()["launcher"] == "Open Diony AI.command"
+    assert "brew install ffmpeg" in cluster.ffmpeg_install_hint()
+    with pytest.raises(ValueError):
+        cluster.write_platform_choice("beos")
+    # a stale or foreign value on disk reads as the detected desk
+    cluster.platform_choice_path().write_text('{"platform": "amiga"}')
+    assert cluster.read_platform_choice() == ("windows" if detected == "windows" else "mac")
+
+
+def test_a_windows_desk_is_detected_from_the_interpreter(monkeypatch) -> None:
+    from diony_contracts import cluster
+
+    monkeypatch.setattr(cluster.sys, "platform", "win32")
+    assert cluster.detected_platform() == "windows"
+    monkeypatch.setattr(cluster.sys, "platform", "darwin")
+    assert cluster.detected_platform() == "mac"
+    monkeypatch.setattr(cluster.sys, "platform", "linux")
+    assert cluster.detected_platform() == "linux"

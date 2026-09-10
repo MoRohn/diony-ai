@@ -749,3 +749,139 @@ def test_a_character_identity_ref_is_not_a_narrator_voice(monkeypatch) -> None:
         fresh, tone_text="tense noir", character_notes={"Elias": "a quiet man"}, seed="s-1"
     )
     assert fresh[0].voice_ref == "sal"
+
+
+# --- the Google narrator ------------------------------------------------------
+
+
+def test_the_flow_camera_narrates_on_gemini_and_the_grok_camera_on_grok(monkeypatch) -> None:
+    from diony_contracts.cluster import write_engine_choice
+
+    monkeypatch.delenv(narration.NARRATOR_ENV, raising=False)
+    monkeypatch.delenv(narration.BACKEND_ENV, raising=False)
+    monkeypatch.setenv("XAI_API_KEY", "test-xai-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    write_engine_choice("google-flow")
+    assert narration.backend() == "gemini" and narration.narrator_configured() is True
+    assert narration.available_backends() == ["gemini", "grok"]
+    write_engine_choice("grok")
+    assert narration.backend() == "grok"
+    assert narration.available_backends() == ["grok", "gemini"]
+    # only the Google key on the desk: the Google path stands on its own
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    assert narration.backend() == "gemini" and narration.available_backends() == ["gemini"]
+    # an explicit backend is law
+    monkeypatch.setenv(narration.BACKEND_ENV, "gemini")
+    assert narration.backend() == "gemini"
+
+
+def test_the_console_offers_every_house_it_holds_a_key_for(monkeypatch) -> None:
+    monkeypatch.setenv("XAI_API_KEY", "x")
+    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    monkeypatch.delenv(narration.BACKEND_ENV, raising=False)
+    monkeypatch.delenv(narration.NARRATOR_ENV, raising=False)
+    catalog = narration.roster_catalog()
+    keys = {row["key"] for row in catalog}
+    assert "eve" in keys and "gemini:Kore" in keys
+    assert next(r for r in catalog if r["key"] == "gemini:Kore")["label"] == "Gemini · Kore"
+    assert next(r for r in catalog if r["key"] == "eve")["label"] == "Eve"
+    assert narration.normalize_voice("GEMINI:kore") == "gemini:Kore"
+    assert narration.normalize_voice("Sal") == "sal"
+    assert (
+        narration.voice_backend("gemini:Puck") == "gemini"
+        and narration.voice_backend("sal") == "grok"
+    )
+    # a Google-only desk offers Gemini voices alone
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    assert all(row["backend"] == "gemini" for row in narration.roster_catalog())
+    with pytest.raises(ValueError):
+        narration.normalize_voice("eve")
+
+
+def test_gemini_speech_speaks_the_exact_words_and_lands_as_a_wav(tmp_path, monkeypatch) -> None:
+    import base64
+
+    from diony_contracts.cluster import write_engine_choice
+    from diony_director.providers import base as provider_base
+
+    monkeypatch.delenv(narration.NARRATOR_ENV, raising=False)
+    monkeypatch.delenv(narration.BACKEND_ENV, raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    write_engine_choice("google-flow")
+    seen: dict = {}
+    pcm = bytes(range(256)) * 8
+
+    class _Response:
+        status_code = 200
+        text = ""
+        headers = {"content-type": "application/json"}
+
+        def json(self):
+            return {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "inlineData": {
+                                        "mimeType": "audio/L16;codec=pcm;rate=24000",
+                                        "data": base64.b64encode(pcm).decode(),
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+
+    def _post(url, *, what, json, headers, timeout):
+        seen.update({"url": url, "json": json, "headers": headers})
+        return _Response()
+
+    monkeypatch.setattr(provider_base, "post_with_retries", _post)
+    cue = narration.NarrationCue(
+        order=0,
+        clip_id="cl-1",
+        speaker="ANA",
+        line="We finish this tonight.",
+        direction="whispering",
+        voice_ref="gemini:Kore",
+    )
+    out = tmp_path / "cue-00.wav"
+    narration._synthesize_gemini(cue, out)
+    assert seen["url"].endswith("/v1beta/models/gemini-2.5-flash-preview-tts:generateContent")
+    assert seen["headers"]["x-goog-api-key"] == "test-gemini-key"
+    body = seen["json"]
+    assert body["contents"][0]["parts"][0]["text"] == "We finish this tonight.", "verbatim, no tags"
+    assert body["generationConfig"]["responseModalities"] == ["AUDIO"]
+    assert body["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"] == {
+        "voiceName": "Kore"
+    }
+    data = out.read_bytes()
+    assert data[:4] == b"RIFF" and data[8:12] == b"WAVE"
+    assert data[24:28] == (24000).to_bytes(4, "little"), "the sample rate the reply declared"
+    assert data[-len(pcm) :] == pcm
+
+
+def test_a_named_voice_speaks_through_its_own_house(monkeypatch, tmp_path) -> None:
+    """A Google Flow film may keep a Grok narrator when the xAI key exists,
+    and a Grok film a Gemini one: the voice id names the house."""
+    from diony_contracts.cluster import write_engine_choice
+
+    monkeypatch.delenv(narration.NARRATOR_ENV, raising=False)
+    monkeypatch.delenv(narration.BACKEND_ENV, raising=False)
+    monkeypatch.setenv("XAI_API_KEY", "x")
+    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    write_engine_choice("google-flow")
+    spoken: list[str] = []
+    monkeypatch.setattr(narration, "_synthesize_grok", lambda cue, out: spoken.append("grok"))
+    monkeypatch.setattr(narration, "_synthesize_gemini", lambda cue, out: spoken.append("gemini"))
+    monkeypatch.setattr(narration, "_probe", lambda path: {"duration_s": 1.2})
+    grok_cue = narration.NarrationCue(order=0, clip_id="a", speaker="", line="one", voice_ref="sal")
+    gemini_cue = narration.NarrationCue(
+        order=1, clip_id="b", speaker="", line="two", voice_ref="gemini:Puck"
+    )
+    open_cue = narration.NarrationCue(order=2, clip_id="c", speaker="", line="three")
+    for cue in (grok_cue, gemini_cue, open_cue):
+        narration.synthesize(cue, tmp_path / f"{cue.clip_id}.wav")
+    assert spoken == ["grok", "gemini", "gemini"]

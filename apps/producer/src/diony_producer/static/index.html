@@ -13,7 +13,7 @@
       href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/app.css?v=p8" />
+    <link rel="stylesheet" href="/static/app.css?v=p9" />
   </head>
   <body data-product-surface="producer" data-active-bay="gallery">
     <header class="mast">
@@ -45,7 +45,6 @@
         <a href="http://director.diony.local" id="director-link" title="Back to the Director">◂ DIRECTOR</a>
         <a href="http://studio.diony.local" id="studio-surface-link" title="Configuration and engine selection">STUDIO ⚙</a>
       </nav>
-      <button type="button" id="studio-control" class="word studio-control">Team</button>
     </header>
 
     <div class="studio">
@@ -119,167 +118,6 @@
       </div>
     </dialog>
 
-    <aside id="studio-drawer" class="studio-drawer" aria-labelledby="studio-drawer-title" hidden>
-      <div class="studio-drawer-head">
-        <div>
-          <p class="meta">Studio governance</p>
-          <h2 id="studio-drawer-title" tabindex="-1">Your Studio</h2>
-        </div>
-        <button type="button" id="close-studio" class="word" aria-label="Close Studio governance">Close</button>
-      </div>
-      <p id="studio-context-line" class="hint">Loading Studio authority…</p>
-
-      <section class="studio-panel member-admin-only" aria-labelledby="invite-maker">
-        <p class="meta">Admin invitation</p>
-        <h3 id="invite-maker">Invite a maker</h3>
-        <form id="invite-form" class="invite-form">
-          <label>Email address
-            <input id="invite-email" name="email" type="email" autocomplete="email" required />
-          </label>
-          <label>Profile Name suggestion
-            <input id="invite-profile" name="proposed_profile_name" maxlength="60" />
-          </label>
-          <div class="invite-form-row">
-            <label>Studio role
-              <select id="invite-role" name="role">
-                <option value="creator">Creator</option>
-                <option value="producer">Producer</option>
-                <option value="viewer">Viewer</option>
-              </select>
-            </label>
-            <label>Expires
-              <select id="invite-expiry" name="expires_hours">
-                <option value="24">24 hours</option>
-                <option value="72" selected>72 hours</option>
-                <option value="168">7 days</option>
-              </select>
-            </label>
-          </div>
-          <label>A note from you
-            <textarea id="invite-note" name="note" rows="2" maxlength="500"></textarea>
-          </label>
-          <div id="invite-preview" class="invite-preview" aria-label="Invitation email preview">
-            <p>/ DIONY AI</p>
-            <strong>YOU'VE BEEN CALLED INTO THE STUDIO.</strong>
-            <span>Producer access · Profile Name · personal Cost Center</span>
-          </div>
-          <p class="hint">A personal Cost Center is created only after acceptance.</p>
-          <p id="invite-error" class="err" role="alert"></p>
-          <button type="submit" class="word invite-send invite-send-action">
-            <span class="invite-send-copy">
-              <small>Studio delivery</small>
-              <strong data-invite-action-label>Send invitation</strong>
-            </span>
-            <span class="invite-send-arrow" aria-hidden="true">→</span>
-          </button>
-        </form>
-      </section>
-
-      <section class="studio-panel member-admin-only">
-        <div class="studio-panel-title"><h3>Invitations</h3><span id="invite-count" class="meta">0</span></div>
-        <div id="invitation-list" class="governance-list"><p class="hint">No open invitations.</p></div>
-      </section>
-      <section class="studio-panel member-admin-only">
-        <div class="studio-panel-title"><h3>Requests</h3><span id="request-count" class="meta">0</span></div>
-        <div id="request-list" class="governance-list"><p class="hint">No one is waiting at the door.</p></div>
-      </section>
-      <section class="studio-panel" aria-labelledby="cost-centers-title">
-        <p class="meta cost-admin-only">Admin only</p>
-        <div class="studio-panel-title"><h3 id="cost-centers-title">Cost Centers</h3><span id="cost-center-count" class="meta">0</span></div>
-        <p class="hint">Name production budgets, then assign one or more members. Every member keeps their personal Cost Center.</p>
-        <form id="cost-center-form" class="invite-form cost-center-form cost-admin-only">
-          <label>Cost Center name
-            <input id="cost-center-name" name="name" maxlength="120" placeholder="Midnight Camera Unit" required />
-          </label>
-          <label>Assign first member
-            <select id="cost-center-member" name="membership_id" required>
-              <option value="">Choose a Studio member</option>
-            </select>
-          </label>
-          <p id="cost-center-error" class="err" role="alert"></p>
-          <button type="submit" class="word invite-send">Create &amp; assign Cost Center</button>
-        </form>
-        <div id="cost-center-list" class="governance-list"><p class="hint">No named Cost Centers yet.</p></div>
-      </section>
-      <section class="studio-panel">
-        <div class="studio-panel-title"><h3>Members</h3><span id="member-count" class="meta">0</span></div>
-        <div id="member-list" class="governance-list"></div>
-      </section>
-      <p id="studio-live" class="sr" aria-live="polite"></p>
-    </aside>
-
-    <section id="join-studio" class="join-studio" aria-labelledby="join-title" hidden>
-      <div class="join-sheet">
-        <p class="join-brand">
-          <svg class="diony-mark" viewBox="-4 -4 715 666" aria-hidden="true" focusable="false">
-            <defs>
-              <linearGradient id="pj-bar1" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0" stop-color="#EA573C" /><stop offset="1" stop-color="#E74B43" />
-              </linearGradient>
-              <linearGradient id="pj-bar2" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0" stop-color="#EF7921" /><stop offset="1" stop-color="#F46F24" />
-              </linearGradient>
-              <linearGradient id="pj-bar3" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0" stop-color="#F38216" /><stop offset=".3" stop-color="#E86C22" /><stop offset=".55" stop-color="#BB462E" /><stop offset=".8" stop-color="#ED453F" /><stop offset="1" stop-color="#F14B42" />
-              </linearGradient>
-            </defs>
-            <rect x="0" y="325" width="39" height="166" rx="19.5" fill="url(#pj-bar1)" />
-            <rect x="107" y="210" width="39" height="397" rx="19.5" fill="url(#pj-bar2)" />
-            <rect x="211" y="0" width="49" height="658" rx="24.5" fill="url(#pj-bar3)" />
-            <rect x="329" y="42" width="56" height="571" rx="28" fill="currentColor" />
-            <rect x="445" y="83" width="62" height="484" rx="31" fill="currentColor" />
-            <path d="M558 138Q558 124 572 124A135 199.5 0 0 1 572 523Q558 523 558 509Z" fill="currentColor" />
-          </svg>
-          <span class="diony-word">Diony</span>
-          <span class="sr">AI</span>
-        </p>
-        <p class="meta">Join a Diony Studio</p>
-        <h1 id="join-title" tabindex="-1">CHECK THE STUDIO BEFORE YOU ENTER.</h1>
-        <form id="join-find" class="join-step">
-          <label for="join-token">Invitation link or code</label>
-          <input id="join-token" autocomplete="off" required />
-          <p class="hint">The Studio checks this invitation. Diony cloud does not.</p>
-          <button type="submit" class="word">Find the Studio</button>
-        </form>
-
-        <div id="join-review" class="join-step" hidden>
-          <dl id="join-passport" class="join-passport"></dl>
-          <div class="join-explain">
-            <p class="meta">WHAT DIONY AI IS</p>
-            <p>Diony AI is the Studio's film production system. The Director writes, prices, and shoots on cloud video engines; finished films return to this Gallery with their receipts and lineage intact.</p>
-            <ul><li>Producer access at your invited role</li><li>Your Profile Name on activity and credits</li><li>A personal Cost Center created when you join</li></ul>
-          </div>
-          <button type="button" id="join-review-continue" class="word">Continue to identity check</button>
-        </div>
-
-        <form id="join-verify" class="join-step" hidden>
-          <label for="join-code">Verification code</label>
-          <input id="join-code" inputmode="numeric" autocomplete="one-time-code" minlength="6" maxlength="6" required />
-          <p id="join-code-hint" class="hint"></p>
-          <button type="submit" class="word">Verify email</button>
-        </form>
-
-        <form id="join-profile-step" class="join-step" hidden>
-          <label for="join-profile">Profile Name</label>
-          <input id="join-profile" minlength="2" maxlength="60" required />
-          <p class="hint">Used on activity, generations, approvals, exports, and cost attribution.</p>
-          <p id="join-accept-summary" class="join-summary"></p>
-          <button type="submit" class="word">Accept invitation</button>
-        </form>
-
-        <div id="join-arrival" class="join-step" hidden>
-          <p class="meta">Studio access ready</p>
-          <h2>YOU'RE IN THE STUDIO.</h2>
-          <p id="join-arrival-copy"></p>
-          <dl id="join-arrival-facts" class="join-passport"></dl>
-          <p class="hint">Internal credits show production use. They are not money and they do not block a run.</p>
-          <button type="button" id="enter-producer" class="word">Enter Producer</button>
-        </div>
-        <p id="join-error" class="err" role="alert"></p>
-        <a href="http://studio.diony.local" class="join-back">Back to Studio</a>
-        <p id="join-live" class="sr" aria-live="polite"></p>
-      </div>
-    </section>
-    <script src="/static/app.js?v=p8"></script>
+    <script src="/static/app.js?v=p9"></script>
   </body>
 </html>

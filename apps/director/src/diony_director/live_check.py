@@ -15,6 +15,7 @@ import time
 import httpx
 
 from diony_contracts.cluster import cluster_root
+from diony_director import brain as brain_mod
 from diony_director import config, engine, ratecards
 from diony_director.providers import flow, grok
 
@@ -34,7 +35,12 @@ def readiness_report() -> dict:
         }
     return {
         "engine": engine.engine_mode().value,
-        "keys": {"grok": grok.configured(), "google-flow": flow.configured()},
+        "keys": {
+            "grok": grok.configured(),
+            "google-flow": flow.configured(),
+            "gemini": brain_mod.gemini_configured(),
+        },
+        "brain": brain_mod.status(),
         "keys_file": str(config.keys_file()),
         "flow_plan": ratecards.flow_plan(),
         "flow_email": flow.account_email() or "(unset — Flow picks an account)",
@@ -115,6 +121,27 @@ def live_probe() -> dict:
         except Exception as err:
             out["google-flow"] = {"ok": False, "detail": f"auth failed: {err}"}
 
+    if not brain_mod.gemini_configured():
+        out["gemini"] = {"ok": False, "detail": "GEMINI_API_KEY not set"}
+    else:
+        try:
+            response = httpx.get(
+                f"{brain_mod.gemini_base()}/v1beta/models",
+                headers={"x-goog-api-key": brain_mod.gemini_key()},
+                timeout=PROBE_TIMEOUT_S,
+            )
+            response.raise_for_status()
+            models = [m.get("name", "") for m in response.json().get("models", [])]
+            tts = [m for m in models if "tts" in m]
+            out["gemini"] = {
+                "ok": True,
+                "detail": (
+                    f"auth OK; {len(models)} models visible"
+                    + (f"; speech: {', '.join(tts)}" if tts else "; no speech model visible")
+                ),
+            }
+        except Exception as err:
+            out["gemini"] = {"ok": False, "detail": f"auth failed: {err}"}
     return out
 
 

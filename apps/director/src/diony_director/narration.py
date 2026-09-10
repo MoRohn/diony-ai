@@ -57,6 +57,12 @@ GROK_VOICE_LANGUAGE_ENV = "DIONY_GROK_VOICE_LANGUAGE"
 GROK_VOICE_LANGUAGE_DEFAULT = "en"
 GROK_VOICE_ROSTER_ENV = "DIONY_GROK_VOICE_ROSTER"
 GROK_CALL_TIMEOUT_S = 120.0
+GEMINI_VOICE_ENV = "DIONY_GEMINI_VOICE"
+GEMINI_VOICE_ROSTER_ENV = "DIONY_GEMINI_VOICE_ROSTER"
+GEMINI_TTS_MODEL_ENV = "DIONY_GEMINI_TTS_MODEL"
+GEMINI_TTS_MODEL_DEFAULT = "gemini-2.5-flash-preview-tts"
+GEMINI_VOICE_PREFIX = "gemini:"
+GEMINI_CALL_TIMEOUT_S = 120.0
 
 # The casting roster: a curated slice of the live Grok TTS voice list
 # (voice_id and gender VERIFIED against GET /v1/tts/voices on this account,
@@ -73,6 +79,27 @@ DEFAULT_ROSTER: dict[str, list[str]] = {
     "sal": ["male", "smooth", "measured", "noir", "tense", "mysterious", "narrator"],
     "leo": ["male", "authoritative", "epic", "dramatic", "intense", "energetic"],
     "atlas": ["male", "deep", "solemn", "grave", "monumental", "slow"],
+}
+
+# The Google narrator: Gemini's prebuilt speech voices (names from the Gemini
+# API speech-generation docs, 2026-09-10). Casting tags are Diony's own reads
+# of each voice — the docs give one word per voice ("bright", "firm",
+# "breezy") and no gender; the gender reads here are Diony's, for the
+# character-notes match, and DIONY_GEMINI_VOICE_ROSTER overrides the lot
+# with JSON {"gemini:Name": ["tag", ...]}.
+GEMINI_DEFAULT_ROSTER: dict[str, list[str]] = {
+    "gemini:Kore": ["female", "firm", "confident", "documentary", "measured", "narrator"],
+    "gemini:Aoede": ["female", "breezy", "bright", "friendly", "upbeat", "playful"],
+    "gemini:Leda": ["female", "youthful", "gentle", "soft", "dreamy", "romantic"],
+    "gemini:Achernar": ["female", "soft", "soothing", "calm", "intimate", "elegant"],
+    "gemini:Sulafat": ["female", "warm", "serene", "poised", "refined"],
+    "gemini:Gacrux": ["female", "mature", "grave", "solemn", "wistful"],
+    "gemini:Charon": ["male", "informative", "calm", "grounded", "documentary", "steady"],
+    "gemini:Puck": ["male", "upbeat", "energetic", "playful", "bright"],
+    "gemini:Fenrir": ["male", "excitable", "dramatic", "intense", "epic", "energetic"],
+    "gemini:Orus": ["male", "firm", "authoritative", "confident", "realistic"],
+    "gemini:Algieba": ["male", "smooth", "measured", "noir", "mysterious", "tense", "narrator"],
+    "gemini:Schedar": ["male", "even", "deep", "slow", "monumental"],
 }
 
 _FEMALE_TELLS = re.compile(
@@ -217,10 +244,10 @@ class NarrationCue:
     window_s: float = 0.0
 
 
-def _roster() -> dict[str, list[str]]:
-    raw = os.environ.get(GROK_VOICE_ROSTER_ENV, "").strip()
+def _roster_from_env(env: str, default: dict[str, list[str]]) -> dict[str, list[str]]:
+    raw = os.environ.get(env, "").strip()
     if not raw:
-        return DEFAULT_ROSTER
+        return default
     try:
         parsed = json.loads(raw)
         roster = {
@@ -233,9 +260,53 @@ def _roster() -> dict[str, list[str]]:
     except (ValueError, AttributeError):
         pass
     raise NarrationFailed(
-        f"{GROK_VOICE_ROSTER_ENV} is set but is not a JSON object of "
+        f"{env} is set but is not a JSON object of "
         '{"Voice": ["tag", ...]} — fix it or unset it for the built-in roster'
     )
+
+
+def voice_backend(voice_ref: str) -> str:
+    """Which narrator a voice id belongs to: `gemini:Name` is Gemini's, any
+    other roster name is Grok's; '' when nothing is named."""
+    ref = str(voice_ref or "").strip()
+    if not ref:
+        return ""
+    return "gemini" if ref.lower().startswith(GEMINI_VOICE_PREFIX) else "grok"
+
+
+def _roster(which: str | None = None) -> dict[str, list[str]]:
+    """The roster the active narrator (or `which`) casts from."""
+    which = which or backend() or "grok"
+    if which == "gemini":
+        return _roster_from_env(GEMINI_VOICE_ROSTER_ENV, GEMINI_DEFAULT_ROSTER)
+    return _roster_from_env(GROK_VOICE_ROSTER_ENV, DEFAULT_ROSTER)
+
+
+def available_backends() -> list[str]:
+    """Every narrator this desk holds a key for, the active one first."""
+    from diony_director import brain as brain_mod
+    from diony_director.providers import grok
+
+    rows = []
+    if grok.configured():
+        rows.append("grok")
+    if brain_mod.gemini_configured():
+        rows.append("gemini")
+    active = backend()
+    if active in rows:
+        rows.remove(active)
+        rows.insert(0, active)
+    return rows
+
+
+def _all_rosters() -> dict[str, list[str]]:
+    """The union of every roster a key on this desk can speak — what the
+    console offers, so a Google Flow film may still pick a Grok voice when
+    the xAI key is present, and a Grok film a Gemini voice."""
+    merged: dict[str, list[str]] = {}
+    for which in available_backends() or ["grok"]:
+        merged.update(_roster(which))
+    return merged
 
 
 IDENTITY_REF = re.compile(r"^vox-[A-Za-z0-9_.-]+(@v\d+)?$")
@@ -248,26 +319,33 @@ def is_identity_ref(voice_ref: str) -> bool:
 
 
 def roster_catalog() -> list[dict]:
-    """The selectable narrator voices (the curated Grok roster, env-overridable)
-    for the Director console: key = voice_id, label, and the casting tags."""
-    return [
-        {
-            "key": name,
-            "label": name[:1].upper() + name[1:],
-            "tags": list(tags),
-            "hint": ", ".join(t for t in tags if t not in {"male", "female"}),
-        }
-        for name, tags in _roster().items()
-    ]
+    """The selectable narrator voices for the Director console — every roster
+    a key on this desk can speak: key = voice_id, label, backend, and the
+    casting tags. Grok names stay bare; Gemini voices carry the `gemini:`
+    prefix and a "Gemini · " label so the two houses read apart."""
+    rows = []
+    for name, tags in _all_rosters().items():
+        which = voice_backend(name)
+        bare = name[len(GEMINI_VOICE_PREFIX) :] if which == "gemini" else name
+        rows.append(
+            {
+                "key": name,
+                "label": (f"Gemini · {bare}" if which == "gemini" else bare[:1].upper() + bare[1:]),
+                "backend": which,
+                "tags": list(tags),
+                "hint": ", ".join(t for t in tags if t not in {"male", "female"}),
+            }
+        )
+    return rows
 
 
 def normalize_voice(value: str | None) -> str:
-    """A console/API voice value as the roster knows it: '' for Auto (the
+    """A console/API voice value as the rosters know it: '' for Auto (the
     Director casts), else the roster key. Unknown names raise ValueError."""
     chosen = str(value or "").strip().lower()
     if chosen in {"", "auto"}:
         return ""
-    keys = {name.lower(): name for name in _roster()}
+    keys = {name.lower(): name for name in _all_rosters()}
     if chosen not in keys:
         raise ValueError(
             f"unknown narrator voice {value!r} — choose Auto or one of: "
@@ -340,7 +418,8 @@ def cast_cues(
     chosen = str(voice or "").strip()
     if chosen.lower() == "auto":
         chosen = ""  # the console's Auto: the Director casts
-    pinned = os.environ.get(GROK_VOICE_ENV, "").strip()
+    pin_env = GEMINI_VOICE_ENV if backend() == "gemini" else GROK_VOICE_ENV
+    pinned = os.environ.get(pin_env, "").strip()
     notes = {str(k).strip().lower(): str(v) for k, v in (character_notes or {}).items()}
     # A `vox-<char>@vN` ref is the splitter's CHARACTER IDENTITY lock (the
     # Flow lane's "this character keeps one voice"), not a narrator voice
@@ -378,7 +457,7 @@ def cast_cues(
             continue
         if pinned:
             cue.voice_ref = pinned
-            cue.cast_note = prefix + f"site-pinned {GROK_VOICE_ENV}"
+            cue.cast_note = prefix + f"site-pinned {pin_env}"
             continue
         cue.voice_ref = voice
         cue.cast_note = prefix + note
@@ -442,29 +521,37 @@ def layout_cues(cues: list[NarrationCue], durations: list[float]) -> list[str]:
 
 
 def backend() -> str:
-    """Which narrator speaks: "grok" | "cli" | "" (none configured).
+    """Which narrator speaks: "grok" | "gemini" | "cli" | "" (none configured).
 
     An explicit DIONY_NARRATOR_BACKEND is law. Unset, an authored CLI
     template outranks the key-derived default — a site that pinned its own
-    narrator meant it — and the Grok voice API is the zero-config default on
-    every box that already holds the xAI key the picture lane uses."""
+    narrator meant it. Then the camera's own house: Gemini speech on the
+    Google Flow camera when GEMINI_API_KEY is set, the Grok voice API on the
+    Grok camera; and whichever key exists when the house's own is missing."""
+    from diony_contracts.cluster import read_engine_choice
+    from diony_director import brain as brain_mod
     from diony_director.providers import grok
 
     choice = os.environ.get(BACKEND_ENV, "").strip().lower()
-    if choice in {"grok", "cli"}:
+    if choice in {"grok", "gemini", "cli"}:
         return choice
     if choice:
         raise NarrationFailed(
-            f"{BACKEND_ENV}={choice!r} names no narrator backend — expected grok or cli"
+            f"{BACKEND_ENV}={choice!r} names no narrator backend — expected grok, gemini or cli"
         )
     if os.environ.get(NARRATOR_ENV, "").strip():
         return "cli"
-    if grok.configured():
-        return "grok"
+    order = ["gemini", "grok"] if read_engine_choice() == "google-flow" else ["grok", "gemini"]
+    for name in order:
+        if name == "grok" and grok.configured():
+            return "grok"
+        if name == "gemini" and brain_mod.gemini_configured():
+            return "gemini"
     return ""
 
 
 def narrator_configured() -> bool:
+    from diony_director import brain as brain_mod
     from diony_director.providers import grok
 
     which = backend()
@@ -472,6 +559,8 @@ def narrator_configured() -> bool:
         return bool(os.environ.get(NARRATOR_ENV, "").strip())
     if which == "grok":
         return grok.configured()
+    if which == "gemini":
+        return brain_mod.gemini_configured()
     return False
 
 
@@ -551,7 +640,8 @@ def cue_sheet(entries: list[dict]) -> list[NarrationCue]:
 
 UNCONFIGURED = (
     "no narrator backend is configured — narration is recorded in post "
-    "(Blueprint 28); set XAI_API_KEY for the Grok voice API (the default), "
+    "(Blueprint 28); set GEMINI_API_KEY for Gemini speech (the Google Flow "
+    "camera's own narrator) or XAI_API_KEY for the Grok voice API, "
     f"or {NARRATOR_ENV} for an on-host narrator, or assemble with narrate "
     "off to cut a mute picture"
 )
@@ -635,15 +725,92 @@ def _synthesize_grok(cue: NarrationCue, output: Path) -> None:
     output.write_bytes(body)
 
 
+def _pcm_to_wav(pcm: bytes, *, rate: int, channels: int = 1, width: int = 2) -> bytes:
+    import struct
+
+    data_size = len(pcm)
+    header = b"RIFF" + struct.pack("<I", 36 + data_size) + b"WAVE"
+    header += b"fmt " + struct.pack(
+        "<IHHIIHH", 16, 1, channels, rate, rate * channels * width, channels * width, width * 8
+    )
+    header += b"data" + struct.pack("<I", data_size)
+    return header + pcm
+
+
+def _synthesize_gemini(cue: NarrationCue, output: Path) -> None:
+    """One line through Gemini speech generation — the Google narrator on the
+    same Google AI Studio key the Gemini brain uses.
+
+    Contract (Gemini API speech generation, 2026-09-10): POST
+    ``{base}/v1beta/models/{model}:generateContent`` with the line as the
+    content, ``responseModalities: ["AUDIO"]`` and a prebuilt voice; the
+    reply's first inline part is base64 16-bit PCM (``audio/L16;…;rate=24000``),
+    wrapped into a WAV here. The words ride verbatim: Gemini reads the whole
+    prompt aloud, so no delivery tag or style instruction is prepended —
+    the direction shapes the casting, never the text."""
+    import base64
+
+    from diony_director import brain as brain_mod
+    from diony_director.providers import base as provider_base
+
+    if not brain_mod.gemini_configured():
+        raise NarrationUnavailable(UNCONFIGURED)
+    model = os.environ.get(GEMINI_TTS_MODEL_ENV, "").strip() or GEMINI_TTS_MODEL_DEFAULT
+    voice_ref = cue.voice_ref or os.environ.get(GEMINI_VOICE_ENV, "").strip() or "gemini:Kore"
+    voice = (
+        voice_ref[len(GEMINI_VOICE_PREFIX) :] if voice_backend(voice_ref) == "gemini" else voice_ref
+    )
+    cue.performed = cue.line
+    payload = {
+        "contents": [{"parts": [{"text": cue.performed}]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}},
+        },
+    }
+    response = provider_base.post_with_retries(
+        f"{brain_mod.gemini_base()}/v1beta/models/{model}:generateContent",
+        what="Gemini speech synthesis",
+        json=payload,
+        headers={"x-goog-api-key": brain_mod.gemini_key(), "Content-Type": "application/json"},
+        timeout=GEMINI_CALL_TIMEOUT_S,
+    )
+    if response.status_code >= 400:
+        raise NarrationFailed(
+            f"Gemini speech rejected {cue.clip_id} ({response.status_code}): {response.text[:300]}"
+        )
+    try:
+        part = response.json()["candidates"][0]["content"]["parts"][0]["inlineData"]
+        pcm = base64.b64decode(part["data"])
+        mime = str(part.get("mimeType") or "audio/L16;codec=pcm;rate=24000")
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise NarrationFailed(
+            f"Gemini speech returned no decodable audio for {cue.clip_id}"
+        ) from exc
+    rate_match = re.search(r"rate=(\d+)", mime)
+    rate = int(rate_match.group(1)) if rate_match else 24000
+    output.write_bytes(_pcm_to_wav(pcm, rate=rate))
+
+
 def synthesize(cue: NarrationCue, output: Path) -> float:
-    """One line → one wav; returns its measured duration. Loud on failure."""
+    """One line → one wav; returns its measured duration. Loud on failure.
+
+    A cue whose voice names a house (`gemini:Kore`, or a Grok roster name)
+    speaks through that house whatever the default — a Google Flow film may
+    keep a Grok narrator when the xAI key is present, and the other way round."""
     output.parent.mkdir(parents=True, exist_ok=True)
     output.unlink(missing_ok=True)
     which = backend()
+    if which != "cli":
+        named = voice_backend(cue.voice_ref)
+        if named and named in available_backends():
+            which = named
     if not which:
         raise NarrationUnavailable(UNCONFIGURED)
     if which == "grok":
         _synthesize_grok(cue, output)
+    elif which == "gemini":
+        _synthesize_gemini(cue, output)
     else:
         _synthesize_cli(cue, output)
     duration = float(_probe(output)["duration_s"])

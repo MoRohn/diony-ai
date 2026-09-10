@@ -513,7 +513,7 @@ def audit_all(
         + "\n- ".join(phrases)
     )
     response = provider_base.post_with_retries(
-        f"{screenwriter.brain_url()}/v1/chat/completions",
+        screenwriter.chat_completions_url(),
         what="likeness audit",
         json={
             "model": screenwriter.brain_model(),

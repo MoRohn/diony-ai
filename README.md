@@ -40,13 +40,13 @@ The Desk opens all three and lays the `*.diony.local` names on first launch. The
 
 **1. Requirements**
 
-- macOS 13+, Windows, or Linux. Python 3.11+ for a source checkout; the packaged `Diony.app` bundles its own runtime.
-- `ffmpeg` and `ffprobe` on the PATH (`brew install ffmpeg`), or point `DIONY_FFMPEG` / `DIONY_FFPROBE` at them. They cut, mix, and review every film.
-- An xAI API key, a useapi.net token with a connected Google Flow account, or both.
+- macOS 13+ or Windows 10/11 (Linux runs the Mac path). Python 3.11+ for a source checkout; the packaged app bundles its own runtime.
+- `ffmpeg` and `ffprobe`: `brew install ffmpeg` on a Mac, `winget install Gyan.FFmpeg` on Windows, or point `DIONY_FFMPEG` / `DIONY_FFPROBE` at them. They cut, mix, and review every film. Diony also looks in the Homebrew, winget, Chocolatey, scoop, and `C:\ffmpeg\bin` homes when the app's PATH is bare.
+- For the Grok Imagine camera: an xAI API key. For the Google Flow camera: a useapi.net token with a linked Google account, plus a Gemini API key so the script and the narrator are Google too. Both cameras on one desk is fine.
 
 **2. Put the keys in one file**
 
-Create `~/.diony/keys.env` (override the location with `DIONY_KEYS_FILE`) and make it private:
+Create `~/.diony/keys.env` on a Mac or `C:\Users\<you>\.diony\keys.env` on Windows (override the location with `DIONY_KEYS_FILE`) and keep it private:
 
 ```bash
 mkdir -p ~/.diony && chmod 700 ~/.diony
@@ -58,18 +58,23 @@ XAI_API_KEY=xai-...
 USEAPI_TOKEN=user:...
 DIONY_FLOW_EMAIL=you@gmail.com      # optional: pin one connected Flow account
 DIONY_FLOW_PLAN=pro                 # plus | pro | ultra-99 | ultra-199 — prices Flow credits
+
+# Google AI Studio — the Gemini brain (script, master prompt, likeness audit) and Gemini speech (narrator)
+GEMINI_API_KEY=AIza...
 EOF
 chmod 600 ~/.diony/keys.env
 ```
 
-An explicit environment variable always wins over the file. There is no key form in the UI by design.
+An explicit environment variable always wins over the file. There is no key form in the UI by design. On Windows use PowerShell: `New-Item -ItemType Directory -Force $env:USERPROFILE\.diony`, then `notepad $env:USERPROFILE\.diony\keys.env` and paste the same lines.
+
+**Which key does what.** Each camera has its own house. On Grok Imagine the xAI key shoots, writes the script with Grok 4.6, and narrates with the Grok voice API. On Google Flow the useapi.net token shoots and the Gemini key writes with Gemini 2.5 Pro and narrates with Gemini speech, so the film is Google end to end. When a camera's own brain key is missing the Director borrows the other house and says so in the header; when both houses are on the desk, the Brain and Voice pills offer either.
 
 **3. Open Diony**
 
 - Mac: double-click **Build Diony AI.command** to build and open `Diony.app`, or **Open Diony AI.command** for the source launcher.
-- Windows: **Open Diony AI.bat**. Linux: `./open-diony.sh`.
+- Windows: **Open Diony AI.bat** (or the signed installer, `DionyAI-Setup-<version>-windows-x64.exe`). Linux: `./open-diony.sh`.
 
-The lobby installs the desk once, opens Studio, and may ask for your password one time to lay the product names. Pick a camera on the Studio page and press **Continue to the Director**.
+The lobby installs the desk once, opens Studio, and asks once to lay the product names: your password on a Mac, a User Account Control prompt on Windows. Studio's **This computer** toggle (Mac | Windows) is preset to the desk it detected; every path, command, and launcher name Diony shows follows it, and you can flip it to read the instructions for the other desk. Pick a camera and press **Continue to the Director**.
 
 **4. Prove the keys before spending**
 
@@ -84,12 +89,12 @@ Optional staging, both free: `--stage-face-models` downloads OpenCV Zoo's YuNet 
 ## How a film is made
 
 1. **Describe the film** in the Director console. One line is enough. Drop or paste reference stills; mark one as the opener to open the frame on it.
-2. **Draft script** or **One shot**. The screenwriter brain (Grok, `grok-4.6` by default) writes a screenplay with characters, settings, and lines, then the Master Video Prompt stage derives the exact prompt every clip inherits. Drafting takes a minute or two on a reasoning model; the room shows the elapsed time. A one shot of any length chains into sequential clips that open on the previous clip's last frame.
+2. **Draft script** or **One shot**. The screenwriter brain (Gemini 2.5 Pro on the Google Flow camera, Grok 4.6 on Grok Imagine) writes a screenplay with characters, settings, and lines, then the Master Video Prompt stage derives the exact prompt every clip inherits. Drafting takes a minute or two on a reasoning model; the room shows the elapsed time. A one shot of any length chains into sequential clips that open on the previous clip's last frame.
 3. **Edit the lines** on the script sheet. Every line and its authored shot is editable until the lock.
 4. **Lock script & price the clips.** Scenes are packed into route-length takes (15 s on Grok, 10 s on Omni Flash), one spoken line per take. The lock reply itemises clips, plates and character sheets, and a revision allowance, and states the session total. Nothing has rolled yet.
 5. **Approve the cast.** Character sheets draw in the background; the cast dock shows each face with its measured verdict. Approve one, or **Approve all**. Under **Cast: Locked** the approved sheet rides every prompt verbatim and cast keyframes are composed before each clip.
 6. **Run & Assemble All**, **Run & Assemble Selected**, or **Run, Assemble & Upscale All** (Google Flow takes finish at 1080p server-side, free on a paid Google plan). The console folds into a live run strip. A provider quota pause is a card with a resume time, never a failure. A refused clip gets its opening frame redrawn on **Retake**; **Skip shot** leaves a stubborn clip out and the run carries on; **Retry all** re-queues every failed clip.
-7. **The cut.** Clips are reviewed (delivery, duration, audio, sampled frames, identity against the approved sheet, spoken lines when a whisper model is staged), assembled with fades and a room-tone floor, loudness-locked, and narrated in post by one cast Grok voice with cues placed at each line's mark. The film ends when the last line ends.
+7. **The cut.** Clips are reviewed (delivery, duration, audio, sampled frames, identity against the approved sheet, spoken lines when a whisper model is staged), assembled with fades and a room-tone floor, loudness-locked, and narrated in post by one cast voice from the camera's house (Gemini speech on Google Flow, the Grok voice API on Grok Imagine) with cues placed at each line's mark. The film ends when the last line ends.
 8. **Deliverables and receipt.** `film.mp4`, `film.srt`, `film.vtt`, `edl.json`, `assembly-map.json`, and `qc-packet.json` land beside each other in the vault. The receipt lists estimate versus actual per operation. The Producer's Finished Clips gallery lists every clip and the film with its spend.
 
 ### Console controls
@@ -103,7 +108,8 @@ Optional staging, both free: `--stage-face-models` downloads OpenCV Zoo's YuNet 
 | **Flow style** / **Flow cam** | Baseline + worlds and camera commands | WORLD and CAMERA templating on the Google route (`/filmic`, `/orbit`). |
 | **Style** | Narrated · Dialogue · Mix | One post narrator; characters speak on camera; or both where each belongs. Fixed at the lock. |
 | **Cast** | Standard · Locked | Cast Lock: the approved identity card at priority 0 on every prompt. Fixed at the lock. |
-| **Voice** | Auto + the Grok roster | One narrator per film, cast from the tone or chosen by name. Changeable until the cut. |
+| **Brain** | Auto · Grok · Gemini | Which model writes. Auto follows the camera; a named house needs its key. Shown only when both keys are on the desk. |
+| **Voice** | Auto + every roster the desk holds a key for | One narrator per film, cast from the tone or chosen by name (Grok voices, or `Gemini · Kore` and company). Changeable until the cut. |
 | **Budget $** | number or empty | A session ceiling. Autopilot holds at the ceiling instead of overspending. |
 
 The header meter reads in the camera's own currency: dollars for Grok Imagine as metered by xAI, plan credits for Google Flow. Total is lifetime spend on this desk; today is today's.
@@ -112,7 +118,7 @@ The header meter reads in the camera's own currency: dollars for Grok Imagine as
 
 Prices live in versioned JSON rate cards at `apps/director/src/diony_director/ratecards/`, each naming its source and fetch date. A card older than 45 days is reported as stale on every estimate. Override the directory with `DIONY_RATECARD_DIR`.
 
-**Grok Imagine (xAI), metered per second.** Default video model `grok-imagine-video-1.5`; stills and character sheets on `grok-imagine-image-2.0`; the narrator on the Grok voice API; the screenwriter on `grok-4.6`.
+**Grok Imagine (xAI), metered per second.** Default video model `grok-imagine-video-1.5`; stills and character sheets on `grok-imagine-image-2.0`; the narrator on the Grok voice API; the screenwriter on `grok-4.6`. All on the one xAI key.
 
 | Model | Unit | USD |
 |---|---|---|
@@ -122,7 +128,7 @@ Prices live in versioned JSON rate cards at `apps/director/src/diony_director/ra
 
 Clips run 1 to 15 seconds. Up to 3 reference images. Native audio. The 1.5 model shoots; the 1.0 model carries the extension and edit lanes.
 
-**Google Flow via useapi.net, priced in Google's published credits.** Default video model `omni-flash` (Omni 1.1 Flash: audio-native, voices, characters, first and last frames, 4/6/8/10 s at 360p or 720p). Veo 3.1 tiers stay reachable by explicit model choice and carry the extension lane. The credit costs below are the ones Google charges your account per generation; the Director converts them to dollars from your plan's price per credit, which is a model of your subscription, never Google's meter.
+**Google Flow via useapi.net, priced in Google's published credits.** The script, the master prompt and the likeness audit run on Gemini 2.5 Pro and the narrator on Gemini speech, both on the Gemini API key, billed by Google AI Studio on its own meter. Default video model `omni-flash` (Omni 1.1 Flash: audio-native, voices, characters, first and last frames, 4/6/8/10 s at 360p or 720p). Veo 3.1 tiers stay reachable by explicit model choice and carry the extension lane. The credit costs below are the ones Google charges your account per generation; the Director converts them to dollars from your plan's price per credit, which is a model of your subscription, never Google's meter.
 
 | Model | Unit | Credits | Ultra plans |
 |---|---|---|---|
@@ -182,12 +188,15 @@ Everything is an environment variable; the keys file is loaded first with set-de
 | `USEAPI_TOKEN` | unset | useapi.net bearer token for Google Flow |
 | `DIONY_FLOW_EMAIL` / `DIONY_FLOW_PLAN` | Flow picks / `pro` | Pin one Flow account; price its credits |
 | `DIONY_KEYS_FILE` | `~/.diony/keys.env` | Where the keys live |
-| `DIONY_DIRECTOR_BRAIN_URL` / `_MODEL` / `_KEY` | `https://api.x.ai` / `grok-4.6` / the xAI key | Any OpenAI-compatible chat endpoint writes the script. Set the URL empty to run the deterministic template writer. |
+| `GEMINI_API_KEY` | unset | Google AI Studio key: the Gemini brain and Gemini speech narrator, the Google Flow camera's own house |
+| `DIONY_GEMINI_BRAIN_MODEL` / `DIONY_GEMINI_TTS_MODEL` | `gemini-2.5-pro` / `gemini-2.5-flash-preview-tts` | The Gemini writer and speech models |
+| `DIONY_GEMINI_VOICE` / `DIONY_GEMINI_VOICE_ROSTER` | cast per film | Pin a Gemini narrator voice (`gemini:Kore`); override the roster as JSON |
+| `DIONY_DIRECTOR_BRAIN_URL` / `_MODEL` / `_KEY` | resolved by camera | Force any OpenAI-compatible chat endpoint to write the script. Set the URL empty to run the deterministic template writer. Otherwise the brain is the camera's house, or the desk's Brain pill choice (`{vault}/.cluster/brain.json`). |
 | `DIONY_DIRECTOR_BRAIN_TIMEOUT` | `600` | Seconds per brain call; the draft is asynchronous |
 | `DIONY_XAI_BASE` / `DIONY_USEAPI_BASE` | provider defaults | API bases, for mocks and proxies |
 | `DIONY_FLOW_REQUEST_GAP_S` / `DIONY_FLOW_UPSCALE_PARALLEL` | `5` / `4` | Flow pacing gap; parallel 1080p finishes |
 | `DIONY_PROMPT_LIMIT_GROK` / `_GOOGLE_FLOW` | `4096` | Prompt character caps |
-| `DIONY_NARRATOR_BACKEND` / `DIONY_NARRATOR_CLI` | Grok voice API | Force a backend, or an on-host command template (`{text}`, `{output}`, `{voice}`) |
+| `DIONY_NARRATOR_BACKEND` / `DIONY_NARRATOR_CLI` | the camera's house | Force `grok`, `gemini`, or `cli` (an on-host command template with `{text}`, `{output}`, `{voice}`) |
 | `DIONY_GROK_VOICE` / `DIONY_GROK_VOICE_ROSTER` | cast per film | Pin a narrator voice; override the roster as JSON |
 | `DIONY_WHISPER_MODEL` | unset | faster-whisper model path; turns the speech guard into a measurement |
 | `DIONY_FACE_ID_DIR` | `{vault}/models/opencv-zoo` | Staged face models for Cast Lock |
@@ -201,7 +210,7 @@ Everything is an environment variable; the keys file is loaded first with set-de
 ## FAQ
 
 **What do I need to make a film?**
-A Mac, Windows, or Linux machine with ffmpeg, and at least one provider account: an xAI API key (Grok Imagine, the Grok narrator voice, and the screenwriter brain) or a useapi.net token linked to a Google account with a Google AI plan (Google Flow). No GPU, no model downloads. With only an xAI key the whole pipeline runs on Grok; with only a Flow token, set an OpenAI-compatible brain with `DIONY_DIRECTOR_BRAIN_URL` or the deterministic template writer drafts the script.
+A Mac, Windows, or Linux machine with ffmpeg, and one camera's keys: an xAI API key (Grok Imagine, the Grok narrator voice, and the Grok brain), or a useapi.net token linked to a Google account with a Google AI plan plus a Gemini API key (Google Flow, Gemini speech, and the Gemini brain). No GPU, no model downloads. Each camera is complete on its own keys; with both on the desk the Brain and Voice pills let a Flow film borrow Grok's writer or narrator and the other way round.
 
 **Which camera should I pick?**
 Studio asks you to choose one, and one camera shoots the whole film so every clip carries one look. Pick Grok Imagine when you want exact per-second pricing, 15 s takes, and the fastest drafts. Pick Google Flow when you want Omni Flash's native voices, registered characters, first-and-last-frame shots, Veo 3.1, and the free 1080p finish. The choice can change any time on the Studio page or the Director's Provider pill; a room already rolling keeps its camera.
@@ -238,6 +247,12 @@ Every estimate says so, and the run still proceeds. Cards carry a fetch date and
 
 **Why does the first launch ask for my password?**
 To write `studio.diony.local`, `director.diony.local`, and `producer.diony.local` into the hosts file and bind the name router on port 80. It happens once. Cancel it and the lobby's Continue retries; the services still run on `:8787`, `:8790`, and `:8788` meanwhile.
+
+**Does the Google Flow camera use Grok for anything?**
+Not when a Gemini key is on the desk: the script, the master prompt, the likeness audit and the narrator all run on Google, and the header's brain chip says `brain Gemini · gemini-2.5-pro`. Without a Gemini key the Director borrows the xAI key for the script and the narrator when it exists, and the chip says so; with neither, the deterministic template writer drafts and the cut needs the Dialogue style or a narrator command.
+
+**Does it run the same on Windows as on a Mac?**
+Yes. The runtime already speaks each desk's language: the product names go into the hosts file behind one password prompt on a Mac or one User Account Control prompt on Windows, the data directory is `~/Library/Application Support/Diony AI` or `%LOCALAPPDATA%\Diony AI`, Python and ffmpeg are found in each desk's usual homes (Homebrew and the Python.org frameworks; winget, Chocolatey, scoop, `C:\ffmpeg\bin`), and the launchers are `Open Diony AI.command` and `Open Diony AI.bat`. Studio's **This computer** toggle only changes what the product tells you: the keys path, the setup commands, the ffmpeg install line, the launcher name, and the missing-ffmpeg message inside the Director. It defaults to the detected desk.
 
 **Can I use a local GPU instead of the cloud engines?**
 No. Diony shot on local DGX Spark clusters and leased GPUs until September 2026; that lane was removed from the product on 2026-09-10. The two cameras are Grok Imagine and Google Flow, and the desk needs no GPU at all. The history is in the [changelog](CHANGELOG.md).
@@ -276,9 +291,9 @@ apps/director/          The Director: sessions, screenwriter, master prompt, spl
                         providers/{grok,flow}, review, revisions, assembly, narration, deliverables,
                         ledger, rate cards, cast lock, likeness guard, static console
 apps/wizard/            Studio: the opening page (camera choice) and the :80 name router
-apps/producer/          Producer: the Gallery of Director films, the launch control plane (workspaces,
-                        members, Cost Centers, workflows, the cost ledger), and the review services the
-                        Director imports (face identity, frame and speech QC)
+apps/producer/          Producer: the Finished Clips gallery, the cost ledger and control plane the
+                        Director's receipts read, and the review services the Director imports (face
+                        identity, frame and speech QC)
 apps/desk/              First open: lobby, service supervision, packaged-app payload staging
 packages/contracts/     Pydantic contracts and JSON Schema: Director ops, cost estimates, production
                         packages, the launch control plane, the engine choice, look and subtitles

@@ -26,6 +26,7 @@ from diony_contracts.production import (
     SettingProfile,
     VoiceProfile,
 )
+from diony_director import brain as brain_mod
 from diony_director import likeness as _likeness
 
 
@@ -63,32 +64,30 @@ class ScreenplayDraft:
     master: MasterPrompt | None = None
 
 
-XAI_BRAIN_BASE = "https://api.x.ai"
-DEFAULT_BRAIN_MODEL = "grok-4.6"
+XAI_BRAIN_BASE = brain_mod.XAI_BRAIN_BASE
+DEFAULT_BRAIN_MODEL = brain_mod.DEFAULT_GROK_BRAIN_MODEL
 
 
 def brain_url() -> str:
-    """The Director brain endpoint (OpenAI-compatible chat completions).
+    """The Director brain base (OpenAI-compatible chat completions), resolved
+    by `diony_director.brain`: an explicit DIONY_DIRECTOR_BRAIN_URL, else the
+    desk's brain choice, else the camera's own house (Gemini on Google Flow,
+    Grok on Grok) — empty when no brain is configured, and then the
+    deterministic template runs."""
+    return brain_mod.resolve().url
 
-    Unset → defaults to xAI when a key is present (zero-config Grok brain).
-    Explicitly empty → the brain is off and the deterministic template runs.
-    """
-    raw = os.environ.get("DIONY_DIRECTOR_BRAIN_URL")
-    if raw is not None:
-        return raw.strip().rstrip("/")
-    if os.environ.get("XAI_API_KEY", "").strip():
-        return XAI_BRAIN_BASE
-    return ""
+
+def chat_completions_url() -> str:
+    """The URL a brain call posts to (Gemini's compatible endpoint has no /v1)."""
+    return brain_mod.resolve().endpoint
 
 
 def brain_model() -> str:
-    return os.environ.get("DIONY_DIRECTOR_BRAIN_MODEL", "").strip() or DEFAULT_BRAIN_MODEL
+    return brain_mod.resolve().model
 
 
 def _brain_headers() -> dict[str, str]:
-    key = os.environ.get("DIONY_DIRECTOR_BRAIN_KEY", "").strip()
-    if not key and "x.ai" in brain_url():
-        key = os.environ.get("XAI_API_KEY", "").strip()
+    key = brain_mod.resolve().key
     return {"Authorization": f"Bearer {key}"} if key else {}
 
 
@@ -656,7 +655,7 @@ def _from_brain(
     # retried on transport blips (SSL bad_record_mac killed drafts with
     # attached stills — large uploads are the most exposed requests we make)
     response = provider_base.post_with_retries(
-        f"{brain_url()}/v1/chat/completions",
+        chat_completions_url(),
         what="brain draft",
         json={
             "model": brain_model(),
@@ -694,7 +693,7 @@ def _from_brain(
     if notes and brain_refine_enabled():
         try:
             refine_response = provider_base.post_with_retries(
-                f"{brain_url()}/v1/chat/completions",
+                chat_completions_url(),
                 what="brain refine",
                 json={
                     "model": brain_model(),

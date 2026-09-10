@@ -493,7 +493,8 @@ def test_the_header_meter_reads_in_the_routes_currency() -> None:
     assert "by_provider" in js and "function renderMeter" in js
     assert "credits(flow.credits)" in js and "usd(grok.usd_micros" in js
     assert 'route === "google-flow"' in js and 'route === "grok"' in js
-    assert "Director's choice" not in js and 'value="auto"' not in html
+    provider_pill = html.split('id="provider"', 1)[1].split("</select>", 1)[0]
+    assert "Director's choice" not in js and 'value="auto"' not in provider_pill
     assert "renderMeter(); // the meter reads in the route's currency" in js
     # the pill mirrors Studio at boot and the meter re-renders right then; the
     # ledger carries the choice so the meter never defaults to dollars
