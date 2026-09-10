@@ -13,7 +13,10 @@ from typing import Any
 PAYLOAD_SCHEMA_VERSION = 1
 DOWNLOAD_SCHEMA_VERSION = 1
 PRODUCT_NAME = "Diony AI"
-LOCAL_BUILD_RECIPE = "macos-development-v3"
+# One recipe tag per local builder; the build scripts compare the stable report
+# against theirs to skip an identical rebuild (build-local-macos.sh, build-local-windows.ps1).
+LOCAL_BUILD_RECIPES = {"macos": "macos-development-v4", "windows": "windows-development-v1"}
+LOCAL_BUILD_RECIPE = LOCAL_BUILD_RECIPES["macos"]
 ROOT_FILES = (
     "AGENTS.md",
     "CHANGELOG.md",
@@ -155,9 +158,15 @@ def build_development_report(
 ) -> dict[str, Any]:
     """Describe a local app without confusing it with trusted release proof."""
     app = app.resolve()
-    executable = app / "Contents" / "MacOS" / PRODUCT_NAME
-    if not executable.is_file():
-        raise ValueError(f"local Diony application is incomplete: {executable}")
+    # Diony.app on a Mac, the "Diony AI" folder with Diony AI.exe on Windows
+    mac_executable = app / "Contents" / "MacOS" / PRODUCT_NAME
+    windows_executable = app / f"{PRODUCT_NAME}.exe"
+    if mac_executable.is_file():
+        platform_key = "macos"
+    elif windows_executable.is_file():
+        platform_key = "windows"
+    else:
+        raise ValueError(f"local Diony application is incomplete: {mac_executable}")
     try:
         payload = json.loads(payload_metadata.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -181,7 +190,8 @@ def build_development_report(
         "built_at": built_at or datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "publishable": False,
         "trust": "ad-hoc-local-only",
-        "build_recipe": LOCAL_BUILD_RECIPE,
+        "platform": platform_key,
+        "build_recipe": LOCAL_BUILD_RECIPES[platform_key],
         "apple_notarized": False,
         "payload_files": int(payload.get("files") or 0),
         "payload_sha256": str(payload.get("payload_sha256") or ""),

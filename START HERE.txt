@@ -91,8 +91,15 @@ from https://www.python.org/downloads/
        Windows      Open Diony AI.bat
        Linux        open-diony.sh
 
-     Mac developers can double-click Build Diony AI.command instead:
-     it builds the native Diony.app from this folder and opens it.
+     Open runs the built app when this folder holds one (its runtime
+     and ffmpeg are inside; close the window right away). With no
+     built app yet it runs from source with Python 3.11+ and says so.
+
+     To build the app once, double-click the Build file for your desk:
+       Mac          Build Diony AI.command   ->  dist/desktop/<v>/development/Diony.app
+       Windows      Build Diony AI.bat       ->  dist\desktop\<v>\development\Diony AI\
+     It builds from this folder and opens the app; later opens need
+     no Python. Rebuild after a change; an unchanged folder is skipped.
 
   2. If a Mac warning says the file cannot be opened: right-click
      it, choose Open, then Open.

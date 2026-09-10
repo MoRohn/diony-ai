@@ -46,6 +46,9 @@ def test_repo_root_is_the_sku() -> None:
     assert (root / "Open Diony AI.command").is_file()
     assert (root / "open-diony.sh").is_file()
     assert (root / "Open Diony AI.bat").is_file()
+    assert (root / "Build Diony AI.command").is_file()
+    assert (root / "Build Diony AI.bat").is_file()
+    assert (root / "scripts" / "release" / "build-local-windows.ps1").is_file()
     assert (root / "START HERE.txt").is_file()
 
 
@@ -569,6 +572,31 @@ def test_launchers_open_named_studio() -> None:
     assert 'py -%%V "%BOOT%"' in win
     assert 'py -3 "%BOOT%"' not in win
     assert "version_info >= (3, 11)" in win
+
+
+def test_launchers_open_the_built_app_first_and_the_build_launchers_pair_up() -> None:
+    root = repo_root()
+    mac = (root / "Open Diony AI.command").read_text()
+    win = (root / "Open Diony AI.bat").read_text()
+    # the built app wins when it is there; the source path stays as the fallback
+    assert "dist/desktop/$VERSION/development/Diony.app" in mac and 'exec open -n "$APP"' in mac
+    assert mac.index("Diony.app") < mac.index("pick_python()")
+    assert r"dist\desktop\%VERSION%\development\Diony AI\Diony AI.exe" in win
+    assert 'start "" "%APP%"' in win and win.index("Diony AI.exe") < win.index("where py")
+    assert "packaging/desktop/version.json" in mac and r"packaging\desktop\version.json" in win
+    # each desk has a Build launcher that drives its local build script
+    build_mac = (root / "Build Diony AI.command").read_text()
+    build_win = (root / "Build Diony AI.bat").read_text()
+    assert "scripts/release/build-local-macos.sh" in build_mac
+    assert (
+        r"scripts\release\build-local-windows.ps1" in build_win
+        and "ExecutionPolicy Bypass" in build_win
+    )
+    ps1 = (root / "scripts" / "release" / "build-local-windows.ps1").read_text()
+    assert '"windows-development-v1"' in ps1
+    assert "diony_desk.media" in ps1 and "windows-amd64" in ps1 and "DIONY_FFMPEG_BUNDLE_DIR" in ps1
+    assert "development-report" in ps1 and "ItemType Junction" in ps1
+    assert "signtool" not in ps1.lower() and "ISCC" not in ps1
 
 
 def test_failed_names_stay_on_lobby(monkeypatch) -> None:

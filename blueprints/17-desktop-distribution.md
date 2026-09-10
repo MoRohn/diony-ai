@@ -11,7 +11,7 @@ The future Diony webpage presents exactly two primary choices:
 
 The page reads `downloads.json`; filenames, byte counts, SHA-256 hashes, version, architecture, minimum OS, and release proof are data rather than duplicated webpage copy. A stable manifest is invalid unless both platform artifacts exist and carry complete trust proof.
 
-Source-checkout launchers remain for engineers and DGX OS. They are not the customer download experience.
+Source-checkout launchers remain for engineers. They are not the customer download experience. Since 2026-09-10 the two `Open Diony AI` launchers (`.command`, `.bat`) open the built local app when the folder holds one and only otherwise run the desk from source, and each desk has a `Build Diony AI` twin (`build-local-macos.sh`, `build-local-windows.ps1`) that produces the ad-hoc local app with the pinned ffmpeg inside; the signed builders stage the same ffmpeg (Universal 2 on the Mac). Linux stays source-only via `open-diony.sh`.
 
 ## Local developer application
 

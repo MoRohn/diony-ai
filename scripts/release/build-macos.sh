@@ -65,6 +65,21 @@ PYTHONPATH="$ROOT/apps/desk/src" "$RELEASE_PYTHON" -m diony_desk.release \
   "$INSTALL_PAYLOAD/apps/producer" "$INSTALL_PAYLOAD/apps/director" \
   "$INSTALL_PAYLOAD/apps/desk"
 
+# ffmpeg comes with Diony: the pinned static release for each Mac architecture,
+# SHA-256 verified, joined into Universal 2 binaries beside the app.
+FFMPEG_STAGE="$BUILD_ROOT/ffmpeg"
+/bin/mkdir -p "$FFMPEG_STAGE"
+PYTHONPATH="$ROOT/apps/desk/src" "$RELEASE_PYTHON" -m diony_desk.media fetch macos-arm64 "$BUILD_ROOT/ffmpeg-arm64"
+PYTHONPATH="$ROOT/apps/desk/src" "$RELEASE_PYTHON" -m diony_desk.media fetch macos-amd64 "$BUILD_ROOT/ffmpeg-amd64"
+for tool in ffmpeg ffprobe; do
+  /usr/bin/lipo -create "$BUILD_ROOT/ffmpeg-arm64/$tool" "$BUILD_ROOT/ffmpeg-amd64/$tool" -output "$FFMPEG_STAGE/$tool"
+  /usr/bin/lipo -info "$FFMPEG_STAGE/$tool" | /usr/bin/grep -q "x86_64 arm64\|arm64 x86_64" || {
+    echo "$tool did not join into a Universal 2 binary." >&2
+    exit 1
+  }
+done
+/bin/cp "$BUILD_ROOT/ffmpeg-arm64/PINNED.json" "$FFMPEG_STAGE/FFMPEG-PINNED.json"
+export DIONY_FFMPEG_BUNDLE_DIR="$FFMPEG_STAGE"
 export DIONY_DESKTOP_PAYLOAD="$PAYLOAD"
 export DIONY_DESKTOP_VERSION="$VERSION"
 export DIONY_MAC_ARCH="universal2"
@@ -73,6 +88,10 @@ export DIONY_MAC_ARCH="universal2"
   "$ROOT/packaging/desktop/diony.spec"
 APP="$BUILD_ROOT/dist/Diony.app"
 [[ -d "$APP" ]] || { echo "PyInstaller did not produce Diony.app" >&2; exit 1; }
+[[ -x "$APP/Contents/Frameworks/ffmpeg" && -x "$APP/Contents/Frameworks/ffprobe" ]] || {
+  echo "Diony.app was built without ffmpeg in its runtime folder." >&2
+  exit 1
+}
 
 while IFS= read -r -d '' item; do
   if /usr/bin/file "$item" | /usr/bin/grep -q "Mach-O"; then

@@ -195,7 +195,7 @@ def test_development_report_marks_local_app_as_non_publishable(tmp_path: Path) -
     assert report["channel"] == "development"
     assert report["publishable"] is False
     assert report["trust"] == "ad-hoc-local-only"
-    assert report["build_recipe"] == "macos-development-v3"
+    assert report["build_recipe"] == "macos-development-v4" and report["platform"] == "macos"
     assert report["version"] == "1.2.3"
     assert report["architecture"] == "arm64"
     assert report["payload_sha256"] == "payload-hash"
@@ -346,3 +346,39 @@ def test_release_builders_do_not_mutate_the_hashed_payload_during_wheel_builds()
     assert '"$INSTALL_PAYLOAD/apps/wizard"' in mac
     assert '$InstallPayload = Join-Path $BuildRoot "install-payload"' in windows
     assert '(Join-Path $InstallPayload "apps\\wizard")' in windows
+
+
+def test_development_report_knows_the_windows_app_layout(tmp_path: Path) -> None:
+    app = tmp_path / "Diony AI"
+    app.mkdir()
+    (app / "Diony AI.exe").write_bytes(b"MZ")
+    (app / "_internal").mkdir()
+    (app / "_internal" / "ffmpeg.exe").write_bytes(b"MZ")
+    metadata = tmp_path / "desktop-release.json"
+    metadata.write_text(json.dumps({"version": "0.22.0", "payload_sha256": "a" * 64, "files": 3}))
+    report = build_development_report(
+        app=app, payload_metadata=metadata, version="0.22.0", architecture="x86_64"
+    )
+    assert report["platform"] == "windows" and report["build_recipe"] == "windows-development-v1"
+    assert report["publishable"] is False and report["bundle_files"] == 2
+
+
+def test_every_desktop_builder_ships_the_pinned_ffmpeg() -> None:
+    root = Path(__file__).resolve().parents[3]
+    scripts = root / "scripts" / "release"
+    mac_local = (scripts / "build-local-macos.sh").read_text()
+    mac_release = (scripts / "build-macos.sh").read_text()
+    win_local = (scripts / "build-local-windows.ps1").read_text()
+    win_release = (scripts / "build-windows.ps1").read_text()
+    for text in (mac_local, mac_release, win_local, win_release):
+        assert "diony_desk.media" in text and "fetch" in text
+        assert "DIONY_FFMPEG_BUNDLE_DIR" in text
+        assert "without ffmpeg" in text  # the build refuses to ship without it
+    assert (
+        "macos-arm64" in mac_release
+        and "macos-amd64" in mac_release
+        and "/usr/bin/lipo -create" in mac_release
+    )
+    assert "windows-amd64" in win_local and "windows-amd64" in win_release
+    spec = (root / "packaging" / "desktop" / "diony.spec").read_text()
+    assert 'os.environ.get("DIONY_FFMPEG_BUNDLE_DIR"' in spec and "binaries=binaries" in spec

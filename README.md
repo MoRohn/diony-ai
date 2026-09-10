@@ -71,10 +71,17 @@ An explicit environment variable always wins over the file. There is no key form
 
 **3. Open Diony**
 
-- Mac: double-click **Build Diony AI.command** to build and open `Diony.app`, or **Open Diony AI.command** for the source launcher.
-- Windows: **Open Diony AI.bat** (or the signed installer, `DionyAI-Setup-<version>-windows-x64.exe`). Linux: `./open-diony.sh`.
+One double-click per desk. The launchers sit at the top of the folder and are named the same way on both:
 
-The lobby installs the desk once, opens Studio, and asks once to lay the product names: your password on a Mac, a User Account Control prompt on Windows. Studio's **This computer** toggle (Mac | Windows) is preset to the desk it detected; every path, command, and launcher name Diony shows follows it, and you can flip it to read the instructions for the other desk. Pick a camera and press **Continue to the Director**.
+| | Mac | Windows |
+|---|---|---|
+| **Open** | `Open Diony AI.command` | `Open Diony AI.bat` |
+| **Build** (once, engineers) | `Build Diony AI.command` | `Build Diony AI.bat` |
+| Installed download | `Diony.app` from the DMG | `DionyAI-Setup-<version>-windows-x64.exe` |
+
+**Open** does the right thing for the folder it is in: when a built app is there it opens that app, which carries its own runtime and ffmpeg, and the window can be closed at once; when there is no built app yet it runs the desk from source with the machine's Python 3.11+ and says so. **Build** makes that app from the folder (`dist/desktop/<version>/development/`) and opens it; rebuilding after a change replaces the older build, and an unchanged folder is not rebuilt. Linux runs from source with `./open-diony.sh`.
+
+Either way the lobby opens Studio and asks once to lay the product names: your password on a Mac, a User Account Control prompt on Windows. Studio's **This computer** toggle (Mac | Windows) is preset to the desk it detected; every path, command, and launcher name Diony shows follows it, and you can flip it to read the instructions for the other desk. Pick a camera and press **Continue to the Director**.
 
 **4. Prove the keys before spending**
 
@@ -251,7 +258,7 @@ To write `studio.diony.local`, `director.diony.local`, and `producer.diony.local
 Not when a Gemini key is on the desk: the script, the master prompt, the likeness audit and the narrator all run on Google, and the header's brain chip says `brain Gemini · gemini-2.5-pro`. Without a Gemini key the Director borrows the xAI key for the script and the narrator when it exists, and the chip says so; with neither, the deterministic template writer drafts and the cut needs the Dialogue style or a narrator command.
 
 **Does it run the same on Windows as on a Mac?**
-Yes. The runtime already speaks each desk's language: the product names go into the hosts file behind one password prompt on a Mac or one User Account Control prompt on Windows, the data directory is `~/Library/Application Support/Diony AI` or `%LOCALAPPDATA%\Diony AI`, ffmpeg ships inside the app for both (a pinned static build per architecture, installed into the data folder on open if a bundle lacks it), Python is found in each desk's usual homes, and the launchers are `Open Diony AI.command` and `Open Diony AI.bat`. Studio's **This computer** toggle only changes what the product tells you: the keys path, the two setup lines, the launcher name, and the wording of a missing-ffmpeg message. It defaults to the detected desk.
+Yes. The runtime already speaks each desk's language: the product names go into the hosts file behind one password prompt on a Mac or one User Account Control prompt on Windows, the data directory is `~/Library/Application Support/Diony AI` or `%LOCALAPPDATA%\Diony AI`, ffmpeg ships inside the app for both (a pinned static build per architecture, installed into the data folder on open if a bundle lacks it), Python is found in each desk's usual homes, and the launchers pair up: `Open Diony AI.command` and `Build Diony AI.command` on a Mac, `Open Diony AI.bat` and `Build Diony AI.bat` on Windows. Studio's **This computer** toggle only changes what the product tells you: the keys path, the two setup lines, the launcher name, and the wording of a missing-ffmpeg message. It defaults to the detected desk.
 
 **Can I use a local GPU instead of the cloud engines?**
 No. Diony shot on local DGX Spark clusters and leased GPUs until September 2026; that lane was removed from the product on 2026-09-10. The two cameras are Grok Imagine and Google Flow, and the desk needs no GPU at all. The history is in the [changelog](CHANGELOG.md).
@@ -277,7 +284,7 @@ ruff check . && ruff format --check .
 
 Tests never open a socket: the root `conftest.py` blocks every non-loopback connection for the session (`DIONY_ALLOW_NETWORK=1` only for a deliberate live run). Never run two pytest invocations at once; the desk's instance-lock tests deadlock across processes. Tests that cut real media skip without ffmpeg.
 
-**Packaged app.** `Build Diony AI.command` stages a secret-free payload, hashes it, bundles a runtime, and opens `dist/desktop/{version}/development/Diony.app`. Rebuild after every change you want to test in the app; a rebuild is skipped when nothing changed. The version is `packaging/desktop/version.json`. Signed, notarised releases come from `scripts/release/` (Blueprint 17).
+**Packaged app.** `Build Diony AI.command` (Mac, `scripts/release/build-local-macos.sh`) and `Build Diony AI.bat` (Windows, `scripts/release/build-local-windows.ps1`) stage a secret-free payload, hash it, bundle a runtime with PyInstaller, lay the pinned ffmpeg and ffprobe in the runtime folder, write a non-publishable development report, and open `dist/desktop/{version}/development/Diony.app` or `…/Diony AI/Diony AI.exe`. Rebuild after every change you want to test in the app; an identical payload is not rebuilt. The version is `packaging/desktop/version.json`. Signed, notarised releases come from `scripts/release/build-macos.sh` (Universal 2, with a lipo-joined ffmpeg) and `build-windows.ps1` (Inno Setup installer), per Blueprint 17.
 
 **UI stamps.** Each surface's static assets carry a `?v=` stamp that the desk uses to detect a stale build. Bump the Director stamp in `apps/director/src/diony_director/static/index.html` when you change its UI; the Producer and Studio stamps are pinned by tests, update the pins with them.
 
@@ -297,7 +304,8 @@ apps/desk/              First open: lobby, service supervision, packaged-app pay
 packages/contracts/     Pydantic contracts and JSON Schema: Director ops, cost estimates, production
                         packages, the launch control plane, the engine choice, look and subtitles
 blueprints/             The numbered constitution; 25–33 are the cloud era
-packaging/, scripts/    Desktop payload, PyInstaller spec, signed release builders
+packaging/, scripts/    Desktop payload, PyInstaller spec, the local Mac and Windows builders, the
+                        signed release builders, the Inno Setup script
 docs/brand/             Banner, mark, gradient rule
 ```
 
@@ -307,7 +315,7 @@ The Diony identity is the bar mark: three gradient bars converging into charcoal
 
 ## License
 
-Diony AI software and Blueprints are proprietary; see [LICENSE](LICENSE). Generation runs on third-party services under their own terms: xAI (Grok Imagine and the Grok voice API) and Google Flow through useapi.net. Bundled and optional open-source components, including OpenCV Zoo face models and faster-whisper, keep their licenses; see [NOTICE](NOTICE). Generated content is the licensee's responsibility.
+Diony AI software and Blueprints are proprietary; see [LICENSE](LICENSE). Generation runs on third-party services under their own terms: xAI (Grok Imagine and the Grok voice API) and Google Flow through useapi.net. Bundled and optional open-source components keep their licenses: FFmpeg (GPL, shipped as separate executables beside the app), OpenCV Zoo face models, and faster-whisper; see [NOTICE](NOTICE). Generated content is the licensee's responsibility.
 
 <br />
 

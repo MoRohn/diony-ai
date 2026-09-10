@@ -1,10 +1,33 @@
 #!/bin/bash
-# Double-click in Finder. First open installs the desk. After that it opens Studio.
+# Diony AI — Mac launcher. Double-click in Finder.
+#
+# Opens the built Diony.app when this folder holds one (Build Diony AI.command
+# makes it); otherwise runs the desk from source with this Mac's Python 3.11+.
+# Either way a browser opens Studio at http://studio.diony.local.
 cd "$(dirname "$0")" || exit 1
 ROOT="$(pwd)"
+BOOT="$ROOT/apps/desk/src/diony_desk/boot.py"
 
 echo "Diony AI"
 echo "A browser will open Studio at http://studio.diony.local"
+echo
+
+if [ ! -f "$BOOT" ]; then
+  echo "This file must stay in the Diony AI folder."
+  read -r -p "Press Return to close. "
+  exit 1
+fi
+
+VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/packaging/desktop/version.json" | head -1)"
+APP="$ROOT/dist/desktop/$VERSION/development/Diony.app"
+if [ -n "$VERSION" ] && [ -d "$APP" ]; then
+  echo "Opening the built Diony.app ($VERSION). ffmpeg and the runtime are inside it."
+  echo "You can close this window."
+  exec open -n "$APP"
+fi
+
+echo "No built app in this folder yet — running from source."
+echo "(Double-click Build Diony AI.command once to build Diony.app.)"
 echo "Leave this window open until it says you can close it."
 echo
 
@@ -33,20 +56,14 @@ pick_python() {
 }
 
 PY="$(pick_python)" || {
-  echo "Diony AI needs Python 3.11 or newer."
-  echo "Install it from https://www.python.org/downloads/macos/ then double-click this again."
+  echo "Diony AI needs Python 3.11 or newer to run from source."
+  echo "Install it from https://www.python.org/downloads/macos/ then double-click this again,"
+  echo "or double-click Build Diony AI.command to build the app, which needs no Python later."
   if command -v open >/dev/null 2>&1; then
     open "https://www.python.org/downloads/macos/"
   fi
   read -r -p "Press Return to close. "
   exit 1
 }
-
-BOOT="$ROOT/apps/desk/src/diony_desk/boot.py"
-if [ ! -f "$BOOT" ]; then
-  echo "This file must stay in the Diony AI folder."
-  read -r -p "Press Return to close. "
-  exit 1
-fi
 
 exec "$PY" "$BOOT"

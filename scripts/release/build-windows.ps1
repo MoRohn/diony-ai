@@ -76,6 +76,20 @@ try {
         (Join-Path $InstallPayload "apps\producer"), (Join-Path $InstallPayload "apps\director"),
         (Join-Path $InstallPayload "apps\desk")
     )
+    # ffmpeg comes with Diony: the pinned Windows release, SHA-256 verified; the
+    # signing pass below covers ffmpeg.exe and ffprobe.exe like every other .exe.
+    $FfmpegStage = Join-Path $BuildRoot "ffmpeg"
+    try {
+        $env:PYTHONPATH = Join-Path $Root "apps\desk\src"
+        Invoke-Checked $Python @("-m", "diony_desk.media", "fetch", "windows-amd64", $FfmpegStage)
+    }
+    finally {
+        $env:PYTHONPATH = $PreviousPythonPath
+    }
+    if (-not (Test-Path (Join-Path $FfmpegStage "ffmpeg.exe")) -or -not (Test-Path (Join-Path $FfmpegStage "ffprobe.exe"))) {
+        throw "The pinned ffmpeg release did not stage for windows-amd64."
+    }
+    $env:DIONY_FFMPEG_BUNDLE_DIR = $FfmpegStage
     $env:DIONY_DESKTOP_PAYLOAD = $Payload
     $env:DIONY_DESKTOP_VERSION = $Version
     Invoke-Checked $Python @(
@@ -86,6 +100,9 @@ try {
     )
     $App = Join-Path $BuildRoot "dist\Diony AI"
     if (-not (Test-Path (Join-Path $App "Diony AI.exe"))) { throw "PyInstaller did not produce Diony AI.exe" }
+    if (-not (Test-Path (Join-Path $App "_internal\ffmpeg.exe")) -or -not (Test-Path (Join-Path $App "_internal\ffprobe.exe"))) {
+        throw "Diony AI was built without ffmpeg in its runtime folder."
+    }
 
     Get-ChildItem $App -Recurse -File | Where-Object { $_.Extension -in ".exe", ".dll", ".pyd" } | ForEach-Object {
         Invoke-Checked $SignTool @("sign", "/sha1", $Certificate, "/fd", "SHA256", "/tr", $TimestampUrl, "/td", "SHA256", $_.FullName)
