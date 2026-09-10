@@ -8,12 +8,12 @@ import os
 import time
 import uuid
 from collections import defaultdict, deque
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Annotated, Any, AsyncIterator
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from diony_contracts.launch import (
@@ -29,20 +29,16 @@ from diony_contracts.launch import (
     User,
     WorkflowStage,
 )
-from diony_producer.costs import CostAnalyticsService
 from diony_producer.control_plane import (
     ControlPlane,
     DocumentNotFound,
     WorkspaceAccessDenied,
 )
-from diony_producer.portable import export_project_package, inspect_project_package
-from diony_producer.privacy import erase_project, project_erasure_plan
+from diony_producer.costs import CostAnalyticsService
 from diony_producer.providers import ProviderRegistry
 from diony_producer.security import Actor, SecretVault, verify_token
 from diony_producer.studio_invites import StudioInvitationService
-from diony_producer.vault import list_vault_projects
 from diony_producer.workflow import DurableWorkflowEngine
-
 
 router = APIRouter(prefix="/api/v1", tags=["launch-control-plane"])
 
@@ -64,10 +60,6 @@ class CheckpointWrite(BaseModel):
     quantity_microunits: int = Field(default=1_000_000, ge=0)
     unit: str = Field(default="operation", min_length=1, max_length=80)
     metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class ErasureConfirm(BaseModel):
-    confirmation: str = Field(min_length=1, max_length=240)
 
 
 class TeamCreate(BaseModel):
@@ -190,9 +182,7 @@ def _actor(
             )
         try:
             actor = verify_token(authorization.split(" ", 1)[1].strip())
-            membership = plane.authorize(
-                actor.user_id, actor.workspace_id, MembershipRole.VIEWER
-            )
+            membership = plane.authorize(actor.user_id, actor.workspace_id, MembershipRole.VIEWER)
             actor.role = membership.role
         except (ValueError, WorkspaceAccessDenied) as exc:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
@@ -282,26 +272,13 @@ def providers(actor: ActorDep) -> dict[str, Any]:
     }
 
 
-@router.get("/projects")
-def projects(actor: ActorDep) -> dict[str, Any]:
-    return {
-        "projects": [
-            project.model_dump(mode="json")
-            for project in list_vault_projects()
-            if project.workspace_id == actor.workspace_id and project.deleted_at is None
-        ]
-    }
-
-
 @router.get("/teams")
 def teams(actor: ActorDep, plane: Plane) -> dict[str, Any]:
     return {"teams": plane.list_documents("team", actor.workspace_id)}
 
 
 @router.post("/teams", status_code=status.HTTP_201_CREATED)
-def create_team(
-    body: TeamCreate, request: Request, actor: ActorDep, plane: Plane
-):
+def create_team(body: TeamCreate, request: Request, actor: ActorDep, plane: Plane):
     _require(plane, actor, MembershipRole.ADMIN)
     team = Team(
         id=f"team-{uuid.uuid4().hex}",
@@ -346,11 +323,7 @@ def studio_context(actor: ActorDep, plane: Plane) -> dict[str, Any]:
 @router.get("/studio/invitations")
 def studio_invitations(actor: ActorDep, plane: Plane) -> dict[str, Any]:
     _require(plane, actor, MembershipRole.ADMIN)
-    return {
-        "invitations": StudioInvitationService(plane).list_invitations(
-            actor.workspace_id
-        )
-    }
+    return {"invitations": StudioInvitationService(plane).list_invitations(actor.workspace_id)}
 
 
 @router.post("/studio/invitations", status_code=status.HTTP_201_CREATED)
@@ -398,9 +371,7 @@ def revoke_studio_invitation(
 @router.get("/studio/join-requests")
 def studio_join_requests(actor: ActorDep, plane: Plane) -> dict[str, Any]:
     _require(plane, actor, MembershipRole.ADMIN)
-    return {
-        "requests": plane.list_documents("studio_join_request", actor.workspace_id)
-    }
+    return {"requests": plane.list_documents("studio_join_request", actor.workspace_id)}
 
 
 @router.post("/studio/join-requests/{request_id}/approve")
@@ -545,9 +516,7 @@ def put_member(
     plane: Plane,
 ):
     _require(plane, actor, MembershipRole.ADMIN)
-    known_team_ids = {
-        str(row["id"]) for row in plane.list_documents("team", actor.workspace_id)
-    }
+    known_team_ids = {str(row["id"]) for row in plane.list_documents("team", actor.workspace_id)}
     unknown = set(body.team_ids).difference(known_team_ids)
     if unknown:
         raise HTTPException(
@@ -597,9 +566,7 @@ def departments(actor: ActorDep, plane: Plane) -> dict[str, Any]:
 
 
 @router.post("/departments", status_code=status.HTTP_201_CREATED)
-def create_department(
-    body: DepartmentCreate, request: Request, actor: ActorDep, plane: Plane
-):
+def create_department(body: DepartmentCreate, request: Request, actor: ActorDep, plane: Plane):
     _require_cost_admin(plane, actor)
     unknown = set(body.team_ids).difference(_known_ids(plane, actor.workspace_id, "team"))
     if unknown:
@@ -649,9 +616,7 @@ def cost_centers(actor: ActorDep, plane: Plane) -> dict[str, Any]:
 
 
 @router.post("/cost-centers", status_code=status.HTTP_201_CREATED)
-def create_cost_center(
-    body: CostCenterCreate, request: Request, actor: ActorDep, plane: Plane
-):
+def create_cost_center(body: CostCenterCreate, request: Request, actor: ActorDep, plane: Plane):
     _require_cost_admin(plane, actor)
     unknown = set(body.team_ids).difference(_known_ids(plane, actor.workspace_id, "team"))
     if unknown:
@@ -703,7 +668,7 @@ def rename_cost_center(
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     before = center.model_copy(deep=True)
     center.name = body.name.strip()
-    center.updated_at = datetime.now(timezone.utc)
+    center.updated_at = datetime.now(UTC)
     CostAnalyticsService(plane).save_cost_center(center)
     plane.audit(
         workspace_id=actor.workspace_id,
@@ -736,8 +701,7 @@ def update_cost_governance(
 ) -> CostGovernance:
     _require_cost_admin(plane, actor)
     member_user_ids = {
-        str(row["user_id"])
-        for row in plane.list_documents("membership", actor.workspace_id)
+        str(row["user_id"]) for row in plane.list_documents("membership", actor.workspace_id)
     }
     if body.admin_user_id not in member_user_ids:
         raise HTTPException(
@@ -746,9 +710,7 @@ def update_cost_governance(
         )
     if body.admin_team_id not in _known_ids(plane, actor.workspace_id, "team"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown Cost Center admin team.")
-    if body.default_cost_center_id not in _known_ids(
-        plane, actor.workspace_id, "cost_center"
-    ):
+    if body.default_cost_center_id not in _known_ids(plane, actor.workspace_id, "cost_center"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown default Cost Center.")
     before = CostAnalyticsService(plane).governance(actor.workspace_id)
     governance = CostGovernance(
@@ -798,58 +760,8 @@ def create_cost_rate_card(
     return rate
 
 
-@router.get("/projects/{project_id}")
-def get_project(project_id: str, actor: ActorDep):
-    project = next((row for row in list_vault_projects() if row.id == project_id), None)
-    if project is None or project.deleted_at is not None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "That project is not in this vault.")
-    if project.workspace_id != actor.workspace_id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "That project belongs to another workspace.")
-    return project
-
-
-def _vault_project_for_actor(project_id: str, actor: Actor):
-    project = next((row for row in list_vault_projects() if row.id == project_id), None)
-    if project is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "That project is not in this vault.")
-    if project.workspace_id != actor.workspace_id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "That project belongs to another workspace.")
-    return project
-
-
-@router.get("/projects/{project_id}/erasure-plan")
-def erasure_plan(project_id: str, actor: ActorDep, plane: Plane):
-    _require(plane, actor, MembershipRole.OWNER)
-    return project_erasure_plan(_vault_project_for_actor(project_id, actor))
-
-
-@router.post("/projects/{project_id}/erase")
-def erase_project_route(
-    project_id: str,
-    body: ErasureConfirm,
-    request: Request,
-    actor: ActorDep,
-    plane: Plane,
-):
-    _require(plane, actor, MembershipRole.OWNER)
-    try:
-        return erase_project(
-            _vault_project_for_actor(project_id, actor),
-            plane=plane,
-            confirmation=body.confirmation,
-            actor_user_id=actor.user_id,
-            correlation_id=_correlation(request),
-        )
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
-
-
 @router.post("/workflows", status_code=status.HTTP_201_CREATED)
-def create_workflow(
-    body: WorkflowCreate, request: Request, actor: ActorDep, plane: Plane
-):
+def create_workflow(body: WorkflowCreate, request: Request, actor: ActorDep, plane: Plane):
     _require(plane, actor, MembershipRole.CREATOR)
     membership = _membership(plane, actor)
     analytics = CostAnalyticsService(plane)
@@ -881,9 +793,11 @@ def create_workflow(
             "The workflow Department must match its Cost Center.",
         )
     requested_team = str(body.config.get("team_id") or "")
-    eligible_teams = center.team_ids if is_cost_admin else [
-        team_id for team_id in center.team_ids if team_id in membership.team_ids
-    ]
+    eligible_teams = (
+        center.team_ids
+        if is_cost_admin
+        else [team_id for team_id in center.team_ids if team_id in membership.team_ids]
+    )
     if requested_team and requested_team not in eligible_teams:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
@@ -1060,7 +974,7 @@ async def workflow_event_stream(
                 yield f"id: {event.seq}\nevent: {event.kind}\ndata: {payload}\n\n"
             run = plane.run(actor.workspace_id, run_id)
             if run.status.terminal and not rows:
-                yield "event: end\ndata: {\"terminal\":true}\n\n"
+                yield 'event: end\ndata: {"terminal":true}\n\n'
                 break
             if not rows:
                 yield ": diony-heartbeat\n\n"
@@ -1074,9 +988,7 @@ async def workflow_event_stream(
 
 
 @router.get("/costs/usage")
-def cost_usage(
-    actor: ActorDep, plane: Plane, project_id: str | None = None
-) -> dict[str, Any]:
+def cost_usage(actor: ActorDep, plane: Plane, project_id: str | None = None) -> dict[str, Any]:
     membership = _membership(plane, actor)
     analytics = CostAnalyticsService(plane)
     if analytics.is_organization_admin(membership):
@@ -1116,9 +1028,7 @@ def cost_summary(actor: ActorDep, plane: Plane) -> dict[str, Any]:
 @router.get("/costs/organization")
 def organization_costs(actor: ActorDep, plane: Plane) -> dict[str, Any]:
     _require_cost_admin(plane, actor)
-    return CostAnalyticsService(plane).summary(
-        actor.workspace_id, organization_wide=True
-    )
+    return CostAnalyticsService(plane).summary(actor.workspace_id, organization_wide=True)
 
 
 @router.get("/audit")
@@ -1158,48 +1068,6 @@ def put_provider_secret(
 def provider_secrets(actor: ActorDep, plane: Plane) -> dict[str, Any]:
     _require(plane, actor, MembershipRole.ADMIN)
     return {"secrets": plane.encrypted_secret_catalog(actor.workspace_id)}
-
-
-@router.post("/projects/{project_id}/export", status_code=status.HTTP_201_CREATED)
-def export_project(project_id: str, request: Request, actor: ActorDep, plane: Plane):
-    _require(plane, actor, MembershipRole.PRODUCER)
-    project = next((row for row in list_vault_projects() if row.id == project_id), None)
-    if project is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "That project is not in this vault.")
-    if project.workspace_id != actor.workspace_id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "That project belongs to another workspace.")
-    package = export_project_package(project, plane=plane)
-    proof = inspect_project_package(package)
-    plane.audit(
-        workspace_id=actor.workspace_id,
-        actor_user_id=actor.user_id,
-        action="project.exported",
-        object_type="project",
-        object_id=project.id,
-        correlation_id=_correlation(request),
-        metadata={"filename": package.name, "bytes": package.stat().st_size},
-    )
-    return {"path": str(package), "bytes": package.stat().st_size, "verification": proof}
-
-
-@router.get("/projects/{project_id}/export/{filename}")
-def download_export(
-    project_id: str, filename: str, actor: ActorDep, plane: Plane
-) -> FileResponse:
-    _require(plane, actor, MembershipRole.VIEWER)
-    project = next((row for row in list_vault_projects() if row.id == project_id), None)
-    if project is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "That project is not in this vault.")
-    if project.workspace_id != actor.workspace_id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "That project belongs to another workspace.")
-    if Path(filename).name != filename or not filename.endswith(".diony.zip"):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid package name.")
-    from diony_producer.vault import vault_root
-
-    target = vault_root() / "exports" / project_id / filename
-    if not target.is_file():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "That package was not found.")
-    return FileResponse(target, filename=filename, media_type="application/zip")
 
 
 @router.get("/health")
@@ -1250,9 +1118,4 @@ def prometheus_metrics(request: Request) -> PlainTextResponse:
         if key == "workflow_runs":
             continue
         lines.append(f"diony_{key} {value}")
-    # Legacy Producer camera/finish runs predate launch WorkflowRun rows. Their
-    # durable stage journal keeps `/metrics` truthful during real productions.
-    from diony_producer.performance import prometheus_lines
-
-    lines.extend(prometheus_lines())
     return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")

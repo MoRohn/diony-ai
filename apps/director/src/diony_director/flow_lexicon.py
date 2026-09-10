@@ -261,7 +261,7 @@ def _custom_lexicon() -> dict[str, dict[str, dict[str, str]]]:
         return _CUSTOM_CACHE["value"]
     try:
         raw = json.loads(path.read_text())
-    except Exception:  # noqa: BLE001 - missing/corrupt file → no overlay
+    except Exception:
         raw = {}
     out: dict[str, dict[str, dict[str, str]]] = {"worlds": {}, "cameras": {}}
     # A key must live in ONE family: a custom world named "orbit" would fight
@@ -443,9 +443,7 @@ def expand(text: str) -> tuple[str, str, bool]:
             # Two adjacent camera tokens must not fuse into one run-on:
             # a comma lands between their clauses. A prose continuation
             # stays seamless — no comma.
-            following = re.match(
-                r"\s+/([A-Za-z][A-Za-z0-9_-]*)", match.string[match.end():]
-            )
+            following = re.match(r"\s+/([A-Za-z][A-Za-z0-9_-]*)", match.string[match.end() :])
             if following and following.group(1).lower() in known:
                 return clause + ","
             return clause

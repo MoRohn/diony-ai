@@ -35,8 +35,11 @@ def _op(op_id: str, *, narr: str = "") -> DirectorOp:
             workspace_id="ws",
             lines=[
                 CostEstimateLine(
-                    label="gen", provider_id="grok", model="grok-imagine-video",
-                    unit="clip", usd_micros=1000,
+                    label="gen",
+                    provider_id="grok",
+                    model="grok-imagine-video",
+                    unit="clip",
+                    usd_micros=1000,
                 )
             ],
         ),
@@ -148,9 +151,7 @@ def test_locks_and_the_site_pin_outrank_casting(monkeypatch) -> None:
 
     monkeypatch.delenv(narration.GROK_VOICE_ENV, raising=False)
     fresh = narration.NarrationCue(order=2, clip_id="cl-3", speaker="BEN", line="hi")
-    narration.cast_cues(
-        [fresh], tone_text="tense noir", character_notes={"Ben": "a quiet man"}
-    )
+    narration.cast_cues([fresh], tone_text="tense noir", character_notes={"Ben": "a quiet man"})
     assert fresh.voice_ref == "sal"
     assert fresh.cast_note.startswith("cast for:")
 
@@ -166,7 +167,9 @@ def test_one_voice_carries_the_whole_film(monkeypatch) -> None:
         narration.NarrationCue(order=0, clip_id="cl-1", speaker="ELIAS", line="a"),
         narration.NarrationCue(order=1, clip_id="cl-2", speaker="MARA", line="b"),
         narration.NarrationCue(order=2, clip_id="cl-3", speaker="", line="c"),
-        narration.NarrationCue(order=3, clip_id="cl-4", speaker="ELIAS", line="d", voice_ref="voice-x"),
+        narration.NarrationCue(
+            order=3, clip_id="cl-4", speaker="ELIAS", line="d", voice_ref="voice-x"
+        ),
     ]
     narration.cast_cues(cues, tone_text="tense noir, night streets")
     unlocked = [c.voice_ref for c in cues[:3]]
@@ -194,9 +197,7 @@ def test_direction_becomes_performed_speech_tags(monkeypatch) -> None:
     assert narration.perform_line("Now!", "shouting") == "[shout] Now!"
 
 
-def test_the_performed_line_reaches_grok_and_the_words_stay_verbatim(
-    tmp_path, monkeypatch
-) -> None:
+def test_the_performed_line_reaches_grok_and_the_words_stay_verbatim(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv(narration.NARRATOR_ENV, raising=False)
     monkeypatch.delenv(narration.BACKEND_ENV, raising=False)
     monkeypatch.delenv(narration.NARRATOR_TAGS_ENV, raising=False)
@@ -217,8 +218,12 @@ def test_the_performed_line_reaches_grok_and_the_words_stay_verbatim(
         lambda url, *, what, json, headers, timeout: seen.update({"json": json}) or _Response(),
     )
     cue = narration.NarrationCue(
-        order=0, clip_id="cl-1", speaker="ANA", line="It is a secret.",
-        direction="whispering", voice_ref="eve",
+        order=0,
+        clip_id="cl-1",
+        speaker="ANA",
+        line="It is a secret.",
+        direction="whispering",
+        voice_ref="eve",
     )
     narration._synthesize_grok(cue, tmp_path / "cue.wav")
     assert seen["json"]["text"] == "<whisper>It is a secret.</whisper>"
@@ -266,8 +271,12 @@ def test_grok_voice_is_the_default_backend_and_speaks_the_exact_words(
 
     monkeypatch.setattr(provider_base, "post_with_retries", _post)
     cue = narration.NarrationCue(
-        order=0, clip_id="cl-1", speaker="ANA", line="We finish this tonight.",
-        direction="low", voice_ref="Sal",
+        order=0,
+        clip_id="cl-1",
+        speaker="ANA",
+        line="We finish this tonight.",
+        direction="low",
+        voice_ref="Sal",
     )
     out = tmp_path / "cue-00.wav"
     narration._synthesize_grok(cue, out)
@@ -297,18 +306,34 @@ def test_narrate_mixes_the_voice_into_the_master(tmp_path, monkeypatch, fake_nar
     film = tmp_path / "film.mp4"
     subprocess.run(
         [
-            ffmpeg, "-y",
-            "-f", "lavfi", "-i", "testsrc2=size=320x180:duration=3",
-            "-f", "lavfi", "-i", "sine=frequency=110:duration=3",
-            "-c:v", "libx264", "-c:a", "aac", "-shortest", str(film),
+            ffmpeg,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:duration=3",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=110:duration=3",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(film),
         ],
         check=True,
         capture_output=True,
     )
     cues = [
         narration.NarrationCue(
-            order=0, clip_id="cl-1", speaker="ANA", line="We finish this tonight.",
-            start_s=0.15, window_s=3.0,
+            order=0,
+            clip_id="cl-1",
+            speaker="ANA",
+            line="We finish this tonight.",
+            start_s=0.15,
+            window_s=3.0,
         )
     ]
     dest = tmp_path / "film-narrated.mp4"
@@ -327,9 +352,15 @@ def test_an_overrunning_cue_never_overlaps_the_next_one() -> None:
     # cl-1's line speaks for 4.0s inside a 2.0s clip — without a layout pass
     # cl-2's cue starts while cl-1's is still talking: two voices at once
     cues = [
-        narration.NarrationCue(order=0, clip_id="cl-1", speaker="ANA", line="a", start_s=0.15, window_s=2.0),
-        narration.NarrationCue(order=1, clip_id="cl-2", speaker="BEN", line="b", start_s=2.15, window_s=2.0),
-        narration.NarrationCue(order=2, clip_id="cl-3", speaker="ANA", line="c", start_s=4.15, window_s=2.0),
+        narration.NarrationCue(
+            order=0, clip_id="cl-1", speaker="ANA", line="a", start_s=0.15, window_s=2.0
+        ),
+        narration.NarrationCue(
+            order=1, clip_id="cl-2", speaker="BEN", line="b", start_s=2.15, window_s=2.0
+        ),
+        narration.NarrationCue(
+            order=2, clip_id="cl-3", speaker="ANA", line="c", start_s=4.15, window_s=2.0
+        ),
     ]
     shifts = narration.layout_cues(cues, [4.0, 1.0, 0.5])
     assert cues[0].start_s == pytest.approx(0.15)
@@ -342,8 +373,12 @@ def test_an_overrunning_cue_never_overlaps_the_next_one() -> None:
 
 def test_cues_that_fit_their_clips_hold_their_marks() -> None:
     cues = [
-        narration.NarrationCue(order=0, clip_id="cl-1", speaker="ANA", line="a", start_s=0.15, window_s=3.0),
-        narration.NarrationCue(order=1, clip_id="cl-2", speaker="BEN", line="b", start_s=3.15, window_s=3.0),
+        narration.NarrationCue(
+            order=0, clip_id="cl-1", speaker="ANA", line="a", start_s=0.15, window_s=3.0
+        ),
+        narration.NarrationCue(
+            order=1, clip_id="cl-2", speaker="BEN", line="b", start_s=3.15, window_s=3.0
+        ),
     ]
     shifts = narration.layout_cues(cues, [2.0, 2.0])
     assert [c.start_s for c in cues] == [0.15, 3.15]
@@ -356,10 +391,22 @@ def test_narrate_applies_the_no_overlap_layout(tmp_path, monkeypatch, fake_narra
     film = tmp_path / "film.mp4"
     subprocess.run(
         [
-            ffmpeg, "-y",
-            "-f", "lavfi", "-i", "testsrc2=size=320x180:duration=4",
-            "-f", "lavfi", "-i", "sine=frequency=110:duration=4",
-            "-c:v", "libx264", "-c:a", "aac", "-shortest", str(film),
+            ffmpeg,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:duration=4",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=110:duration=4",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(film),
         ],
         check=True,
         capture_output=True,
@@ -367,8 +414,12 @@ def test_narrate_applies_the_no_overlap_layout(tmp_path, monkeypatch, fake_narra
     # the fake narrator speaks 1.2s per cue; the second cue is scheduled only
     # 0.35s after the first — it must wait, never talk over it
     cues = [
-        narration.NarrationCue(order=0, clip_id="cl-1", speaker="ANA", line="one", start_s=0.15, window_s=0.35),
-        narration.NarrationCue(order=1, clip_id="cl-2", speaker="BEN", line="two", start_s=0.5, window_s=3.5),
+        narration.NarrationCue(
+            order=0, clip_id="cl-1", speaker="ANA", line="one", start_s=0.15, window_s=0.35
+        ),
+        narration.NarrationCue(
+            order=1, clip_id="cl-2", speaker="BEN", line="two", start_s=0.5, window_s=3.5
+        ),
     ]
     report = narration.narrate(film, cues, tmp_path / "out.mp4", loudness_target="streaming")
     first, second = report.cues
@@ -388,16 +439,28 @@ def test_the_final_lock_never_pumps_the_quiet_bed_into_static(
     film = tmp_path / "film.mp4"
     subprocess.run(
         [
-            ffmpeg, "-y",
-            "-f", "lavfi", "-i", "testsrc2=size=320x180:duration=8",
+            ffmpeg,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:duration=8",
             "-filter_complex",
             "sine=frequency=110:duration=1.5,apad=whole_dur=8,"
             "aformat=channel_layouts=stereo[tone];"
             "anoisesrc=r=48000:colour=brown:amplitude=0.006:d=8,"
             "aformat=channel_layouts=stereo[bed];"
             "[tone][bed]amix=inputs=2:duration=first:normalize=0[a]",
-            "-map", "0:v", "-map", "[a]",
-            "-c:v", "libx264", "-c:a", "aac", "-shortest", str(film),
+            "-map",
+            "0:v",
+            "-map",
+            "[a]",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(film),
         ],
         check=True,
         capture_output=True,
@@ -411,8 +474,18 @@ def test_the_final_lock_never_pumps_the_quiet_bed_into_static(
     narration.narrate(film, cues, dest, loudness_target="streaming")
     probe = subprocess.run(
         [
-            ffmpeg, "-ss", "4.0", "-t", "3.5", "-i", str(dest),
-            "-af", "volumedetect", "-f", "null", "-",
+            ffmpeg,
+            "-ss",
+            "4.0",
+            "-t",
+            "3.5",
+            "-i",
+            str(dest),
+            "-af",
+            "volumedetect",
+            "-f",
+            "null",
+            "-",
         ],
         capture_output=True,
         text=True,
@@ -435,10 +508,22 @@ def test_a_line_too_long_for_its_clip_is_named_never_trimmed(
     film = tmp_path / "film.mp4"
     subprocess.run(
         [
-            ffmpeg, "-y",
-            "-f", "lavfi", "-i", "testsrc2=size=320x180:duration=2",
-            "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
-            "-c:v", "libx264", "-c:a", "aac", "-shortest", str(film),
+            ffmpeg,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:duration=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=48000:cl=stereo",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(film),
         ],
         check=True,
         capture_output=True,
@@ -446,8 +531,12 @@ def test_a_line_too_long_for_its_clip_is_named_never_trimmed(
     # the fake narrator speaks 1.2s; a 0.1s window + 1.0s tolerance is beaten
     cues = [
         narration.NarrationCue(
-            order=0, clip_id="cl-9", speaker="", line="far too many words",
-            start_s=0.15, window_s=0.1,
+            order=0,
+            clip_id="cl-9",
+            speaker="",
+            line="far too many words",
+            start_s=0.15,
+            window_s=0.1,
         )
     ]
     report = narration.narrate(film, cues, tmp_path / "out.mp4", loudness_target="streaming")
@@ -463,10 +552,22 @@ def _film(tmp_path, seconds: int):
     film = tmp_path / "film.mp4"
     subprocess.run(
         [
-            ffmpeg, "-y",
-            "-f", "lavfi", "-i", f"testsrc2=size=320x180:duration={seconds}",
-            "-f", "lavfi", "-i", f"sine=frequency=110:duration={seconds}",
-            "-c:v", "libx264", "-c:a", "aac", "-shortest", str(film),
+            ffmpeg,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc2=size=320x180:duration={seconds}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=110:duration={seconds}",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(film),
         ],
         check=True,
         capture_output=True,
@@ -476,8 +577,12 @@ def _film(tmp_path, seconds: int):
 
 def test_tail_hold_measures_the_last_line_past_the_picture() -> None:
     cues = [
-        narration.NarrationCue(order=0, clip_id="cl-1", speaker="A", line="a", start_s=0.15, window_s=2.0),
-        narration.NarrationCue(order=1, clip_id="cl-2", speaker="A", line="b", start_s=2.15, window_s=2.0),
+        narration.NarrationCue(
+            order=0, clip_id="cl-1", speaker="A", line="a", start_s=0.15, window_s=2.0
+        ),
+        narration.NarrationCue(
+            order=1, clip_id="cl-2", speaker="A", line="b", start_s=2.15, window_s=2.0
+        ),
     ]
     # the last cue ends at 2.15 + 3.0 = 5.15 on a 4.0s picture
     hold, surplus = narration.tail_hold_for(cues, [1.0, 3.0], 4.0)
@@ -492,13 +597,19 @@ def test_tail_hold_measures_the_last_line_past_the_picture() -> None:
 
 
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
-def test_the_last_frame_holds_until_the_last_line_finishes(tmp_path, monkeypatch, fake_narrator) -> None:
+def test_the_last_frame_holds_until_the_last_line_finishes(
+    tmp_path, monkeypatch, fake_narrator
+) -> None:
     film = _film(tmp_path, 2)
     # the fake narrator speaks 1.2s; cued at 1.5s it runs 0.7s past the picture
     cues = [
         narration.NarrationCue(
-            order=0, clip_id="cl-9", speaker="ANA", line="and that is the end.",
-            start_s=1.5, window_s=0.5,
+            order=0,
+            clip_id="cl-9",
+            speaker="ANA",
+            line="and that is the end.",
+            start_s=1.5,
+            window_s=0.5,
         )
     ]
     dest = tmp_path / "out.mp4"
@@ -521,15 +632,29 @@ def test_a_line_longer_than_the_tail_cap_is_named(tmp_path, monkeypatch, fake_na
 
     def long_take(cue, output):
         subprocess.run(
-            [ffmpeg, "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=35",
-             "-ar", "48000", "-ac", "1", str(output)],
-            check=True, capture_output=True,
+            [
+                ffmpeg,
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=35",
+                "-ar",
+                "48000",
+                "-ac",
+                "1",
+                str(output),
+            ],
+            check=True,
+            capture_output=True,
         )
         return 35.0
 
     monkeypatch.setattr(narration, "synthesize", long_take)
     cues = [
-        narration.NarrationCue(order=0, clip_id="cl-9", speaker="", line="x", start_s=0.15, window_s=40.0)
+        narration.NarrationCue(
+            order=0, clip_id="cl-9", speaker="", line="x", start_s=0.15, window_s=40.0
+        )
     ]
     report = narration.narrate(film, cues, tmp_path / "out.mp4", loudness_target="streaming")
     assert report.tail_hold_s == narration.MAX_TAIL_HOLD_S
@@ -559,7 +684,9 @@ def test_tone_neutral_films_spread_across_the_roster_by_seed(monkeypatch) -> Non
 def test_the_console_choice_outranks_the_pin_and_the_cast_but_not_a_lock(monkeypatch) -> None:
     monkeypatch.delenv(narration.GROK_VOICE_ROSTER_ENV, raising=False)
     monkeypatch.setenv(narration.GROK_VOICE_ENV, "rex")
-    locked = narration.NarrationCue(order=0, clip_id="cl-1", speaker="ANA", line="a", voice_ref="voice-ana")
+    locked = narration.NarrationCue(
+        order=0, clip_id="cl-1", speaker="ANA", line="a", voice_ref="voice-ana"
+    )
     open_a = narration.NarrationCue(order=1, clip_id="cl-2", speaker="BEN", line="b")
     open_b = narration.NarrationCue(order=2, clip_id="cl-3", speaker="", line="c")
     narration.cast_cues([locked, open_a, open_b], tone_text="tense noir", voice="atlas", seed="s-1")
@@ -599,16 +726,26 @@ def test_a_character_identity_ref_is_not_a_narrator_voice(monkeypatch) -> None:
     assert narration.is_identity_ref("vox-chr_2")
     assert not narration.is_identity_ref("sal") and not narration.is_identity_ref("voice-ana")
     cues = [
-        narration.NarrationCue(order=0, clip_id="cl-1", speaker="ELIAS", line="a", voice_ref="vox-chr-lead@v1"),
-        narration.NarrationCue(order=1, clip_id="cl-2", speaker="MARA", line="b", voice_ref="vox-chr-2@v1"),
-        narration.NarrationCue(order=2, clip_id="cl-3", speaker="ANA", line="c", voice_ref="voice-ana"),
+        narration.NarrationCue(
+            order=0, clip_id="cl-1", speaker="ELIAS", line="a", voice_ref="vox-chr-lead@v1"
+        ),
+        narration.NarrationCue(
+            order=1, clip_id="cl-2", speaker="MARA", line="b", voice_ref="vox-chr-2@v1"
+        ),
+        narration.NarrationCue(
+            order=2, clip_id="cl-3", speaker="ANA", line="c", voice_ref="voice-ana"
+        ),
     ]
     narration.cast_cues(cues, tone_text="tense noir", voice="atlas", seed="s-1")
     assert cues[0].voice_ref == "atlas" and cues[1].voice_ref == "atlas"
     assert cues[0].cast_note.startswith("character voice lock")
     assert cues[2].voice_ref == "voice-ana" and cues[2].cast_note == "authored voice lock"
     fresh = [
-        narration.NarrationCue(order=0, clip_id="cl-1", speaker="ELIAS", line="a", voice_ref="vox-chr-lead@v1"),
+        narration.NarrationCue(
+            order=0, clip_id="cl-1", speaker="ELIAS", line="a", voice_ref="vox-chr-lead@v1"
+        ),
     ]
-    narration.cast_cues(fresh, tone_text="tense noir", character_notes={"Elias": "a quiet man"}, seed="s-1")
+    narration.cast_cues(
+        fresh, tone_text="tense noir", character_notes={"Elias": "a quiet man"}, seed="s-1"
+    )
     assert fresh[0].voice_ref == "sal"

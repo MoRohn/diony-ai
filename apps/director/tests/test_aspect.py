@@ -30,9 +30,10 @@ def test_unknown_aspect_is_refused() -> None:
 
 
 def test_pin_aspect_speaks_each_providers_dialect() -> None:
+    from test_continuity_music import _gen_op
+
     from diony_contracts.director import CloudProvider
     from diony_director.app import _pin_aspect
-    from test_continuity_music import _gen_op
 
     session.set_aspect("s-pin", "9:16")
     grok_op = _gen_op("op-g", "s-pin", "cl-1")
@@ -46,9 +47,9 @@ def test_pin_aspect_speaks_each_providers_dialect() -> None:
 
 def test_aspect_locks_once_footage_exists() -> None:
     from fastapi import HTTPException
+    from test_continuity_music import _gen_op
 
     from diony_director.app import _apply_aspect
-    from test_continuity_music import _gen_op
 
     sid = "s-lock"
     op = _gen_op("op-done", sid, "cl-1", status="completed")
@@ -96,8 +97,9 @@ def test_omitted_aspect_is_a_keep_not_a_request() -> None:
     """None — a client that doesn't send the field — keeps the session's
     shape. It must never flip a 9:16 session to the default, or 409 an
     innocent message once footage locks the shape."""
-    from diony_director.app import MessageIn, ProduceIn, _apply_aspect
     from test_continuity_music import _gen_op
+
+    from diony_director.app import MessageIn, ProduceIn, _apply_aspect
 
     sid = "s-keep"
     session.set_aspect(sid, "9:16")

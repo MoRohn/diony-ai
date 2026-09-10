@@ -61,8 +61,8 @@ PYTHONPATH="$ROOT/apps/desk/src" "$RELEASE_PYTHON" -m diony_desk.release \
 "$RELEASE_PYTHON" -m venv "$BUILD_ROOT/venv"
 "$PY" -m pip install --disable-pip-version-check -r "$ROOT/packaging/desktop/requirements-release.txt"
 "$PY" -m pip install --disable-pip-version-check \
-  "$INSTALL_PAYLOAD/packages/contracts" "$INSTALL_PAYLOAD/apps/wizard" "$INSTALL_PAYLOAD/apps/wan" \
-  "$INSTALL_PAYLOAD/apps/finish" "$INSTALL_PAYLOAD/apps/producer" "$INSTALL_PAYLOAD/apps/director" \
+  "$INSTALL_PAYLOAD/packages/contracts" "$INSTALL_PAYLOAD/apps/wizard" \
+  "$INSTALL_PAYLOAD/apps/producer" "$INSTALL_PAYLOAD/apps/director" \
   "$INSTALL_PAYLOAD/apps/desk"
 
 export DIONY_DESKTOP_PAYLOAD="$PAYLOAD"

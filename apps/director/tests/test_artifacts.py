@@ -42,9 +42,7 @@ def test_registering_a_still_updates_the_bible_and_ref_packs(tmp_path) -> None:
     front = next(o for o in ops if o.artifact_refs["bible"]["slot"] == "front")
     still = tmp_path / "front.png"
     still.write_bytes(b"png" * 400)
-    artifacts.register_still(
-        package, front, path=still, media_generation_id="user:img-front"
-    )
+    artifacts.register_still(package, front, path=still, media_generation_id="user:img-front")
     char = package.character(front.artifact_refs["bible"]["char_id"])
     assert char.hero_stills["front"] == str(still)
     assert str(still) in char.grok_ref_pack
@@ -56,16 +54,14 @@ def test_later_slots_chain_earlier_stills_as_references(tmp_path) -> None:
     ops = artifacts.plan_sheet_ops("s-art", package)
     char_id = package.characters[0].char_id
     front = next(
-        o for o in ops
-        if o.artifact_refs["bible"] == {"char_id": char_id, "slot": "front"}
+        o for o in ops if o.artifact_refs["bible"] == {"char_id": char_id, "slot": "front"}
     )
     still = tmp_path / "front.png"
     still.write_bytes(b"png" * 400)
     artifacts.register_still(package, front, path=still, media_generation_id="user:img-front")
 
     profile_op = next(
-        o for o in ops
-        if o.artifact_refs["bible"] == {"char_id": char_id, "slot": "profile"}
+        o for o in ops if o.artifact_refs["bible"] == {"char_id": char_id, "slot": "profile"}
     )
     refs = artifacts.references_for(package, profile_op)
     assert "user:img-front" in refs

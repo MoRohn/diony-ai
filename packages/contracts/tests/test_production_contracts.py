@@ -23,9 +23,17 @@ from diony_contracts.production import (
 def _script() -> Script:
     lines = [
         ScriptLine(line_id="ln-1", kind="heading", text="INT. DINER - NIGHT", scene_id="sc-1"),
-        ScriptLine(line_id="ln-2", kind="action", text="MARA slides into the booth.", scene_id="sc-1"),
+        ScriptLine(
+            line_id="ln-2", kind="action", text="MARA slides into the booth.", scene_id="sc-1"
+        ),
         ScriptLine(line_id="ln-3", kind="cue", text="MARA", speaker="MARA", scene_id="sc-1"),
-        ScriptLine(line_id="ln-4", kind="dialogue", text="Not tonight. Tonight we drive.", speaker="MARA", scene_id="sc-1"),
+        ScriptLine(
+            line_id="ln-4",
+            kind="dialogue",
+            text="Not tonight. Tonight we drive.",
+            speaker="MARA",
+            scene_id="sc-1",
+        ),
     ]
     scene = Scene(
         scene_id="sc-1",
@@ -140,7 +148,12 @@ def test_clip_review_verdict_and_families() -> None:
 
 
 def test_continuity_lock_recipes_are_typed() -> None:
-    lock = ContinuityLock(lock_recipe="character_asset", character_packs=[{"char_id": "chr-mara", "sheet_version": 1, "pack_kind": "flow_character"}])
+    lock = ContinuityLock(
+        lock_recipe="character_asset",
+        character_packs=[
+            {"char_id": "chr-mara", "sheet_version": 1, "pack_kind": "flow_character"}
+        ],
+    )
     assert lock.lock_recipe == "character_asset"
     with pytest.raises(ValidationError):
         ContinuityLock(lock_recipe="vibes")

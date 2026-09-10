@@ -53,7 +53,12 @@ def test_every_form_of_the_name_becomes_the_descriptor_and_nothing_else_moves() 
     # a mention that opens a sentence is capitalized
     assert "The broad-shouldered man in sunglasses and a leather vest holds." in text
     # brands, on-screen titles, wardrobe, and the reference opener are untouched
-    for kept in ("Volvo FM", "both Volvo trucks", "PRECISION and CONTROL", "Use the reference image"):
+    for kept in (
+        "Volvo FM",
+        "both Volvo trucks",
+        "PRECISION and CONTROL",
+        "Use the reference image",
+    ):
         assert kept in text
 
 
@@ -84,7 +89,9 @@ def test_a_cue_line_in_caps_becomes_the_label_in_caps() -> None:
     assert not changed and label == "MARA"
 
 
-def test_nicknames_the_brain_lists_are_aliases_and_a_descriptor_naming_the_person_is_refused() -> None:
+def test_nicknames_the_brain_lists_are_aliases_and_a_descriptor_naming_the_person_is_refused() -> (
+    None
+):
     people = _people({**PERSON, "aliases": ["JCVD", "the Muscles from Brussels"]})
     text, hits = likeness.scrub("JCVD, the Muscles from Brussels, grins.", people)
     assert hits == 2 and "JCVD" not in text and "Brussels" not in text
@@ -141,7 +148,11 @@ class _Brain:
                 brain.calls.append("audit")
                 if isinstance(brain.audit_reply, Exception):
                     raise brain.audit_reply
-                return {"choices": [{"message": {"content": json.dumps(brain.audit_reply or {"people": []})}}]}
+                return {
+                    "choices": [
+                        {"message": {"content": json.dumps(brain.audit_reply or {"people": []})}}
+                    ]
+                }
 
         return _Response()
 
@@ -157,8 +168,20 @@ def _leaky_body(**overrides) -> dict:
         ending=f"a stable wide hold of {ACTOR} in full split",
         prompt=LEAKED,
         clips=[
-            {"prompt": LEAKED, "duration_s": 10, "narration": "", "scene_change": False, "opening": f"{ACTOR} in a split"},
-            {"prompt": "The camera pulls back on Van Damme.", "duration_s": 10, "narration": "Van Damme holds.", "scene_change": False, "opening": ""},
+            {
+                "prompt": LEAKED,
+                "duration_s": 10,
+                "narration": "",
+                "scene_change": False,
+                "opening": f"{ACTOR} in a split",
+            },
+            {
+                "prompt": "The camera pulls back on Van Damme.",
+                "duration_s": 10,
+                "narration": "Van Damme holds.",
+                "scene_change": False,
+                "opening": "",
+            },
         ],
         **overrides,
     )
@@ -178,16 +201,23 @@ def test_a_confessed_person_is_described_never_named_in_every_field(monkeypatch,
     brain = _Brain(_leaky_body(real_people=[PERSON]))
     monkeypatch.setattr(screenwriter.httpx, "post", brain)
     master = master_prompt.derive(
-        "a man in a full split between two trucks", target_duration_s=20,
-        reference_images=[str(still)], clip_plan=[10, 10],
+        "a man in a full split between two trucks",
+        target_duration_s=20,
+        reference_images=[str(still)],
+        clip_plan=[10, 10],
     )
-    doc = json.dumps({k: v for k, v in master.model_dump(mode="json").items() if k != "real_people"})
+    doc = json.dumps(
+        {k: v for k, v in master.model_dump(mode="json").items() if k != "real_people"}
+    )
     # the record keeps the name; nothing a generator sees does
     assert master.real_people and master.real_people[0]["name"] == ACTOR
     for field in likeness.master_texts(master):
         assert "Damme" not in field and "Jean-Claude" not in field, field
     assert master.prompt.startswith(f"Create a video of {DESCRIPTOR}")
-    assert master.clips[1]["narration"] == "The broad-shouldered man in sunglasses and a leather vest holds."
+    assert (
+        master.clips[1]["narration"]
+        == "The broad-shouldered man in sunglasses and a leather vest holds."
+    )
     assert master.clips[0]["opening"] == f"{DESCRIPTOR[:1].upper()}{DESCRIPTOR[1:]} in a split"
     assert f"{DESCRIPTOR}'s sunglasses" in master.continuity_anchors
     assert any("likeness guard" in w and "never named" in w for w in master.warnings)
@@ -201,14 +231,18 @@ def test_a_name_the_brain_wrote_but_did_not_confess_is_caught_by_the_audit(monke
     monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_URL", "http://127.0.0.1:9999")
     brain = _Brain(
         _leaky_body(),  # no real_people key at all
-        audit_reply={"people": [{"name": "Van Damme", "descriptor": DESCRIPTOR, "label": "The Splitter"}]},
+        audit_reply={
+            "people": [{"name": "Van Damme", "descriptor": DESCRIPTOR, "label": "The Splitter"}]
+        },
     )
     monkeypatch.setattr(screenwriter.httpx, "post", brain)
     master = master_prompt.derive("a man in a full split", target_duration_s=20, clip_plan=[10, 10])
     assert brain.calls == ["master", "audit"]
     for field in likeness.master_texts(master):
         assert "Damme" not in field and "Jean-Claude" not in field, field
-    assert ACTOR in master.real_people[0]["aliases"], "the full phrase joined the surname the audit named"
+    assert ACTOR in master.real_people[0]["aliases"], (
+        "the full phrase joined the surname the audit named"
+    )
 
 
 def test_an_audit_that_fails_is_a_warning_never_a_failed_derivation(monkeypatch) -> None:
@@ -234,9 +268,14 @@ def test_a_film_with_no_real_people_is_byte_identical_and_names_no_guard(monkeyp
     brain = _Brain(master_brain_body(real_people=[]))
     monkeypatch.setattr(screenwriter.httpx, "post", brain)
     master = master_prompt.derive("a keeper waits", target_duration_s=8)
-    assert master.prompt == master_prompt.optimize(
-        master_prompt._parse(master_brain_body(), idea="a keeper waits", target_duration_s=8, has_reference=False)
-    ).prompt
+    assert (
+        master.prompt
+        == master_prompt.optimize(
+            master_prompt._parse(
+                master_brain_body(), idea="a keeper waits", target_duration_s=8, has_reference=False
+            )
+        ).prompt
+    )
     assert not master.real_people
     assert not any("likeness" in w for w in master.warnings)
 
@@ -257,7 +296,9 @@ def test_a_revision_note_naming_the_person_reaches_the_provider_described() -> N
     master = master_prompt.derive("a getaway driver leaves a neon diner", target_duration_s=60)
     master.real_people = _people(PERSON)
     draft = screenwriter.write_script(
-        "a getaway driver decides to leave town from a neon diner", runtime_target_s=60, master=master
+        "a getaway driver decides to leave town from a neon diner",
+        runtime_target_s=60,
+        master=master,
     )
     package = packagebuilder.build_package("s-likeness", "a getaway driver leaves town", draft)
     clip = package.clips[0]
@@ -270,15 +311,23 @@ def test_a_revision_note_naming_the_person_reaches_the_provider_described() -> N
 # --- the screenplay -----------------------------------------------------------
 
 
-def test_a_real_person_cast_as_a_character_is_relabeled_and_every_speaker_follows(monkeypatch) -> None:
+def test_a_real_person_cast_as_a_character_is_relabeled_and_every_speaker_follows(
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_URL", "http://127.0.0.1:9999")
     monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_REFINE", "0")
     body = {
         "logline": f"{ACTOR} holds a split between two trucks.",
         "beats": [{"beat": f"{ACTOR} holds", "story_time": "Day 1"}],
-        "settings": [{"setting_id": "set-hwy", "name": "Sunlit Highway", "kind": "EXT", "room_tone": "wind"}],
+        "settings": [
+            {"setting_id": "set-hwy", "name": "Sunlit Highway", "kind": "EXT", "room_tone": "wind"}
+        ],
         "characters": [
-            {"char_id": "chr-jcvd", "name": "JEAN-CLAUDE VAN DAMME", "age_body_notes": "the actor's face"},
+            {
+                "char_id": "chr-jcvd",
+                "name": "JEAN-CLAUDE VAN DAMME",
+                "age_body_notes": "the actor's face",
+            },
             {"char_id": "chr-mara", "name": "MARA"},
         ],
         "scenes": [
@@ -288,7 +337,11 @@ def test_a_real_person_cast_as_a_character_is_relabeled_and_every_speaker_follow
                 "story_time": "Day 1",
                 "cast": ["chr-jcvd", "chr-mara"],
                 "lines": [
-                    {"kind": "action", "text": "Van Damme lowers into the split.", "shot": "Wide on Van Damme."},
+                    {
+                        "kind": "action",
+                        "text": "Van Damme lowers into the split.",
+                        "shot": "Wide on Van Damme.",
+                    },
                     {"kind": "dialogue", "text": "Hold it.", "speaker": "JEAN-CLAUDE VAN DAMME"},
                     {"kind": "dialogue", "text": "Holding.", "speaker": "MARA"},
                 ],
@@ -326,7 +379,9 @@ def test_the_screenplay_inherits_the_master_derivations_people(monkeypatch) -> N
     body = {
         "logline": "A split.",
         "beats": [{"beat": "hold", "story_time": "Day 1"}],
-        "settings": [{"setting_id": "set-hwy", "name": "Highway", "kind": "EXT", "room_tone": "wind"}],
+        "settings": [
+            {"setting_id": "set-hwy", "name": "Highway", "kind": "EXT", "room_tone": "wind"}
+        ],
         "characters": [{"char_id": "chr-1", "name": "VAN DAMME"}],
         "scenes": [
             {
@@ -348,7 +403,10 @@ def test_the_screenplay_inherits_the_master_derivations_people(monkeypatch) -> N
     monkeypatch.setattr(screenwriter.httpx, "post", lambda *a, **k: _Response())
     draft = screenwriter.write_script("a man in a split", runtime_target_s=20, master=master)
     assert draft.characters[0].name == "THE SPLITTER"
-    assert draft.script.lines[1].text == "The broad-shouldered man in sunglasses and a leather vest waits."
+    assert (
+        draft.script.lines[1].text
+        == "The broad-shouldered man in sunglasses and a leather vest waits."
+    )
 
 
 @pytest.mark.parametrize(
@@ -391,7 +449,7 @@ PICTURED_PROMPT = (
     "face, silver-brown hair, and pale blue Oxford. Grant Merriweather, 58, athletic build, "
     "stands at the fence at sunrise. Merriweather holds the rail. Spoken aloud on this "
     "clip's track, exactly these words: \"I'm Grant Merriweather, and I approve this "
-    "message.\" No on-screen text."
+    'message." No on-screen text.'
 )
 
 
@@ -410,15 +468,19 @@ def test_a_pictured_prompt_describes_every_named_person_but_leaves_speech_verbat
     assert out.count("The silver-haired candidate in the pale blue Oxford, 58") == 1
     assert "The silver-haired candidate in the pale blue Oxford holds the rail." in out
     # the spoken line is the user's own words and rendered live beside the poster
-    assert "\"I'm Grant Merriweather, and I approve this message.\"" in out
-    assert "Merriweather" not in out.replace("I'm Grant Merriweather, and I approve this message.", "")
+    assert '"I\'m Grant Merriweather, and I approve this message."' in out
+    assert "Merriweather" not in out.replace(
+        "I'm Grant Merriweather, and I approve this message.", ""
+    )
     again, more = likeness.scrub_pictured(out, people)
     assert again == out and more == 0
     note = likeness.pictured_note(hits, people)
     assert "3 mentions" in note and CANDIDATE["descriptor"] in note and "Merriweather" not in note
 
 
-def test_a_confessed_character_is_kept_on_the_artifact_and_a_real_person_never_doubles(monkeypatch, tmp_path) -> None:
+def test_a_confessed_character_is_kept_on_the_artifact_and_a_real_person_never_doubles(
+    monkeypatch, tmp_path
+) -> None:
     monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_URL", "http://127.0.0.1:9999")
     still = tmp_path / "poster.png"
     still.write_bytes(b"\x89PNG\r\n\x1a\n")
@@ -430,7 +492,9 @@ def test_a_confessed_character_is_kept_on_the_artifact_and_a_real_person_never_d
     )
     brain = _Brain(body)
     monkeypatch.setattr(screenwriter.httpx, "post", brain)
-    master = master_prompt.derive("a campaign ad", target_duration_s=8, reference_images=[str(still)])
+    master = master_prompt.derive(
+        "a campaign ad", target_duration_s=8, reference_images=[str(still)]
+    )
     # the real person stays a real person; the invented one is a character
     assert [p["name"] for p in master.real_people] == [ACTOR]
     assert [c["name"] for c in master.characters] == ["Grant Merriweather"]
@@ -462,7 +526,12 @@ def test_a_screenplays_cast_is_known_by_name_with_the_role_as_descriptor() -> No
 
     cast = [
         CharacterProfile(char_id="c1", name="Grant Merriweather", role="the candidate"),
-        CharacterProfile(char_id="c2", name="Tom", role="Tom's neighbor", age_body_notes="a weathered farmer in his sixties, broad hands"),
+        CharacterProfile(
+            char_id="c2",
+            name="Tom",
+            role="Tom's neighbor",
+            age_body_notes="a weathered farmer in his sixties, broad hands",
+        ),
         CharacterProfile(char_id="c3", name="", role="nobody"),
     ]
     people = likeness.people_from_profiles(cast)
@@ -484,10 +553,20 @@ def _flow_lane(monkeypatch):
 
     def fake_submit(op):
         counter["n"] += 1
-        sent["videos"].append({"op_id": op.id, "prompt": op.prompt, "refs": dict(op.artifact_refs), "ext": f"vid-{counter['n']}"})
+        sent["videos"].append(
+            {
+                "op_id": op.id,
+                "prompt": op.prompt,
+                "refs": dict(op.artifact_refs),
+                "ext": f"vid-{counter['n']}",
+            }
+        )
         return base.CloudJobHandle(
-            provider_id="google-flow", external_id=f"vid-{counter['n']}", model=op.model,
-            duration_s=int(op.duration_s), mode="t2v",
+            provider_id="google-flow",
+            external_id=f"vid-{counter['n']}",
+            model=op.model,
+            duration_s=int(op.duration_s),
+            mode="t2v",
         )
 
     def fake_poll(handle):
@@ -499,7 +578,8 @@ def _flow_lane(monkeypatch):
                 detail=flow_mod._FILTER_REASONS["PROMINENT_PERSON"] + " [PROMINENT_PERSON]",
             )
         return base.CloudJobStatus(
-            state="done", result_url=f"https://flow/{handle.external_id}",
+            state="done",
+            result_url=f"https://flow/{handle.external_id}",
             metadata={"media_generation_id": f"user:{handle.external_id}"},
         )
 
@@ -508,7 +588,9 @@ def _flow_lane(monkeypatch):
         payload = b"mp4" * 2048
         dest.write_bytes(payload)
         return base.FetchedClip(
-            path=dest, sha256=hashlib.sha256(payload).hexdigest(), bytes=len(payload),
+            path=dest,
+            sha256=hashlib.sha256(payload).hexdigest(),
+            bytes=len(payload),
             media_url=status.result_url,
         )
 
@@ -544,7 +626,9 @@ def _sync_submitter(monkeypatch):
     monkeypatch.setattr(app_module, "_kick_submitter", kick)
 
 
-def test_the_submit_gate_describes_names_beside_an_uploaded_still_and_keeps_them_without_one(monkeypatch) -> None:
+def test_the_submit_gate_describes_names_beside_an_uploaded_still_and_keeps_them_without_one(
+    monkeypatch,
+) -> None:
     import base64
 
     from fastapi.testclient import TestClient
@@ -560,8 +644,14 @@ def test_the_submit_gate_describes_names_beside_an_uploaded_still_and_keeps_them
 
     # pictured: the poster rides as a reference → the prompt names no one
     sid = client.post("/api/director/sessions").json()["session_id"]
-    still = client.post(f"/api/director/sessions/{sid}/uploads", json={"name": "MERRIWEATHER.png", "data_base64": png}).json()["upload"]
-    body = client.post(f"/api/director/sessions/{sid}/message", json={"text": "a campaign ad", "provider": "google-flow", "duration_s": 8}).json()
+    still = client.post(
+        f"/api/director/sessions/{sid}/uploads",
+        json={"name": "MERRIWEATHER.png", "data_base64": png},
+    ).json()["upload"]
+    body = client.post(
+        f"/api/director/sessions/{sid}/message",
+        json={"text": "a campaign ad", "provider": "google-flow", "duration_s": 8},
+    ).json()
     op = session.get_op((body.get("ops") or [body["op"]])[0]["id"])
     for _ in range(200):
         if op.status != "deriving":
@@ -571,9 +661,11 @@ def test_the_submit_gate_describes_names_beside_an_uploaded_still_and_keeps_them
     assert client.post(f"/api/director/ops/{op.id}/run").status_code == 200
     shipped = sent["videos"][-1]
     assert shipped["op_id"] == op.id and still["path"] in shipped["refs"]["references"]
-    assert "Merriweather" not in shipped["prompt"].replace("I'm Grant Merriweather, and I approve this message.", "")
+    assert "Merriweather" not in shipped["prompt"].replace(
+        "I'm Grant Merriweather, and I approve this message.", ""
+    )
     assert CANDIDATE["descriptor"] in shipped["prompt"]
-    assert "\"I'm Grant Merriweather, and I approve this message.\"" in shipped["prompt"]
+    assert '"I\'m Grant Merriweather, and I approve this message."' in shipped["prompt"]
     # the card shows what was sent, and says why
     assert session.get_op(op.id).prompt == shipped["prompt"]
     assert session.PICTURED_GUARD_MARK in session.get_op(op.id).rationale
@@ -581,7 +673,10 @@ def test_the_submit_gate_describes_names_beside_an_uploaded_still_and_keeps_them
 
     # unpictured: the same film without a still keeps its character's name
     sid2 = client.post("/api/director/sessions").json()["session_id"]
-    body = client.post(f"/api/director/sessions/{sid2}/message", json={"text": "a campaign ad", "provider": "google-flow", "duration_s": 8}).json()
+    body = client.post(
+        f"/api/director/sessions/{sid2}/message",
+        json={"text": "a campaign ad", "provider": "google-flow", "duration_s": 8},
+    ).json()
     op2 = session.get_op((body.get("ops") or [body["op"]])[0]["id"])
     for _ in range(200):
         if op2.status != "deriving":
@@ -592,7 +687,9 @@ def test_the_submit_gate_describes_names_beside_an_uploaded_still_and_keeps_them
     assert session.PICTURED_GUARD_MARK not in session.get_op(op2.id).rationale
 
 
-def test_retry_sets_the_picture_aside_when_a_name_clean_prompt_is_still_refused(monkeypatch) -> None:
+def test_retry_sets_the_picture_aside_when_a_name_clean_prompt_is_still_refused(
+    monkeypatch,
+) -> None:
     import base64
 
     from fastapi.testclient import TestClient
@@ -605,8 +702,14 @@ def test_retry_sets_the_picture_aside_when_a_name_clean_prompt_is_still_refused(
     client = TestClient(app_module.app)
     png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 24).decode()
     sid = client.post("/api/director/sessions").json()["session_id"]
-    still = client.post(f"/api/director/sessions/{sid}/uploads", json={"name": "MERRIWEATHER.png", "data_base64": png}).json()["upload"]
-    body = client.post(f"/api/director/sessions/{sid}/message", json={"text": "a campaign ad", "provider": "google-flow", "duration_s": 8}).json()
+    still = client.post(
+        f"/api/director/sessions/{sid}/uploads",
+        json={"name": "MERRIWEATHER.png", "data_base64": png},
+    ).json()["upload"]
+    body = client.post(
+        f"/api/director/sessions/{sid}/message",
+        json={"text": "a campaign ad", "provider": "google-flow", "duration_s": 8},
+    ).json()
     op = session.get_op((body.get("ops") or [body["op"]])[0]["id"])
     for _ in range(200):
         if op.status != "deriving":
@@ -615,7 +718,9 @@ def test_retry_sets_the_picture_aside_when_a_name_clean_prompt_is_still_refused(
     sent["refuse"].add("vid-1")
     assert client.post(f"/api/director/ops/{op.id}/run").status_code == 200
     assert client.get(f"/api/director/ops/{op.id}").json()["op"]["status"] == "failed"
-    assert "Merriweather" not in sent["videos"][0]["prompt"].replace("I'm Grant Merriweather, and I approve this message.", "")
+    assert "Merriweather" not in sent["videos"][0]["prompt"].replace(
+        "I'm Grant Merriweather, and I approve this message.", ""
+    )
     # the opener has no frame to redraw; the picture is set aside instead
     assert app_module._plan_frame_redraw(op, None) == (False, False, "")
     res = client.post(f"/api/director/ops/{op.id}/retry")
@@ -649,7 +754,9 @@ def test_retry_sets_the_picture_aside_when_a_name_clean_prompt_is_still_refused(
     assert app_module._plan_picture_setaside(fresh)[0] is True
 
 
-def test_an_artifact_derived_before_the_characters_contract_is_audited_once_at_the_first_pictured_submit(monkeypatch) -> None:
+def test_an_artifact_derived_before_the_characters_contract_is_audited_once_at_the_first_pictured_submit(
+    monkeypatch,
+) -> None:
     """s-9c2f04d993's master knew no characters (an older build derived it).
     At the first pictured Flow submit the brain reads the artifact once, the
     character it finds is described in the prompt, and the artifact remembers
@@ -663,7 +770,8 @@ def test_an_artifact_derived_before_the_characters_contract_is_audited_once_at_t
     brain = _candidate_brain(monkeypatch)
     brain.master_body = master_brain_body(
         primary_subject="Grant Merriweather, 58, silver-brown hair, pale blue shirt",
-        prompt=PICTURED_PROMPT, narration="",
+        prompt=PICTURED_PROMPT,
+        narration="",
     )  # no characters confessed
     brain.audit_reply = {"people": [], "characters": [CANDIDATE]}
     monkeypatch.setenv("DIONY_LIKENESS_AUDIT", "0")  # derivation audit off: the old-build shape
@@ -672,8 +780,14 @@ def test_an_artifact_derived_before_the_characters_contract_is_audited_once_at_t
     client = TestClient(app_module.app)
     png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 24).decode()
     sid = client.post("/api/director/sessions").json()["session_id"]
-    client.post(f"/api/director/sessions/{sid}/uploads", json={"name": "MERRIWEATHER.png", "data_base64": png})
-    body = client.post(f"/api/director/sessions/{sid}/message", json={"text": "a campaign ad", "provider": "google-flow", "duration_s": 8}).json()
+    client.post(
+        f"/api/director/sessions/{sid}/uploads",
+        json={"name": "MERRIWEATHER.png", "data_base64": png},
+    )
+    body = client.post(
+        f"/api/director/sessions/{sid}/message",
+        json={"text": "a campaign ad", "provider": "google-flow", "duration_s": 8},
+    ).json()
     op = session.get_op((body.get("ops") or [body["op"]])[0]["id"])
     for _ in range(200):
         if op.status != "deriving":
@@ -686,15 +800,22 @@ def test_an_artifact_derived_before_the_characters_contract_is_audited_once_at_t
     assert client.post(f"/api/director/ops/{op.id}/run").status_code == 200
     assert brain.calls == ["master", "audit"]
     shipped = sent["videos"][-1]["prompt"]
-    assert "Merriweather" not in shipped.replace("I'm Grant Merriweather, and I approve this message.", "")
+    assert "Merriweather" not in shipped.replace(
+        "I'm Grant Merriweather, and I approve this message.", ""
+    )
     assert CANDIDATE["descriptor"] in shipped
-    assert master.characters_audited is True and [c["name"] for c in master.characters] == ["Grant Merriweather"]
+    assert master.characters_audited is True and [c["name"] for c in master.characters] == [
+        "Grant Merriweather"
+    ]
     # the audit survives a restart with the artifact
     session.persist(sid)
     session.reset()
     session.rehydrate_from_vault()
     restored = session.master_for_op(op.id)
-    assert restored.characters_audited is True and restored.characters[0]["name"] == "Grant Merriweather"
+    assert (
+        restored.characters_audited is True
+        and restored.characters[0]["name"] == "Grant Merriweather"
+    )
     # a brain that fails at the gate never blocks the submit
     restored.characters_audited = False
     restored.characters = []

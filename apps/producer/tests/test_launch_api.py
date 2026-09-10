@@ -10,7 +10,9 @@ from diony_producer.control_plane import ControlPlane
 from diony_producer.security import issue_token
 
 
-def test_launch_api_bootstrap_workflow_progress_controls_and_metrics(tmp_path: Path, monkeypatch) -> None:
+def test_launch_api_bootstrap_workflow_progress_controls_and_metrics(
+    tmp_path: Path, monkeypatch
+) -> None:
     vault = tmp_path / "vault"
     monkeypatch.setenv("DIONY_VAULT", str(vault))
     monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(vault))
@@ -22,12 +24,9 @@ def test_launch_api_bootstrap_workflow_progress_controls_and_metrics(tmp_path: P
     assert session.headers["X-Correlation-ID"]
     providers = client.get("/api/v1/providers")
     assert providers.status_code == 200
-    assert any(row["id"] == "diony.wan22" for row in providers.json()["providers"])
-    reset_project = client.post("/api/reset")
-    assert reset_project.status_code == 200
-    projects = client.get("/api/v1/projects")
-    assert projects.status_code == 200
-    assert reset_project.json()["id"] in {row["id"] for row in projects.json()["projects"]}
+    ids = {row["id"] for row in providers.json()["providers"]}
+    assert {"grok", "google-flow", "diony.assembly"} <= ids
+    assert client.get("/api/v1/projects").status_code == 404
     team = client.post("/api/v1/teams", json={"name": "Picture Unit"})
     assert team.status_code == 201
     member = client.put(
@@ -125,11 +124,13 @@ def test_token_auth_mode_rejects_unsigned_launch_requests(tmp_path: Path, monkey
     monkeypatch.setenv("DIONY_AUTH_SECRET", "test-secret-that-is-long-enough")
     client = TestClient(app)
     assert client.get("/api/v1/session").status_code == 401
-    assert client.get("/api/project").status_code == 200
-    assert client.post("/api/reset").status_code == 401
+    assert client.get("/api/engine").status_code == 200
+    assert client.post("/api/director-films/delete", json={"sessions": ["x"]}).status_code == 401
 
 
-def test_token_auth_mode_accepts_persisted_workspace_membership(tmp_path: Path, monkeypatch) -> None:
+def test_token_auth_mode_accepts_persisted_workspace_membership(
+    tmp_path: Path, monkeypatch
+) -> None:
     vault = tmp_path / "vault"
     monkeypatch.setenv("DIONY_VAULT", str(vault))
     monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(vault))
@@ -137,9 +138,7 @@ def test_token_auth_mode_accepts_persisted_workspace_membership(tmp_path: Path, 
     monkeypatch.setenv("DIONY_AUTH_SECRET", "test-secret-that-is-long-enough")
     ControlPlane().bootstrap_local()
     token = issue_token("local-user", "local-workspace", MembershipRole.OWNER)
-    response = TestClient(app).get(
-        "/api/v1/session", headers={"Authorization": f"Bearer {token}"}
-    )
+    response = TestClient(app).get("/api/v1/session", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
     assert response.json()["auth_mode"] == "token"
 

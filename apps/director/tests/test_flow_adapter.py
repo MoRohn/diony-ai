@@ -1,5 +1,7 @@
 """GoogleFlowAdapter: POST /videos, poll /jobs, credit reconciliation from remainingCredits."""
 
+from datetime import UTC
+
 import pytest
 
 from diony_contracts.director import (
@@ -82,7 +84,7 @@ def test_submit_posts_async_and_returns_the_job_id(monkeypatch) -> None:
 def test_quota_429_raises_the_quota_error_with_the_providers_reset_time(monkeypatch) -> None:
     """The live 2026-09-02 shape: PUBLIC_ERROR_USER_QUOTA_REACHED with an ISO
     retryAfter — must surface as the transient quota flavor, never the fatal one."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     body = {
         "error": "PUBLIC_ERROR_USER_QUOTA_REACHED (HTTP 429)",
@@ -99,7 +101,7 @@ def test_quota_429_raises_the_quota_error_with_the_providers_reset_time(monkeypa
         flow.submit(_op())
         raise AssertionError("expected CloudAdapterQuotaError")
     except base.CloudAdapterQuotaError as err:
-        expected = datetime(2026, 9, 2, 22, 33, 11, 316000, tzinfo=timezone.utc).timestamp()
+        expected = datetime(2026, 9, 2, 22, 33, 11, 316000, tzinfo=UTC).timestamp()
         assert err.retry_at == expected
         assert "429" in str(err)
         assert err.reason_code == "PUBLIC_ERROR_USER_QUOTA_REACHED"
@@ -128,7 +130,9 @@ def test_quota_reason_reads_the_live_envelope_never_dumps_it() -> None:
     code, why = base.quota_reason(res)
     assert code == "PUBLIC_ERROR_USER_QUOTA_REACHED"
     assert "quota is used up" in why and "jobId" not in why and "@" not in why
-    throttled = _Response({"error": {"message": "PUBLIC_ERROR_USER_REQUESTS_THROTTLED"}}, status_code=429)
+    throttled = _Response(
+        {"error": {"message": "PUBLIC_ERROR_USER_REQUESTS_THROTTLED"}}, status_code=429
+    )
     throttled.text = ""
     assert base.quota_reason(throttled)[1].startswith("Flow is throttling")
     plain = _Response({"error": "slow down please"}, status_code=429)
@@ -140,7 +144,9 @@ def test_poll_completed_extracts_video_url_and_credits(monkeypatch) -> None:
     body = {
         "status": "completed",
         "remainingCredits": 960,
-        "media": [{"mediaGenerationId": "user:abc", "videoUrl": "https://flow-content.google/clip.mp4"}],
+        "media": [
+            {"mediaGenerationId": "user:abc", "videoUrl": "https://flow-content.google/clip.mp4"}
+        ],
     }
     monkeypatch.setattr(flow.httpx, "get", lambda url, **kw: _Response(body, status_code=200))
     handle = flow.submit_handle("j-171", model="veo-3.1-fast", duration_s=8, credits_before=980)
@@ -311,9 +317,13 @@ def test_every_flow_api_call_passes_through_the_pacing_gate(monkeypatch, tmp_pat
         return real_paced(send, what=what)
 
     monkeypatch.setattr(flow, "paced", counting_paced)
-    monkeypatch.setattr(flow.httpx, "post", lambda url, **kw: _Response(
-        {"jobId": "j-1", "mediaGenerationId": "m-1", "entityId": "c-1", "ref": "v-1"}
-    ))
+    monkeypatch.setattr(
+        flow.httpx,
+        "post",
+        lambda url, **kw: _Response(
+            {"jobId": "j-1", "mediaGenerationId": "m-1", "entityId": "c-1", "ref": "v-1"}
+        ),
+    )
     monkeypatch.setattr(
         flow.httpx, "get", lambda url, **kw: _Response({"status": "running"}, status_code=200)
     )
@@ -358,7 +368,10 @@ def _live_filtered_job_body() -> dict:
                     "mediaMetadata": {
                         "visibility": "FILTERED",
                         "mediaStatus": {
-                            "error": {"message": "PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED", "code": 3},
+                            "error": {
+                                "message": "PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED",
+                                "code": 3,
+                            },
                             "failureReasons": ["PROMINENT_PERSON"],
                             "mediaGenerationStatus": "MEDIA_GENERATION_STATUS_FAILED",
                         },
@@ -373,7 +386,7 @@ def _live_filtered_job_body() -> dict:
 
 
 def test_poll_names_the_filter_behind_all_operations_failed(monkeypatch) -> None:
-    """"All operations failed" is Flow's generic wrapper; the director must
+    """ "All operations failed" is Flow's generic wrapper; the director must
     read the nested reason — a prominent-person refusal — and land it as
     moderated (nothing rendered, nothing burned) with actionable words."""
     monkeypatch.setattr(

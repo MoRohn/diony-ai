@@ -1,4 +1,4 @@
-"""Optional local transcript check of the speech Wan2.2 delivered (Blueprint 24).
+"""Optional local transcript check of the speech a provider delivered (Blueprint 24).
 
 When a faster-whisper model directory is installed on the host and named by
 ``DIONY_WHISPER_MODEL``, the delivered dialogue stem is transcribed and the
@@ -17,18 +17,74 @@ from functools import lru_cache
 from pathlib import Path
 
 _WORD = re.compile(r"[a-z0-9']+")
-_ONES = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-         "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"]
-_TENS = {2: "twenty", 3: "thirty", 4: "forty", 5: "fifty", 6: "sixty", 7: "seventy", 8: "eighty", 9: "ninety"}
+_ONES = [
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
+]
+_TENS = {
+    2: "twenty",
+    3: "thirty",
+    4: "forty",
+    5: "fifty",
+    6: "sixty",
+    7: "seventy",
+    8: "eighty",
+    9: "ninety",
+}
 _CONTRACTIONS = {
-    "i'm": "i am", "you're": "you are", "we're": "we are", "they're": "they are",
-    "it's": "it is", "that's": "that is", "there's": "there is", "he's": "he is", "she's": "she is",
-    "isn't": "is not", "aren't": "are not", "wasn't": "was not", "weren't": "were not",
-    "don't": "do not", "doesn't": "does not", "didn't": "did not", "can't": "cannot", "won't": "will not",
-    "couldn't": "could not", "wouldn't": "would not", "shouldn't": "should not",
-    "i'll": "i will", "you'll": "you will", "we'll": "we will", "they'll": "they will", "he'll": "he will", "she'll": "she will",
-    "i've": "i have", "you've": "you have", "we've": "we have", "they've": "they have",
-    "i'd": "i would", "you'd": "you would", "we'd": "we would", "they'd": "they would",
+    "i'm": "i am",
+    "you're": "you are",
+    "we're": "we are",
+    "they're": "they are",
+    "it's": "it is",
+    "that's": "that is",
+    "there's": "there is",
+    "he's": "he is",
+    "she's": "she is",
+    "isn't": "is not",
+    "aren't": "are not",
+    "wasn't": "was not",
+    "weren't": "were not",
+    "don't": "do not",
+    "doesn't": "does not",
+    "didn't": "did not",
+    "can't": "cannot",
+    "won't": "will not",
+    "couldn't": "could not",
+    "wouldn't": "would not",
+    "shouldn't": "should not",
+    "i'll": "i will",
+    "you'll": "you will",
+    "we'll": "we will",
+    "they'll": "they will",
+    "he'll": "he will",
+    "she'll": "she will",
+    "i've": "i have",
+    "you've": "you have",
+    "we've": "we have",
+    "they've": "they have",
+    "i'd": "i would",
+    "you'd": "you would",
+    "we'd": "we would",
+    "they'd": "they would",
     "let's": "let us",
 }
 
@@ -127,7 +183,10 @@ def _take_match(word: str, pool: list[str]) -> int | None:
     if len(word) < 4:
         return None
     for index, candidate in enumerate(pool):
-        if len(candidate) >= 4 and SequenceMatcher(None, word, candidate).ratio() >= FUZZY_WORD_RATIO:
+        if (
+            len(candidate) >= 4
+            and SequenceMatcher(None, word, candidate).ratio() >= FUZZY_WORD_RATIO
+        ):
             return index
     return None
 
@@ -145,10 +204,12 @@ def _load_model(model_dir: str):
     from faster_whisper import WhisperModel  # type: ignore[import-not-found]
 
     device = "cuda" if os.environ.get("DIONY_WHISPER_DEVICE", "auto") in {"auto", "cuda"} else "cpu"
-    compute = os.environ.get("DIONY_WHISPER_COMPUTE", "int8_float16" if device == "cuda" else "int8")
+    compute = os.environ.get(
+        "DIONY_WHISPER_COMPUTE", "int8_float16" if device == "cuda" else "int8"
+    )
     try:
         return WhisperModel(model_dir, device=device, compute_type=compute)
-    except Exception:  # noqa: BLE001 - GPU load failure falls back to CPU int8
+    except Exception:
         return WhisperModel(model_dir, device="cpu", compute_type="int8")
 
 
@@ -171,7 +232,7 @@ def detect_speech(audio: Path) -> SpeechDetection | None:
             if text:
                 heard.append(text)
                 speech_s += max(0.0, float(segment.end) - float(segment.start))
-    except Exception:  # noqa: BLE001 - an unmeasurable track never fails a take
+    except Exception:
         return None
     transcript = " ".join(heard).strip()
     return SpeechDetection(
@@ -189,9 +250,11 @@ def transcribe_line(audio: Path, authored_line: str) -> TranscriptMeasurement | 
         return None
     try:
         model = _load_model(str(model_dir))
-        segments, _info = model.transcribe(str(audio), beam_size=1, vad_filter=True, word_timestamps=False)
+        segments, _info = model.transcribe(
+            str(audio), beam_size=1, vad_filter=True, word_timestamps=False
+        )
         heard = " ".join(segment.text.strip() for segment in segments).strip()
-    except Exception:  # noqa: BLE001 - an unmeasurable transcript never fails a take
+    except Exception:
         return None
     accuracy, last_ok, missed = score_transcript(authored_line, heard)
     return TranscriptMeasurement(
@@ -203,4 +266,14 @@ def transcribe_line(audio: Path, authored_line: str) -> TranscriptMeasurement | 
     )
 
 
-__all__ = ["SpeechDetection", "TranscriptMeasurement", "detect_speech", "normalize_words", "number_words", "score_transcript", "transcribe_line", "whisper_model_path", "word_accuracy"]
+__all__ = [
+    "SpeechDetection",
+    "TranscriptMeasurement",
+    "detect_speech",
+    "normalize_words",
+    "number_words",
+    "score_transcript",
+    "transcribe_line",
+    "whisper_model_path",
+    "word_accuracy",
+]

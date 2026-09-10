@@ -24,7 +24,9 @@ def _package(sid: str, policy: str):
     draft = screenwriter.write_script(
         "a getaway driver decides to leave town from a neon diner", runtime_target_s=60
     )
-    return packagebuilder.build_package(sid, "a getaway driver leaves town", draft, provider_policy=policy)
+    return packagebuilder.build_package(
+        sid, "a getaway driver leaves town", draft, provider_policy=policy
+    )
 
 
 # --- expansion ---------------------------------------------------------------
@@ -113,9 +115,7 @@ def _veo_picture(package):
     """The Veo prose dialect stays a tested capability behind an explicit
     model choice (the Flow policy now books omni-flash across the board) —
     force a picture clip onto it, on Veo's non-Ultra grid."""
-    clip = next(
-        c for c in package.clips if c.clip_class not in {"sync-dialogue", "vo-over"}
-    )
+    clip = next(c for c in package.clips if c.clip_class not in {"sync-dialogue", "vo-over"})
     clip.model = "veo-3.1-fast"
     clip.duration_s = 8
     return clip
@@ -191,30 +191,6 @@ def test_omni_shot_shorthand_expands_too() -> None:
     assert "micro-expression" in prompt and "/closeup" not in prompt
 
 
-def test_mixed_package_keeps_the_world_off_omni_dialogue() -> None:
-    """Auto policy: pictures on Grok, dialogue on omni. Styling only the
-    spoken shots would break the scene's one-look doctrine — the session
-    world stays off a mixed package's dialogue clips."""
-    sid = "s-mixed"
-    session.set_flow_template(sid, world="cyberpunk")
-    package = _package(sid, "auto")
-    assert any(c.provider is CloudProvider.GROK for c in package.clips)
-    dialogue = next(c for c in package.clips if c.model == "omni-flash")
-    prompt = compiler.compile_clip_prompt(dialogue, package).prompt
-    assert "Dense neon decay" not in prompt
-
-
-def test_inline_world_is_authored_law_even_on_a_mixed_package() -> None:
-    package = _package("s-mixed-inline", "auto")
-    dialogue = next(c for c in package.clips if c.model == "omni-flash")
-    dialogue.camera_idea = "/dreamy: close on her face"
-    prompt = compiler.compile_clip_prompt(dialogue, package).prompt
-    assert "Soft emotional unreality" in prompt
-
-
-# --- the Grok route never speaks the lexicon ---------------------------------
-
-
 def test_grok_prompts_ignore_the_template_and_keep_realism() -> None:
     sid = "s-grok-safe"
     session.set_flow_template(sid, world="cyberpunk", camera="orbit")
@@ -258,7 +234,9 @@ def test_flow_chat_prompt_carries_world_and_session_camera() -> None:
 def test_flow_chat_inline_camera_suppresses_the_template_camera() -> None:
     sid = "s-chat-inline"
     session.set_flow_template(sid, camera="dollyout")
-    prompt = session.compile_prompt("/orbit: the silver case on the table", CloudProvider.GOOGLE_FLOW, sid)
+    prompt = session.compile_prompt(
+        "/orbit: the silver case on the table", CloudProvider.GOOGLE_FLOW, sid
+    )
     assert "180-degree orbit" in prompt
     assert "dolly-out" not in prompt, "one camera idea per clip"
 
@@ -282,8 +260,12 @@ def test_custom_lexicon_entries_merge_over_builtins(tmp_path) -> None:
     custom.write_text(
         json.dumps(
             {
-                "worlds": {"housestyle": {"label": "House", "clause": "The house look: warm rim light."}},
-                "cameras": {"crashzoom": {"label": "Crash zoom", "clause": "Sudden crash zoom to the face"}},
+                "worlds": {
+                    "housestyle": {"label": "House", "clause": "The house look: warm rim light."}
+                },
+                "cameras": {
+                    "crashzoom": {"label": "Crash zoom", "clause": "Sudden crash zoom to the face"}
+                },
             }
         )
     )
@@ -405,9 +387,7 @@ def test_omitted_flow_fields_keep_the_template_and_never_409() -> None:
         },
     )
     client.post(f"/api/director/sessions/{sid}/lock_script")
-    res = client.post(
-        f"/api/director/sessions/{sid}/message", json={"text": "one bonus shot"}
-    )
+    res = client.post(f"/api/director/sessions/{sid}/message", json={"text": "one bonus shot"})
     assert res.status_code == 200
     assert session.flow_template_for(sid) == {"world": "filmic", "camera": "dollyin"}
 
@@ -447,9 +427,7 @@ def test_advisories_flag_stacked_worlds_and_cameras() -> None:
 
 def test_stacked_worlds_warn_in_the_flow_proposal() -> None:
     sid = session.create_session()
-    proposal = session.propose(
-        sid, "/filmic /epic: the horizon breaks", provider="google-flow"
-    )
+    proposal = session.propose(sid, "/filmic /epic: the horizon breaks", provider="google-flow")
     assert "/epic wins" in proposal.reply and "/filmic" in proposal.reply
 
 
@@ -522,13 +500,9 @@ def test_malformed_custom_entries_never_break_a_compile() -> None:
 def test_template_camera_yields_to_authored_camera_prose() -> None:
     sid = "s-cam-prose"
     session.set_flow_template(sid, camera="orbit")
-    prompt = session.compile_prompt(
-        "slow dolly in on a watch face", CloudProvider.GOOGLE_FLOW, sid
-    )
+    prompt = session.compile_prompt("slow dolly in on a watch face", CloudProvider.GOOGLE_FLOW, sid)
     assert "180-degree orbit" not in prompt, "authored camera prose rules"
-    prompt = session.compile_prompt(
-        "a lone tree on a causeway", CloudProvider.GOOGLE_FLOW, sid
-    )
+    prompt = session.compile_prompt("a lone tree on a causeway", CloudProvider.GOOGLE_FLOW, sid)
     assert "180-degree orbit" in prompt
 
 

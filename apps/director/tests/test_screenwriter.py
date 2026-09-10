@@ -39,7 +39,14 @@ def test_brain_hook_is_used_when_configured(monkeypatch) -> None:
     body = {
         "logline": "A driver leaves town.",
         "beats": [{"beat": "decision", "story_time": "Night 1"}],
-        "settings": [{"setting_id": "set-diner", "name": "Neon Diner", "kind": "INT", "room_tone": "diner hum"}],
+        "settings": [
+            {
+                "setting_id": "set-diner",
+                "name": "Neon Diner",
+                "kind": "INT",
+                "room_tone": "diner hum",
+            }
+        ],
         "characters": [{"char_id": "chr-mara", "name": "MARA"}],
         "scenes": [
             {
@@ -171,20 +178,33 @@ def test_brain_retries_once_before_falling_back(monkeypatch) -> None:
             body = {
                 "logline": "second try wins",
                 "beats": [{"beat": "b", "story_time": "Night 1"}],
-                "settings": [{
-                    "setting_id": "set-a", "name": "Pier", "kind": "EXT",
-                    "room_tone": "waves",
-                    "time_weather": "Night 1, sea fog",
-                    "grade_language": "sodium lamps against black water",
-                    "camera_kit": "28-40mm, waist height, slow drifts",
-                }],
-                "characters": [{
-                    "char_id": "chr-a", "name": "AVA",
-                    "wardrobe": "yellow oilskin over a navy sweater",
-                }],
-                "scenes": [{"heading": "EXT. PIER - NIGHT", "setting_ref": "set-a",
-                            "story_time": "Night 1", "cast": ["chr-a"],
-                            "lines": [{"kind": "action", "text": "AVA waits."}]}],
+                "settings": [
+                    {
+                        "setting_id": "set-a",
+                        "name": "Pier",
+                        "kind": "EXT",
+                        "room_tone": "waves",
+                        "time_weather": "Night 1, sea fog",
+                        "grade_language": "sodium lamps against black water",
+                        "camera_kit": "28-40mm, waist height, slow drifts",
+                    }
+                ],
+                "characters": [
+                    {
+                        "char_id": "chr-a",
+                        "name": "AVA",
+                        "wardrobe": "yellow oilskin over a navy sweater",
+                    }
+                ],
+                "scenes": [
+                    {
+                        "heading": "EXT. PIER - NIGHT",
+                        "setting_ref": "set-a",
+                        "story_time": "Night 1",
+                        "cast": ["chr-a"],
+                        "lines": [{"kind": "action", "text": "AVA waits."}],
+                    }
+                ],
             }
             return {"choices": [{"message": {"content": _json.dumps(body)}}]}
 

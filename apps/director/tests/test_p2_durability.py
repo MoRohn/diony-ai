@@ -27,11 +27,27 @@ def _client() -> TestClient:
 def _real_clip(path: Path, duration: int) -> None:
     subprocess.run(
         [
-            "ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc2=size=320x180:duration={duration}",
-            "-f", "lavfi", "-i", f"sine=frequency=330:duration={duration}",
-            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", str(path),
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc2=size=320x180:duration={duration}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=330:duration={duration}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(path),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
 
 
@@ -42,24 +58,37 @@ def _fake_adapters(monkeypatch):
         def _submit(op):
             counter["n"] += 1
             return base.CloudJobHandle(
-                provider_id=provider_id, external_id=f"{provider_id}-{counter['n']}",
-                model=op.model, duration_s=int(op.duration_s),
+                provider_id=provider_id,
+                external_id=f"{provider_id}-{counter['n']}",
+                model=op.model,
+                duration_s=int(op.duration_s),
             )
+
         return _submit
 
     def _poll(handle):
         return base.CloudJobStatus(
-            state="done", result_url=f"https://cdn/{handle.external_id}.mp4",
-            metadata={"duration_s": handle.duration_s, "media_generation_id": f"user:{handle.external_id}"},
+            state="done",
+            result_url=f"https://cdn/{handle.external_id}.mp4",
+            metadata={
+                "duration_s": handle.duration_s,
+                "media_generation_id": f"user:{handle.external_id}",
+            },
         )
 
     def make_submit_image(provider_id):
-        def _submit_image(prompt, *, model, references=None, aspect_ratio="landscape", resolution=""):
+        def _submit_image(
+            prompt, *, model, references=None, aspect_ratio="landscape", resolution=""
+        ):
             counter["n"] += 1
             return base.CloudJobHandle(
-                provider_id=provider_id, external_id=f"{provider_id}-img-{counter['n']}",
-                model=model, duration_s=0, metadata={"kind": "image"},
+                provider_id=provider_id,
+                external_id=f"{provider_id}-img-{counter['n']}",
+                model=model,
+                duration_s=0,
+                metadata={"kind": "image"},
             )
+
         return _submit_image
 
     def _fetch(handle, status, dest):
@@ -72,7 +101,9 @@ def _fake_adapters(monkeypatch):
             dest.write_bytes(b"clip" * 1024)
         payload = dest.read_bytes()
         clip = base.FetchedClip(
-            path=dest, sha256=hashlib.sha256(payload).hexdigest(), bytes=len(payload),
+            path=dest,
+            sha256=hashlib.sha256(payload).hexdigest(),
+            bytes=len(payload),
             media_url=status.result_url,
         )
         if handle.provider_id == "google-flow":
@@ -127,8 +158,14 @@ def test_session_state_survives_a_restart(tmp_path) -> None:
 
     session.register_review(
         op.id,
-        ClipReview(id="r-p2", clip_id=op.clip_id, op_id=op.id, verdict="warn",
-                   families={"identity": "unmeasured"}, issues=["identity unmeasured"]),
+        ClipReview(
+            id="r-p2",
+            clip_id=op.clip_id,
+            op_id=op.id,
+            verdict="warn",
+            families={"identity": "unmeasured"},
+            issues=["identity unmeasured"],
+        ),
     )
     session.persist(sid)
     package_clip_count = len(session.package_for(sid).clips)
@@ -185,7 +222,7 @@ def test_restart_mid_batch_resumes_polls_and_finishes(monkeypatch) -> None:
 
 
 def test_orphaned_running_jobs_are_reaped_at_boot() -> None:
-    client = _client()
+    _client()
     plane, ctx = app_module._boot()
     from diony_contracts.launch import (
         GenerationJob,
@@ -198,11 +235,17 @@ def test_orphaned_running_jobs_are_reaped_at_boot() -> None:
     run = ledger.ensure_run(plane, ctx.workspace.id, ctx.user.id, "ghost-session")
     job = plane.save_job(
         GenerationJob(
-            id="job-ghost-1", run_id=run.id, workspace_id=ctx.workspace.id,
-            project_id="director", stage=WorkflowStage.VIDEO,
-            capability=ProviderCapability.VIDEO, provider_id="grok",
-            model="grok-imagine-video-1.5", status=JobStatus.RUNNING,
-            idempotency_key="op-ghost", external_job_id="req-ghost",
+            id="job-ghost-1",
+            run_id=run.id,
+            workspace_id=ctx.workspace.id,
+            project_id="director",
+            stage=WorkflowStage.VIDEO,
+            capability=ProviderCapability.VIDEO,
+            provider_id="grok",
+            model="grok-imagine-video-1.5",
+            status=JobStatus.RUNNING,
+            idempotency_key="op-ghost",
+            external_job_id="req-ghost",
             metadata={"op_id": "op-ghost"},
         )
     )
@@ -269,9 +312,7 @@ def test_draft_lines_are_editable_until_the_lock() -> None:
         json={"line_id": dialogue["line_id"], "text": "We drive at dawn, not a minute later."},
     )
     assert res.status_code == 200
-    edited = next(
-        l for l in res.json()["script"]["lines"] if l["line_id"] == dialogue["line_id"]
-    )
+    edited = next(l for l in res.json()["script"]["lines"] if l["line_id"] == dialogue["line_id"])
     assert edited["text"] == "We drive at dawn, not a minute later."
 
     res = client.post(
@@ -315,7 +356,11 @@ def test_the_film_ships_with_subtitles_edl_and_qc_packet(monkeypatch, fake_narra
     _drive(client, sid)
     film = client.post(f"/api/director/sessions/{sid}/assemble", json={}).json()
     assert set(film["deliverables"]) == {
-        "film.srt", "film.vtt", "edl.json", "assembly-map.json", "qc-packet.json"
+        "film.srt",
+        "film.vtt",
+        "edl.json",
+        "assembly-map.json",
+        "qc-packet.json",
     }
     assert film["cue_count"] >= 1
     root = cluster_root() / "director" / sid
@@ -355,8 +400,8 @@ def test_engine_is_cloud_has_one_shared_definition(monkeypatch) -> None:
     assert engine_is_cloud() is True
     monkeypatch.setenv("DIONY_ENGINE", "local_legacy")
     assert engine_is_cloud() is False
-    from diony_director import engine as director_engine
     from diony_contracts.director import EngineMode
+    from diony_director import engine as director_engine
 
     assert director_engine.engine_mode() is EngineMode.LOCAL_LEGACY
 
@@ -383,18 +428,30 @@ def test_v2v_edits_never_send_a_duration(monkeypatch) -> None:
 
     monkeypatch.setattr(flow.httpx, "post", lambda url, **kw: seen.update(kw) or _Response())
     op = DirectorOp(
-        id="op-v2v", session_id="s-v", op=DirectorOpType.EDIT,
-        provider=CloudProvider.GOOGLE_FLOW, model="omni-flash",
-        mode=CloudGenerationMode.V2V_EDIT, prompt="fix the audio, keep the picture",
-        duration_s=6, resolution="720p",
+        id="op-v2v",
+        session_id="s-v",
+        op=DirectorOpType.EDIT,
+        provider=CloudProvider.GOOGLE_FLOW,
+        model="omni-flash",
+        mode=CloudGenerationMode.V2V_EDIT,
+        prompt="fix the audio, keep the picture",
+        duration_s=6,
+        resolution="720p",
         artifact_refs={"source_video": "user:vid9"},
         estimate=CostEstimate(
-            id="est-v", workspace_id="local-workspace",
-            lines=[CostEstimateLine(
-                label="v2v", provider_id="google-flow", model="omni-flash",
-                unit="v2v:720p", unit_rate_usd_micros=1,
-                quantity_microunits=1_000_000, usd_micros=1,
-            )],
+            id="est-v",
+            workspace_id="local-workspace",
+            lines=[
+                CostEstimateLine(
+                    label="v2v",
+                    provider_id="google-flow",
+                    model="omni-flash",
+                    unit="v2v:720p",
+                    unit_rate_usd_micros=1,
+                    quantity_microunits=1_000_000,
+                    usd_micros=1,
+                )
+            ],
         ),
     )
     flow.submit(op)
@@ -429,16 +486,27 @@ def test_a_broken_draft_is_refused_before_the_lock(monkeypatch) -> None:
     body = {
         "logline": "A keeper answers.",
         "beats": [{"beat": "b", "story_time": "Night 1"}],
-        "settings": [{"setting_id": "set-lh", "name": "Lighthouse", "kind": "INT",
-                      "room_tone": "wind", "time_weather": "night", "grade_language": "brass",
-                      "camera_kit": "32mm"}],
+        "settings": [
+            {
+                "setting_id": "set-lh",
+                "name": "Lighthouse",
+                "kind": "INT",
+                "room_tone": "wind",
+                "time_weather": "night",
+                "grade_language": "brass",
+                "camera_kit": "32mm",
+            }
+        ],
         "characters": [{"char_id": "chr-el", "name": "ELIAS", "wardrobe": "grey peacoat"}],
-        "scenes": [{
-            "heading": "INT. LIGHTHOUSE - NIGHT",
-            "setting_ref": "Lighthouse",  # the classic LLM slip: name, not id
-            "story_time": "Night 1", "cast": ["chr-el"],
-            "lines": [{"kind": "dialogue", "text": "I know that knock.", "speaker": "ELIAS"}],
-        }],
+        "scenes": [
+            {
+                "heading": "INT. LIGHTHOUSE - NIGHT",
+                "setting_ref": "Lighthouse",  # the classic LLM slip: name, not id
+                "story_time": "Night 1",
+                "cast": ["chr-el"],
+                "lines": [{"kind": "dialogue", "text": "I know that knock.", "speaker": "ELIAS"}],
+            }
+        ],
     }
 
     from master_brain_fakes import is_master_call, master_brain_body
@@ -482,13 +550,15 @@ def test_provider_swap_requantizes_to_the_new_grid() -> None:
     draft = screenwriter.write_script("a chase through a desert town", runtime_target_s=60)
     package = packagebuilder.build_package("s-swap", "a chase", draft)
     clip = next(
-        c for c in package.clips
-        if c.provider.value == "grok" and not c.audio_packet.voice_ref
+        c for c in package.clips if c.provider.value == "grok" and not c.audio_packet.voice_ref
     )
     clip.add_prompt(compile_clip_prompt(clip, package))
     review = ClipReview(
-        id="r-sw", clip_id=clip.clip_id, verdict="fail",
-        families={"delivery": "fail"}, issues=["empty media"],
+        id="r-sw",
+        clip_id=clip.clip_id,
+        verdict="fail",
+        families={"delivery": "fail"},
+        issues=["empty media"],
     )
     first, _ = revisions.plan_revision(
         review, clip, package, session_id="s-swap", revision_count=0, failure_memory=set()
@@ -516,8 +586,11 @@ def test_extend_revisions_pass_the_capability_gate() -> None:
     clip = next(c for c in package.clips if c.provider.value == "grok")
     clip.add_prompt(compile_clip_prompt(clip, package))
     review = ClipReview(
-        id="r-ex", clip_id=clip.clip_id, verdict="fail",
-        families={"duration": "fail"}, issues=["measured 2.0s vs booked 6s"],
+        id="r-ex",
+        clip_id=clip.clip_id,
+        verdict="fail",
+        families={"duration": "fail"},
+        issues=["measured 2.0s vs booked 6s"],
     )
     op, _ = revisions.plan_revision(
         review, clip, package, session_id="s-ext", revision_count=0, failure_memory=set()
@@ -535,9 +608,7 @@ def test_a_held_bible_op_still_gates_its_scenes() -> None:
     all_ids = {o["id"] for o in locked["ops"]} | {b["id"] for b in locked["bible_ops"]}
     session.set_batch_targets(sid, all_ids)
     # simulate the budget hold: a plate op dropped from targets, still proposed
-    plate = next(
-        b for b in locked["bible_ops"] if b["artifact_refs"]["bible"].get("setting_id")
-    )
+    plate = next(b for b in locked["bible_ops"] if b["artifact_refs"]["bible"].get("setting_id"))
     session.batch_targets(sid).discard(plate["id"])
     for b in locked["bible_ops"]:
         if b["id"] != plate["id"]:
@@ -566,9 +637,7 @@ def test_watchdog_surfaces_a_job_stuck_without_progress() -> None:
     rt["last_progress_ts"] = time.time() - app_module.STALL_WATCHDOG_S - 120
 
     counts = client.post(f"/api/director/sessions/{sid}/advance").json()
-    assert any(
-        s["op_id"] == op.id and "may be lost" in s["reason"] for s in counts["stalled"]
-    )
+    assert any(s["op_id"] == op.id and "may be lost" in s["reason"] for s in counts["stalled"])
     assert counts["pending"] == 1, "surfaced, never auto-failed — the job may still land"
 
     rt["last_progress_ts"] = time.time()  # fresh progress → the watchdog is quiet

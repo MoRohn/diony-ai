@@ -9,6 +9,12 @@ for extra in ("apps/producer/src", "apps/wan/src", "apps/finish/src", "packages/
     if candidate.is_dir() and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
+from diony_contracts.testing import network_guard_fixture  # noqa: E402 - after the path shim
+
+# Blueprint 24 offline guard: every package registers it so a single-package
+# run is as offline as a whole-repo run (the helper is idempotent).
+_diony_network_guard = network_guard_fixture()
+
 
 @pytest.fixture(autouse=True)
 def director_isolated_vault(tmp_path, monkeypatch):
@@ -32,6 +38,10 @@ def director_isolated_vault(tmp_path, monkeypatch):
     # since the test key is present); brain tests set the URL themselves.
     monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_URL", "")
     monkeypatch.setenv("DIONY_KEYS_FILE", str(tmp_path / "keys.env"))
+    # Studio always chose a camera before the Director opened; tests default to Grok
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("grok")
     # The Flow request-pacing gate stays live (requests still serialize and
     # stamp the clock) but never really sleeps between fakes; the pacing
     # tests install their own recording sleep.
@@ -62,4 +72,3 @@ def fake_narrator(monkeypatch):
         "DIONY_NARRATOR_CLI",
         f"{ffmpeg} -y -f lavfi -i sine=frequency=520:duration=1.2 -ar 48000 -ac 1 {{output}}",
     )
-

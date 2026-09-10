@@ -5,21 +5,22 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "diony-producer"
 version = "0.9.0"
-description = "Diony AI Producer — Idea to Production to Gallery. Live Wan2.2 FARM and diony_sr_v1 1080."
+description = "Diony AI Producer — the Gallery and the shared production services (cost ledger, control plane, face identity, frame and speech QC); the legacy local Wan2.2 lane"
 requires-python = ">=3.11"
+authors = [{ name = "Diony AI" }]
 license = { text = "Proprietary" }
 dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
   "python-multipart>=0.0.9",
   "diony-contracts",
-  "diony-wan",
-  "diony-finish",
   "httpx>=0.27",
-  "boto3>=1.35,<2",
   "cryptography>=43,<48",
   "numpy>=1.24",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff"]
 
 [project.scripts]
 diony-producer = "diony_producer.app:main"

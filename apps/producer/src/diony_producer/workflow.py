@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from diony_contracts.launch import (
@@ -18,12 +18,11 @@ from diony_producer.costs import CostAnalyticsService, UsageSample
 from diony_producer.observability import log_event
 from diony_producer.providers import ProviderPending, ProviderRegistry, ProviderUnavailable
 
-
 OPTIONAL_STAGES = {WorkflowStage.IMAGE, WorkflowStage.VOICE, WorkflowStage.SOUND}
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class DurableWorkflowEngine:
@@ -225,7 +224,7 @@ class DurableWorkflowEngine:
             state.status = JobStatus.FAILED
             state.error_code = "PROVIDER_NOT_CONFIGURED"
             state.error_message = (
-                f"No {state.stage.capability.value} provider is configured on this signed site."
+                f"No {state.stage.capability.value} provider is configured on this desk."
             )
             run.status = JobStatus.FAILED
             run.current_stage = state.stage
@@ -242,8 +241,10 @@ class DurableWorkflowEngine:
 
         provider = chain[0]
         stage_payload = dict(run.config.get("stage_payloads", {}).get(state.stage.value, {}))
-        if job and job.status == JobStatus.WAITING_PROVIDER and not stage_payload.get(
-            "checkpoint_complete"
+        if (
+            job
+            and job.status == JobStatus.WAITING_PROVIDER
+            and not stage_payload.get("checkpoint_complete")
         ):
             return run
         if job is None:
@@ -301,7 +302,7 @@ class DurableWorkflowEngine:
                 pending = exc
                 error = None
                 break
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 error = exc
                 self._event(
                     run,
@@ -395,24 +396,26 @@ class DurableWorkflowEngine:
         state.error_code = ""
         state.error_message = ""
         state.completed_at = moment
-        recorded = CostAnalyticsService(self.plane).record(UsageSample(
-            id=f"usage-{job.id}",
-            workspace_id=run.workspace_id,
-            project_id=run.project_id,
-            run_id=run.id,
-            job_id=job.id,
-            capability=job.capability,
-            provider_id=job.provider_id,
-            model=job.model,
-            quantity_microunits=int(stage_payload.get("quantity_microunits") or 1_000_000),
-            unit=str(stage_payload.get("unit") or "stage"),
-            cost_center_id=str(run.config.get("cost_center_id") or ""),
-            department_id=str(run.config.get("department_id") or ""),
-            team_id=str(run.config.get("team_id") or ""),
-            actual_internal_credits=result.internal_credits_used,
-            actual_cost_breakdown=result.cost_breakdown,
-            metadata={"run_id": run.id, **result.metadata},
-        ))
+        recorded = CostAnalyticsService(self.plane).record(
+            UsageSample(
+                id=f"usage-{job.id}",
+                workspace_id=run.workspace_id,
+                project_id=run.project_id,
+                run_id=run.id,
+                job_id=job.id,
+                capability=job.capability,
+                provider_id=job.provider_id,
+                model=job.model,
+                quantity_microunits=int(stage_payload.get("quantity_microunits") or 1_000_000),
+                unit=str(stage_payload.get("unit") or "stage"),
+                cost_center_id=str(run.config.get("cost_center_id") or ""),
+                department_id=str(run.config.get("department_id") or ""),
+                team_id=str(run.config.get("team_id") or ""),
+                actual_internal_credits=result.internal_credits_used,
+                actual_cost_breakdown=result.cost_breakdown,
+                metadata={"run_id": run.id, **result.metadata},
+            )
+        )
         self.plane.save_job(job)
         self._recompute(run)
         if run.status != JobStatus.SUCCEEDED:

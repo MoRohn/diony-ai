@@ -1,6 +1,6 @@
 """Deterministic script dissection into provider-legal ClipUnits.
 
-Doctrine (Blueprint 26 §2.2, revised by Blueprint 33): split on a camera or
+Doctrine (Blueprint 26 §4, revised by Blueprint 33): split on a camera or
 subject change or a dialogue breath, never mid-word; a dialogue line stays in
 one clip; duration comes from the beats plus the spoken words and handles,
 quantized UP to the provider grid; room tone carries across every join in a
@@ -50,8 +50,20 @@ OPENER_BEAT_S = 6.0
 # one-clip foley event: every clip must describe the same piece, or thirteen
 # generations invent thirteen unrelated jingles.
 MUSIC_HINTS = (
-    "music", "groove", "tune", "theme", "melody", "song", "riff", "jingle",
-    "anthem", "instrumental", "soundtrack", "score", "bassline", "beat drops",
+    "music",
+    "groove",
+    "tune",
+    "theme",
+    "melody",
+    "song",
+    "riff",
+    "jingle",
+    "anthem",
+    "instrumental",
+    "soundtrack",
+    "score",
+    "bassline",
+    "beat drops",
 )
 
 _WIDE_WORDS = ("wide", "establish", "master", "aerial", "overhead", "top-", "drone")
@@ -97,22 +109,35 @@ def _packs(cast: list[str], characters: list[CharacterProfile], pack_kind: str) 
 # --- lanes and take units ---------------------------------------------------
 
 
-def lanes_for(provider_policy: str = "auto") -> tuple[tuple[CloudProvider, str], tuple[CloudProvider, str]]:
-    """((picture provider, model), (dialogue provider, model)) for a policy.
+def lanes_for(
+    provider_policy: str,
+) -> tuple[tuple[CloudProvider, str], tuple[CloudProvider, str]]:
+    """((picture provider, model), (dialogue provider, model)) for the camera
+    Studio chose. One camera shoots the whole film — one model, one look,
+    picture and dialogue alike.
 
-    "auto": doctrine routing — picture on Grok, dialogue on the voice-capable
-    Omni lane. "grok": everything on Grok; dialogue speaks through native audio
+    "grok": everything on Grok Imagine; dialogue speaks through native audio
     with the voice honestly unlocked (no voice_ref). "google-flow": the whole
     package rides Omni 1.1 Flash — audio-native, characters and refs,
-    start/end frames, v2v editing, the 4/6/8/10s grid on any plan — one model,
-    one look, picture and dialogue alike. The Veo tiers stay reachable by
-    explicit model choice (and as the extension lane), never as a default.
+    start/end frames, v2v editing, the 4/6/8/10s grid on any plan. The Veo
+    tiers stay reachable by explicit model choice (and as the extension lane),
+    never as a default.
     """
     if provider_policy == "grok":
         return (CloudProvider.GROK, PICTURE_MODEL), (CloudProvider.GROK, PICTURE_MODEL)
     if provider_policy == "google-flow":
-        return (CloudProvider.GOOGLE_FLOW, DIALOGUE_MODEL), (CloudProvider.GOOGLE_FLOW, DIALOGUE_MODEL)
-    return (CloudProvider.GROK, PICTURE_MODEL), (CloudProvider.GOOGLE_FLOW, DIALOGUE_MODEL)
+        return (CloudProvider.GOOGLE_FLOW, DIALOGUE_MODEL), (
+            CloudProvider.GOOGLE_FLOW,
+            DIALOGUE_MODEL,
+        )
+    raise ValueError(f"unknown camera {provider_policy!r}; choose grok or google-flow")
+
+
+def _studio_policy() -> str:
+    """The camera Studio chose; a missing choice is refused, never guessed."""
+    from diony_director import session
+
+    return session.engine_policy()
 
 
 def take_unit(provider: CloudProvider, model: str) -> int:
@@ -125,9 +150,9 @@ def take_unit(provider: CloudProvider, model: str) -> int:
     return estimate_mod.veo_grid()[-1]
 
 
-def take_units(provider_policy: str = "auto") -> dict[str, int]:
+def take_units(provider_policy: str | None = None) -> dict[str, int]:
     """{"picture": s, "spoken": s} — the take lengths a policy packs toward."""
-    picture, spoken = lanes_for(provider_policy)
+    picture, spoken = lanes_for(provider_policy or _studio_policy())
     return {"picture": take_unit(*picture), "spoken": take_unit(*spoken)}
 
 
@@ -351,7 +376,7 @@ def split_script(
     characters: list[CharacterProfile],
     settings: list[SettingProfile],
     *,
-    provider_policy: str = "auto",
+    provider_policy: str | None = None,
     production_style: str = "narrated",
     cast_lock: str = "standard",
 ) -> list[ClipUnit]:
@@ -360,7 +385,10 @@ def split_script(
     or the character in the clip — and lands it on the clip's audio packet.
     Cast lock (Blueprint 32) decides who rides a spoken take's identity refs.
     """
-    (picture_provider, picture_model), (dialogue_provider, dialogue_model) = lanes_for(provider_policy)
+    provider_policy = provider_policy or _studio_policy()
+    (picture_provider, picture_model), (dialogue_provider, dialogue_model) = lanes_for(
+        provider_policy
+    )
     dialogue_voice_locked = dialogue_provider is CloudProvider.GOOGLE_FLOW
     picture_unit = take_unit(picture_provider, picture_model)
     spoken_unit = take_unit(dialogue_provider, dialogue_model)
@@ -480,9 +508,7 @@ def split_script(
                 # where the words sit inside the take, paced to the booked length
                 spoken_at = next(i for i, b in enumerate(take) if b is spoken)
                 before_s = sum(b.natural_s for b in take[:spoken_at])
-                line_at_s = (
-                    round(before_s * (duration / packed.natural_s), 2) if before_s else 0.0
-                )
+                line_at_s = round(before_s * (duration / packed.natural_s), 2) if before_s else 0.0
                 listener = next((c for c in cast_chars if c.char_id != char.char_id), None)
                 # Who the identity references are for: the people IN the
                 # frame. An off-screen speaker's sheet must never ride a shot
@@ -514,7 +540,10 @@ def split_script(
                                 "line": spoken.line.text,
                                 "parenthetical": spoken.parenthetical,
                                 **(
-                                    {"off_screen": True, "listeners": [c.name for c in visible_cast]}
+                                    {
+                                        "off_screen": True,
+                                        "listeners": [c.name for c in visible_cast],
+                                    }
                                     if off_screen
                                     else {}
                                 ),
@@ -525,7 +554,9 @@ def split_script(
                         if on_camera
                         else {"pace": "measured", "distance": "close, dry"},
                         on_camera=on_camera,
-                        voicing=styles.voicing_for(style, on_camera=on_camera, off_screen=off_screen),
+                        voicing=styles.voicing_for(
+                            style, on_camera=on_camera, off_screen=off_screen
+                        ),
                         line_at_s=line_at_s,
                         room_tone_id=tone,
                         foley=foley,
@@ -538,7 +569,9 @@ def split_script(
                             {
                                 "char_id": packed.char_id,
                                 "sheet_version": packed.sheet_version,
-                                "pack_kind": "flow_character" if dialogue_voice_locked else "grok_refs",
+                                "pack_kind": "flow_character"
+                                if dialogue_voice_locked
+                                else "grok_refs",
                             }
                             for packed in packed_chars
                         ],
@@ -598,10 +631,9 @@ def split_script(
         for position, clip in enumerate(scene_clips):
             if position == len(scene_clips) - 1:
                 clip.join_next = "cut"
-            elif (
-                clip.clip_class in {"sync-dialogue", "vo-over"}
-                and scene_clips[position + 1].camera_idea.startswith("Reaction")
-            ):
+            elif clip.clip_class in {"sync-dialogue", "vo-over"} and scene_clips[
+                position + 1
+            ].camera_idea.startswith("Reaction"):
                 clip.join_next = "reaction_cut"
             else:
                 clip.join_next = "bridge"

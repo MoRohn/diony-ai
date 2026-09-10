@@ -23,13 +23,15 @@ import hashlib
 import uuid
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
+from test_look_bible import ANIMATED, _chain_brain, _wait_proposed
 
 from diony_contracts.production import LookBible
-from diony_director import app as app_module, look as look_mod, review as review_mod, session
+from diony_director import app as app_module
+from diony_director import look as look_mod
+from diony_director import review as review_mod
+from diony_director import session
 from diony_director.providers import base, flow
-from test_look_bible import ANIMATED, _chain_brain, _wait_proposed
 
 PROMINENT = (
     flow._FILTER_REASONS["PROMINENT_PERSON"]
@@ -49,17 +51,25 @@ def _lanes(monkeypatch):
 
     def fake_submit(op):
         counter["n"] += 1
-        sent["videos"].append({"op_id": op.id, "refs": dict(op.artifact_refs), "ext": f"vid-{counter['n']}"})
+        sent["videos"].append(
+            {"op_id": op.id, "refs": dict(op.artifact_refs), "ext": f"vid-{counter['n']}"}
+        )
         return base.CloudJobHandle(
-            provider_id="google-flow", external_id=f"vid-{counter['n']}", model=op.model,
-            duration_s=int(op.duration_s), mode="t2v",
+            provider_id="google-flow",
+            external_id=f"vid-{counter['n']}",
+            model=op.model,
+            duration_s=int(op.duration_s),
+            mode="t2v",
         )
 
     def fake_submit_image(prompt, *, model, references=None, aspect_ratio="landscape"):
         counter["n"] += 1
         sent["images"].append({"prompt": prompt, "references": list(references or [])})
         return base.CloudJobHandle(
-            provider_id="google-flow", external_id=f"img-{counter['n']}", model=model, duration_s=0,
+            provider_id="google-flow",
+            external_id=f"img-{counter['n']}",
+            model=model,
+            duration_s=0,
         )
 
     def fake_poll(handle):
@@ -76,7 +86,9 @@ def _lanes(monkeypatch):
         payload = (b"png" if handle.duration_s == 0 else b"mp4") * 2048
         dest.write_bytes(payload)
         return base.FetchedClip(
-            path=dest, sha256=hashlib.sha256(payload).hexdigest(), bytes=len(payload),
+            path=dest,
+            sha256=hashlib.sha256(payload).hexdigest(),
+            bytes=len(payload),
             media_url=status.result_url,
         )
 
@@ -121,10 +133,15 @@ def _sync_submitter(monkeypatch):
 
 def _pass_reviews(monkeypatch):
     monkeypatch.setattr(
-        review_mod, "review_chain_link",
+        review_mod,
+        "review_chain_link",
         lambda path, **kw: review_mod.ClipReview(
-            id="rev-ok", clip_id=kw["op_id"], op_id=kw["op_id"], verdict="pass",
-            families={"delivery": "pass"}, recommended_op="accept",
+            id="rev-ok",
+            clip_id=kw["op_id"],
+            op_id=kw["op_id"],
+            verdict="pass",
+            families={"delivery": "pass"},
+            recommended_op="accept",
         ),
     )
 
@@ -134,12 +151,16 @@ def _pass_reviews(monkeypatch):
 
 def test_a_redrawn_frame_is_a_fresh_composition_and_safe_when_asked() -> None:
     look = LookBible(medium="2.5D animated explainer", palette="muted navy with one amber accent")
-    plain = look_mod.frame_redraw_prompt("A night skyline of glass towers.", look, safe=False, attempt=1)
+    plain = look_mod.frame_redraw_prompt(
+        "A night skyline of glass towers.", look, safe=False, attempt=1
+    )
     assert "a night skyline of glass towers." in plain
     assert look.block() in plain
     assert "attempt 1" in plain and "different angle" in plain
     assert look_mod.SAFE_FRAME_STEER not in plain
-    safe = look_mod.frame_redraw_prompt("A man at a desk.", look, safe=True, attempt=2, continues=True)
+    safe = look_mod.frame_redraw_prompt(
+        "A man at a desk.", look, safe=True, attempt=2, continues=True
+    )
     assert look_mod.SAFE_FRAME_STEER in safe
     assert "continues the previous shot directly" in safe
     assert "attempt 2" in safe
@@ -265,14 +286,24 @@ def test_run_batch_records_the_run_plan_and_retry_hands_it_back(monkeypatch) -> 
     client = TestClient(app_module.app)
     res = client.post(
         f"/api/director/sessions/{sid}/run_batch",
-        json={"op_ids": [op.id for op in proposal.ops], "assemble": True, "finish": "1080p", "upscale": True},
+        json={
+            "op_ids": [op.id for op in proposal.ops],
+            "assemble": True,
+            "finish": "1080p",
+            "upscale": True,
+        },
     )
     assert res.status_code == 200
     plan = res.json()["run_plan"]
     assert plan["assemble"] is True and plan["finish"] == "1080p" and plan["upscale"] is True
     assert plan["op_ids"] == [first.id, second.id, third.id]
     # a plain Run (no assemble) leaves the plan alone
-    assert client.post(f"/api/director/sessions/{sid}/run_batch", json={"op_ids": [first.id]}).status_code == 200
+    assert (
+        client.post(
+            f"/api/director/sessions/{sid}/run_batch", json={"op_ids": [first.id]}
+        ).status_code
+        == 200
+    )
     assert session.run_plan(sid)["finish"] == "1080p"
     # the plan survives a restart
     session.persist(sid)
@@ -291,15 +322,21 @@ def test_run_batch_records_the_run_plan_and_retry_hands_it_back(monkeypatch) -> 
     assert body["run_plan"]["finish"] == "1080p"
     assert body["retargeted"] == [second.id, third.id]
     assert session.batch_targets(sid) == {first.id, second.id, third.id}
-    assert client.post(f"/api/director/sessions/{sid}/advance").json()["run_plan"]["assemble"] is True
+    assert (
+        client.post(f"/api/director/sessions/{sid}/advance").json()["run_plan"]["assemble"] is True
+    )
     # a retake of a review-failed link re-arms the run the same way
     session.set_batch_targets(sid, set())
     first.status = "completed"
     session.register_review(
         first.id,
         review_mod.ClipReview(
-            id="rev-bad", clip_id=first.id, op_id=first.id, verdict="fail",
-            families={"continuity": "fail"}, issues=["the clip ignored its opening frame"],
+            id="rev-bad",
+            clip_id=first.id,
+            op_id=first.id,
+            verdict="fail",
+            families={"continuity": "fail"},
+            issues=["the clip ignored its opening frame"],
         ),
     )
     body = client.post(f"/api/director/ops/{first.id}/retry").json()
@@ -307,7 +344,9 @@ def test_run_batch_records_the_run_plan_and_retry_hands_it_back(monkeypatch) -> 
     assert body["run_plan"]["assemble"] is True
 
 
-def test_a_refused_link_rolls_again_from_a_fresh_frame_and_the_run_finishes(monkeypatch, tmp_path) -> None:
+def test_a_refused_link_rolls_again_from_a_fresh_frame_and_the_run_finishes(
+    monkeypatch, tmp_path
+) -> None:
     """End to end through the API — the 2026-09-06 shape. Clip 2 cuts to a new
     place and opens from a style frame; Flow refuses the clip for a prominent
     person. ONE Retry: the frame is redrawn likeness-safe without the previous
@@ -350,7 +389,9 @@ def test_a_refused_link_rolls_again_from_a_fresh_frame_and_the_run_finishes(monk
     assert sent["videos"][-1]["op_id"] == second.id
     assert sent["videos"][-1]["refs"]["start_image"] == old_frame
     assert len(sent["images"]) == 1
-    prev_last_frame = str(app_module.cluster_root() / "director" / sid / "frames" / f"{first.id}.jpg")
+    prev_last_frame = str(
+        app_module.cluster_root() / "director" / sid / "frames" / f"{first.id}.jpg"
+    )
     assert prev_last_frame in sent["images"][0]["references"]
     # the break dropped clip 3 from the batch
     client.post(f"/api/director/sessions/{sid}/advance")
@@ -373,7 +414,9 @@ def test_a_refused_link_rolls_again_from_a_fresh_frame_and_the_run_finishes(monk
     redraw = sent["images"][1]
     assert look_mod.SAFE_FRAME_STEER in redraw["prompt"]
     assert "attempt 1" in redraw["prompt"]
-    assert prev_last_frame not in redraw["references"], "a safe redraw drops the previous link's last frame"
+    assert prev_last_frame not in redraw["references"], (
+        "a safe redraw drops the previous link's last frame"
+    )
     new_frame = session.runtime(second.id)["style_frame"]
     assert new_frame and new_frame != old_frame and Path(new_frame).is_file()
     assert sent["videos"][-1]["op_id"] == second.id
@@ -407,7 +450,12 @@ def test_a_second_refusal_composes_from_the_users_stills_alone(monkeypatch, tmp_
     sid = client.post("/api/director/sessions").json()["session_id"]
     still = client.post(
         f"/api/director/sessions/{sid}/uploads",
-        json={"name": "mood.png", "data_base64": __import__("base64").b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 24).decode()},
+        json={
+            "name": "mood.png",
+            "data_base64": __import__("base64")
+            .b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 24)
+            .decode(),
+        },
     ).json()["upload"]
     body = client.post(
         f"/api/director/sessions/{sid}/message",
@@ -424,7 +472,9 @@ def test_a_second_refusal_composes_from_the_users_stills_alone(monkeypatch, tmp_
     # redraw 1: no previous last frame, but the look frame and the still ride
     assert client.post(f"/api/director/ops/{second.id}/retry").status_code == 200
     assert client.get(f"/api/director/ops/{second.id}").json()["op"]["status"] == "failed"
-    look_frame = str(app_module.cluster_root() / "director" / sid / "frames" / f"look-{first.id}.jpg")
+    look_frame = str(
+        app_module.cluster_root() / "director" / sid / "frames" / f"look-{first.id}.jpg"
+    )
     assert look_frame in sent["images"][1]["references"]
     assert still["path"] in sent["images"][1]["references"]
     # redraw 2: the user's still alone

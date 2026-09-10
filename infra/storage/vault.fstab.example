@@ -1,4 +1,0 @@
-# Example NFS vault. Studio fills server IP and export.
-# Mount on Spark Cluster (4). Do not put this on the RoCE fabric.
-
-192.168.10.50:/volume1/diony-vault  /diony/vault  nfs  defaults,_netdev,nofail,hard,timeo=600,retrans=2  0  0

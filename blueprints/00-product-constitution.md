@@ -4,6 +4,8 @@ Status: Day 1 locked
 Owner: Diony AI  
 Applies to: every Blueprint, profile, app, and agent session
 
+> **Amendment, 2026-08-31 (Blueprint 25).** Generation is **cloud by default**: Grok Imagine (xAI) and Google Flow (through useapi.net) are the cameras, the Director (`apps/director`) is the primary surface, and Studio's job is to choose the engine. Locked truth 5 below ("never cloud-by-default") and the DeepSeek/Wan/fleet-mode truths described the local lane, which was removed from the product on 2026-09-10; they are history, not doctrine. The human gates, the quality bar (`10`), the vault, and the contracts-first rule stand unchanged. Where this document and a Blueprint numbered 25 or above disagree on the Director lane, the higher number wins.
+
 ## What Diony AI is
 
 Diony AI is a **packaged SKU**: software, versioned cluster profiles, crate-to-cluster Studio, Producer, Conductor, and these Blueprints. A customer takes the hardware cluster and this product and can make a **full 1-hour TV/movie-ready clip** given enough time and energy.

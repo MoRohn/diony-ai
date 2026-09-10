@@ -36,8 +36,8 @@ LOOK_CONTRACT = (
     "look ({medium, render_language, palette, lens_grade, lighting_system, "
     "negatives (list of 2–4 short phrases)}) — the film-wide LOOK BIBLE derived "
     "from visual_style and the idea: medium is the one medium every shot is made "
-    "in (e.g. \"2.5D animated explainer, flat shaded with soft paper texture\" or "
-    "\"photoreal live action on a digital cinema camera\"); render_language how "
+    'in (e.g. "2.5D animated explainer, flat shaded with soft paper texture" or '
+    '"photoreal live action on a digital cinema camera"); render_language how '
     "surfaces, edges, and light are drawn; palette the colours and their "
     "discipline; lens_grade the lens, depth of field, contrast, and grade the whole "
     "film shares; lighting_system the lighting philosophy (not one scene's "
@@ -98,15 +98,22 @@ _MEDIUM_TELLS: tuple[tuple[tuple[str, ...], str, str], ...] = (
 
 _PALETTE_TELLS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("neon", "cyberpunk"), "saturated neon magenta and cyan against deep black"),
-    (("night", "midnight", "after dark", "moody"), "muted navy and charcoal with one warm amber accent, low saturation"),
+    (
+        ("night", "midnight", "after dark", "moody"),
+        "muted navy and charcoal with one warm amber accent, low saturation",
+    ),
     (("sunset", "golden hour", "dusk"), "warm amber and rose against cool violet shadow"),
     (("desert", "sand", "sun"), "bleached sand, ochre, and pale sky, warm and dry"),
     (("forest", "rain", "overcast", "grey"), "desaturated greens and slate grey, soft contrast"),
     (("minimal", "clean"), "restrained two-tone palette on a clean field, large negative space"),
 )
 
-_LENS_DEFAULT_PHOTOREAL = "35–50mm equivalents, shallow depth of field, filmic contrast, gentle grain"
-_LENS_DEFAULT_STYLIZED = "35mm-equivalent framing, selective focus, soft filmic contrast, subtle grain"
+_LENS_DEFAULT_PHOTOREAL = (
+    "35–50mm equivalents, shallow depth of field, filmic contrast, gentle grain"
+)
+_LENS_DEFAULT_STYLIZED = (
+    "35mm-equivalent framing, selective focus, soft filmic contrast, subtle grain"
+)
 
 
 def template_look(idea: str, visual_style: str = "") -> LookBible:
@@ -188,7 +195,9 @@ def style_frame_prompt(opening: str, look: LookBible, *, continues_from: str = "
     """The image-lane prompt for a scene-change opener: the clip's first frame
     composed in the film's look, matched to the reference images (the look's
     anchors and the previous clip's last frame)."""
-    opening = " ".join((opening or "the scene at rest, composed for the shot to come").split()).rstrip(".")
+    opening = " ".join(
+        (opening or "the scene at rest, composed for the shot to come").split()
+    ).rstrip(".")
     parts = [f"{STYLE_FRAME_LEAD} {opening[:1].lower()}{opening[1:]}."]
     if continues_from:
         parts.append(
@@ -230,7 +239,9 @@ def frame_redraw_prompt(
     fresh composition of the same moment (so the redraw is not the same
     picture again), steered clear of recognizable people when the failure was
     a filter refusal, in the film's look when the film has one."""
-    opening = " ".join((opening or "the scene at rest, composed for the shot to come").split()).rstrip(".")
+    opening = " ".join(
+        (opening or "the scene at rest, composed for the shot to come").split()
+    ).rstrip(".")
     if look is not None and look.block():
         base = style_frame_prompt(opening, look)
     else:

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "diony-contracts"
 version = "0.2.0"
-description = "Diony AI Producer machine API: Project, Bible, Shot, Take, QC, Timeline, MixLock, Deliverable, Program stitch"
+description = "Diony AI machine API: Director ops and cost estimates, production packages (Script, ClipUnit, ClipReview), the launch control plane, and the legacy Project/Shot/Take contracts"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff"]
 
 [project.scripts]
 diony-export-schemas = "diony_contracts.export_schema:main"
@@ -24,7 +24,7 @@ diony-export-schemas = "diony_contracts.export_schema:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-diony_contracts = ["examples/*.json"]
+diony_contracts = ["py.typed"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

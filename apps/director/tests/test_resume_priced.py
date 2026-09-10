@@ -49,7 +49,9 @@ def test_a_priced_script_that_printed_anything_is_no_longer_priced() -> None:
     session.get_op(locked["ops"][0]["id"]).status = "completed"
     session.persist(sid)
     rows = client.get("/api/director/resumable").json()["sessions"]
-    assert all(r["session_id"] != sid for r in rows), "a partly printed set with nothing failed or rolling is settled"
+    assert all(r["session_id"] != sid for r in rows), (
+        "a partly printed set with nothing failed or rolling is settled"
+    )
     session.reset()
 
 
@@ -69,7 +71,9 @@ def test_the_lock_endpoint_hands_the_set_back_the_way_lock_script_did() -> None:
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["locked"] is True
-    assert [o["id"] for o in body["ops"]] == [o["id"] for o in locked["ops"]], "clip ops, in shot order"
+    assert [o["id"] for o in body["ops"]] == [o["id"] for o in locked["ops"]], (
+        "clip ops, in shot order"
+    )
     assert {b["id"] for b in body["bible_ops"]} == {b["id"] for b in locked["bible_ops"]}
     assert body["clips"] == len(locked["ops"]) and body["scenes"] >= 1
     assert body["planned_s"] == sum(o["duration_s"] for o in locked["ops"])

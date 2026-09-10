@@ -1,7 +1,7 @@
 """Transactional local-first control plane for Diony production.
 
 SQLite is the launch controller store: one authoritative Producer controller per
-signed site, WAL journaling, immutable cost allocations/events, and JSON contracts that
+one desk, WAL journaling, immutable cost allocations/events, and JSON contracts that
 remain portable. Heavy media stays in the vault; no model payload enters this DB.
 """
 
@@ -13,10 +13,11 @@ import os
 import sqlite3
 import threading
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from diony_contracts.launch import (
     AuditEvent,
@@ -50,7 +51,7 @@ class DocumentNotFound(ControlPlaneError):
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def control_plane_path() -> Path:
@@ -58,9 +59,7 @@ def control_plane_path() -> Path:
     if explicit:
         return Path(explicit).expanduser()
     vault = Path(
-        os.environ.get("DIONY_PRODUCER_VAULT")
-        or os.environ.get("DIONY_VAULT")
-        or ".diony-vault"
+        os.environ.get("DIONY_PRODUCER_VAULT") or os.environ.get("DIONY_VAULT") or ".diony-vault"
     ).expanduser()
     return vault / ".control" / "diony.sqlite3"
 
@@ -268,7 +267,9 @@ class ControlPlane:
             assigned_cost_center_ids=[cost_center.id],
         )
         self.put_document("user", user.id, workspace.id, user.model_dump(mode="json"))
-        self.put_document("workspace", workspace.id, workspace.id, workspace.model_dump(mode="json"))
+        self.put_document(
+            "workspace", workspace.id, workspace.id, workspace.model_dump(mode="json")
+        )
         self.put_document(
             "membership", membership.id, workspace.id, membership.model_dump(mode="json")
         )
@@ -282,9 +283,7 @@ class ControlPlane:
             try:
                 self.get_document(kind, document.id, workspace.id)
             except DocumentNotFound:
-                self.put_document(
-                    kind, document.id, workspace.id, document.model_dump(mode="json")
-                )
+                self.put_document(kind, document.id, workspace.id, document.model_dump(mode="json"))
         return BootstrapContext(user=user, workspace=workspace, membership=membership)
 
     def put_document(
@@ -415,9 +414,7 @@ class ControlPlane:
             conn.close()
         return [json.loads(row["body_json"]) for row in rows]
 
-    def find_document_by_field(
-        self, kind: str, field: str, value: str
-    ) -> dict[str, Any] | None:
+    def find_document_by_field(self, kind: str, field: str, value: str) -> dict[str, Any] | None:
         """Find a public-entry document by an exact indexed-in-payload value.
 
         Used only for high-entropy invitation digests. Callers must still validate
@@ -437,9 +434,7 @@ class ControlPlane:
                 return body
         return None
 
-    def add_membership(
-        self, user_id: str, workspace_id: str, role: MembershipRole
-    ) -> Membership:
+    def add_membership(self, user_id: str, workspace_id: str, role: MembershipRole) -> Membership:
         membership = Membership(
             id=f"{workspace_id}:{user_id}",
             user_id=user_id,
@@ -508,16 +503,12 @@ class ControlPlane:
             )
 
     def run(self, workspace_id: str, run_id: str) -> WorkflowRun:
-        return WorkflowRun.model_validate(
-            self.get_document("workflow_run", run_id, workspace_id)
-        )
+        return WorkflowRun.model_validate(self.get_document("workflow_run", run_id, workspace_id))
 
     def runs(self, workspace_id: str, *, project_id: str | None = None) -> list[WorkflowRun]:
         return [
             WorkflowRun.model_validate(row)
-            for row in self.list_documents(
-                "workflow_run", workspace_id, project_id=project_id
-            )
+            for row in self.list_documents("workflow_run", workspace_id, project_id=project_id)
         ]
 
     def save_job(self, job: GenerationJob) -> GenerationJob:
@@ -565,17 +556,13 @@ class ControlPlane:
     ) -> list[CostAllocationEntry]:
         return [
             CostAllocationEntry.model_validate(row)
-            for row in self.list_documents(
-                "cost_allocation", workspace_id, project_id=project_id
-            )
+            for row in self.list_documents("cost_allocation", workspace_id, project_id=project_id)
         ]
 
     def usage(self, workspace_id: str, *, project_id: str | None = None) -> list[UsageEvent]:
         return [
             UsageEvent.model_validate(row)
-            for row in self.list_documents(
-                "usage_event", workspace_id, project_id=project_id
-            )
+            for row in self.list_documents("usage_event", workspace_id, project_id=project_id)
         ]
 
     def append_event(
@@ -769,9 +756,7 @@ class ControlPlane:
             conn.close()
         return (row["ciphertext"], row["masked"]) if row else None
 
-    def delete_encrypted_secret(
-        self, workspace_id: str, provider_id: str, name: str
-    ) -> None:
+    def delete_encrypted_secret(self, workspace_id: str, provider_id: str, name: str) -> None:
         with self.transaction() as conn:
             conn.execute(
                 "DELETE FROM encrypted_secrets WHERE workspace_id=? AND provider_id=? AND name=?",
@@ -828,7 +813,9 @@ class ControlPlane:
             "workflow_success_rate": round(success_rate, 6),
             "generation_jobs": len(jobs),
             "queue_depth": sum(
-                1 for job in jobs if job.status.value in {"queued", "retry_wait", "waiting_provider"}
+                1
+                for job in jobs
+                if job.status.value in {"queued", "retry_wait", "waiting_provider"}
             ),
             "cost_usd_micros": total_cost,
             "internal_credits": internal_credits,

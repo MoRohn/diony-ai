@@ -13,9 +13,9 @@
       href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/app.css?v=p5" />
+    <link rel="stylesheet" href="/static/app.css?v=p7" />
   </head>
-  <body data-product-surface="producer" data-active-bay="idea">
+  <body data-product-surface="producer" data-active-bay="gallery">
     <header class="mast">
       <p class="brand diony-brand">
         <svg class="diony-mark" viewBox="-4 -4 715 666" aria-hidden="true" focusable="false">
@@ -41,18 +41,11 @@
         <span class="surface-tag">PRODUCER</span>
         <span class="sr">AI</span>
       </p>
-      <div id="site-line" class="site-line" role="status" aria-live="polite"></div>
-      <nav class="bays" aria-label="Pages">
-        <button type="button" data-bay="idea" class="on">Idea</button>
-        <button type="button" data-bay="production">Production</button>
-        <button type="button" data-bay="gallery">Gallery</button>
-      </nav>
       <nav class="surface-links" aria-label="Diony surfaces">
         <a href="http://director.diony.local" id="director-link" title="Back to the Director">◂ DIRECTOR</a>
         <a href="http://studio.diony.local" id="studio-surface-link" title="Configuration and engine selection">STUDIO ⚙</a>
       </nav>
       <button type="button" id="studio-control" class="word studio-control">Team</button>
-      <button type="button" id="start-over" class="word mast-reset">Start over</button>
     </header>
 
     <div class="studio">
@@ -68,237 +61,20 @@
           aria-hidden="true"
         />
 
-        <p id="title" class="sr">Untitled</p>
-        <p id="logline" class="sr"></p>
-        <span id="hired" class="sr"></span>
-        <span id="trt" class="sr"></span>
-        <span id="fleet" class="sr"></span>
-        <input id="titleHint" type="text" class="sr" tabindex="-1" />
-        <div id="customers" hidden></div>
-
-        <section id="bay-idea" class="bay">
-          <label class="write" for="idea">
-            <span class="sr">The idea, in words</span>
-            <textarea id="idea" rows="10" placeholder="Write the picture."></textarea>
-          </label>
-          <div id="refs" class="frames"></div>
-          <p id="bench-empty" class="reference-hint">
-            <span class="reference-hint-label">Reference files</span>
-            <span>Attach images or files, or drag them anywhere onto this window.</span>
-          </p>
-          <div class="idea-dock">
-            <div class="idea-main">
-              <fieldset id="allotment" class="allotment">
-                <legend>Length</legend>
-                <div id="allotment-picks" class="allotment-picks" role="listbox" aria-label="Goal length" aria-orientation="horizontal"></div>
-              </fieldset>
-              <p id="idea-err" class="err" role="alert"></p>
-              <p id="hint-keys" class="graphite">⌘↩ Produce</p>
-              <div class="idea-tools">
-                <button type="button" id="lay-ref" class="word">Attach</button>
-                <div class="sample-maker">
-                  <p class="sample-promise"><strong>Sample</strong><span>Make a finished 5–10s clip from this idea and its references.</span></p>
-                  <div class="sample-controls">
-                    <div id="sample-length" class="sample-timecodes" role="radiogroup" aria-label="Sample length">
-                      <button type="button" role="radio" aria-checked="true" data-sample-seconds="5">5s</button>
-                      <button type="button" role="radio" aria-checked="false" data-sample-seconds="10">10s</button>
-                    </div>
-                    <button type="button" id="make-sample" class="word sample-action">Make sample</button>
-                  </div>
-                </div>
-                <button type="button" id="lock-bible" class="word hidden">Lock bible</button>
-              </div>
-            </div>
-            <button type="button" id="cast" class="clap" aria-label="Produce">
-              <span class="clap-stick" aria-hidden="true"></span>
-              <span class="clap-slate">Produce</span>
-            </button>
-          </div>
-          <input
-            id="ref-files"
-            type="file"
-            hidden
-            multiple
-            accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm,.pdf,.txt,.md,.docx"
-          />
-        </section>
-
-        <section id="bay-production" class="bay hidden">
-          <div class="run">
-            <header class="run-head">
-              <div class="run-head-toolbar">
-                <div class="run-head-status">
-                  <p id="run-meta" class="meta">Production report</p>
-                  <p id="run-beat" class="run-beat"></p>
-                </div>
-                <div class="run-head-actions" aria-label="Production controls">
-                  <button type="button" id="run-stop" class="word run-stop-action" hidden>STOP</button>
-                  <button type="button" id="run-refresh" class="word run-refresh-action">
-                    <span class="run-refresh-icon" aria-hidden="true">↻</span>
-                    <span class="run-refresh-copy">
-                      <strong data-run-refresh-label>Refresh</strong>
-                    </span>
-                  </button>
-                </div>
-              </div>
-              <h2 id="run-title">—</h2>
-              <p id="run-now" class="sr"></p>
-              <div class="run-overall">
-                <div class="run-meter" aria-hidden="true">
-                  <div id="run-bar" class="run-bar"><i id="run-bar-fill"></i></div>
-                </div>
-                <div class="run-stats">
-                  <p id="run-count" class="run-count"></p>
-                  <p id="run-clock" class="run-clock" aria-live="polite">
-                    <span id="run-clock-value">0:00</span>
-                    <small id="run-clock-label">Elapsed</small>
-                  </p>
-                </div>
-              </div>
-            </header>
-
-            <div class="run-workspace">
-              <div class="run-primary">
-                <article id="run-signal" class="run-signal waiting" aria-labelledby="run-signal-title">
-                  <p id="run-signal-announcement" class="sr" role="status" aria-live="polite"></p>
-                  <div class="run-signal-head">
-                    <span id="run-signal-state">Standby</span>
-                    <time id="run-signal-updated"></time>
-                  </div>
-                  <p id="run-signal-eyebrow" class="run-signal-eyebrow">PRODUCTION · STANDBY</p>
-                  <h3 id="run-signal-title">Production is waiting</h3>
-                  <p id="run-signal-detail">Produce starts the run.</p>
-                  <div id="run-signal-progress" class="run-signal-progress" hidden>
-                    <i id="run-signal-progress-fill"></i>
-                    <span id="run-signal-progress-label"></span>
-                  </div>
-                  <dl id="run-signal-metrics" class="run-signal-metrics"></dl>
-                </article>
-
-                <section id="run-incomplete-result" class="run-incomplete-result" hidden aria-labelledby="run-incomplete-title">
-                  <header>
-                    <div>
-                      <p class="run-kicker">Incomplete result</p>
-                      <h3 id="run-incomplete-title">Completed clips kept</h3>
-                    </div>
-                    <span>720p · not a master</span>
-                  </header>
-                  <video id="run-incomplete-video" playsinline controls preload="metadata"></video>
-                  <footer>
-                    <p id="run-incomplete-detail">Production stopped before the full rundown completed.</p>
-                    <a id="run-incomplete-download" class="word" href="#" download>Download incomplete result</a>
-                  </footer>
-                </section>
-
-                <section class="run-col run-col-clips" aria-labelledby="run-clips-title">
-                  <header class="run-section-head">
-                    <div>
-                      <p id="run-clips-title" class="run-kicker">Shots</p>
-                      <p id="run-clip-summary" class="run-section-summary">Waiting for the run.</p>
-                    </div>
-                    <div id="run-clip-counts" class="run-clip-counts" aria-label="Clip totals"></div>
-                  </header>
-                  <ol id="run-clips" class="run-clips" aria-label="Clip production status"></ol>
-                </section>
-              </div>
-
-              <aside class="run-overview" aria-label="Delivery status">
-                <section class="pipeline-slate" aria-labelledby="run-pipeline-title">
-                  <p id="run-pipeline-title" class="run-kicker">Pipeline</p>
-                  <ol id="run-steps" class="run-steps" aria-label="The run"></ol>
-                </section>
-
-                <details id="master-standard" class="master-standard">
-                  <summary class="run-disclosure-head">
-                    <span class="run-disclosure-copy">
-                      <small id="master-standard-title">Master output</small>
-                      <strong id="master-standard-material">No material yet</strong>
-                    </span>
-                    <strong id="master-standard-status">PLANNING</strong>
-                    <span class="run-disclosure-cue" aria-hidden="true">+</span>
-                  </summary>
-                  <div class="master-standard-body">
-                    <dl>
-                      <div>
-                        <dt>Negative</dt>
-                        <dd id="master-standard-negative">Wan2.2 A14B · 1280×720</dd>
-                      </div>
-                      <div>
-                        <dt>Final</dt>
-                        <dd id="master-standard-final">1920×1080 · 16:9 · 23.976 · Rec.709 legal</dd>
-                      </div>
-                      <div>
-                        <dt>Picture</dt>
-                        <dd id="master-standard-picture">diony_sr_v1 · temporal 720→1080</dd>
-                      </div>
-                      <div>
-                        <dt>Sound</dt>
-                        <dd id="master-standard-sound">−24 LUFS broadcast · −1 dBTP</dd>
-                      </div>
-                    </dl>
-                    <p id="master-standard-blockers" class="master-standard-blockers" aria-live="polite"></p>
-                  </div>
-                </details>
-
-                <details class="run-activity-drawer">
-                  <summary class="run-disclosure-head">
-                    <span class="run-disclosure-copy">
-                      <small id="run-activity-title">Activity</small>
-                      <strong>Live production log</strong>
-                    </span>
-                    <span class="run-disclosure-cue" aria-hidden="true">+</span>
-                  </summary>
-                  <section id="run-activity-live" class="activity-live-work" aria-live="polite">
-                    <header>
-                      <strong id="run-activity-state">WAITING</strong>
-                      <time id="run-activity-updated">NOT YET UPDATED</time>
-                    </header>
-                    <h3 id="run-activity-current">Production is waiting</h3>
-                    <p id="run-activity-current-detail">Produce starts the run.</p>
-                    <dl class="activity-work-grid">
-                      <div><dt>Clip / Take</dt><dd id="run-activity-identity">—</dd></div>
-                      <div><dt>Stage</dt><dd id="run-activity-stage">Standby</dd></div>
-                      <div><dt>GPU</dt><dd id="run-activity-gpu">—</dd></div>
-                      <div><dt>Compute</dt><dd id="run-activity-compute">—</dd></div>
-                    </dl>
-                  </section>
-                  <div class="activity-log-head">
-                    <strong>Production log</strong>
-                    <span id="run-activity-log-meta">No messages yet</span>
-                  </div>
-                  <ol id="run-log" class="run-log" aria-label="Run activity" aria-live="off"></ol>
-                </details>
-              </aside>
-            </div>
-            <p id="program-err" class="err" role="alert"></p>
-          </div>
-        </section>
-
-        <section id="bay-gallery" class="bay hidden">
+        <section id="bay-gallery" class="bay">
           <p id="gallery-meta" class="meta">Gallery</p>
           <h2 id="gallery-title">Finished clips</h2>
-          <p id="gallery-note" class="hint">Screen a clip or select two or more to make a new version.</p>
-          <div id="director-films" class="director-films hidden">
-            <h3 class="director-films-title">Director films</h3>
-            <div class="director-films-actions">
-              <label class="film-selall"><input type="checkbox" id="film-select-all"> Select all</label>
-              <button type="button" id="film-download" class="word" disabled>Download selected</button>
-              <button type="button" id="film-stitch" class="word" disabled>Stitch selected</button>
-              <button type="button" id="film-delete" class="word film-delete" disabled>Delete selected</button>
-              <span id="film-actions-note" aria-live="polite"></span>
-            </div>
-            <div id="director-films-grid" class="director-films-grid" aria-label="Director film inventory" role="list"></div>
-          </div>
+          <p id="gallery-note" class="hint">Watch, review details, select, download, stitch, or remove a finished clip.</p>
           <div id="gallery-selection" class="gallery-selection" aria-label="Clip selection">
             <button type="button" id="gallery-select-mode" class="word" aria-pressed="false">Select clips</button>
             <p id="gallery-selection-count" aria-live="polite">No clips selected</p>
-            <button type="button" id="join-selected" class="word join-selected" disabled>Join / stitch selected</button>
+            <button type="button" id="join-selected" class="word join-selected" disabled>Stitch selected</button>
+            <button type="button" id="download-selected" class="word" disabled>Download selected</button>
+            <button type="button" id="delete-selected" class="word film-delete" disabled>Delete selected</button>
+            <span id="gallery-actions-note" aria-live="polite"></span>
           </div>
           <div id="gallery-grid" class="gallery-grid" aria-label="Finished clip inventory" role="list"></div>
-          <p id="gallery-empty" class="hint">No clips yet. The 1080 program lands here after Production finishes.</p>
-          <div class="floor-actions">
-            <button type="button" id="lock-distribution" class="word hidden">Distribution</button>
-          </div>
+          <p id="gallery-empty" class="hint">No clips yet. A clip lands here the moment the Director prints it; a film when it cuts.</p>
         </section>
       </div>
     </div>
@@ -323,35 +99,13 @@
       </div>
     </dialog>
 
-    <dialog id="production-stop-dialog" class="production-stop-dialog" aria-labelledby="production-stop-title">
-      <div class="production-stop-shell">
-        <header>
-          <p class="meta">Production control</p>
-          <h2 id="production-stop-title">STOP PRODUCTION?</h2>
-          <p>Further camera negatives stop now. Choose what happens to completed clips.</p>
-        </header>
-        <div class="production-stop-choices" role="group" aria-label="Completed clip choice">
-          <button type="button" class="production-stop-choice keep" data-stop-disposition="keep">
-            <strong>Keep</strong>
-            <span>Stitch completed clips and save them as an incomplete result.</span>
-          </button>
-          <button type="button" class="production-stop-choice delete" data-stop-disposition="delete">
-            <strong>Delete</strong>
-            <span>Delete completed clips from this Production run.</span>
-          </button>
-        </div>
-        <p id="production-stop-error" class="err" role="alert"></p>
-        <button type="button" id="production-stop-cancel" class="word">Go back</button>
-      </div>
-    </dialog>
-
     <dialog id="gallery-details" class="gallery-details-dialog" aria-labelledby="gallery-details-title">
       <div class="gallery-details-shell">
         <header class="gallery-details-head">
           <div>
             <p class="meta">Source slate</p>
             <h2 id="gallery-details-title">Finished clip details</h2>
-            <p id="gallery-details-meta">Original Idea prompt and reference files</p>
+            <p id="gallery-details-meta">The prompt that rolled, the camera, the references</p>
           </div>
           <button type="button" id="gallery-details-close" class="gallery-details-close" aria-label="Close clip details">Close</button>
         </header>
@@ -359,60 +113,9 @@
           <p class="gallery-details-loading">Loading the source record…</p>
         </div>
         <footer class="gallery-details-foot">
-          <p>Prompts copy exactly as entered. Reference downloads preserve the original files.</p>
+          <p>Prompts copy exactly as they rolled. Every receipt stays on the ledger.</p>
           <p id="gallery-copy-feedback" class="gallery-copy-feedback" role="status" aria-live="polite"></p>
         </footer>
-      </div>
-    </dialog>
-
-    <dialog id="join-workspace" class="join-workspace" aria-labelledby="join-workspace-title">
-      <div class="join-workspace-shell">
-        <header class="join-workspace-head">
-          <div>
-            <p class="meta">Gallery splice</p>
-            <h2 id="join-workspace-title">BUILD A NEW VERSION.</h2>
-            <p>Source clips stay untouched. Frames are the authority.</p>
-          </div>
-          <button type="button" id="close-join-workspace" class="word">Cancel</button>
-        </header>
-
-        <div class="join-workspace-grid">
-          <section class="join-cut-room" aria-label="Clip order and join points">
-            <div class="join-section-label">
-              <span>Sequence</span><em>Drag with buttons. Fine-adjust with arrow keys.</em>
-            </div>
-            <ol id="join-sequence" class="splice-rail"></ol>
-            <div class="join-section-label">
-              <span>Join points</span><em>Frame and millisecond feedback stay linked.</em>
-            </div>
-            <div id="join-junctions" class="join-junctions"></div>
-          </section>
-
-          <aside class="join-monitor" aria-label="Joined version preview">
-            <div class="join-preview-frame">
-              <video id="join-preview" playsinline controls hidden></video>
-              <div id="join-preview-empty">
-                <span>Preview the actual trims and transition.</span>
-                <strong>1080</strong>
-              </div>
-            </div>
-            <dl id="join-summary" class="join-summary">
-              <div><dt>Result</dt><dd>Waiting for a valid sequence</dd></div>
-            </dl>
-            <p id="join-normalization" class="join-normalization"></p>
-            <div id="join-progress" class="join-progress" hidden>
-              <i aria-hidden="true"></i><span>Creating the new version…</span>
-            </div>
-            <p id="gallery-join-error" class="err" role="alert"></p>
-            <div class="join-actions">
-              <button type="button" id="preview-join" class="word">Preview</button>
-              <button type="button" id="create-join" class="word create-join">Create new version</button>
-              <button type="button" id="cancel-join-process" class="word hidden">Cancel process</button>
-            </div>
-            <p class="join-trust">Creates a new 1920×1080 Rec.709 asset with source lineage, Profile Name, and Cost Center attribution.</p>
-          </aside>
-        </div>
-        <p id="gallery-join-live" class="sr" aria-live="polite"></p>
       </div>
     </dialog>
 
@@ -543,7 +246,7 @@
           <dl id="join-passport" class="join-passport"></dl>
           <div class="join-explain">
             <p class="meta">WHAT DIONY AI IS</p>
-            <p>Diony AI is the Studio's content production system. Ideas enter Producer, the signed site makes the work, and finished 1080p programs return with their lineage intact.</p>
+            <p>Diony AI is the Studio's film production system. The Director writes, prices, and shoots on cloud video engines; finished films return to this Gallery with their receipts and lineage intact.</p>
             <ul><li>Producer access at your invited role</li><li>Your Profile Name on activity and credits</li><li>A personal Cost Center created when you join</li></ul>
           </div>
           <button type="button" id="join-review-continue" class="word">Continue to identity check</button>
@@ -577,6 +280,6 @@
         <p id="join-live" class="sr" aria-live="polite"></p>
       </div>
     </section>
-    <script src="/static/app.js?v=p5"></script>
+    <script src="/static/app.js?v=p7"></script>
   </body>
 </html>

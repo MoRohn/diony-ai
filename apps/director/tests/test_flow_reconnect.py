@@ -2,11 +2,7 @@
 health-gated auto-heal — the parts that must be right without a live browser.
 """
 
-import httpx
-import pytest
-
 from diony_director import flow_reconnect
-
 
 # --- cookie-table formatting -------------------------------------------------
 
@@ -136,7 +132,12 @@ def test_ensure_connected_leaves_a_healthy_account_untouched(monkeypatch) -> Non
 
     monkeypatch.setattr(flow_reconnect, "reconnect_from_browser", _no_capture)
     result = flow_reconnect.ensure_connected()
-    assert result == {"ok": True, "status": 200, "detail": "already connected", "reconnected": False}
+    assert result == {
+        "ok": True,
+        "status": 200,
+        "detail": "already connected",
+        "reconnected": False,
+    }
 
 
 def test_ensure_connected_reconnects_only_when_unhealthy(monkeypatch) -> None:

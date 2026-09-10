@@ -9,14 +9,13 @@ import re
 import secrets
 import unicodedata
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
 
 from pydantic import BaseModel
 
-from diony_contracts.cluster import site_status
 from diony_contracts.launch import (
     AdmissionPolicy,
     CostCenter,
@@ -123,13 +122,10 @@ class StudioInvitationService:
     @staticmethod
     def _digest(value: str) -> str:
         signing = (
-            os.environ.get("DIONY_INVITE_SECRET", "")
-            or os.environ.get("DIONY_AUTH_SECRET", "")
+            os.environ.get("DIONY_INVITE_SECRET", "") or os.environ.get("DIONY_AUTH_SECRET", "")
         ).encode()
         if len(signing) < 24:
-            raise RuntimeError(
-                "DIONY_INVITE_SECRET or DIONY_AUTH_SECRET must be at least 24 bytes"
-            )
+            raise RuntimeError("DIONY_INVITE_SECRET or DIONY_AUTH_SECRET must be at least 24 bytes")
         return hmac.new(signing, value.encode(), hashlib.sha256).hexdigest()
 
     def _workspace(self, workspace_id: str) -> Workspace:
@@ -140,29 +136,21 @@ class StudioInvitationService:
     def _inviter_name(self, workspace_id: str, user_id: str) -> str:
         try:
             membership = Membership.model_validate(
-                self.plane.get_document(
-                    "membership", f"{workspace_id}:{user_id}", workspace_id
-                )
+                self.plane.get_document("membership", f"{workspace_id}:{user_id}", workspace_id)
             )
             if membership.profile_name:
                 return membership.profile_name
         except DocumentNotFound:
             pass
         try:
-            user = User.model_validate(
-                self.plane.get_document("user", user_id, workspace_id)
-            )
+            user = User.model_validate(self.plane.get_document("user", user_id, workspace_id))
             return user.display_name
         except DocumentNotFound:
             return "A Studio Admin"
 
     @staticmethod
     def _site_label() -> str:
-        state = site_status()
-        label = str(state.get("label") or state.get("site") or "")
-        if label and label.lower() != "unsigned":
-            return label
-        return "Signed Diony production site"
+        return "Diony Studio (cloud production on Grok Imagine and Google Flow)"
 
     def create_invitation(
         self,
@@ -238,9 +226,7 @@ class StudioInvitationService:
         )
         base = (
             workspace.controller_origin
-            or os.environ.get(
-                "DIONY_PRODUCER_PUBLIC_URL", "http://producer.diony.local"
-            )
+            or os.environ.get("DIONY_PRODUCER_PUBLIC_URL", "http://producer.diony.local")
         ).rstrip("/")
         accept_url = f"{base}/#invite={raw}"
         rendered = render_invitation_email(
@@ -269,7 +255,7 @@ class StudioInvitationService:
         invitation = StudioInvitation.model_validate(body)
         if invitation.status == InvitationStatus.REVOKED:
             raise ValueError("This Studio closed the invitation.")
-        if invitation.expires_at <= datetime.now(timezone.utc):
+        if invitation.expires_at <= datetime.now(UTC):
             if invitation.status == InvitationStatus.ACTIVE:
                 invitation.status = InvitationStatus.EXPIRED
                 invitation.updated_at = utc_now()
@@ -303,8 +289,7 @@ class StudioInvitationService:
             "controller_fingerprint": workspace.controller_fingerprint,
             "recipient_mask": recipient_mask(invitation.email),
             "proposed_profile_name": invitation.proposed_profile_name,
-            "approval_required": invitation.admission_policy
-            == AdmissionPolicy.ADMIN_APPROVAL,
+            "approval_required": invitation.admission_policy == AdmissionPolicy.ADMIN_APPROVAL,
             "expires_at": invitation.expires_at.isoformat(),
         }
 
@@ -348,17 +333,13 @@ class StudioInvitationService:
         )
         delivery = self.mailer.deliver(
             delivery,
-            render_verification_email(
-                workspace=workspace, invitation=invitation, code=code
-            ),
+            render_verification_email(workspace=workspace, invitation=invitation, code=code),
         )
         return VerificationRequested(
             delivery=delivery, recipient_mask=recipient_mask(invitation.email)
         )
 
-    def confirm_email_verification(
-        self, token: str, code: str
-    ) -> VerificationConfirmed:
+    def confirm_email_verification(self, token: str, code: str) -> VerificationConfirmed:
         invitation = self._invitation(token)
         verification = EmailVerification.model_validate(
             self.plane.get_document(
@@ -411,9 +392,7 @@ class StudioInvitationService:
             not verification.verified_at
             or not verification.ticket_expires_at
             or verification.ticket_expires_at <= utc_now()
-            or not hmac.compare_digest(
-                verification.ticket_hash, self._digest(verification_ticket)
-            )
+            or not hmac.compare_digest(verification.ticket_hash, self._digest(verification_ticket))
         ):
             raise ValueError("Verify the invitation email before joining.")
         return invitation, verification
@@ -448,9 +427,7 @@ class StudioInvitationService:
                 studio_name=workspace.name,
                 membership=membership,
                 cost_center=center,
-                session_token=issue_token(
-                    membership.user_id, workspace.id, membership.role
-                ),
+                session_token=issue_token(membership.user_id, workspace.id, membership.role),
             )
 
         clean_name, profile_key = _profile_name(profile_name)
@@ -478,9 +455,7 @@ class StudioInvitationService:
             invitation.join_request_id = request.id
             invitation.status = InvitationStatus.USED
             invitation.updated_at = utc_now()
-            user = User(
-                id=user_id, email=invitation.email, display_name=clean_name
-            )
+            user = User(id=user_id, email=invitation.email, display_name=clean_name)
             self.plane.put_documents_atomic(
                 [
                     ("user", user.id, workspace.id, user.model_dump(mode="json")),
@@ -505,9 +480,7 @@ class StudioInvitationService:
                 profile_name=clean_name,
                 status_kind="approval_pending",
             )
-            return JoinOutcome(
-                status="pending", studio_name=workspace.name, request=request
-            )
+            return JoinOutcome(status="pending", studio_name=workspace.name, request=request)
 
         return self._admit(
             invitation=invitation,
@@ -638,9 +611,7 @@ class StudioInvitationService:
         )
         producer_url = (
             workspace.controller_origin
-            or os.environ.get(
-                "DIONY_PRODUCER_PUBLIC_URL", "http://producer.diony.local"
-            )
+            or os.environ.get("DIONY_PRODUCER_PUBLIC_URL", "http://producer.diony.local")
         ).rstrip("/")
         return self.mailer.deliver(
             delivery,
@@ -667,9 +638,7 @@ class StudioInvitationService:
             return None
         producer_url = (
             workspace.controller_origin
-            or os.environ.get(
-                "DIONY_PRODUCER_PUBLIC_URL", "http://producer.diony.local"
-            )
+            or os.environ.get("DIONY_PRODUCER_PUBLIC_URL", "http://producer.diony.local")
         ).rstrip("/")
         rendered = render_membership_status_email(
             to=to,
@@ -704,14 +673,10 @@ class StudioInvitationService:
         correlation_id: str,
     ) -> JoinOutcome:
         request = StudioJoinRequest.model_validate(
-            self.plane.get_document(
-                "studio_join_request", request_id, workspace_id
-            )
+            self.plane.get_document("studio_join_request", request_id, workspace_id)
         )
         invitation = StudioInvitation.model_validate(
-            self.plane.get_document(
-                "studio_invitation", request.invitation_id, workspace_id
-            )
+            self.plane.get_document("studio_invitation", request.invitation_id, workspace_id)
         )
         workspace = self._workspace(workspace_id)
         if request.status == JoinRequestStatus.APPROVED and invitation.accepted_membership_id:
@@ -771,9 +736,7 @@ class StudioInvitationService:
         correlation_id: str,
     ) -> StudioJoinRequest:
         request = StudioJoinRequest.model_validate(
-            self.plane.get_document(
-                "studio_join_request", request_id, workspace_id
-            )
+            self.plane.get_document("studio_join_request", request_id, workspace_id)
         )
         if request.status != JoinRequestStatus.PENDING:
             raise ValueError("This join request is no longer pending.")
@@ -798,9 +761,7 @@ class StudioInvitationService:
             after=request,
         )
         invitation = StudioInvitation.model_validate(
-            self.plane.get_document(
-                "studio_invitation", request.invitation_id, workspace_id
-            )
+            self.plane.get_document("studio_invitation", request.invitation_id, workspace_id)
         )
         self._send_membership_status(
             workspace=self._workspace(workspace_id),
@@ -830,9 +791,7 @@ class StudioInvitationService:
         if confirmation != expected:
             raise ValueError(f"Type {expected} to remove this member.")
         center = CostCenter.model_validate(
-            self.plane.get_document(
-                "cost_center", membership.personal_cost_center_id, workspace_id
-            )
+            self.plane.get_document("cost_center", membership.personal_cost_center_id, workspace_id)
         )
         membership.status = MembershipStatus.REMOVED
         membership.removed_at = utc_now()
@@ -870,9 +829,7 @@ class StudioInvitationService:
         invitation_id = next(
             (
                 str(row["id"])
-                for row in self.plane.list_documents(
-                    "studio_invitation", workspace_id
-                )
+                for row in self.plane.list_documents("studio_invitation", workspace_id)
                 if row.get("accepted_membership_id") == membership.id
             ),
             f"membership:{membership.id}",
@@ -895,9 +852,7 @@ class StudioInvitationService:
         correlation_id: str,
     ) -> StudioInvitation:
         invitation = StudioInvitation.model_validate(
-            self.plane.get_document(
-                "studio_invitation", invitation_id, workspace_id
-            )
+            self.plane.get_document("studio_invitation", invitation_id, workspace_id)
         )
         if invitation.status == InvitationStatus.USED:
             raise ValueError("An accepted invitation cannot be revoked.")
@@ -924,9 +879,7 @@ class StudioInvitationService:
     def list_invitations(self, workspace_id: str) -> list[dict]:
         deliveries = {
             row["invitation_id"]: row
-            for row in self.plane.list_documents(
-                "invitation_email_delivery", workspace_id
-            )
+            for row in self.plane.list_documents("invitation_email_delivery", workspace_id)
             if row.get("kind") == "studio_invitation"
         }
         return [

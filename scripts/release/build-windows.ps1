@@ -73,7 +73,6 @@ try {
     Invoke-Checked $Python @(
         "-m", "pip", "install", "--disable-pip-version-check",
         (Join-Path $InstallPayload "packages\contracts"), (Join-Path $InstallPayload "apps\wizard"),
-        (Join-Path $InstallPayload "apps\wan"), (Join-Path $InstallPayload "apps\finish"),
         (Join-Path $InstallPayload "apps\producer"), (Join-Path $InstallPayload "apps\director"),
         (Join-Path $InstallPayload "apps\desk")
     )

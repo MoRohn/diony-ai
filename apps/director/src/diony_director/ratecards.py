@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -36,6 +36,10 @@ class RateEntry(BaseModel):
     usd_micros_per_unit: int = Field(default=0, ge=0)
     credits: int = Field(default=0, ge=0)
     credits_ultra: int | None = Field(default=None, ge=0)
+    # An exact per-plan price outranks the tier defaults above: Google prices a
+    # few lanes per plan (the Veo Lite lower-priority lane is free only on the
+    # $199.99 Ultra plan), not per Ultra/non-Ultra tier.
+    credits_by_plan: dict[str, int] = Field(default_factory=dict)
     confidence: str = "documented"
 
 
@@ -46,7 +50,11 @@ class RateCardFile(BaseModel):
     source: str
     fetched_at: date
     stale_after_days: int = Field(default=45, gt=0)
+    official_source: str = ""
+    notes: list[str] = Field(default_factory=list)
     plans_usd_micros_per_credit: dict[str, int] = Field(default_factory=dict)
+    plans_monthly_credits: dict[str, int] = Field(default_factory=dict)
+    plans_usd_per_month: dict[str, float] = Field(default_factory=dict)
     captcha_usd_micros_per_solve: int = Field(default=0, ge=0)
     cards: list[RateEntry] = Field(default_factory=list)
 
@@ -87,8 +95,8 @@ def load_files(directory: Path | None = None) -> dict[str, RateCardFile]:
 
 
 def is_stale(card_file: RateCardFile, now: datetime | None = None) -> bool:
-    moment = now or datetime.now(timezone.utc)
-    fetched = datetime.combine(card_file.fetched_at, datetime.min.time(), tzinfo=timezone.utc)
+    moment = now or datetime.now(UTC)
+    fetched = datetime.combine(card_file.fetched_at, datetime.min.time(), tzinfo=UTC)
     return moment - fetched > timedelta(days=card_file.stale_after_days)
 
 
@@ -98,12 +106,12 @@ def usd_per_credit(card_file: RateCardFile, plan: str | None = None) -> int:
         return card_file.plans_usd_micros_per_credit[plan_name]
     except KeyError as err:
         known = ", ".join(sorted(card_file.plans_usd_micros_per_credit))
-        raise RateCardMissing(
-            f"unknown Flow plan {plan_name!r}; known plans: {known}"
-        ) from err
+        raise RateCardMissing(f"unknown Flow plan {plan_name!r}; known plans: {known}") from err
 
 
 def _entry_credits(entry: RateEntry, plan: str) -> int:
+    if plan in entry.credits_by_plan:
+        return entry.credits_by_plan[plan]
     if plan.startswith("ultra") and entry.credits_ultra is not None:
         return entry.credits_ultra
     return entry.credits
@@ -147,9 +155,7 @@ def resolve(
                 source=card_file.source,
                 stale=is_stale(card_file, now=now),
             )
-    raise RateCardMissing(
-        f"no rate for provider={provider_id!r} model={model!r} unit={unit!r}"
-    )
+    raise RateCardMissing(f"no rate for provider={provider_id!r} model={model!r} unit={unit!r}")
 
 
 def captcha_usd_micros(files: dict[str, RateCardFile]) -> int:
@@ -166,9 +172,7 @@ def contract_rate_cards(
     plan = flow_plan()
     cards: list[CostRateCard] = []
     for card_file in loaded.values():
-        effective = datetime.combine(
-            card_file.fetched_at, datetime.min.time(), tzinfo=timezone.utc
-        )
+        effective = datetime.combine(card_file.fetched_at, datetime.min.time(), tzinfo=UTC)
         for entry in card_file.cards:
             rate = resolve(loaded, card_file.provider_id, entry.model, entry.unit, plan=plan)
             cards.append(

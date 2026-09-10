@@ -1,360 +1,175 @@
 <!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Cache-Control" content="no-store" />
-    <title>Diony AI Studio — Crate to system</title>
-    <link rel="icon" type="image/png" href="/static/diony-ai-app-icon.png?v=brand3" />
-    <link rel="apple-touch-icon" href="/static/diony-ai-app-icon.png?v=brand3" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
-    <link rel="stylesheet" href="/static/app.css?v=brand17" />
-    <link rel="stylesheet" href="/static/folio.css?v=brand17" />
-  </head>
-  <body data-product-surface="studio" data-step="path" data-entry="loading">
-    <div class="studio-intro-stage-copy" aria-hidden="true">
-      <span>Idea in.</span>
-      <strong>Show out.</strong>
+<html lang="en" data-diony="studio-opening">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diony Studio</title>
+<link rel="icon" type="image/png" href="/static/diony-ai-app-icon.png?v=brand3">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#0D0D0D; --bg2:#141414; --line:#2B2926; --line2:#3A3733;
+    --ink:#F6F6F6; --ink2:#C9C4BD; --mut:#8F8A82;
+    --accent:#FF7A2F; --accent-ink:#FFB066;
+    --ok:#7BC98A; --bad:#E4657A;
+    --grad:linear-gradient(90deg,#FFA23A,#FF7A2F,#FF402F,#E43B4B);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased;display:flex;flex-direction:column}
+  ::selection{background:var(--accent);color:#0D0D0D}
+  .mast{display:flex;align-items:center;gap:.55rem;padding:1.1rem 1.6rem;border-bottom:1px solid var(--line)}
+  .surface-links{margin-left:auto;display:flex;gap:1rem}
+  .surface-links a{color:var(--mut);text-decoration:none;font:600 .7rem/1 "IBM Plex Mono",monospace;letter-spacing:.08em}
+  .surface-links a:hover{color:var(--accent-ink)}
+  .diony-mark{display:block;overflow:visible;width:auto;height:clamp(1.6rem,2.2vw,2rem)}
+  .diony-word{font:400 clamp(1.25rem,1.7vw,1.5rem)/1 Archivo,Inter,sans-serif;font-weight:700;letter-spacing:0;color:var(--ink)}
+  .mast .sub{font:500 .7rem/1 "IBM Plex Mono",monospace;color:var(--mut);letter-spacing:.14em;margin-left:.4rem}
+  main{flex:1;display:flex;align-items:center;justify-content:center;padding:2rem 1.5rem}
+  .panel{max-width:52rem;width:100%}
+  h1{font-family:Archivo,Inter,sans-serif;font-weight:900;font-stretch:118%;font-size:clamp(1.9rem,4.5vw,3rem);line-height:1.05;margin:0 0 .5rem;text-wrap:balance}
+  h1 .grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .dek{color:var(--ink2);max-width:44rem;margin:0 0 1.8rem}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:.9rem}
+  .card{position:relative;border:1px solid var(--line);border-radius:12px;background:var(--bg2);padding:1.1rem 1.2rem;cursor:pointer;text-align:left;color:var(--ink);font:inherit;transition:border-color .15s}
+  .card:hover{border-color:var(--line2)}
+  .card[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+  .card .logo{display:flex;align-items:center;height:2.1rem;margin-bottom:.7rem}
+  .card .logo svg{height:1.9rem;width:auto;display:block}
+  .card h2{font-family:Archivo,Inter,sans-serif;font-weight:700;font-stretch:108%;font-size:1.02rem;margin:0 0 .3rem}
+  .card p{margin:0;color:var(--ink2);font-size:.86rem}
+  .chip{position:absolute;top:.9rem;right:.9rem;font:500 .64rem/1 "IBM Plex Mono",monospace;letter-spacing:.08em;border:1px solid var(--line2);border-radius:99px;padding:.3em .6em;color:var(--ink2)}
+  .chip.on{border-color:var(--ok);color:var(--ok)}
+  .chip.off{border-color:var(--bad);color:var(--bad)}
+  .chip.rec{border-color:var(--accent);color:var(--accent-ink)}
+  .go{display:flex;align-items:center;gap:1rem;margin-top:1.6rem;flex-wrap:wrap}
+  .go button{font:700 1rem/1 Inter,sans-serif;color:#0D0D0D;background:var(--grad);border:0;border-radius:10px;padding:.85em 1.8em;cursor:pointer}
+  .go button:disabled{opacity:.4;cursor:default}
+  .go .hint{font:500 .74rem/1.5 "IBM Plex Mono",monospace;color:var(--mut)}
+  .foot{padding:1rem 1.6rem;border-top:1px solid var(--line);display:flex;gap:1.4rem;flex-wrap:wrap}
+  .foot a{color:var(--mut);font:500 .74rem/1 "IBM Plex Mono",monospace;letter-spacing:.05em;text-decoration:none}
+  .foot a:hover{color:var(--accent-ink)}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+</style>
+</head>
+<body>
+<header class="mast">
+  <svg class="diony-mark" viewBox="-4 -4 715 666" aria-hidden="true" focusable="false">
+    <defs>
+      <linearGradient id="op-bar1" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#EA573C" /><stop offset="1" stop-color="#E74B43" />
+      </linearGradient>
+      <linearGradient id="op-bar2" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#EF7921" /><stop offset="1" stop-color="#F46F24" />
+      </linearGradient>
+      <linearGradient id="op-bar3" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#F38216" /><stop offset=".3" stop-color="#E86C22" /><stop offset=".55" stop-color="#BB462E" /><stop offset=".8" stop-color="#ED453F" /><stop offset="1" stop-color="#F14B42" />
+      </linearGradient>
+    </defs>
+    <rect x="0" y="325" width="39" height="166" rx="19.5" fill="url(#op-bar1)" />
+    <rect x="107" y="210" width="39" height="397" rx="19.5" fill="url(#op-bar2)" />
+    <rect x="211" y="0" width="49" height="658" rx="24.5" fill="url(#op-bar3)" />
+    <rect x="329" y="42" width="56" height="571" rx="28" fill="currentColor" />
+    <rect x="445" y="83" width="62" height="484" rx="31" fill="currentColor" />
+    <path d="M558 138Q558 124 572 124A135 199.5 0 0 1 572 523Q558 523 558 509Z" fill="currentColor" />
+  </svg>
+  <span class="diony-word">Diony</span>
+  <span class="sub">STUDIO</span>
+  <nav class="surface-links" aria-label="Diony surfaces">
+    <a href="http://director.diony.local" id="director-link">DIRECTOR ▸</a>
+    <a href="http://producer.diony.local" id="producer-link">PRODUCER ▸</a>
+  </nav>
+</header>
+
+<main>
+  <div class="panel">
+    <h1>Choose your <span class="grad">camera</span>.</h1>
+    <p class="dek">Studio configures the shoot; the Director runs it; Producer monitors the production and holds the Gallery. Every shot of a film rolls on the camera you pick here — you can change it any time.</p>
+    <div class="cards" role="radiogroup" aria-label="Production engine">
+      <button class="card" type="button" data-engine="grok" aria-pressed="false">
+        <span class="chip" id="grok-chip">checking…</span>
+        <span class="logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false" fill="currentColor">
+            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+          </svg>
+        </span>
+        <h2>Grok Imagine</h2>
+        <p>xAI’s metered camera. Native audio, edits, extensions. Exact per-second pricing.</p>
+      </button>
+      <button class="card" type="button" data-engine="google-flow" aria-pressed="false">
+        <span class="chip" id="flow-chip">checking…</span>
+        <span class="logo" aria-hidden="true">
+          <svg viewBox="0 0 48 48" focusable="false">
+            <path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 8 3l5.7-5.7C34.1 6.1 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z"/>
+            <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 15.1 18.9 12 24 12c3.1 0 5.8 1.1 8 3l5.7-5.7C34.1 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/>
+            <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/>
+            <path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C36.9 40.4 44 35 44 24c0-1.3-.1-2.6-.4-3.9z"/>
+          </svg>
+        </span>
+        <h2>Google Flow</h2>
+        <p>Veo 3.1 and Omni Flash via useapi.net. Locked voices, characters, first/last frames, 4K upscale.</p>
+      </button>
     </div>
-    <header class="mast stage-header">
-      <p class="brand diony-brand">
-        <svg class="diony-mark" viewBox="-4 -4 715 666" aria-hidden="true" focusable="false">
-          <defs>
-            <linearGradient id="wm-bar1" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stop-color="#EA573C" /><stop offset="1" stop-color="#E74B43" />
-            </linearGradient>
-            <linearGradient id="wm-bar2" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stop-color="#EF7921" /><stop offset="1" stop-color="#F46F24" />
-            </linearGradient>
-            <linearGradient id="wm-bar3" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stop-color="#F38216" /><stop offset=".3" stop-color="#E86C22" /><stop offset=".55" stop-color="#BB462E" /><stop offset=".8" stop-color="#ED453F" /><stop offset="1" stop-color="#F14B42" />
-            </linearGradient>
-          </defs>
-          <rect x="0" y="325" width="39" height="166" rx="19.5" fill="url(#wm-bar1)" />
-          <rect x="107" y="210" width="39" height="397" rx="19.5" fill="url(#wm-bar2)" />
-          <rect x="211" y="0" width="49" height="658" rx="24.5" fill="url(#wm-bar3)" />
-          <rect x="329" y="42" width="56" height="571" rx="28" fill="currentColor" />
-          <rect x="445" y="83" width="62" height="484" rx="31" fill="currentColor" />
-          <path d="M558 138Q558 124 572 124A135 199.5 0 0 1 572 523Q558 523 558 509Z" fill="currentColor" />
-        </svg>
-        <span class="diony-word">Diony</span>
-        <span class="sr">AI</span>
-      </p>
-      <p class="studio-intro-motto" aria-label="Own Your Studio, Produce at Cost">
-        <span>OWN YOUR STUDIO</span>
-        <strong>PRODUCE AT COST</strong>
-      </p>
-      <p id="site-line" class="site-line"></p>
-      <button type="button" id="start-over" class="word mast-reset">Start over</button>
-    </header>
-
-    <div class="studio">
-      <div class="sheet production-folio">
-        <svg class="diony-spirit spirit-wizard" viewBox="0 0 190 170" aria-hidden="true">
-          <path class="spirit-orbit" d="M27 123c34 27 82 24 112-7 22-23 28-55 16-82" />
-          <path class="spirit-body" d="M57 53c13-22 48-27 68-9 22 20 20 58-2 78-24 21-63 13-75-16-7-18-3-39 9-53Z" />
-          <path class="spirit-horn" d="M69 52 58 25l27 18M117 44l22-20-7 30" />
-          <circle class="spirit-eye" cx="82" cy="74" r="5" />
-          <circle class="spirit-eye" cx="111" cy="71" r="5" />
-          <path class="spirit-mouth" d="M79 96h34M96 96v13" />
-          <path class="spirit-spark" d="m155 42 3 10 10 3-10 4-3 10-4-10-10-4 10-3Z" />
-        </svg>
-
-        <p class="sr">Crate to system</p>
-        <p id="mode-line" class="sr">Dry-run. No fabric mutation.</p>
-
-        <section id="studio-intro" class="studio-intro" aria-labelledby="studio-intro-title" hidden>
-          <p class="studio-intro-kicker">FIRST ACT · 01</p>
-          <div class="studio-intro-grid">
-            <div class="studio-intro-copyblock">
-              <h1 id="studio-intro-title" tabindex="-1"><span>From idea</span><span>to moving</span><span>image.</span></h1>
-              <p class="studio-intro-copy">Create with control.</p>
-              <p class="studio-intro-hint">Enter to Start New or Join Studio</p>
-              <details class="disclose studio-intro-details">
-                <summary>Details</summary>
-                <p>Start a new Studio or join one you were invited to.</p>
-              </details>
-            </div>
-            <svg class="studio-intro-mark" viewBox="-4 -4 715 666" aria-hidden="true" focusable="false">
-              <defs>
-                <linearGradient id="wi-bar1" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0" stop-color="#EA573C" /><stop offset="1" stop-color="#E74B43" />
-                </linearGradient>
-                <linearGradient id="wi-bar2" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0" stop-color="#EF7921" /><stop offset="1" stop-color="#F46F24" />
-                </linearGradient>
-                <linearGradient id="wi-bar3" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0" stop-color="#F38216" /><stop offset=".3" stop-color="#E86C22" /><stop offset=".55" stop-color="#BB462E" /><stop offset=".8" stop-color="#ED453F" /><stop offset="1" stop-color="#F14B42" />
-                </linearGradient>
-              </defs>
-              <rect x="0" y="325" width="39" height="166" rx="19.5" fill="url(#wi-bar1)" />
-              <rect x="107" y="210" width="39" height="397" rx="19.5" fill="url(#wi-bar2)" />
-              <rect x="211" y="0" width="49" height="658" rx="24.5" fill="url(#wi-bar3)" />
-              <rect x="329" y="42" width="56" height="571" rx="28" fill="#F6F6F6" />
-              <rect x="445" y="83" width="62" height="484" rx="31" fill="#F6F6F6" />
-              <path d="M558 138Q558 124 572 124A135 199.5 0 0 1 572 523Q558 523 558 509Z" fill="#F6F6F6" />
-            </svg>
-          </div>
-          <button type="button" id="enter-studio" class="studio-intro-enter">
-            <span aria-hidden="true">›</span>
-            <strong>ENTER</strong>
-          </button>
-        </section>
-
-        <section id="studio-entry" class="studio-entry" aria-labelledby="studio-entry-title" hidden>
-          <p class="entry-kicker">DIONY STUDIO</p>
-          <p class="entry-motto" aria-label="Own your studio. Produce at cost.">
-            <span>OWN YOUR STUDIO</span><strong>PRODUCE AT COST</strong>
-          </p>
-          <h1 id="studio-entry-title" tabindex="-1"><span>START YOUR OWN</span><span>JOIN A TEAM</span></h1>
-          <p class="entry-intro">Set up the production system, or enter a Studio that already has one.</p>
-          <div class="entry-paths">
-            <article class="entry-path">
-              <p class="entry-label">START NEW</p>
-              <div class="entry-portrait entry-motion" data-motion-state="still" aria-hidden="true">
-                <video
-                  class="entry-motion-video"
-                  muted
-                  playsinline
-                  preload="auto"
-                  poster="/static/studio-maker-motion-first.jpg?v=entrymotion8"
-                  tabindex="-1"
-                >
-                  <source src="/static/studio-maker-motion.mp4?v=entrymotion8" type="video/mp4" />
-                </video>
-              </div>
-              <p>Name the Studio. Sign its production site. You become the first owner and Cost/Budgetary Admin.</p>
-              <button type="button" id="start-studio" class="entry-action"><span class="entry-action-label">Start a Studio</span><b class="entry-action-arrow" aria-hidden="true">→</b></button>
-            </article>
-            <span class="studio-seam" aria-hidden="true"><i></i></span>
-            <article class="entry-path">
-              <p class="entry-label">JOIN</p>
-              <div class="entry-portrait entry-portrait-team entry-motion" data-motion-state="still" aria-hidden="true">
-                <video
-                  class="entry-motion-video"
-                  muted
-                  playsinline
-                  preload="auto"
-                  poster="/static/studio-team-motion-first.jpg?v=entrymotion8"
-                  tabindex="-1"
-                >
-                  <source src="/static/studio-team-motion.mp4?v=entrymotion8" type="video/mp4" />
-                </video>
-              </div>
-              <p>Use an invite from a Studio you trust. Your Profile Name and personal Cost Center travel with your work.</p>
-              <button type="button" id="join-existing-studio" class="entry-action"><span class="entry-action-label">Join a Studio</span><b class="entry-action-arrow" aria-hidden="true">→</b></button>
-            </article>
-          </div>
-          <p class="entry-truth">Your work stays on the Studio's signed production system.</p>
-        </section>
-
-        <div id="prep" class="screening">
-          <ol id="rail" class="shot-index cue-navigation" aria-label="Crate lines"></ol>
-
-          <div class="well cue-workspace">
-            <section class="learn" aria-label="Lesson">
-              <p id="line-index" class="meta">01</p>
-              <h2 id="learn-title">COMPUTE</h2>
-              <p id="learn-why" class="grammar">Choose where Diony AI will run. Agent will take it from here.</p>
-              <details id="about" class="disclose">
-                <summary>Details</summary>
-                <div class="disclose-panel">
-                  <dl id="plan-card" class="plan hidden" hidden></dl>
-                  <div id="connect-guide" class="guide hidden" hidden></div>
-                  <div id="about-body">
-                    <p>Runpod first: <a href="https://www.runpod.io/">RunPod</a>. Enverge second: <a href="https://enverge.ai/">Enverge</a>.</p>
-                  </div>
-                </div>
-              </details>
-            </section>
-
-            <section class="do" aria-label="Report">
-              <p id="review-banner" class="review hidden">Recorded. Read-only.</p>
-              <div id="loom" class="loom hidden" hidden></div>
-              <form id="form" class="fields">
-                <div class="field compute-field">
-                  <input type="hidden" name="site" value="" />
-                  <div class="compute-groups">
-                    <section class="compute-group compute-group-local" aria-labelledby="compute-local-label">
-                      <p id="compute-local-label" class="compute-group-label">LOCAL</p>
-                      <div class="choice">
-                        <button type="button" data-site="local">DGX Quad-Spark Cluster</button>
-                      </div>
-                      <div class="local-cluster-sketches" aria-label="Local DGX Spark cluster setup sketches">
-                        <figure class="cluster-sketch">
-                          <figcaption><span>01</span> CLUSTER FABRIC</figcaption>
-                          <svg class="cluster-map" viewBox="0 0 620 238" role="img" aria-label="Four DGX Sparks connected from CX-7 port 2 to a MikroTik 200 gigabit fabric switch">
-                            <g class="cluster-cable cluster-cable-fabric">
-                              <path d="M140 55 H248 L286 103" />
-                              <path d="M480 55 H372 L334 103" />
-                              <path d="M140 183 H248 L286 135" />
-                              <path d="M480 183 H372 L334 135" />
-                            </g>
-                            <g class="spark-box" transform="translate(18 24)"><rect width="122" height="62" /><text x="12" y="25">SPARK 01</text><text class="spark-port" x="12" y="45">CX-7 PORT 2</text></g>
-                            <g class="spark-box" transform="translate(480 24)"><rect width="122" height="62" /><text x="12" y="25">SPARK 02</text><text class="spark-port" x="12" y="45">CX-7 PORT 2</text></g>
-                            <g class="spark-box" transform="translate(18 152)"><rect width="122" height="62" /><text x="12" y="25">SPARK 03</text><text class="spark-port" x="12" y="45">CX-7 PORT 2</text></g>
-                            <g class="spark-box" transform="translate(480 152)"><rect width="122" height="62" /><text x="12" y="25">SPARK 04</text><text class="spark-port" x="12" y="45">CX-7 PORT 2</text></g>
-                            <g class="fabric-box" transform="translate(248 86)"><rect width="124" height="66" /><text x="62" y="27">MIKROTIK FABRIC</text><text class="spark-port" x="62" y="47">4 × 200G · ROCE</text></g>
-                            <text class="cable-label" x="310" y="72">QSFP 200G</text>
-                          </svg>
-                        </figure>
-                        <figure class="cluster-sketch cluster-sketch-wiring">
-                          <figcaption><span>02</span> TWO SEPARATE NETWORKS</figcaption>
-                          <div class="connector-map" role="img" aria-label="Each Spark uses CX-7 port 2 for the 200 gigabit fabric and RJ-45 Cat6 for management and vault traffic">
-                            <div class="connector-source"><strong>EACH SPARK</strong><span aria-label="CX-7 PORT 2"><b>CX-7</b><small>PORT 2</small></span><span aria-label="RJ-45 10G"><b>RJ-45</b><small>10G</small></span></div>
-                            <div class="connector-runs" aria-hidden="true"><span class="cluster-cable fabric-run"></span><span class="cluster-cable management-run"></span></div>
-                            <div class="connector-destinations"><span><b>MIKROTIK FABRIC</b><small>QSFP 200G</small></span><span><b>10GBE MANAGEMENT + VAULT</b><small>RJ-45 · CAT6</small></span></div>
-                          </div>
-                          <p class="cluster-rule"><b>Never cross the networks.</b> RoCE carries GPU traffic. RJ-45 carries Studio, Sync, and NAS.</p>
-                        </figure>
-                      </div>
-                      <button type="button" class="existing-compute-action" data-existing-scope="local" aria-label="Launch autonomous setup for existing compute">
-                        <span class="existing-compute-status" aria-hidden="true"><i></i><small>AGENT READY</small></span>
-                        <span class="existing-compute-copy"><em>AUTONOMOUS SETUP</em><strong>Connect to Existing Compute</strong><small>Discover · Validate · Open Producer</small></span>
-                        <b class="existing-compute-arrow" aria-hidden="true">↗</b>
-                      </button>
-                    </section>
-                    <section class="compute-group compute-group-lease" aria-labelledby="compute-lease-label">
-                      <p id="compute-lease-label" class="compute-group-label">LEASE</p>
-                      <div class="choice">
-                        <button type="button" data-site="dual">Enverge DGX Dual-Spark Cluster</button>
-                        <button type="button" data-site="b300">Runpod NVIDIA B300</button>
-                        <button type="button" data-site="b200">Runpod NVIDIA B200</button>
-                      </div>
-                      <button type="button" class="existing-compute-action" data-existing-scope="lease" aria-label="Launch autonomous setup for existing compute">
-                        <span class="existing-compute-status" aria-hidden="true"><i></i><small>AGENT READY</small></span>
-                        <span class="existing-compute-copy"><em>AUTONOMOUS SETUP</em><strong>Connect to Existing Compute</strong><small>Discover · Validate · Open Producer</small></span>
-                        <b class="existing-compute-arrow" aria-hidden="true">↗</b>
-                      </button>
-                    </section>
-                  </div>
-                </div>
-              </form>
-              <section id="provision-panel" class="provision-panel hidden" hidden aria-live="polite">
-                <div class="provision-head">
-                  <p class="provision-kicker">SETUP AGENT</p>
-                  <p id="provision-provider" class="provision-provider"></p>
-                </div>
-                <h3 id="provision-title">Preparing compute</h3>
-                <p id="provision-detail" class="provision-detail"></p>
-                <div id="provision-live-status" class="provision-live-status" data-state="waiting" role="status" aria-live="polite">
-                  <span class="provision-live-signal" aria-hidden="true"><i></i></span>
-                  <div class="provision-live-copy">
-                    <div class="provision-live-head">
-                      <strong id="provision-live-label">Waiting for connection</strong>
-                      <span id="provision-live-count">0 of 0 checks complete</span>
-                    </div>
-                    <p id="provision-live-detail">Add the connection details to begin read-only inspection.</p>
-                    <div id="provision-live-track" class="provision-live-track" role="progressbar" aria-label="Setup progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-                      <span id="provision-live-bar"></span>
-                    </div>
-                  </div>
-                </div>
-                <section id="provision-stages" class="provision-stages hidden" hidden aria-label="Setup stages">
-                  <div class="provision-stages-head">
-                    <strong>Setup progress</strong>
-                    <div class="provision-stages-meta">
-                      <span id="provision-stages-stage">Waiting</span>
-                      <span id="provision-stages-elapsed"></span>
-                      <b id="provision-stages-percent">0%</b>
-                    </div>
-                  </div>
-                  <ol id="provision-stage-list" class="provision-stage-list"></ol>
-                </section>
-                <ol id="provision-timeline" class="provision-timeline"></ol>
-                <form id="provision-form" class="provision-form"></form>
-                <p id="provision-error" class="err" role="alert"></p>
-                <div class="provision-actions">
-                  <div id="provision-progress" class="provision-progress hidden" hidden role="progressbar" aria-label="Setup in progress" aria-valuetext="Diony is completing this site">
-                    <span class="provision-progress-turn" aria-hidden="true"></span>
-                    <span class="provision-progress-copy"><strong id="provision-progress-label">SETUP IN PROGRESS</strong><small id="provision-progress-detail">Diony is completing this site.</small></span>
-                  </div>
-                  <button type="button" id="provision-continue" class="agent-continue">Continue</button>
-                </div>
-                <p class="provision-security">Secrets stay in this Studio process. They are never shown in Activity or written to the signed report.</p>
-              </section>
-              <div id="site-refresh-row" class="site-refresh hidden" hidden>
-                <button type="button" id="site-refresh" class="word">Refresh</button>
-                <p class="live-hint">Clear this setup.</p>
-              </div>
-              <p id="confirm-line" class="confirm hidden" hidden></p>
-              <div id="pack-progress" class="pack-progress hidden" hidden aria-live="polite">
-                <p class="pack-progress-label">Pack pull in progress</p>
-                <div class="pack-progress-track" role="progressbar" aria-valuetext="Pulling pack">
-                  <span class="pack-progress-bar"></span>
-                </div>
-                <p id="pack-progress-detail" class="pack-progress-detail"></p>
-              </div>
-              <div id="prove-card" class="prove hidden" hidden></div>
-              <p id="ready-hint" class="live-hint hidden" hidden></p>
-              <details id="activity" class="disclose hidden" hidden>
-                <summary>Activity</summary>
-                <div class="disclose-panel">
-                  <pre id="apply-log" class="snippet hidden" hidden></pre>
-                </div>
-              </details>
-              <div id="ready-actions" class="ready-actions hidden" hidden>
-                <button type="button" id="retry-apply" class="word hidden" hidden>Pull pack</button>
-                <button type="button" id="test-gpu" class="word hidden" hidden>Test GPU</button>
-              </div>
-              <details id="notes" class="disclose hidden">
-                <summary id="notes-summary">Files</summary>
-                <div class="disclose-panel">
-                  <pre id="snippet" class="snippet hidden"></pre>
-                  <pre id="filebox" class="snippet hidden"></pre>
-                  <pre id="health" class="health hidden"></pre>
-                </div>
-              </details>
-              <p id="form-error" class="err" role="alert"></p>
-              <button type="button" id="retry-state" class="word hidden" hidden>Retry</button>
-              <p id="status" class="hint"></p>
-              <p id="producer-line" class="hint"></p>
-            </section>
-          </div>
-        </div>
-
-        <section id="done" class="done hidden" hidden>
-          <p class="meta">Signed report</p>
-          <h2>Setup is locked. Open Producer.</h2>
-          <p id="done-mandate" class="grammar"></p>
-          <p id="done-meta" class="hint"></p>
-          <dl id="done-sheet" class="plan"></dl>
-          <p id="done-producer"></p>
-          <p id="done-open-note" class="hint"></p>
-          <details id="done-workbook" class="disclose">
-            <summary>Workbook</summary>
-            <div class="disclose-panel">
-              <pre id="done-report" class="snippet"></pre>
-            </div>
-          </details>
-          <button type="button" id="reset-done" class="word">Start over</button>
-        </section>
-
-        <button type="button" id="pass" class="continue" aria-label="Continue">
-          <span class="clap-stick" hidden aria-hidden="true"></span>
-          <span class="clap-slate">Continue</span>
-          <span class="advance-nock" aria-hidden="true"></span>
-        </button>
-      </div>
+    <div class="go">
+      <button id="continue" type="button" disabled>Continue</button>
+      <span class="hint" id="hint">Keys load from ~/.diony/keys.env</span>
     </div>
-    <dialog id="compute-confirm" class="compute-confirm" aria-labelledby="compute-confirm-title">
-      <form method="dialog" class="compute-confirm-card">
-        <p class="compute-confirm-kicker">COMPUTE</p>
-        <h2 id="compute-confirm-title">Confirm option?</h2>
-        <p id="compute-confirm-choice" class="compute-confirm-choice"></p>
-        <dl id="compute-confirm-facts" class="compute-confirm-facts"></dl>
-        <p id="compute-confirm-note" class="compute-confirm-note"></p>
-        <div class="compute-confirm-actions">
-          <button type="button" id="compute-confirm-cancel" class="word">Go back</button>
-          <button type="button" id="compute-confirm-continue" class="agent-continue">Continue</button>
-        </div>
-      </form>
-    </dialog>
-    <script src="/static/app.js?v=brand17"></script>
-  </body>
+  </div>
+</main>
+
+<script>
+(() => {
+  const cards = Array.from(document.querySelectorAll(".card"));
+  const go = document.getElementById("continue");
+  const hint = document.getElementById("hint");
+  let chosen = "";
+
+  function select(engine) {
+    chosen = engine;
+    cards.forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.engine === engine)));
+    go.disabled = !engine;
+    go.textContent = "Continue to the Director";
+  }
+
+  cards.forEach((c) => c.addEventListener("click", () => select(c.dataset.engine)));
+
+  fetch("/api/opening")
+    .then((r) => r.json())
+    .then((state) => {
+      const setChip = (id, ready, on, off) => {
+        const chip = document.getElementById(id);
+        chip.textContent = ready ? on : off;
+        chip.className = "chip " + (ready ? "on" : "off");
+      };
+      setChip("grok-chip", state.providers.grok, "KEY READY", "NO KEY");
+      setChip("flow-chip", state.providers["google-flow"], "TOKEN READY", "NO TOKEN");
+      if (state.director_url) document.getElementById("director-link").href = state.director_url;
+      if (state.producer_url) document.getElementById("producer-link").href = state.producer_url;
+      if (state.engine) select(state.engine);
+    })
+    .catch(() => {
+      hint.textContent = "Studio API not answering — refresh this page.";
+    });
+
+  go.addEventListener("click", async () => {
+    if (!chosen) return;
+    go.disabled = true;
+    try {
+      const res = await fetch("/api/opening/engine", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ engine: chosen }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.detail || res.status);
+      window.location.assign(body.next);
+    } catch (err) {
+      hint.textContent = "Could not save the choice: " + (err.message || err);
+      go.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
 </html>

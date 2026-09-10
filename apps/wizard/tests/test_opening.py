@@ -1,4 +1,4 @@
-"""The Studio opening: engine selection first; the classic rail is the legacy choice."""
+"""The Studio opening: engine selection is the whole of Studio."""
 
 from fastapi.testclient import TestClient
 
@@ -13,7 +13,7 @@ def _client() -> TestClient:
 def test_root_always_serves_the_opening() -> None:
     html = _client().get("/").text
     assert 'data-diony="studio-opening"' in html
-    assert "production engine" in html
+    assert "camera" in html
 
 
 def test_choosing_a_cloud_engine_points_at_the_director() -> None:
@@ -25,18 +25,18 @@ def test_choosing_a_cloud_engine_points_at_the_director() -> None:
     assert 'data-diony="studio-opening"' in client.get("/").text
 
 
-def test_the_legacy_engine_is_retired_from_the_chooser() -> None:
+def test_the_legacy_engine_is_refused() -> None:
     client = _client()
     res = client.post("/api/opening/engine", json={"engine": "local_legacy"})
     assert res.status_code == 422
     assert read_engine_choice() == ""
-    # the opening stays the front door regardless
-    assert 'data-diony="studio-opening"' in client.get("/").text
 
 
-def test_classic_is_always_reachable_explicitly() -> None:
-    html = _client().get("/classic").text
-    assert 'data-diony="studio-opening"' not in html
+def test_there_is_no_classic_rail_any_more() -> None:
+    client = _client()
+    assert client.get("/classic").status_code == 404
+    assert client.get("/api/state").status_code == 404
+    assert "classic_url" not in client.get("/api/opening").json()
 
 
 def test_unknown_engines_are_refused() -> None:
@@ -55,3 +55,18 @@ def test_opening_state_reports_provider_readiness(monkeypatch, tmp_path) -> None
     assert state["providers"]["google-flow"] is False
     assert state["director_url"] == "http://director.diony.local"
     assert state["producer_url"] == "http://producer.diony.local"
+
+
+def test_the_opening_offers_exactly_the_two_cameras() -> None:
+    html = _client().get("/").text
+    assert html.count('class="card"') == 2
+    assert 'data-engine="grok"' in html and 'data-engine="google-flow"' in html
+    assert 'data-engine="auto"' not in html
+    assert "Director’s choice" not in html and "Director's choice" not in html
+
+
+def test_there_is_no_automatic_route() -> None:
+    client = _client()
+    assert client.post("/api/opening/engine", json={"engine": "auto"}).status_code == 422
+    assert client.post("/api/opening/engine", json={"engine": "director"}).status_code == 422
+    assert read_engine_choice() == ""

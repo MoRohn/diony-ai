@@ -6,6 +6,5 @@ uvicorn[standard]==0.52.3
 pydantic==2.13.4
 python-multipart==0.0.32
 httpx==0.28.1
-boto3==1.43.75
 cryptography==47.0.0
 numpy==2.4.6

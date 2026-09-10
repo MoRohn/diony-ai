@@ -26,7 +26,9 @@ def _print(op, tmp_path) -> None:
     op.status = "completed"
     clip = tmp_path / f"{op.id}.mp4"
     clip.write_bytes(b"clip" * 64)
-    session.runtime(op.id)["clip"] = base.FetchedClip(path=clip, sha256="x", bytes=clip.stat().st_size)
+    session.runtime(op.id)["clip"] = base.FetchedClip(
+        path=clip, sha256="x", bytes=clip.stat().st_size
+    )
 
 
 def test_a_new_script_retires_the_rooms_earlier_film(tmp_path) -> None:
@@ -84,14 +86,14 @@ def test_authored_lines_count_only_the_living_script() -> None:
     sid = _sid()
     session.propose(
         sid,
-        "Scene 1 — Dawn\nVisual: a founder at a desk.\nNarration: \"Nobody remembers the first sale.\"\n"
-        "Scene 2 — Noon\nVisual: the desk buried in orders.\nNarration: \"Everyone remembers the phones.\"\n",
+        'Scene 1 — Dawn\nVisual: a founder at a desk.\nNarration: "Nobody remembers the first sale."\n'
+        'Scene 2 — Noon\nVisual: the desk buried in orders.\nNarration: "Everyone remembers the phones."\n',
         duration_s=45,
     )
     assert session.authored_lines_expected(sid) == 2
     session.propose(
         sid,
-        "Scene 1 — Night\nVisual: a diver on a flooded stair.\nNarration: \"The lantern was still lit.\"\n",
+        'Scene 1 — Night\nVisual: a diver on a flooded stair.\nNarration: "The lantern was still lit."\n',
         duration_s=45,
     )
     assert session.authored_lines_expected(sid) == 1

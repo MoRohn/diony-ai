@@ -5,7 +5,6 @@ wired QC families, and the closed ledger leaks."""
 import json
 import shutil
 import subprocess
-from pathlib import Path
 
 import pytest
 
@@ -14,12 +13,14 @@ from diony_contracts.production import ClipReview, Scene, Script, ScriptLine
 from diony_director import (
     assembly,
     compiler,
-    estimate as estimate_mod,
     ledger,
     packagebuilder,
     revisions,
     screenwriter,
     splitter,
+)
+from diony_director import (
+    estimate as estimate_mod,
 )
 
 HAVE_FFMPEG = shutil.which("ffmpeg") is not None
@@ -29,38 +30,47 @@ def _brain_body(**overrides) -> dict:
     body = {
         "logline": "A keeper answers the door.",
         "beats": [{"beat": "the knock", "story_time": "Night 1"}],
-        "settings": [{
-            "setting_id": "set-lh", "name": "Lighthouse Gallery", "kind": "INT",
-            "room_tone": "wind against glass",
-            "time_weather": "Night 1, storm light",
-            "grade_language": "brass lamplight against storm blue",
-            "camera_kit": "32mm, low angle, slow push-ins",
-        }],
-        "characters": [{
-            "char_id": "chr-el", "name": "ELIAS",
-            "wardrobe": "salt-stained grey peacoat over a cream fisherman's sweater",
-        }],
-        "scenes": [{
-            "heading": "INT. LIGHTHOUSE GALLERY - NIGHT",
-            "setting_ref": "set-lh",
-            "story_time": "Night 1",
-            "cast": ["chr-el"],
-            "emotional_job": "make the audience dread the door",
-            "lines": [
-                {
-                    "kind": "action",
-                    "text": "ELIAS turns to the stairwell door.",
-                    "shot": "Medium single, slow pan following the turn, lamp flame guttering",
-                },
-                {
-                    "kind": "dialogue",
-                    "text": "I know that knock.",
-                    "speaker": "ELIAS",
-                    "shot": "Close-up at eye level, the door soft over his shoulder",
-                },
-                {"kind": "sound", "text": "Three slow knocks through the iron door."},
-            ],
-        }],
+        "settings": [
+            {
+                "setting_id": "set-lh",
+                "name": "Lighthouse Gallery",
+                "kind": "INT",
+                "room_tone": "wind against glass",
+                "time_weather": "Night 1, storm light",
+                "grade_language": "brass lamplight against storm blue",
+                "camera_kit": "32mm, low angle, slow push-ins",
+            }
+        ],
+        "characters": [
+            {
+                "char_id": "chr-el",
+                "name": "ELIAS",
+                "wardrobe": "salt-stained grey peacoat over a cream fisherman's sweater",
+            }
+        ],
+        "scenes": [
+            {
+                "heading": "INT. LIGHTHOUSE GALLERY - NIGHT",
+                "setting_ref": "set-lh",
+                "story_time": "Night 1",
+                "cast": ["chr-el"],
+                "emotional_job": "make the audience dread the door",
+                "lines": [
+                    {
+                        "kind": "action",
+                        "text": "ELIAS turns to the stairwell door.",
+                        "shot": "Medium single, slow pan following the turn, lamp flame guttering",
+                    },
+                    {
+                        "kind": "dialogue",
+                        "text": "I know that knock.",
+                        "speaker": "ELIAS",
+                        "shot": "Close-up at eye level, the door soft over his shoulder",
+                    },
+                    {"kind": "sound", "text": "Three slow knocks through the iron door."},
+                ],
+            }
+        ],
     }
     body.update(overrides)
     return body
@@ -144,18 +154,33 @@ def _two_beat_script() -> tuple[Script, list, list]:
     draft = screenwriter.write_script("a getaway driver leaves a neon diner", runtime_target_s=60)
     lines = [
         ScriptLine(line_id="ln-1", kind="heading", text="INT. NEON DINER - NIGHT", scene_id="sc-1"),
-        ScriptLine(line_id="ln-2", kind="action", text="LEAD counts the keys twice.", scene_id="sc-1"),
-        ScriptLine(line_id="ln-3", kind="action", text="SECOND slides the map across.", scene_id="sc-1"),
-        ScriptLine(line_id="ln-4", kind="dialogue", text="Tonight we drive.", speaker="LEAD", scene_id="sc-1"),
+        ScriptLine(
+            line_id="ln-2", kind="action", text="LEAD counts the keys twice.", scene_id="sc-1"
+        ),
+        ScriptLine(
+            line_id="ln-3", kind="action", text="SECOND slides the map across.", scene_id="sc-1"
+        ),
+        ScriptLine(
+            line_id="ln-4",
+            kind="dialogue",
+            text="Tonight we drive.",
+            speaker="LEAD",
+            scene_id="sc-1",
+        ),
         ScriptLine(line_id="ln-5", kind="action", text="SECOND nods once.", scene_id="sc-1"),
     ]
     script = Script(
         id="scr-2b",
         runtime_target_s=30,
-        scenes=[Scene(
-            scene_id="sc-1", heading="INT. NEON DINER - NIGHT", setting_ref="set-primary",
-            cast=["chr-lead", "chr-second"], line_ids=[l.line_id for l in lines],
-        )],
+        scenes=[
+            Scene(
+                scene_id="sc-1",
+                heading="INT. NEON DINER - NIGHT",
+                setting_ref="set-primary",
+                cast=["chr-lead", "chr-second"],
+                line_ids=[l.line_id for l in lines],
+            )
+        ],
         lines=lines,
     )
     return script, draft.characters, draft.settings
@@ -164,6 +189,10 @@ def _two_beat_script() -> tuple[Script, list, list]:
 def test_beats_pack_into_long_takes_never_one_clip_per_line() -> None:
     """Blueprint 33: two action beats + a line + its reaction are ~16.7s of
     beats — two takes on the omni grid, never four clips of four seconds."""
+    # this production rolls on Google Flow (the 10 s Omni grid, the Flow finish lane)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     script, characters, settings = _two_beat_script()
     clips = splitter.split_script(script, characters, settings)
     assert len(clips) == 2, "a 16-second scene is two takes"
@@ -174,7 +203,7 @@ def test_beats_pack_into_long_takes_never_one_clip_per_line() -> None:
     # both takes pace to the scene's even share (8.35s): the picture take
     # books 9s on Grok's per-second range, the spoken take 10s on the omni grid
     assert picture.natural_s == spoken.natural_s == 8.35
-    assert picture.duration_s == 9 and spoken.duration_s == 10
+    assert picture.duration_s == 10 and spoken.duration_s == 10  # the Omni grid top
 
 
 def test_camera_language_is_sentences_never_truncated_prose() -> None:
@@ -188,6 +217,10 @@ def test_camera_language_is_sentences_never_truncated_prose() -> None:
 
 
 def test_two_hander_dialogue_gets_over_the_shoulder_coverage_then_the_reaction() -> None:
+    # this production rolls on Google Flow (the 10 s Omni grid, the Flow finish lane)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     script, characters, settings = _two_beat_script()
     clips = splitter.split_script(script, characters, settings)
     dialogue = next(c for c in clips if c.clip_class == "sync-dialogue")
@@ -200,6 +233,10 @@ def test_two_hander_dialogue_gets_over_the_shoulder_coverage_then_the_reaction()
 
 
 def test_joins_are_authored_bridge_reaction_cut_and_scene_cut() -> None:
+    # this production rolls on Google Flow (the 10 s Omni grid, the Flow finish lane)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     script, characters, settings = _two_beat_script()
     # a line long enough to fill its own take pushes the reaction into the
     # next take — which is where a reaction CUT still lives
@@ -221,12 +258,22 @@ def test_a_scene_opening_on_dialogue_buys_no_empty_establishing_clip() -> None:
     draft = screenwriter.write_script("a getaway driver leaves town", runtime_target_s=60)
     lines = [
         ScriptLine(line_id="ln-1", kind="heading", text="INT. CAR - NIGHT", scene_id="sc-1"),
-        ScriptLine(line_id="ln-2", kind="dialogue", text="Go. Now.", speaker="LEAD", scene_id="sc-1"),
+        ScriptLine(
+            line_id="ln-2", kind="dialogue", text="Go. Now.", speaker="LEAD", scene_id="sc-1"
+        ),
     ]
     script = Script(
-        id="scr-d1", runtime_target_s=15,
-        scenes=[Scene(scene_id="sc-1", heading="INT. CAR - NIGHT", setting_ref="set-primary",
-                      cast=["chr-lead"], line_ids=["ln-1", "ln-2"])],
+        id="scr-d1",
+        runtime_target_s=15,
+        scenes=[
+            Scene(
+                scene_id="sc-1",
+                heading="INT. CAR - NIGHT",
+                setting_ref="set-primary",
+                cast=["chr-lead"],
+                line_ids=["ln-1", "ln-2"],
+            )
+        ],
         lines=lines,
     )
     clips = splitter.split_script(script, draft.characters, draft.settings)
@@ -247,7 +294,7 @@ def test_sound_lines_become_foley_on_the_nearest_picture() -> None:
 # --- W6: every dialect directs its soundtrack -------------------------------
 
 
-def _package(policy: str = "auto"):
+def _package(policy: str = "grok"):
     draft = screenwriter.write_script(
         "a getaway driver decides to leave town from a neon diner", runtime_target_s=60
     )
@@ -257,9 +304,7 @@ def _package(policy: str = "auto"):
 def test_the_veo_dialect_finally_directs_sound(monkeypatch) -> None:
     package = _package(policy="google-flow")
     # the Veo dialect stays a tested capability behind an explicit model choice
-    picture = next(
-        c for c in package.clips if c.clip_class not in {"sync-dialogue", "vo-over"}
-    )
+    picture = next(c for c in package.clips if c.clip_class not in {"sync-dialogue", "vo-over"})
     picture.model = "veo-3.1-fast"
     picture.duration_s = 8
     version = compiler.compile_clip_prompt(picture, package)
@@ -280,18 +325,39 @@ def test_score_direction_reaches_score_led_clips() -> None:
     # the template's own ln-2 must not shadow these): the second take is
     # coverage under score, never a plate reset
     lines = [
-        ScriptLine(line_id="ln-91", kind="heading", text="INT. NEON DINER - NIGHT", scene_id="sc-9"),
-        ScriptLine(line_id="ln-92", kind="action", text="LEAD counts the keys twice.", scene_id="sc-9"),
-        ScriptLine(line_id="ln-93", kind="action", text="SECOND slides the map across.", scene_id="sc-9"),
-        ScriptLine(line_id="ln-94", kind="action", text="LEAD folds the map into a coat pocket.", scene_id="sc-9"),
+        ScriptLine(
+            line_id="ln-91", kind="heading", text="INT. NEON DINER - NIGHT", scene_id="sc-9"
+        ),
+        ScriptLine(
+            line_id="ln-92", kind="action", text="LEAD counts the keys twice.", scene_id="sc-9"
+        ),
+        ScriptLine(
+            line_id="ln-93", kind="action", text="SECOND slides the map across.", scene_id="sc-9"
+        ),
+        ScriptLine(
+            line_id="ln-94",
+            kind="action",
+            text="LEAD folds the map into a coat pocket.",
+            scene_id="sc-9",
+        ),
         ScriptLine(line_id="ln-95", kind="action", text="SECOND nods once.", scene_id="sc-9"),
-        ScriptLine(line_id="ln-96", kind="action", text="The door swings shut behind them.", scene_id="sc-9"),
+        ScriptLine(
+            line_id="ln-96",
+            kind="action",
+            text="The door swings shut behind them.",
+            scene_id="sc-9",
+        ),
     ]
     package.script.lines.extend(lines)
-    package.script.scenes.append(Scene(
-        scene_id="sc-9", heading="INT. NEON DINER - NIGHT", setting_ref=package.settings[0].setting_id,
-        cast=[c.char_id for c in package.characters], line_ids=[l.line_id for l in lines],
-    ))
+    package.script.scenes.append(
+        Scene(
+            scene_id="sc-9",
+            heading="INT. NEON DINER - NIGHT",
+            setting_ref=package.settings[0].setting_id,
+            cast=[c.char_id for c in package.characters],
+            line_ids=[l.line_id for l in lines],
+        )
+    )
     clips = splitter.split_script(package.script, package.characters, package.settings)
     package.clips = clips
     scored = next(c for c in clips if c.scene_id == "sc-9" and c.clip_class == "score-led")
@@ -309,7 +375,8 @@ def test_score_direction_reaches_score_led_clips() -> None:
 def test_grok_clip_estimates_book_their_image_inputs() -> None:
     package = _package()
     still_locked = next(
-        c for c in package.clips
+        c
+        for c in package.clips
         if c.provider is CloudProvider.GROK and c.continuity.lock_recipe == "still"
     )
     est = estimate_mod.estimate_op(
@@ -328,8 +395,11 @@ def test_grok_extend_revisions_book_input_video_seconds() -> None:
     clip = next(c for c in package.clips if c.provider is CloudProvider.GROK)
     clip.add_prompt(compiler.compile_clip_prompt(clip, package))
     review = ClipReview(
-        id="r-ext", clip_id=clip.clip_id, verdict="fail",
-        families={"duration": "fail"}, issues=["measured 2.0s vs booked 6s"],
+        id="r-ext",
+        clip_id=clip.clip_id,
+        verdict="fail",
+        families={"duration": "fail"},
+        issues=["measured 2.0s vs booked 6s"],
     )
     op, _ = revisions.plan_revision(
         review, clip, package, session_id="s-p1", revision_count=0, failure_memory=set()
@@ -342,20 +412,35 @@ def test_grok_actuals_meter_the_inputs_that_really_attached() -> None:
     from diony_contracts.director import DirectorOp
 
     est = estimate_mod.estimate_op(
-        provider=CloudProvider.GROK, model="grok-imagine-video-1.5",
-        mode=CloudGenerationMode.T2V, duration_s=6, resolution="720p",
+        provider=CloudProvider.GROK,
+        model="grok-imagine-video-1.5",
+        mode=CloudGenerationMode.T2V,
+        duration_s=6,
+        resolution="720p",
     )
     op = DirectorOp(
-        id="op-act", session_id="s-a", op=DirectorOpType.GENERATE,
-        provider=CloudProvider.GROK, model="grok-imagine-video-1.5",
-        mode=CloudGenerationMode.T2V, duration_s=6, resolution="720p",
-        artifact_refs={"references": ["a.png", "b.png"]}, estimate=est,
+        id="op-act",
+        session_id="s-a",
+        op=DirectorOpType.GENERATE,
+        provider=CloudProvider.GROK,
+        model="grok-imagine-video-1.5",
+        mode=CloudGenerationMode.T2V,
+        duration_s=6,
+        resolution="720p",
+        artifact_refs={"references": ["a.png", "b.png"]},
+        estimate=est,
     )
     breakdown, _, _ = ledger._grok_actuals(op, 6)
     bare = DirectorOp(
-        id="op-bare", session_id="s-a", op=DirectorOpType.GENERATE,
-        provider=CloudProvider.GROK, model="grok-imagine-video-1.5",
-        mode=CloudGenerationMode.T2V, duration_s=6, resolution="720p", estimate=est,
+        id="op-bare",
+        session_id="s-a",
+        op=DirectorOpType.GENERATE,
+        provider=CloudProvider.GROK,
+        model="grok-imagine-video-1.5",
+        mode=CloudGenerationMode.T2V,
+        duration_s=6,
+        resolution="720p",
+        estimate=est,
     )
     bare_breakdown, _, _ = ledger._grok_actuals(bare, 6)
     assert breakdown.total_usd_micros == bare_breakdown.total_usd_micros + 2 * 10_000
@@ -396,17 +481,36 @@ def test_effective_windows_trim_the_grid_surplus() -> None:
 def test_assembly_trims_and_beds_the_program(tmp_path) -> None:
     def make(path, duration):
         subprocess.run(
-            ["ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc2=size=320x180:duration={duration}",
-             "-f", "lavfi", "-i", f"sine=frequency=440:duration={duration}",
-             "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", str(path)],
-            check=True, capture_output=True,
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"testsrc2=size=320x180:duration={duration}",
+                "-f",
+                "lavfi",
+                "-i",
+                f"sine=frequency=440:duration={duration}",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-c:a",
+                "aac",
+                "-shortest",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
         )
 
     a, b = tmp_path / "a.mp4", tmp_path / "b.mp4"
     make(a, 3.0)
     make(b, 2.0)
     result = assembly.assemble(
-        [a, b], tmp_path / "film.mp4",
+        [a, b],
+        tmp_path / "film.mp4",
         specs=[{"needed_s": 1.5}, {"join": "cut"}],
     )
     assert result.path.is_file()
@@ -417,9 +521,21 @@ def test_assembly_trims_and_beds_the_program(tmp_path) -> None:
 def test_assembly_accepts_a_named_look_profile(tmp_path) -> None:
     def make(path, duration):
         subprocess.run(
-            ["ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc2=size=320x180:duration={duration}",
-             "-c:v", "libx264", "-preset", "ultrafast", str(path)],
-            check=True, capture_output=True,
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"testsrc2=size=320x180:duration={duration}",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
         )
 
     a, b = tmp_path / "a.mp4", tmp_path / "b.mp4"
@@ -443,10 +559,28 @@ def test_review_measures_frames_and_chain_continuity(tmp_path) -> None:
 
     def make(path):
         subprocess.run(
-            ["ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc2=size=320x180:duration={clip.duration_s}",
-             "-f", "lavfi", "-i", f"sine=frequency=330:duration={clip.duration_s}",
-             "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", str(path)],
-            check=True, capture_output=True,
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"testsrc2=size=320x180:duration={clip.duration_s}",
+                "-f",
+                "lavfi",
+                "-i",
+                f"sine=frequency=330:duration={clip.duration_s}",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-c:a",
+                "aac",
+                "-shortest",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
         )
 
     current, previous = tmp_path / "cur.mp4", tmp_path / "prev.mp4"
@@ -461,13 +595,18 @@ def test_review_measures_frames_and_chain_continuity(tmp_path) -> None:
 
 def test_revision_notes_key_on_the_failed_family() -> None:
     review = ClipReview(
-        id="r-fam", clip_id="cl-1-1", verdict="fail",
+        id="r-fam",
+        clip_id="cl-1-1",
+        verdict="fail",
         families={"continuity": "fail", "delivery": "pass"},
         issues=["colour drifted 0.140 from the previous shot"],
     )
     assert revisions._note_for(review) == "fix-continuity"
     frames = ClipReview(
-        id="r-fr", clip_id="cl-1-1", verdict="fail",
-        families={"frames": "fail"}, issues=["2 sampled frame(s) are black"],
+        id="r-fr",
+        clip_id="cl-1-1",
+        verdict="fail",
+        families={"frames": "fail"},
+        issues=["2 sampled frame(s) are black"],
     )
     assert revisions._note_for(frames) == "fix-frames"

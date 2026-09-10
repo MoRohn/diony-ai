@@ -8,8 +8,8 @@ alwaysApply: false
 
 Blueprints are the product constitution, not essays.
 
-- Numbered `00`–`10`. If you add a domain, add a number and link it from `blueprints/README.md`.
+- Numbered `00`–`33` and counting; 25–33 are the cloud era, 00/10/15–18/24 the foundations. If you add a domain, take the next number and link it from `blueprints/README.md` under the right era.
 - Every Blueprint needs: status, pass criteria or SLA, commands/snippets, failure-mode table.
 - Do not contradict `10-quality-mandate.md`. Quote it; do not weaken it.
-- Hardware facts live in `01` and `09`. Serving flags live in `04`. Do not fork a third copy in README without a pointer.
+- Provider and pricing doctrine lives in `25`; continuity machinery in `26`. Retired numbers (01–09, 11–14, 19–23) are never reused. Do not fork a third copy in README without a pointer.
 - When a serving flag or switch command is proven on the lab cluster, update the Blueprint **and** `infra/` in the same change.

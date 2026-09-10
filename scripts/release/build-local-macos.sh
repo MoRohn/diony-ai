@@ -78,8 +78,8 @@ INSTALL_PAYLOAD="$BUILD_ROOT/install-payload"
 "$PY" -m pip install --disable-pip-version-check \
   -r "$ROOT/packaging/desktop/requirements-release.txt"
 "$PY" -m pip install --disable-pip-version-check \
-  "$INSTALL_PAYLOAD/packages/contracts" "$INSTALL_PAYLOAD/apps/wizard" "$INSTALL_PAYLOAD/apps/wan" \
-  "$INSTALL_PAYLOAD/apps/finish" "$INSTALL_PAYLOAD/apps/producer" "$INSTALL_PAYLOAD/apps/director" \
+  "$INSTALL_PAYLOAD/packages/contracts" "$INSTALL_PAYLOAD/apps/wizard" \
+  "$INSTALL_PAYLOAD/apps/producer" "$INSTALL_PAYLOAD/apps/director" \
   "$INSTALL_PAYLOAD/apps/desk"
 
 export DIONY_DESKTOP_PAYLOAD="$PAYLOAD"

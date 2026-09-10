@@ -15,9 +15,10 @@ def test_bootstrap_is_idempotent_and_workspace_isolation_is_enforced(tmp_path: P
     first = plane.bootstrap_local()
     again = plane.bootstrap_local()
     assert first.workspace.id == again.workspace.id == "local-workspace"
-    assert plane.get_document("cost_governance", "cost-governance", "local-workspace")[
-        "admin_team_id"
-    ] == "local-admin-team"
+    assert (
+        plane.get_document("cost_governance", "cost-governance", "local-workspace")["admin_team_id"]
+        == "local-admin-team"
+    )
     plane.put_document("project", "project-1", "local-workspace", {"title": "Owned here"})
     assert plane.get_document("project", "project-1", "local-workspace")["title"] == "Owned here"
     with pytest.raises(WorkspaceAccessDenied):
@@ -28,7 +29,10 @@ def test_membership_roles_gate_management(tmp_path: Path) -> None:
     plane = ControlPlane(tmp_path / "control.sqlite3")
     plane.bootstrap_local()
     plane.add_membership("usr-viewer", "local-workspace", MembershipRole.VIEWER)
-    assert plane.authorize("local-user", "local-workspace", MembershipRole.OWNER).role == MembershipRole.OWNER
+    assert (
+        plane.authorize("local-user", "local-workspace", MembershipRole.OWNER).role
+        == MembershipRole.OWNER
+    )
     with pytest.raises(WorkspaceAccessDenied):
         plane.authorize("usr-viewer", "local-workspace", MembershipRole.PRODUCER)
 
@@ -77,7 +81,7 @@ def test_byok_keys_are_encrypted_with_workspace_bound_aad(tmp_path: Path, monkey
     raw = (tmp_path / "control.sqlite3").read_bytes()
     assert b"super-secret-value" not in raw
     assert secrets.get("local-workspace", "provider-x", "api_key") == "super-secret-value"
-    with pytest.raises(Exception):
+    with pytest.raises((ValueError, Exception)):
         secrets.decrypt_for_workspace("another-workspace", saved.ciphertext)
 
 

@@ -35,8 +35,6 @@ MIN_PY = (3, 11)
 EDITABLES = (
     "packages/contracts",
     "apps/wizard",
-    "apps/wan",
-    "apps/finish",
     "apps/producer",
     "apps/director",
     "apps/desk",
@@ -55,9 +53,7 @@ _state: dict = {
     "python": "",
     "error": "",
     "diagnostics": "",
-    "runtime_mode": (
-        "installed" if bool(getattr(sys, "frozen", False)) else "source-checkout"
-    ),
+    "runtime_mode": ("installed" if bool(getattr(sys, "frozen", False)) else "source-checkout"),
     "log": [],
 }
 _lock = threading.Lock()
@@ -66,7 +62,7 @@ _lock = threading.Lock()
 class DeskInstanceLock:
     """A held per-user lock; closing it allows the next Desk launch to start."""
 
-    def __init__(self, handle) -> None:  # noqa: ANN001 - binary file handle
+    def __init__(self, handle) -> None:
         self._handle = handle
 
     def close(self) -> None:
@@ -134,9 +130,7 @@ def acquire_instance_lock(
         time.sleep(0.05)
     handle.seek(0)
     handle.truncate()
-    handle.write(
-        (json.dumps({"pid": os.getpid(), "started": int(time.time())}) + "\n").encode()
-    )
+    handle.write((json.dumps({"pid": os.getpid(), "started": int(time.time())}) + "\n").encode())
     handle.flush()
     return DeskInstanceLock(handle)
 
@@ -177,11 +171,11 @@ def user_data_dir(
 def repo_root() -> Path:
     bundled = bundled_product_root()
     if bundled is not None:
-        profile = bundled / "infra" / "profiles" / "spark-4x-v1.yaml"
-        if profile.is_file():
+        marker = bundled / "packages" / "contracts" / "pyproject.toml"
+        if marker.is_file():
             return bundled
         raise FileNotFoundError(
-            f"Diony AI application resources are incomplete: {profile}. Reinstall the application."
+            f"Diony AI application resources are incomplete: {marker}. Reinstall the application."
         )
     here = Path(__file__).resolve()
     for path in [here, *here.parents]:
@@ -549,11 +543,11 @@ def install_packages(python: Path, root: Path) -> None:
 
 
 def wizard_state_ok(host: str = "127.0.0.1", port: int | None = None) -> bool:
-    """True when GET /api/state on the Studio bind is 200 JSON with active_step."""
+    """True when GET /api/opening on the Studio bind is 200 JSON with the engine choice."""
     dest = WIZARD_PORT if port is None else port
     try:
         conn = http.client.HTTPConnection(host, dest, timeout=1.5)
-        conn.request("GET", "/api/state")
+        conn.request("GET", "/api/opening")
         resp = conn.getresponse()
         code = resp.status
         raw = resp.read()
@@ -566,29 +560,13 @@ def wizard_state_ok(host: str = "127.0.0.1", port: int | None = None) -> bool:
         payload = json.loads(raw.decode())
     except (ValueError, UnicodeDecodeError):
         return False
-    return isinstance(payload, dict) and "active_step" in payload
+    return isinstance(payload, dict) and "engine" in payload
 
 
-def wizard_ui_stamp(root: Path | None = None) -> str:
-    """Cache token from the on-disk Studio HTML (`app.js?v=`)."""
-    html = (root or repo_root()) / "apps" / "wizard" / "src" / "diony_wizard" / "static" / "index.html"
-    try:
-        text = html.read_text(encoding="utf-8")
-    except OSError:
-        return ""
-    token = "app.js?v="
-    start = text.find(token)
-    if start < 0:
-        return ""
-    rest = text[start + len(token) :]
-    stamp = rest.split('"', 1)[0].split("'", 1)[0].split("&", 1)[0].split(" ", 1)[0].strip()
-    return stamp
-
-
-def wizard_html_ok(root: Path | None = None, host: str = "127.0.0.1", port: int | None = None) -> bool:
-    """True when GET / serves this desk's Studio: the engine-selection opening
-    (cloud engines) or the classic rail matching the on-disk UI stamp."""
-    stamp = wizard_ui_stamp(root)
+def wizard_html_ok(
+    root: Path | None = None, host: str = "127.0.0.1", port: int | None = None
+) -> bool:
+    """True when GET / serves this desk's Studio: the engine-selection opening."""
     dest = WIZARD_PORT if port is None else port
     try:
         conn = http.client.HTTPConnection(host, dest, timeout=1.5)
@@ -599,11 +577,7 @@ def wizard_html_ok(root: Path | None = None, host: str = "127.0.0.1", port: int 
         conn.close()
     except OSError:
         return False
-    if code != 200:
-        return False
-    if b'data-diony="studio-opening"' in raw:
-        return True
-    return not stamp or stamp.encode("utf-8") in raw
+    return code == 200 and b'data-diony="studio-opening"' in raw
 
 
 def wizard_is_current(root: Path | None = None) -> bool:
@@ -614,7 +588,7 @@ def producer_state_ok(host: str = "127.0.0.1", port: int | None = None) -> bool:
     dest = PRODUCER_PORT if port is None else port
     try:
         conn = http.client.HTTPConnection(host, dest, timeout=1.5)
-        conn.request("GET", "/api/project")
+        conn.request("GET", "/api/engine")
         resp = conn.getresponse()
         code = resp.status
         raw = resp.read()
@@ -627,7 +601,7 @@ def producer_state_ok(host: str = "127.0.0.1", port: int | None = None) -> bool:
         payload = json.loads(raw.decode())
     except (ValueError, UnicodeDecodeError):
         return False
-    return isinstance(payload, dict) and bool(payload.get("id"))
+    return isinstance(payload, dict) and "cloud" in payload
 
 
 def producer_ui_stamp(root: Path | None = None) -> str:
@@ -815,9 +789,9 @@ def process_command(pid: int) -> str:
     try:
         if os.name == "nt":
             command = (
-                "$p=Get-CimInstance Win32_Process -Filter \"ProcessId = "
+                '$p=Get-CimInstance Win32_Process -Filter "ProcessId = '
                 + str(int(pid))
-                + "\"; if ($p) {$p.CommandLine}"
+                + '"; if ($p) {$p.CommandLine}'
             )
             return subprocess.check_output(
                 ["powershell", "-NoProfile", "-Command", command],
@@ -848,7 +822,9 @@ def listener_is_diony(port: int) -> bool:
         "--service director",
     )
     commands = [process_command(pid).lower() for pid in listener_pids(port)]
-    return bool(commands) and all(any(mark in command for mark in signatures) for command in commands)
+    return bool(commands) and all(
+        any(mark in command for mark in signatures) for command in commands
+    )
 
 
 def listener_is_desk(port: int = DESK_PORT) -> bool:
@@ -861,7 +837,9 @@ def listener_is_desk(port: int = DESK_PORT) -> bool:
         "diony.app/contents/macos/diony ai",
     )
     commands = [process_command(pid).lower() for pid in listener_pids(port)]
-    return bool(commands) and all(any(mark in command for mark in signatures) for command in commands)
+    return bool(commands) and all(
+        any(mark in command for mark in signatures) for command in commands
+    )
 
 
 def stop_listener(port: int) -> None:
@@ -1016,7 +994,9 @@ def ensure_product_names(root: Path | None = None) -> bool:
         say("Product names wait until the desk Python exists.")
         return False
     if product_names_live():
-        say("Studio is http://studio.diony.local. Producer is http://producer.diony.local. Director is http://director.diony.local.")
+        say(
+            "Studio is http://studio.diony.local. Producer is http://producer.diony.local. Director is http://director.diony.local."
+        )
         return True
     say(PREPARING_STUDIO_COPY)
     env = os.environ.copy()
@@ -1040,7 +1020,9 @@ def ensure_product_names(root: Path | None = None) -> bool:
             "or run: python -m diony_wizard.gateway ensure"
         )
         return False
-    say("Studio is http://studio.diony.local. Producer is http://producer.diony.local. Director is http://director.diony.local.")
+    say(
+        "Studio is http://studio.diony.local. Producer is http://producer.diony.local. Director is http://director.diony.local."
+    )
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return True
     deadline = time.time() + 8
@@ -1088,59 +1070,6 @@ def open_browser(url: str) -> None:
         pass
 
 
-def _studio_state(host: str = "127.0.0.1", port: int | None = None) -> dict | None:
-    """GET /api/state from Studio as a dict, or None when it is not answering."""
-    dest = WIZARD_PORT if port is None else port
-    try:
-        conn = http.client.HTTPConnection(host, dest, timeout=1.5)
-        conn.request("GET", "/api/state")
-        resp = conn.getresponse()
-        # The state carries every step's log; never cap the read or the JSON
-        # truncates and a signed site reads as unsigned.
-        raw = resp.read() if resp.status == 200 else b""
-        conn.close()
-    except OSError:
-        return None
-    try:
-        payload = json.loads(raw.decode()) if raw else {}
-    except (ValueError, UnicodeDecodeError):
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def studio_signed_state(host: str = "127.0.0.1", port: int | None = None) -> str:
-    """'signed', 'identifying', or 'unsigned'.
-
-    A restored site lock reads complete the instant Studio starts, before
-    Studio has identified the signed GPU on its Connect line. A launch must not
-    land on Producer for a lease that has since been recycled: while Studio is
-    still identifying, the launch waits; a missing GPU is an unsigned site.
-    """
-    payload = _studio_state(host, port)
-    if not payload or payload.get("complete") is not True:
-        return "unsigned"
-    signed_gpu = payload.get("signed_gpu")
-    status = str(signed_gpu.get("status") or "") if isinstance(signed_gpu, dict) else ""
-    if status in {"unverified", "identifying"}:
-        return "identifying"
-    if status == "missing":
-        return "unsigned"
-    return "signed"
-
-
-def wizard_signed(host: str = "127.0.0.1", port: int | None = None) -> bool:
-    """True when Studio reports the site signed and its GPU identified."""
-    return studio_signed_state(host, port) == "signed"
-
-
-def studio_identifying(host: str = "127.0.0.1", port: int | None = None) -> bool:
-    """True while Studio is still identifying a restored site's GPU."""
-    return studio_signed_state(host, port) == "identifying"
-
-
-IDENTIFY_WAIT_SECONDS = 20.0  # one TCP timeout plus one SSH attempt on the signed line
-
-
 def engine_is_cloud() -> bool:
     """Blueprint 25: cloud is the primary engine unless explicitly set to legacy.
 
@@ -1155,33 +1084,13 @@ def engine_is_cloud() -> bool:
     return _shared()
 
 
-def landing_url(*, wait: float = 3.0, identify_wait: float = IDENTIFY_WAIT_SECONDS) -> str:
-    """Where a launch should bring the user.
+def landing_url(*, wait: float = 3.0) -> str:
+    """Where a launch should bring the user: Studio's opening page, always.
 
-    Cloud engine (the default): the Director is the front door; Producer when
-    the Director is down; Studio only when nothing else answers. The legacy
-    local engine keeps the signed-GPU landing: Producer once signed, else
-    Studio — a launch must never wait on a recycled lease's Connect line when
-    the product no longer generates there.
+    The flow is Studio (choose the engine) → Director (make the film) →
+    Producer (the Gallery). Studio hands the user onward.
     """
-    if engine_is_cloud():
-        # The flow is Studio (configure + choose engine) → Director → Producer.
-        # Studio's opening page is the front door; it hands the user onward.
-        return STUDIO_URL
-
-    now = time.monotonic()
-    deadline = now + max(0.0, wait)
-    identify_deadline = now + max(0.0, wait, identify_wait)
-    while True:
-        if wizard_signed():
-            return PRODUCER_URL if port_open(PRODUCER_PORT) else STUDIO_URL
-        now = time.monotonic()
-        if studio_identifying() and now < identify_deadline:
-            time.sleep(0.25)
-            continue
-        if now >= deadline:
-            return STUDIO_URL
-        time.sleep(0.25)
+    return STUDIO_URL
 
 
 def handoff_to_existing_desk(*, timeout: float = 2.0) -> None:
@@ -1209,9 +1118,7 @@ def handoff_to_existing_desk(*, timeout: float = 2.0) -> None:
 def ensure_running(root: Path) -> None:
     wizard = service_command("wizard", root)
     producer = service_command("producer", root)
-    if not is_frozen() and (
-        not Path(wizard[0]).is_file() or not Path(producer[0]).is_file()
-    ):
+    if not is_frozen() and (not Path(wizard[0]).is_file() or not Path(producer[0]).is_file()):
         raise RuntimeError("Install did not leave diony-wizard and diony-producer.")
     say("Starting Studio and Producer.", phase="starting", title="Opening Studio")
     if port_open(WIZARD_PORT) and not wizard_is_current(root):
@@ -1281,12 +1188,16 @@ def ensure_director_running(root: Path) -> None:
     problem is reported loudly but never blocks Studio or Producer."""
     try:
         if not ensure_director_installed(root):
-            say("Director is unavailable this session (install failed). Studio and Producer are unaffected.")
+            say(
+                "Director is unavailable this session (install failed). Studio and Producer are unaffected."
+            )
             return
         director = service_command("director", root)
         if port_open(DIRECTOR_PORT) and not director_is_current(root):
             if not listener_is_diony(DIRECTOR_PORT):
-                say("Port 8790 is used by another application; the Director stays off this session.")
+                say(
+                    "Port 8790 is used by another application; the Director stays off this session."
+                )
                 return
             in_flight = director_in_flight_jobs()
             if in_flight != 0:
@@ -1314,7 +1225,7 @@ def ensure_director_running(root: Path) -> None:
                 say("Director is not serving this desk's UI. Studio and Producer are unaffected.")
                 return
         say("Director is http://director.diony.local.")
-    except Exception as exc:  # noqa: BLE001 - the Director never blocks the desk
+    except Exception as exc:
         say(f"Director startup skipped: {exc}")
 
 
@@ -1352,7 +1263,7 @@ def work() -> None:
         if not desk_already_installed(root):
             install_packages(python, root)
         ensure_running(root)
-    except Exception as exc:  # noqa: BLE001 — surface to the lobby
+    except Exception as exc:
         diagnostics = ""
         try:
             diagnostics = str(write_diagnostic_report(locals().get("root")))
@@ -1361,10 +1272,9 @@ def work() -> None:
         set_state(
             phase="error",
             title="Could not open the desk",
-            detail=(
-                f"{str(exc)[:320]}"
-                + (f" Diagnostics: {diagnostics}" if diagnostics else "")
-            )[:500],
+            detail=(f"{str(exc)[:320]}" + (f" Diagnostics: {diagnostics}" if diagnostics else ""))[
+                :500
+            ],
             error=str(exc)[:1200],
             diagnostics=diagnostics,
         )
@@ -1374,10 +1284,10 @@ class DeskHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, directory: str | None = None, **kwargs):
         super().__init__(*args, directory=directory or str(STATIC), **kwargs)
 
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+    def log_message(self, format: str, *args: object) -> None:
         return
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path in {"/", "/index.html"}:
             self._send_file(STATIC / "index.html", "text/html; charset=utf-8")
@@ -1405,9 +1315,7 @@ class DeskHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/diagnostics":
             try:
-                body = (
-                    json.dumps(diagnostic_snapshot(), indent=2, sort_keys=True) + "\n"
-                ).encode()
+                body = (json.dumps(diagnostic_snapshot(), indent=2, sort_keys=True) + "\n").encode()
             except Exception as exc:
                 body = json.dumps({"product": "Diony AI", "error": str(exc)[:500]}).encode()
             self.send_response(200)
@@ -1531,7 +1439,10 @@ def main(argv: list[str] | None = None) -> int:
     server = serve()
     url = lobby_url(server.server_address[1])
     print(f"Diony AI — opening at {STUDIO_URL}", flush=True)
-    print("A browser page will open. Leave this window open until it says you can close it.", flush=True)
+    print(
+        "A browser page will open. Leave this window open until it says you can close it.",
+        flush=True,
+    )
     worker = threading.Thread(target=work, name="diony-desk-work", daemon=True)
     worker.start()
     already = False
@@ -1548,14 +1459,20 @@ def main(argv: list[str] | None = None) -> int:
         open_browser(landing_url())
         if engine_is_cloud():
             print(f"Studio is open at {STUDIO_URL}. You can close this window.", flush=True)
-            print(f"Choose an engine there; the Director is {DIRECTOR_URL}, Producer is {PRODUCER_URL}.", flush=True)
+            print(
+                f"Choose an engine there; the Director is {DIRECTOR_URL}, Producer is {PRODUCER_URL}.",
+                flush=True,
+            )
         else:
             print(f"Studio is open at {STUDIO_URL}. You can close this window.", flush=True)
             print(f"Producer is {PRODUCER_URL} after you Sign.", flush=True)
     elif phase == "ready":
         if engine_is_cloud():
             print(f"Studio is opening at {STUDIO_URL}. You can close this window.", flush=True)
-            print(f"Choose an engine there; the Director is {DIRECTOR_URL}, Producer is {PRODUCER_URL}.", flush=True)
+            print(
+                f"Choose an engine there; the Director is {DIRECTOR_URL}, Producer is {PRODUCER_URL}.",
+                flush=True,
+            )
         else:
             print(f"Studio is opening here at {STUDIO_URL}. You can close this window.", flush=True)
             print(f"Producer is {PRODUCER_URL} after you Sign.", flush=True)
@@ -1572,7 +1489,9 @@ def main(argv: list[str] | None = None) -> int:
         if not lobby_opened:
             open_browser(url)
         print(public_state()["detail"], flush=True)
-        print("Leave this window open, or close it and double-click Open Diony AI again.", flush=True)
+        print(
+            "Leave this window open, or close it and double-click Open Diony AI again.", flush=True
+        )
     try:
         threading.Event().wait()
     except KeyboardInterrupt:

@@ -52,18 +52,58 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 # Surname particles: "Van Damme", "De Niro", "von Trier", "Del Toro" — the
 # particle rides with the surname, so the surname-alone alias is the whole
 # group, never a bare "Damme".
 _PARTICLES = {
-    "van", "von", "de", "di", "da", "del", "della", "der", "den", "du", "la",
-    "le", "los", "las", "dos", "das", "bin", "ibn", "al", "el", "st", "st.",
-    "saint", "mc", "mac", "o", "ter", "ten", "af", "av",
+    "van",
+    "von",
+    "de",
+    "di",
+    "da",
+    "del",
+    "della",
+    "der",
+    "den",
+    "du",
+    "la",
+    "le",
+    "los",
+    "las",
+    "dos",
+    "das",
+    "bin",
+    "ibn",
+    "al",
+    "el",
+    "st",
+    "st.",
+    "saint",
+    "mc",
+    "mac",
+    "o",
+    "ter",
+    "ten",
+    "af",
+    "av",
 }
 _ARTICLES = ("the ", "a ", "an ")
-_PREPOSITIONS = {"in", "with", "of", "at", "on", "wearing", "who", "whose", "from", "under", "behind"}
+_PREPOSITIONS = {
+    "in",
+    "with",
+    "of",
+    "at",
+    "on",
+    "wearing",
+    "who",
+    "whose",
+    "from",
+    "under",
+    "behind",
+}
 
 # The contract text both brains receive — one law, written once.
 BRAIN_LAW = (
@@ -100,7 +140,12 @@ Person = dict[str, Any]
 
 
 def audit_enabled() -> bool:
-    return os.environ.get("DIONY_LIKENESS_AUDIT", "1").strip().lower() not in {"0", "false", "no", "off"}
+    return os.environ.get("DIONY_LIKENESS_AUDIT", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
 
 
 # --------------------------------------------------------------------------
@@ -120,7 +165,7 @@ def _surname_group(tokens: list[str]) -> str:
     start = end
     while start > 0 and tokens[start - 1].lower().strip(".") in _PARTICLES:
         start -= 1
-    return " ".join(tokens[start:end + 1])
+    return " ".join(tokens[start : end + 1])
 
 
 def default_label(descriptor: str) -> str:
@@ -130,7 +175,7 @@ def default_label(descriptor: str) -> str:
     lowered = text.lower()
     for article in _ARTICLES:
         if lowered.startswith(article):
-            text = text[len(article):]
+            text = text[len(article) :]
             break
     head: list[str] = []
     for word in text.split():
@@ -237,9 +282,7 @@ def _pattern(aliases: list[str]) -> re.Pattern[str]:
     if not aliases:
         return re.compile(r"(?!x)x")
     alternatives = "|".join(_alias_regex(a) for a in aliases)
-    return re.compile(
-        r"(?<![\w'’-])(?P<name>" + alternatives + r")(?P<poss>['’]s)?(?![\w-])"
-    )
+    return re.compile(r"(?<![\w'’-])(?P<name>" + alternatives + r")(?P<poss>['’]s)?(?![\w-])")
 
 
 def _at_sentence_start(text: str, index: int) -> bool:
@@ -317,7 +360,7 @@ def scrub_pictured(text: str, people: list[Person]) -> tuple[str, int]:
     out: list[str] = []
     cursor = 0
     for match in _QUOTED.finditer(text):
-        prose, n = scrub(text[cursor:match.start()], people)
+        prose, n = scrub(text[cursor : match.start()], people)
         out.append(prose)
         out.append(match.group(0))
         hits += n
@@ -339,9 +382,7 @@ def pictured_note(hits: int, people: list[Person]) -> str:
 
 
 def mentions(text: str, people: list[Person]) -> bool:
-    return any(
-        _pattern(p.get("aliases") or [p["name"]]).search(text or "") for p in people
-    )
+    return any(_pattern(p.get("aliases") or [p["name"]]).search(text or "") for p in people)
 
 
 # --------------------------------------------------------------------------
@@ -350,19 +391,56 @@ def mentions(text: str, people: list[Person]) -> bool:
 
 _CAP_TOKEN = r"[A-Z][a-zA-Z'’]+(?:-[A-Za-z][a-zA-Z'’]+)*"
 _CANDIDATE = re.compile(
-    r"(?<![\w'’-])" + _CAP_TOKEN + r"(?:\s+(?:(?:van|von|de|di|da|del|della|der|du|la|le|mc|mac|st\.?)\s+)?" + _CAP_TOKEN + r")*"
+    r"(?<![\w'’-])"
+    + _CAP_TOKEN
+    + r"(?:\s+(?:(?:van|von|de|di|da|del|della|der|du|la|le|mc|mac|st\.?)\s+)?"
+    + _CAP_TOKEN
+    + r")*"
 )
 # Words a prompt capitalizes mid-sentence for reasons of its own.
 _NOT_A_NAME = {
-    "I", "AI", "Constraints", "Lighting", "Camera", "Then", "At", "In", "The",
-    "Use", "Preserve", "Maintain", "Pace", "Create", "Keep", "Avoid", "Do",
-    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
-    "January", "February", "March", "April", "May", "June", "July", "August",
-    "September", "October", "November", "December",
+    "I",
+    "AI",
+    "Constraints",
+    "Lighting",
+    "Camera",
+    "Then",
+    "At",
+    "In",
+    "The",
+    "Use",
+    "Preserve",
+    "Maintain",
+    "Pace",
+    "Create",
+    "Keep",
+    "Avoid",
+    "Do",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 }
 
 
-def candidates(texts: Iterable[str], people: list[Person] | None = None, *, cap: int = 40) -> list[str]:
+def candidates(
+    texts: Iterable[str], people: list[Person] | None = None, *, cap: int = 40
+) -> list[str]:
     """Capitalized phrases that could name someone and are not yet covered by
     a known person. Multi-word phrases anywhere; a single capitalized word only
     mid-sentence (every sentence starts with one). ALL CAPS words are on-screen
@@ -451,7 +529,9 @@ def audit_all(
         timeout=screenwriter.brain_timeout_s(),
     )
     if response.status_code >= 400:
-        raise RuntimeError(f"likeness audit rejected ({response.status_code}): {response.text[:200]}")
+        raise RuntimeError(
+            f"likeness audit rejected ({response.status_code}): {response.text[:200]}"
+        )
     body = screenwriter._json_object(response.json()["choices"][0]["message"]["content"])
     people = normalize_people(body.get("people") or [], has_reference=has_reference)
     # a phrase that CONTAINS a confirmed person is that person too:
@@ -492,7 +572,7 @@ def people_from_profiles(profiles: Iterable[Any]) -> list[Person]:
             lowered = descriptor.lower()
             for article in _ARTICLES:
                 if lowered.startswith(article):
-                    descriptor = descriptor[len(article):]
+                    descriptor = descriptor[len(article) :]
                     break
             descriptor = "the " + descriptor[:1].lower() + descriptor[1:]
         raw.append({"name": name, "descriptor": descriptor})
@@ -516,8 +596,16 @@ def merge(*groups: Iterable[Person] | None) -> list[Person]:
 _MASTER_PROSE_FIELDS = ("narration", "prompt")
 # Fragments the assembler joins into its own sentences: never capitalized.
 _MASTER_FRAGMENT_FIELDS = (
-    "primary_subject", "primary_action", "setting", "spatial", "camera",
-    "performance", "micro_expressions", "physics", "body_mechanics", "mood",
+    "primary_subject",
+    "primary_action",
+    "setting",
+    "spatial",
+    "camera",
+    "performance",
+    "micro_expressions",
+    "physics",
+    "body_mechanics",
+    "mood",
     "ending",
 )
 _MASTER_TEXT_FIELDS = _MASTER_PROSE_FIELDS + _MASTER_FRAGMENT_FIELDS
@@ -699,7 +787,11 @@ def script_texts(body: dict) -> list[str]:
             texts.append(str(char.get("name", "") or ""))
             texts.append(str(char.get("age_body_notes", "") or ""))
             wardrobe = char.get("wardrobe")
-            texts.append(wardrobe if isinstance(wardrobe, str) else " ".join(str(v) for v in (wardrobe or {}).values()))
+            texts.append(
+                wardrobe
+                if isinstance(wardrobe, str)
+                else " ".join(str(v) for v in (wardrobe or {}).values())
+            )
     for scene in body.get("scenes") or []:
         if isinstance(scene, dict):
             texts.append(str(scene.get("heading", "") or ""))

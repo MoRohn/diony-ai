@@ -19,8 +19,7 @@ def test_temporal_quality_accepts_stable_motion_and_rejects_full_frame_flicker()
     assert stable_receipt.frame_count == 12
 
     flicker = [
-        np.full((36, 64, 3), 30 if index % 2 == 0 else 220, dtype=np.uint8)
-        for index in range(12)
+        np.full((36, 64, 3), 30 if index % 2 == 0 else 220, dtype=np.uint8) for index in range(12)
     ]
     flicker_receipt = measure_temporal_frames(flicker)
     assert flicker_receipt.measured is True

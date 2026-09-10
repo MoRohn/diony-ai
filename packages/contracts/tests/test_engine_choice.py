@@ -43,9 +43,9 @@ def test_garbage_on_disk_reads_empty(tmp_path, monkeypatch) -> None:
     assert read_engine_choice() == ""
 
 
-def test_the_three_cloud_era_choices_are_legal(tmp_path, monkeypatch) -> None:
+def test_the_two_cameras_are_the_only_legal_choices(tmp_path, monkeypatch) -> None:
     _isolate(tmp_path, monkeypatch)
-    assert set(ENGINE_CHOICES) == {"auto", "grok", "google-flow"}
+    assert set(ENGINE_CHOICES) == {"grok", "google-flow"}
     for choice in ENGINE_CHOICES:
         write_engine_choice(choice)
         assert read_engine_choice() == choice

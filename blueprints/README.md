@@ -1,36 +1,31 @@
 # Blueprints
 
-Numbered operational constitution for Diony AI. Read `00` first. Coding agents: implement these; do not contradict them.
+Numbered operational constitution for Diony AI. Coding agents: implement these; do not contradict them.
+
+**Blueprints 25–33 are the cloud era**, in force since the Director pivot of 2026-08-31: read `25` first, then `00` for the gates and `10` for the quality bar. The numbers 01–09, 11–14, and 19–23 described the local-cluster lane that was removed on 2026-09-10; they are retired and never reused.
+
+## Cloud era (the product)
 
 | # | File | Topic |
 |---|---|---|
-| 00 | [00-product-constitution.md](00-product-constitution.md) | Product, gates, locked truths |
-| 01 | [01-crate-to-cluster.md](01-crate-to-cluster.md) | Unbox, Sync wrap, Studio steps (local crate) |
-| 02 | [02-cluster-topology.md](02-cluster-topology.md) | RoCE vs 10GbE, MTU, NCCL, vault |
-| 03 | [03-fleet-profiles.md](03-fleet-profiles.md) | BRAIN / SPLIT / FARM / FINISH |
-| 04 | [04-model-serving.md](04-model-serving.md) | DeepSeek Spark recipes, Wan, audio |
-| 05 | [05-producer-pipeline.md](05-producer-pipeline.md) | Showrunner loop, engines, QC |
-| 06 | [06-1080p-sota-finish.md](06-1080p-sota-finish.md) | 720 negative → 1080 master |
-| 07 | [07-hour-long-av.md](07-hour-long-av.md) | SLA math, storage, energy |
-| 08 | [08-ops-autonomy.md](08-ops-autonomy.md) | Health, heal, air-gap, updates |
-| 09 | [09-bom-and-sku.md](09-bom-and-sku.md) | Crate BOM |
-| 10 | [10-quality-mandate.md](10-quality-mandate.md) | SOTA production constitution |
-| 11 | [11-wizard-walkthrough.md](11-wizard-walkthrough.md) | Learn + do crate-to-cluster |
-| 12 | [12-idea-to-studio.md](12-idea-to-studio.md) | Producer customer bays |
-| 13 | [13-idea-refs-and-edits.md](13-idea-refs-and-edits.md) | Multimodal ideas and legacy edit-lineage compatibility |
-| 14 | [14-compute-paths.md](14-compute-paths.md) | Desk, Dual-Spark, B300, B200; site lock; same product |
-| 15 | [15-creative-design-system.md](15-creative-design-system.md) | Diony Chorus brand, type, motion, accessibility, surface density |
-| 16 | [16-launch-control-plane.md](16-launch-control-plane.md) | Durable workflows, tenancy, providers, Cost Centers, BYOK, export, operations |
+| 25 | [25-director-pivot.md](25-director-pivot.md) | The pivot: cloud generation, the Director as primary UI, provider doctrine (Grok Imagine, Google Flow via useapi.net), the cost engine (estimate → live → receipt, rate cards as documents), one camera per film |
+| 26 | [26-continuity-lock.md](26-continuity-lock.md) | The production-package contracts and the plan → shoot → review → fix machinery: lock recipes, bibles before pictures, the face gate, review families, the fix ladder, assembly |
+| 27 | [27-master-video-prompt.md](27-master-video-prompt.md) | The Master Video Prompt as the Idea-to-Prompt stage of every Director flow: the template runs on the brain per brief and returns the pre-split finalized artifact; duration as an input; one-shot bodies, screenplay briefs, per-clip inheritance, the deriving hold; §3a the likeness guard |
+| 28 | [28-post-assembly-narration.md](28-post-assembly-narration.md) | The voice track as a post instrument: clips render picture and ambience only, the film is cut as booked, one cast Grok voice narrates every line onto the real cut timeline with cues at each mark, the speech guard, the tail hold |
+| 29 | [29-look-bible.md](29-look-bible.md) | The Look Bible and the style frame: one film-level look verbatim on every prompt, plate, and sheet across all three dialects; style frames at scene changes; uploads as references unless marked opener; chain-link review and Retake |
+| 30 | [30-flow-1080p-finish.md](30-flow-1080p-finish.md) | The Google Flow 1080p finish: `POST /videos/upscale` contract (async jobid, per-resolution pricing, cached results, link-pending polls), UPSCALE ops as finishes of takes, throttled waves, `finish=auto|720p|1080p` at the cut, Run, Assemble & Upscale All |
+| 31 | [31-production-style.md](31-production-style.md) | Production Style: Narrated (default), Dialogue (script lines ride the prompt and characters voice them in the clip), Mix; per-clip `voicing`, spoken-line review and `fix-line`, the speech guard's keep / rescue / balance / mute |
+| 32 | [32-cast-lock.md](32-cast-lock.md) | Cast Lock: Standard or Locked — an `IdentityCard` verbatim at priority 0, an anchor + turnaround sheet measured with YuNet + SFace, cast keyframes before each clip, `<IMAGE_n>` / `@character_n` markers, self-registering Flow characters; off-screen `(O.S.)` lines |
+| 33 | [33-long-takes-and-the-cast-dock.md](33-long-takes-and-the-cast-dock.md) | Long takes: a scene's beats pack into the fewest takes the route allows (Grok 15 s / Omni 10 s), one spoken line per take, `natural_s` and `line_at_s` on the contracts; the cast dock approves faces without scrolling |
+
+## Foundations that still apply
+
+| # | File | Topic |
+|---|---|---|
+| 00 | [00-product-constitution.md](00-product-constitution.md) | Product, gates, locked truths — read with the 2026-08-31 amendment at its head |
+| 10 | [10-quality-mandate.md](10-quality-mandate.md) | The quality constitution: reject-and-retake, no previz as master |
+| 15 | [15-creative-design-system.md](15-creative-design-system.md) | The bar-mark brand, type, motion, accessibility, surface density |
+| 16 | [16-launch-control-plane.md](16-launch-control-plane.md) | Durable workflows, the cost ledger, providers, Cost Centers, BYOK, export |
 | 17 | [17-desktop-distribution.md](17-desktop-distribution.md) | Self-contained Mac/Windows install, startup, signing, downloads |
-| 18 | [18-studio-entry-and-governance.md](18-studio-entry-and-governance.md) | Dual Start/Join entry, Profile Names, personal Cost Centers, membership governance |
-| 19 | [19-producer-final-production-standard.md](19-producer-final-production-standard.md) | Definitive Idea-to-Production golden path, strict 1080 master standard, recovery, and completion checklist |
-| 20 | [20-wan22-prompt-intelligence.md](20-wan22-prompt-intelligence.md) | Autonomous typed Wan2.2 prompt planning, validation, guarded refinement, QC repair, and receipts |
-| 21 | [21-production-performance-assurance.md](21-production-performance-assurance.md) | Exact-quality Wan residency, streaming Finish, measured QC, durable latency evidence, canary, and rollback gates |
-| 22 | [22-voice-performance-system.md](22-voice-performance-system.md) | Immutable Character voices, performance scripts, studio audio, S2V conditioning, AV QC, cache, and backend qualification |
-| 23 | [23-optimal-clip-production-flow.md](23-optimal-clip-production-flow.md) | Receipt-addressed Idea -> Voice -> Wan -> AutoQC -> 1080 Finish flow, B200 activation, and advanced-model qualification boundary |
-| 24 | [24-montage-intelligence.md](24-montage-intelligence.md) | Rundown variety review, prompt craft lint, sampled-frame QC, decision log, program look and chain colour match, final review, subtitle sidecars, measured sizing, offline test guard |
-| 27 | [27-master-video-prompt.md](27-master-video-prompt.md) | The Master Video Prompt as the Idea-to-Prompt stage of every Director flow: the template runs on the brain per brief and returns the pre-split finalized artifact; duration as an input; one-shot bodies, screenplay briefs, per-clip inheritance, the deriving hold |
-| 30 | [30-flow-1080p-finish.md](30-flow-1080p-finish.md) | The Google Flow 1080p finish on the Director lane: `POST /videos/upscale` contract (async jobid, per-resolution pricing, cached results, link-pending polls), UPSCALE ops as finishes of takes (measured, never re-shot), throttled waves, `finish=auto|720p|1080p` at the cut, and Run, Assemble & Upscale All on the batch bar |
-| 31 | [31-production-style.md](31-production-style.md) | Production Style on the Director lane: Narrated (default, Blueprint 28 post narrator), Dialogue (script lines ride the prompt and characters voice them in the clip), Mix (on-camera dialogue in the clip, voice-over in post); per-clip `voicing`, spoken-line review and `fix-line`, the speech guard's keep / rescue / balance / mute at the cut |
-| 32 | [32-cast-lock.md](32-cast-lock.md) | Cast Lock on the Director lane: Standard (pre-32) or Locked — an `IdentityCard` verbatim at priority 0 on every prompt, an anchor + turnaround board sheet measured with YuNet+SFace (desk staging via `diony-director-check --stage-face-models`, failed slots redrawn), cast keyframes composed off the sheet before each clip rolls, `<IMAGE_n>` / `@character_n` identity markers, self-registering Flow characters; off-screen `(O.S.)` dialogue lines heard from beyond the frame under every style |
-| 33 | [33-long-takes-and-the-cast-dock.md](33-long-takes-and-the-cast-dock.md) | Long takes on the Director's scripted lane: a scene's beats pack into the fewest takes the route's longest clip allows (Grok 15s / omni 10s), balanced and paced to the scene's even share, one spoken line per take, `natural_s` + `line_at_s` on the contracts driving the trim, the cue sheet, and the subtitles; the screenwriter is briefed on the take length; the cast dock in the console approves faces without scrolling the thread |
+| 18 | [18-studio-entry-and-governance.md](18-studio-entry-and-governance.md) | Start/Join entry, Profile Names, Cost Centers, membership governance |
+| 24 | [24-montage-intelligence.md](24-montage-intelligence.md) | Rundown variety review, prompt lint, sampled-frame QC, decision log, look and chain colour match, final review, subtitle sidecars, the offline test guard |

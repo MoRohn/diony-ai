@@ -24,11 +24,27 @@ def _client() -> TestClient:
 def _real_clip(path: Path, duration: int, size: str = "320x180") -> None:
     subprocess.run(
         [
-            "ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc2=size={size}:duration={duration}",
-            "-f", "lavfi", "-i", f"sine=frequency=330:duration={duration}",
-            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", str(path),
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc2=size={size}:duration={duration}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=330:duration={duration}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(path),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
 
 
@@ -82,11 +98,16 @@ def _fake_adapters(
         return base.CloudJobStatus(
             state="done",
             result_url=f"https://cdn/{handle.external_id}.mp4",
-            metadata={"duration_s": handle.duration_s, "media_generation_id": f"user:{handle.external_id}"},
+            metadata={
+                "duration_s": handle.duration_s,
+                "media_generation_id": f"user:{handle.external_id}",
+            },
         )
 
     def make_submit_image(provider_id):
-        def _submit_image(prompt, *, model, references=None, aspect_ratio="landscape", resolution=""):
+        def _submit_image(
+            prompt, *, model, references=None, aspect_ratio="landscape", resolution=""
+        ):
             counter["n"] += 1
             return base.CloudJobHandle(
                 provider_id=provider_id,
@@ -232,9 +253,7 @@ def test_full_loop_generate_review_assemble_receipt(monkeypatch, tmp_path, fake_
     assert refused.status_code == 409
     assert "missing shots" in refused.json()["detail"]
     # …and an explicit allow_gaps ships what exists
-    film = client.post(
-        f"/api/director/sessions/{sid}/assemble", json={"allow_gaps": True}
-    ).json()
+    film = client.post(f"/api/director/sessions/{sid}/assemble", json={"allow_gaps": True}).json()
     assert film["clip_count"] == 3
     assert film["duration_s"] > 3
 
@@ -246,7 +265,9 @@ def test_full_loop_generate_review_assemble_receipt(monkeypatch, tmp_path, fake_
 
 
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
-def test_retry_missing_shots_fills_the_gaps_and_cuts_clean(monkeypatch, tmp_path, fake_narrator) -> None:
+def test_retry_missing_shots_fills_the_gaps_and_cuts_clean(
+    monkeypatch, tmp_path, fake_narrator
+) -> None:
     """The functional 'Retry' beside 'Assemble anyway': run_retakes rolls the
     drafted ops for every missing shot, and the default cut then succeeds."""
     client = _client()
@@ -297,6 +318,10 @@ def test_a_failed_job_drafts_the_next_revision(monkeypatch, tmp_path) -> None:
 
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
 def test_upscale_proposal_on_a_completed_flow_clip(monkeypatch, tmp_path) -> None:
+    # this production rolls on Google Flow (the 10 s Omni grid, the Flow finish lane)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     client = _client()
     _fake_adapters(monkeypatch, tmp_path)
     sid = _start(client)
@@ -375,8 +400,10 @@ def test_run_batch_selected_subset_only(monkeypatch, tmp_path) -> None:
     chosen = [ops[0]["id"], ops[2]["id"]]
     client.post(f"/api/director/sessions/{sid}/run_batch", json={"op_ids": chosen}).json()
     _drive(client, sid)
-    states = {o["id"]: o["status"] for o in
-              [client.get(f"/api/director/ops/{o['id']}").json()["op"] for o in ops]}
+    states = {
+        o["id"]: o["status"]
+        for o in [client.get(f"/api/director/ops/{o['id']}").json()["op"] for o in ops]
+    }
     assert all(states[i] == "completed" for i in chosen)
     untouched = [o["id"] for o in ops if o["id"] not in chosen]
     assert all(states[i] == "proposed" for i in untouched)
@@ -393,7 +420,9 @@ def test_run_batch_reports_holds_instead_of_dying(monkeypatch, tmp_path) -> None
     ops = client.post(f"/api/director/sessions/{sid}/lock_script").json()["ops"]
 
     def boom(op):
-        raise __import__("diony_director.providers.base", fromlist=["CloudAdapterError"]).CloudAdapterError("provider down")
+        raise __import__(
+            "diony_director.providers.base", fromlist=["CloudAdapterError"]
+        ).CloudAdapterError("provider down")
 
     monkeypatch.setattr(grok, "submit", boom)
     batch = client.post(f"/api/director/sessions/{sid}/run_batch", json={}).json()
@@ -448,6 +477,10 @@ def test_run_batch_survives_raw_http_errors_and_names_them(monkeypatch, tmp_path
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
 def test_directed_batch_chains_bridge_frames_and_plates(monkeypatch, tmp_path) -> None:
     """The continuity doctrine, wired: plates open scenes, last frames chain clips."""
+    # this production rolls on Google Flow (the 10 s Omni grid, the Flow finish lane)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     client = _client()
     _fake_adapters(monkeypatch, tmp_path)
 
@@ -469,7 +502,7 @@ def test_directed_batch_chains_bridge_frames_and_plates(monkeypatch, tmp_path) -
         f"/api/director/sessions/{sid}/produce",
         json={"idea": "a getaway driver decides to leave town from a neon diner"},
     )
-    locked = client.post(f"/api/director/sessions/{sid}/lock_script").json()
+    client.post(f"/api/director/sessions/{sid}/lock_script").json()
     client.post(f"/api/director/sessions/{sid}/run_batch", json={})
     _drive(client, sid)
 
@@ -553,12 +586,12 @@ def test_locked_estimate_covers_clips_bible_and_allowance(monkeypatch, tmp_path)
 
 
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
-@pytest.mark.parametrize("engine", ["auto", "grok", "google-flow"])
+@pytest.mark.parametrize("engine", ["grok", "google-flow"])
 def test_narration_lands_on_every_studio_engine(
     engine, monkeypatch, tmp_path, fake_narrator
 ) -> None:
     """Blueprint 28 is engine-agnostic: whichever Studio option shot the
-    clips — Grok, Google Flow, or the auto mix — the assembled cut gets the
+    clips — Grok or Google Flow — the assembled cut gets the
     same post-recorded narration: cues placed, mixed, and audited, with the
     mute picture-lock kept beside the narrated master."""
     import json
@@ -609,7 +642,7 @@ def _locked_production(client, monkeypatch, tmp_path, **fake_kwargs):
     ops = client.post(f"/api/director/sessions/{sid}/lock_script").json()["ops"]
     flow_ids = {o["clip_id"] for o in ops if o["provider"] == "google-flow"}
     grok_ids = {o["clip_id"] for o in ops if o["provider"] == "grok"}
-    assert flow_ids and grok_ids, "the fixture production must route both lanes"
+    assert flow_ids and not grok_ids, "one camera shoots the whole film: the Flow lane"
     client.post(f"/api/director/sessions/{sid}/run_batch", json={})
     tick = _drive(client, sid)
     assert tick["failed"] == 0
@@ -620,6 +653,10 @@ def _locked_production(client, monkeypatch, tmp_path, **fake_kwargs):
 def test_upscale_all_finishes_the_flow_takes_and_cuts_a_1080p_film(
     monkeypatch, tmp_path, fake_narrator
 ) -> None:
+    # this production rolls on Google Flow (the 10 s Omni grid, the Flow finish lane)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     from diony_director import review
 
     client = _client()
@@ -688,6 +725,10 @@ def test_upscale_all_finishes_the_flow_takes_and_cuts_a_1080p_film(
 def test_a_short_finish_fails_its_check_and_the_take_stays_in_the_cut(
     monkeypatch, tmp_path, fake_narrator
 ) -> None:
+    # this production rolls on Google Flow (the 10 s Omni grid, the Flow finish lane)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     client = _client()
     sid, ops, flow_ids, grok_ids = _locked_production(
         client, monkeypatch, tmp_path, finish_size="640x360"
@@ -720,6 +761,10 @@ def test_a_short_finish_fails_its_check_and_the_take_stays_in_the_cut(
 
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
 def test_a_failed_finish_job_never_drafts_a_retake(monkeypatch, tmp_path, fake_narrator) -> None:
+    # this production rolls on Google Flow (the 10 s Omni grid, the Flow finish lane)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     client = _client()
     sid, ops, flow_ids, grok_ids = _locked_production(
         client, monkeypatch, tmp_path, fail_upscales=True
@@ -738,7 +783,10 @@ def test_a_failed_finish_job_never_drafts_a_retake(monkeypatch, tmp_path, fake_n
     for cid in flow_ids:
         assert rows[cid]["status"] == "completed", "the take itself is untouched"
         assert rows[cid]["finish"]["status"] == "failed"
-        assert "provider exploded" in rows[cid]["finish"]["reason"] or rows[cid]["finish"]["status"] == "failed"
+        assert (
+            "provider exploded" in rows[cid]["finish"]["reason"]
+            or rows[cid]["finish"]["status"] == "failed"
+        )
     strict = client.post(f"/api/director/sessions/{sid}/assemble", json={"finish": "1080p"})
     assert strict.status_code == 409
     assert "finish" in strict.text
@@ -751,6 +799,10 @@ def test_a_failed_finish_job_never_drafts_a_retake(monkeypatch, tmp_path, fake_n
 
 
 def test_a_link_pending_job_is_left_alone_for_the_providers_window(monkeypatch, tmp_path) -> None:
+    # this production rolls on Google Flow (the 10 s Omni grid, the Flow finish lane)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     from diony_director import session as director_session
 
     client = _client()
@@ -788,10 +840,14 @@ def test_a_link_pending_job_is_left_alone_for_the_providers_window(monkeypatch, 
 
 
 def test_finish_waves_release_a_few_upscales_at_a_time(monkeypatch, tmp_path) -> None:
-    from diony_contracts.director import CloudGenerationMode, CloudProvider, DirectorOp, DirectorOpType
-    from diony_director import session as director_session
-
+    from diony_contracts.director import (
+        CloudGenerationMode,
+        CloudProvider,
+        DirectorOp,
+        DirectorOpType,
+    )
     from diony_director import estimate as estimate_mod
+    from diony_director import session as director_session
 
     monkeypatch.setenv("DIONY_FLOW_UPSCALE_PARALLEL", "2")
     client = _client()
@@ -848,7 +904,10 @@ def test_the_voice_setting_is_offered_validated_and_persisted(monkeypatch) -> No
 
     bad = client.post(f"/api/director/sessions/{sid}/voice", json={"voice": "marvin"})
     assert bad.status_code == 422 and "unknown narrator voice" in bad.text
-    assert client.post(f"/api/director/sessions/{sid}/voice", json={"voice": "Atlas"}).json()["voice"] == "atlas"
+    assert (
+        client.post(f"/api/director/sessions/{sid}/voice", json={"voice": "Atlas"}).json()["voice"]
+        == "atlas"
+    )
     assert client.get(f"/api/director/sessions/{sid}/settings").json()["voice"] == "atlas"
     # the message body carries it too, None keeps, "auto" releases
     client.post(f"/api/director/sessions/{sid}/message", json={"text": "a truck", "duration_s": 6})
@@ -866,7 +925,13 @@ def test_the_voice_setting_is_offered_validated_and_persisted(monkeypatch) -> No
 
 
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
-def test_the_cut_speaks_with_the_chosen_voice_and_reports_it(monkeypatch, tmp_path, fake_narrator) -> None:
+def test_the_cut_speaks_with_the_chosen_voice_and_reports_it(
+    monkeypatch, tmp_path, fake_narrator
+) -> None:
+    # this production rolls on Google Flow (the 10 s Omni grid, the Flow finish lane)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     monkeypatch.delenv("DIONY_GROK_VOICE", raising=False)
     client = _client()
     sid, ops, flow_ids, grok_ids = _locked_production(client, monkeypatch, tmp_path)

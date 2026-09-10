@@ -10,8 +10,6 @@ The doctrine under test:
 - the bridge frame is taken at the assembly CUT point, not the surplus tail.
 """
 
-from pathlib import Path
-
 import pytest
 
 from diony_contracts.production import Scene, Script, ScriptLine
@@ -27,7 +25,9 @@ def _draft():
 def _script_with_music():
     lines = [
         ScriptLine(line_id="ln-1", kind="heading", text="INT. DINER - NIGHT", scene_id="sc-1"),
-        ScriptLine(line_id="ln-2", kind="action", text="Mara waits by the counter.", scene_id="sc-1"),
+        ScriptLine(
+            line_id="ln-2", kind="action", text="Mara waits by the counter.", scene_id="sc-1"
+        ),
         ScriptLine(
             line_id="ln-3",
             kind="sound",
@@ -36,7 +36,11 @@ def _script_with_music():
         ),
         ScriptLine(line_id="ln-4", kind="action", text="Mara counts the till.", scene_id="sc-1"),
         ScriptLine(
-            line_id="ln-5", kind="dialogue", text="We leave tonight.", speaker="MARA", scene_id="sc-1"
+            line_id="ln-5",
+            kind="dialogue",
+            text="We leave tonight.",
+            speaker="MARA",
+            scene_id="sc-1",
         ),
     ]
     return Script(
@@ -63,9 +67,7 @@ def test_a_music_cue_scores_the_whole_scene_not_one_clip() -> None:
         assert clip.audio_packet.score == "in"
         assert "funky instrumental groove" in clip.audio_packet.score_desc
         # the cue is the scene's score, never a one-clip foley event
-        assert not any(
-            "groove" in str(e.get("event", "")) for e in clip.audio_packet.foley
-        )
+        assert not any("groove" in str(e.get("event", "")) for e in clip.audio_packet.foley)
 
 
 def test_scene_openers_breathe_with_ambience_not_forced_silence() -> None:
@@ -81,9 +83,7 @@ def test_scene_openers_breathe_with_ambience_not_forced_silence() -> None:
 
 def test_scored_prompt_never_contradicts_itself_with_no_music() -> None:
     draft = _draft()
-    package = packagebuilder.build_package(
-        "s-music", "a getaway", draft, provider_policy="grok"
-    )
+    package = packagebuilder.build_package("s-music", "a getaway", draft, provider_policy="grok")
     scene = package.script.scenes[0]
     clips = splitter.split_script(_script_with_music(), draft.characters, draft.settings)
     # graft the music-scored clips onto the real package's scene/setting ids
@@ -114,11 +114,10 @@ def test_legacy_music_foley_reads_as_score_not_beside_no_music() -> None:
 
 
 def test_grok_reference_packs_always_carry_the_setting_plate() -> None:
-    package = packagebuilder.build_package(
-        "s-plate", "a getaway", _draft(), provider_policy="grok"
-    )
+    package = packagebuilder.build_package("s-plate", "a getaway", _draft(), provider_policy="grok")
     clip = next(
-        c for c in package.clips
+        c
+        for c in package.clips
         if c.continuity.lock_recipe == "ref" and c.continuity.character_packs
     )
     setting_id = str(clip.continuity.setting_plate["setting_id"])
@@ -184,15 +183,19 @@ def test_re_anchor_keeps_the_bridge_frame_first(monkeypatch, tmp_path) -> None:
     the plate, then identity — never identity sheets alone."""
     from types import SimpleNamespace
 
-    from diony_director import app as app_module, session
+    from diony_director import app as app_module
+    from diony_director import session
 
     package = packagebuilder.build_package(
         "s-anchor", "a getaway", _draft(), provider_policy="grok"
     )
     clip = next(
-        c for c in package.clips
-        if c.continuity.lock_recipe == "ref" and c.continuity.character_packs
-        and c.provider is not None and c.provider.value == "grok"
+        c
+        for c in package.clips
+        if c.continuity.lock_recipe == "ref"
+        and c.continuity.character_packs
+        and c.provider is not None
+        and c.provider.value == "grok"
     )
     setting = package.setting(str(clip.continuity.setting_plate["setting_id"]))
     setting.plate_asset_id = "/vault/plates/diner.jpg"
@@ -203,9 +206,7 @@ def test_re_anchor_keeps_the_bridge_frame_first(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(session, "clip_for_op", lambda _op: clip)
     monkeypatch.setattr(session, "package_for", lambda _sid: package)
-    monkeypatch.setattr(
-        session, "apply_uploads_to_refs", lambda _sid, _clip, _pkg, refs: refs
-    )
+    monkeypatch.setattr(session, "apply_uploads_to_refs", lambda _sid, _clip, _pkg, refs: refs)
     monkeypatch.setattr(session, "chain_position", lambda _sid, _oid: 4)
     monkeypatch.setattr(session, "previous_completed_clip_op", lambda _sid, _op: prev)
     monkeypatch.setattr(
@@ -230,20 +231,21 @@ def test_re_anchor_keeps_the_bridge_frame_first(monkeypatch, tmp_path) -> None:
     assert op.artifact_refs.get("aspect_ratio") == "16:9"
 
 
-def test_chained_clip_bridges_from_the_frame_with_aspect_pinned(
-    monkeypatch, tmp_path
-) -> None:
+def test_chained_clip_bridges_from_the_frame_with_aspect_pinned(monkeypatch, tmp_path) -> None:
     from types import SimpleNamespace
 
-    from diony_director import app as app_module, session
+    from diony_director import app as app_module
+    from diony_director import session
 
     package = packagebuilder.build_package(
         "s-bridge", "a getaway", _draft(), provider_policy="grok"
     )
     clip = next(
-        c for c in package.clips
+        c
+        for c in package.clips
         if c.continuity.lock_recipe == "ref"
-        and c.provider is not None and c.provider.value == "grok"
+        and c.provider is not None
+        and c.provider.value == "grok"
     )
 
     op = _gen_op("op-b", "s-bridge", clip.clip_id)
@@ -252,9 +254,7 @@ def test_chained_clip_bridges_from_the_frame_with_aspect_pinned(
 
     monkeypatch.setattr(session, "clip_for_op", lambda _op: clip)
     monkeypatch.setattr(session, "package_for", lambda _sid: package)
-    monkeypatch.setattr(
-        session, "apply_uploads_to_refs", lambda _sid, _clip, _pkg, refs: refs
-    )
+    monkeypatch.setattr(session, "apply_uploads_to_refs", lambda _sid, _clip, _pkg, refs: refs)
     monkeypatch.setattr(session, "chain_position", lambda _sid, _oid: 1)
     monkeypatch.setattr(session, "previous_completed_clip_op", lambda _sid, _op: prev)
     monkeypatch.setattr(
@@ -276,7 +276,7 @@ def test_chained_clip_bridges_from_the_frame_with_aspect_pinned(
 
 HAVE_FFMPEG = True
 try:  # mirror the production_flow guard
-    from diony_producer.gallery_join import resolve_media_tool
+    from diony_producer.media_tools import resolve_media_tool
 
     HAVE_FFMPEG = bool(resolve_media_tool("ffmpeg") and resolve_media_tool("ffprobe"))
 except ImportError:
@@ -290,34 +290,82 @@ def test_bridge_frame_is_cut_point_conformed_to_program_raster(tmp_path) -> None
     chose."""
     import subprocess
 
-    from diony_director import app as app_module, assembly
-    from diony_producer.gallery_join import resolve_media_tool
+    from diony_director import app as app_module
+    from diony_director import assembly
+    from diony_producer.media_tools import resolve_media_tool
 
     ffmpeg = resolve_media_tool("ffmpeg")
     src = tmp_path / "wide.mp4"
     # 4s clip whose hue flips at 2s: green first half, red second half
     subprocess.run(
-        [ffmpeg, "-y", "-loglevel", "error",
-         "-f", "lavfi", "-i", "color=c=green:s=1456x624:d=2:r=24",
-         "-f", "lavfi", "-i", "color=c=red:s=1456x624:d=2:r=24",
-         "-filter_complex", "[0:v][1:v]concat=n=2:v=1[v]",
-         "-map", "[v]", str(src)],
-        check=True, capture_output=True, timeout=120,
+        [
+            ffmpeg,
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=green:s=1456x624:d=2:r=24",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=1456x624:d=2:r=24",
+            "-filter_complex",
+            "[0:v][1:v]concat=n=2:v=1[v]",
+            "-map",
+            "[v]",
+            str(src),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=120,
     )
     dest = tmp_path / "bridge.jpg"
     # cut point inside the green half — the bridge must be green, not tail-red
     frame = app_module._last_frame(src, dest, at_s=1.5)
     assert frame and dest.is_file()
-    probe = subprocess.run(
-        [resolve_media_tool("ffprobe"), "-v", "quiet", "-select_streams", "v:0",
-         "-show_entries", "stream=width,height", "-of", "csv=p=0", str(dest)],
-        check=True, capture_output=True, timeout=60,
-    ).stdout.decode().strip()
+    probe = (
+        subprocess.run(
+            [
+                resolve_media_tool("ffprobe"),
+                "-v",
+                "quiet",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=p=0",
+                str(dest),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+        .stdout.decode()
+        .strip()
+    )
     assert probe == f"{assembly.WIDTH},{assembly.HEIGHT}"
     raw = subprocess.run(
-        [ffmpeg, "-y", "-loglevel", "error", "-i", str(dest),
-         "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
-        check=True, capture_output=True, timeout=60,
+        [
+            ffmpeg,
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            str(dest),
+            "-vf",
+            "scale=1:1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-",
+        ],
+        check=True,
+        capture_output=True,
+        timeout=60,
     ).stdout
     red, green = raw[0], raw[1]
     assert green > red, f"expected the green cut frame, got rgb {tuple(raw[:3])}"

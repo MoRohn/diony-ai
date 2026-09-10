@@ -25,7 +25,9 @@ def _package(sid: str, policy: str):
     draft = screenwriter.write_script(
         "a getaway driver decides to leave town from a neon diner", runtime_target_s=60
     )
-    return packagebuilder.build_package(sid, "a getaway driver leaves town", draft, provider_policy=policy)
+    return packagebuilder.build_package(
+        sid, "a getaway driver leaves town", draft, provider_policy=policy
+    )
 
 
 # --- expansion and hardening -------------------------------------------------
@@ -58,12 +60,10 @@ def test_unreliable_camera_locks_are_hardened() -> None:
     assert grok_lexicon.harden_camera_locks("a steady shot holds") == (
         "a locked camera shot holds"
     ), "the rewrite stays grammatical — a noun phrase becomes a noun phrase"
-    assert grok_lexicon.harden_camera_locks("the camera holds steady") == (
-        "the camera not moving"
+    assert grok_lexicon.harden_camera_locks("the camera holds steady") == ("the camera not moving")
+    assert grok_lexicon.harden_camera_locks("camera not moving") == "camera not moving", (
+        "the reliable form is left alone"
     )
-    assert (
-        grok_lexicon.harden_camera_locks("camera not moving") == "camera not moving"
-    ), "the reliable form is left alone"
 
 
 def test_locked_token_uses_the_reliable_negative_form() -> None:
@@ -130,27 +130,6 @@ def test_inline_atmosphere_suppresses_the_session_one() -> None:
     assert "dust particles" not in prompt.lower(), "atmosphere never stacks over an inline choice"
 
 
-def test_mixed_package_keeps_the_atmosphere_off_grok_pictures() -> None:
-    """Auto policy: pictures on Grok, dialogue on omni. An atmosphere the
-    Flow lane can never carry would make the spoken shots mismatch the
-    pictures — the session signature stays off a mixed package."""
-    sid = "s-grok-mixed"
-    session.set_grok_template(sid, atmosphere="rain")
-    package = _package(sid, "auto")
-    assert any(c.provider is not CloudProvider.GROK for c in package.clips)
-    picture = next(c for c in package.clips if c.provider is CloudProvider.GROK)
-    prompt = compiler.compile_clip_prompt(picture, package).prompt
-    assert "Rain falls in the foreground" not in prompt
-
-
-def test_inline_atmosphere_is_authored_law_even_on_a_mixed_package() -> None:
-    package = _package("s-grok-mixed-inline", "auto")
-    picture = next(c for c in package.clips if c.provider is CloudProvider.GROK)
-    picture.camera_idea = "/dust over the intersection"
-    prompt = compiler.compile_clip_prompt(picture, package).prompt
-    assert "dust particles swirl around the subject" in prompt
-
-
 def test_hardening_never_touches_innocent_steady_prose() -> None:
     assert grok_lexicon.harden_camera_locks("steady handheld pan across the room") == (
         "steady handheld pan across the room"
@@ -164,7 +143,14 @@ def test_an_expanded_clause_arms_the_blocking_lock() -> None:
     custom.parent.mkdir(parents=True, exist_ok=True)
     custom.write_text(
         json.dumps(
-            {"cameras": {"tailcam": {"label": "Tail cam", "clause": "camera follows from directly behind"}}}
+            {
+                "cameras": {
+                    "tailcam": {
+                        "label": "Tail cam",
+                        "clause": "camera follows from directly behind",
+                    }
+                }
+            }
         )
     )
     package = _package("s-grok-tail", "grok")
@@ -192,7 +178,9 @@ def test_session_camera_never_forces_scripted_shots() -> None:
     package = _package(sid, "grok")
     picture = next(c for c in package.clips if c.provider is CloudProvider.GROK)
     prompt = compiler.compile_clip_prompt(picture, package).prompt
-    assert "camera orbits the subject" not in prompt, "authored shots rule — one camera idea per clip"
+    assert "camera orbits the subject" not in prompt, (
+        "authored shots rule — one camera idea per clip"
+    )
 
 
 def test_authored_steady_shot_is_hardened_at_compile() -> None:
@@ -212,9 +200,7 @@ def test_veo_prompts_ignore_the_grok_template_and_tokens() -> None:
     session.set_grok_template(sid, camera="orbit", atmosphere="dust")
     package = _package(sid, "google-flow")
     # the Veo dialect stays a tested capability behind an explicit model choice
-    picture = next(
-        c for c in package.clips if c.clip_class not in {"sync-dialogue", "vo-over"}
-    )
+    picture = next(c for c in package.clips if c.clip_class not in {"sync-dialogue", "vo-over"})
     picture.model = "veo-3.1-fast"
     picture.duration_s = 8
     prompt = compiler.compile_clip_prompt(picture, package).prompt
@@ -240,7 +226,9 @@ def test_grok_chat_prompt_carries_camera_and_atmosphere() -> None:
     sid = "s-chat-grok"
     session.set_grok_template(sid, camera="pushin", atmosphere="wind")
     prompt = session.compile_prompt("she waits on the bench", CloudProvider.GROK, sid)
-    assert prompt.startswith("she waits on the bench."), "motion leads — the model weighs early words most"
+    assert prompt.startswith("she waits on the bench."), (
+        "motion leads — the model weighs early words most"
+    )
     assert "Camera slowly pushes in." in prompt
     assert "The wind moves hair and clothing." in prompt
     assert "Cinematic single shot" in prompt
@@ -261,11 +249,15 @@ def test_grok_chat_hardens_unreliable_lock_wording() -> None:
 
 
 def test_an_opening_still_adds_the_i2v_directive_on_grok_only() -> None:
-    grok = session.compile_prompt("the horse rears", CloudProvider.GROK, "s-i", has_start_image=True)
+    grok = session.compile_prompt(
+        "the horse rears", CloudProvider.GROK, "s-i", has_start_image=True
+    )
     assert grok_lexicon.I2V_DIRECTIVE in grok
     bare = session.compile_prompt("the horse rears", CloudProvider.GROK, "s-i")
     assert grok_lexicon.I2V_DIRECTIVE not in bare
-    flow = session.compile_prompt("the horse rears", CloudProvider.GOOGLE_FLOW, "s-i", has_start_image=True)
+    flow = session.compile_prompt(
+        "the horse rears", CloudProvider.GOOGLE_FLOW, "s-i", has_start_image=True
+    )
     assert grok_lexicon.I2V_DIRECTIVE not in flow
 
 
@@ -280,8 +272,16 @@ def test_custom_entries_merge_and_cross_family_collisions_drop() -> None:
     custom.write_text(
         json.dumps(
             {
-                "cameras": {"crashzoom": {"label": "Crash zoom", "clause": "camera crash-zooms to the face"}},
-                "atmospheres": {"pushin": {"label": "Bad", "clause": "confusing"}, "embers": {"label": "Embers", "clause": "embers drift upward through the frame"}},
+                "cameras": {
+                    "crashzoom": {"label": "Crash zoom", "clause": "camera crash-zooms to the face"}
+                },
+                "atmospheres": {
+                    "pushin": {"label": "Bad", "clause": "confusing"},
+                    "embers": {
+                        "label": "Embers",
+                        "clause": "embers drift upward through the frame",
+                    },
+                },
             }
         )
     )
@@ -297,7 +297,9 @@ def test_a_vanished_custom_key_falls_back_quietly() -> None:
 
     custom = cluster_root() / ".cluster" / "grok_lexicon.json"
     custom.parent.mkdir(parents=True, exist_ok=True)
-    custom.write_text(json.dumps({"cameras": {"crashzoom": {"label": "CZ", "clause": "camera crash-zooms"}}}))
+    custom.write_text(
+        json.dumps({"cameras": {"crashzoom": {"label": "CZ", "clause": "camera crash-zooms"}}})
+    )
     sid = "s-vanish"
     session.set_grok_template(sid, camera="crashzoom")
     custom.unlink()
@@ -395,6 +397,7 @@ def test_shot_edit_warns_only_on_tokens_neither_lexicon_knows() -> None:
         "/pushin is Grok shorthand — only the token neither route knows warns"
     )
 
+
 def test_template_camera_yields_to_authored_camera_prose() -> None:
     sid = "s-grok-cam-prose"
     session.set_grok_template(sid, camera="pushin")
@@ -402,9 +405,7 @@ def test_template_camera_yields_to_authored_camera_prose() -> None:
         "camera pans across the harbor at dawn", CloudProvider.GROK, sid
     )
     assert "pushes in" not in prompt, "authored camera prose rules — one move per prompt"
-    prompt = session.compile_prompt(
-        "a lighthouse braces against the surf", CloudProvider.GROK, sid
-    )
+    prompt = session.compile_prompt("a lighthouse braces against the surf", CloudProvider.GROK, sid)
     assert "Camera slowly pushes in." in prompt
 
 
@@ -425,9 +426,9 @@ def test_cross_route_shot_token_warns_only_when_the_route_is_decided(monkeypatch
     """A Flow-only token like /filmic on a Grok-committed session will ride
     literal — a high-confidence warning. Under auto the route is undecided,
     so a route-specific token stays quiet (only unknown-to-both warns)."""
-    import diony_contracts.cluster as cluster
     from fastapi.testclient import TestClient
 
+    import diony_contracts.cluster as cluster
     from diony_director.app import app
 
     client = TestClient(app)
@@ -448,5 +449,4 @@ def test_cross_route_shot_token_warns_only_when_the_route_is_decided(monkeypatch
         return res.json().get("shot_warnings", [])
 
     assert _shot_warn("grok") == ["/filmic"], "Flow-only token rides literal on Grok"
-    assert _shot_warn("auto") == [], "route undecided — a route-specific token is silent"
     assert _shot_warn("google-flow") == [], "/filmic is native on the Flow route"

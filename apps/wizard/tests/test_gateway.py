@@ -47,7 +47,7 @@ def test_write_hosts_uses_override_path(tmp_path, monkeypatch) -> None:
 
 def test_host_router_sets_names_header() -> None:
     class Echo(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
+        def do_GET(self) -> None:
             body = b"ok"
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
@@ -55,7 +55,7 @@ def test_host_router_sets_names_header() -> None:
             self.end_headers()
             self.wfile.write(body)
 
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+        def log_message(self, format: str, *args: object) -> None:
             return
 
     def serve() -> ThreadingHTTPServer:
@@ -114,9 +114,7 @@ def test_gateway_health_accepts_the_installed_legacy_wizard_label(monkeypatch) -
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(
-        "diony_wizard.gateway.http.client.HTTPConnection", lambda *_a, **_k: Conn()
-    )
+    monkeypatch.setattr("diony_wizard.gateway.http.client.HTTPConnection", lambda *_a, **_k: Conn())
     assert gateway_healthy() is True
 
 

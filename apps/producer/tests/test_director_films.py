@@ -56,25 +56,42 @@ def test_producer_masthead_links_back_to_the_director() -> None:
 
 
 def test_cloud_production_reports_director_runs() -> None:
-    from diony_contracts.launch import GenerationJob, JobStatus, ProviderCapability, WorkflowRun, WorkflowStage
+    from diony_contracts.launch import (
+        GenerationJob,
+        JobStatus,
+        ProviderCapability,
+        WorkflowRun,
+        WorkflowStage,
+    )
     from diony_producer.control_plane import ControlPlane
 
     plane = ControlPlane()
     ctx = plane.bootstrap_local()
     run = WorkflowRun.production_default(
-        id="director-s-test77", workspace_id=ctx.workspace.id,
-        project_id="director", created_by=ctx.user.id,
+        id="director-s-test77",
+        workspace_id=ctx.workspace.id,
+        project_id="director",
+        created_by=ctx.user.id,
     )
     plane.save_run(run)
-    for i, status in enumerate([JobStatus.SUCCEEDED, JobStatus.SUCCEEDED, JobStatus.RUNNING, JobStatus.FAILED]):
-        plane.save_job(GenerationJob(
-            id=f"job-t{i}", run_id=run.id, workspace_id=ctx.workspace.id,
-            project_id="director", stage=WorkflowStage.VIDEO,
-            capability=ProviderCapability.VIDEO, provider_id="grok",
-            model="grok-imagine-video-1.5", status=status,
-            idempotency_key=f"op-t{i}",
-            actual_cost_usd_micros=840_000 if status is JobStatus.SUCCEEDED else 0,
-        ))
+    for i, status in enumerate(
+        [JobStatus.SUCCEEDED, JobStatus.SUCCEEDED, JobStatus.RUNNING, JobStatus.FAILED]
+    ):
+        plane.save_job(
+            GenerationJob(
+                id=f"job-t{i}",
+                run_id=run.id,
+                workspace_id=ctx.workspace.id,
+                project_id="director",
+                stage=WorkflowStage.VIDEO,
+                capability=ProviderCapability.VIDEO,
+                provider_id="grok",
+                model="grok-imagine-video-1.5",
+                status=status,
+                idempotency_key=f"op-t{i}",
+                actual_cost_usd_micros=840_000 if status is JobStatus.SUCCEEDED else 0,
+            )
+        )
 
     body = _client().get("/api/cloud-production").json()
     assert len(body["sessions"]) == 1
@@ -109,40 +126,6 @@ def test_a_film_without_plane_history_carries_a_zero_receipt() -> None:
     assert row["active"] is False
 
 
-def test_gallery_items_carry_their_project_cost() -> None:
-    from diony_contracts.launch import (
-        GenerationJob,
-        JobStatus,
-        ProviderCapability,
-        WorkflowRun,
-        WorkflowStage,
-    )
-    from diony_producer.app import _project_costs_usd_micros
-    from diony_producer.control_plane import ControlPlane
-
-    plane = ControlPlane()
-    ctx = plane.bootstrap_local()
-    run = WorkflowRun.production_default(
-        id="run-local-1", workspace_id=ctx.workspace.id,
-        project_id="proj-a", created_by=ctx.user.id,
-    )
-    plane.save_run(run)
-    for i, micros in enumerate([250_000, 750_000]):
-        plane.save_job(GenerationJob(
-            id=f"job-c{i}", run_id=run.id, workspace_id=ctx.workspace.id,
-            project_id="proj-a", stage=WorkflowStage.VIDEO,
-            capability=ProviderCapability.VIDEO, provider_id="wan",
-            model="wan2.2", status=JobStatus.SUCCEEDED,
-            idempotency_key=f"cost-{i}", actual_cost_usd_micros=micros,
-        ))
-    costs = _project_costs_usd_micros()
-    assert costs["proj-a"] == 1_000_000
-    # …and the gallery payload attaches the receipt to every listed item
-    payload = _client().get("/api/gallery").json()
-    for item in payload.get("items", []):
-        assert "cost_usd_micros" in item
-
-
 def _make_film(session: str, duration: float = 1.0) -> Path:
     import subprocess
 
@@ -150,12 +133,29 @@ def _make_film(session: str, duration: float = 1.0) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [
-            "ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc2=size=320x180:duration={duration}",
-            "-f", "lavfi", "-i", f"sine=frequency=440:duration={duration}",
-            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-shortest", str(dest),
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc2=size=320x180:duration={duration}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=440:duration={duration}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(dest),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     return dest
 
@@ -170,9 +170,7 @@ def test_stitch_selected_films_makes_a_join(tmp_path) -> None:
     _make_film("s-one")
     _make_film("s-two")
     client = _client()
-    res = client.post(
-        "/api/director-films/stitch", json={"sessions": ["s-one", "s-two"]}
-    )
+    res = client.post("/api/director-films/stitch", json={"sessions": ["s-one", "s-two"]})
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["session"].startswith("join-")
@@ -185,7 +183,9 @@ def test_stitch_selected_films_makes_a_join(tmp_path) -> None:
 
 def test_stitch_requires_two_known_films() -> None:
     client = _client()
-    assert client.post("/api/director-films/stitch", json={"sessions": ["s-one"]}).status_code == 422
+    assert (
+        client.post("/api/director-films/stitch", json={"sessions": ["s-one"]}).status_code == 422
+    )
     assert (
         client.post(
             "/api/director-films/stitch", json={"sessions": ["s-none", "s-nada"]}
@@ -265,9 +265,16 @@ def test_stitch_joins_in_gallery_order_newest_first(tmp_path, monkeypatch) -> No
         return real_run(cmd, **kwargs)
 
     monkeypatch.setattr(_subprocess, "run", fake_run)
-    res = _client().post(
-        "/api/director-films/stitch", json={"sessions": ["s-old", "s-new"]}
-    )
+    res = _client().post("/api/director-films/stitch", json={"sessions": ["s-old", "s-new"]})
     assert res.status_code == 200, res.text
     lines = [l for l in captured["listing"].splitlines() if l.startswith("file ")]
     assert "s-new" in lines[0] and "s-old" in lines[1], "newest first — the Gallery order"
+
+
+def test_the_console_and_its_api_are_never_browser_cached() -> None:
+    """A Producer index cached across a desktop rebuild showed the previous UI."""
+    client = _client()
+    for path in ("/", "/api/engine", "/api/gallery", "/static/app.js?v=p7"):
+        res = client.get(path)
+        assert res.status_code == 200, path
+        assert res.headers["cache-control"] == "no-store, max-age=0", path

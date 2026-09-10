@@ -50,7 +50,9 @@ def prompt_adherence(negative: Path, subject_text: str, *, frame_count: int) -> 
         import torch  # type: ignore[import-not-found]
         from PIL import Image  # type: ignore[import-not-found]
 
-        frames = decode_sampled_frames(negative, sample_frame_indices(frame_count), width=448, height=252)
+        frames = decode_sampled_frames(
+            negative, sample_frame_indices(frame_count), width=448, height=252
+        )
         if not frames:
             return None
         model, processor, device = _load(str(model_dir))
@@ -61,11 +63,13 @@ def prompt_adherence(negative: Path, subject_text: str, *, frame_count: int) -> 
             image_embeds = image_embeds / image_embeds.norm(dim=-1, keepdim=True)
             pooled = image_embeds.mean(dim=0)
             pooled = pooled / pooled.norm()
-            text_inputs = processor(text=[text[:300]], return_tensors="pt", padding=True, truncation=True, max_length=77).to(device)
+            text_inputs = processor(
+                text=[text[:300]], return_tensors="pt", padding=True, truncation=True, max_length=77
+            ).to(device)
             text_embeds = model.get_text_features(**text_inputs)[0]
             text_embeds = text_embeds / text_embeds.norm()
             score = float((pooled * text_embeds).sum().item())
-    except Exception:  # noqa: BLE001 - optional evidence never fails a take
+    except Exception:
         return None
     return round(max(0.0, min(1.0, score)), 4)
 

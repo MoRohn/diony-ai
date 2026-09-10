@@ -1,7 +1,6 @@
 """GrokImagineAdapter: async submit/poll, and immediate persistence of ephemeral URLs."""
 
 import hashlib
-import json
 
 from diony_contracts.director import (
     CloudGenerationMode,
@@ -82,7 +81,9 @@ def test_submit_posts_the_generation_and_returns_the_request_id(monkeypatch) -> 
 def test_poll_maps_done_and_carries_the_result_url(monkeypatch) -> None:
     def fake_get(url, **kwargs):
         assert url.endswith("/v1/videos/req-abc123")
-        return _Response({"status": "done", "video": {"url": "https://cdn.x.ai/clip.mp4", "duration": 6}})
+        return _Response(
+            {"status": "done", "video": {"url": "https://cdn.x.ai/clip.mp4", "duration": 6}}
+        )
 
     monkeypatch.setattr(grok.httpx, "get", fake_get)
     handle = grok.submit_handle("req-abc123", model="grok-imagine-video", duration_s=6)
@@ -92,11 +93,17 @@ def test_poll_maps_done_and_carries_the_result_url(monkeypatch) -> None:
 
 
 def test_poll_maps_failed_moderated_and_expired(monkeypatch) -> None:
-    responses = iter([
-        _Response({"status": "failed", "error": {"code": "internal", "message": "GPU exploded"}}),
-        _Response({"status": "failed", "error": {"code": "content_moderation", "message": "refused"}}),
-        _Response({"status": "expired"}),
-    ])
+    responses = iter(
+        [
+            _Response(
+                {"status": "failed", "error": {"code": "internal", "message": "GPU exploded"}}
+            ),
+            _Response(
+                {"status": "failed", "error": {"code": "content_moderation", "message": "refused"}}
+            ),
+            _Response({"status": "expired"}),
+        ]
+    )
     monkeypatch.setattr(grok.httpx, "get", lambda url, **kw: next(responses))
     handle = grok.submit_handle("req-x", model="grok-imagine-video", duration_s=6)
     first = grok.poll(handle)
@@ -214,5 +221,7 @@ def test_dropped_reference_images_are_recorded_not_silent(monkeypatch, tmp_path)
         )
     )
     assert handle.metadata["references_dropped"] == 2
-    clean = grok.submit(_op(mode=CloudGenerationMode.I2V, artifact_refs={"start_image": str(still)}))
+    clean = grok.submit(
+        _op(mode=CloudGenerationMode.I2V, artifact_refs={"start_image": str(still)})
+    )
     assert "references_dropped" not in clean.metadata

@@ -5,8 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "diony-wizard"
 version = "0.20.0"
-description = "Diony AI crate-to-system Studio — live pack apply, site lock on the vault, Producer start."
+description = "Diony AI Studio — the opening page (engine choice) and the product-name router; the legacy crate-to-system rail at /classic"
 requires-python = ">=3.11"
+authors = [{ name = "Diony AI" }]
 license = { text = "Proprietary" }
 dependencies = [
   "fastapi>=0.115",
@@ -14,6 +15,9 @@ dependencies = [
   "httpx>=0.27",
   "diony-contracts",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff"]
 
 [project.scripts]
 diony-wizard = "diony_wizard.app:main"

@@ -46,15 +46,13 @@ def _configured_key(path: Path) -> bytes:
     if encoded:
         try:
             key = base64.urlsafe_b64decode(encoded)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise RuntimeError("DIONY_KEY_ENCRYPTION_KEY must be URL-safe base64") from exc
         if len(key) != 32:
             raise RuntimeError("DIONY_KEY_ENCRYPTION_KEY must decode to 32 bytes")
         return key
     if os.environ.get("DIONY_AUTH_MODE", "local").strip().lower() == "token":
-        raise RuntimeError(
-            "DIONY_KEY_ENCRYPTION_KEY is required on a shared token-auth controller"
-        )
+        raise RuntimeError("DIONY_KEY_ENCRYPTION_KEY is required on a shared token-auth controller")
     key_path = path.parent / "master.key"
     try:
         raw = key_path.read_bytes()
@@ -112,9 +110,7 @@ class SecretVault:
         )
         return plaintext.decode()
 
-    def put(
-        self, workspace_id: str, provider_id: str, name: str, plaintext: str
-    ) -> StoredSecret:
+    def put(self, workspace_id: str, provider_id: str, name: str, plaintext: str) -> StoredSecret:
         if not plaintext:
             raise ValueError("Provider secret cannot be empty")
         ciphertext = self.encrypt_for_workspace(workspace_id, plaintext)

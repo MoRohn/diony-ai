@@ -48,7 +48,6 @@ from off-screen with no mouth forming the words (Dialogue, Mix).
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 from typing import Any
@@ -90,9 +89,7 @@ def normalize_mode(value: str | None) -> str:
     if not chosen:
         return DEFAULT_MODE
     if chosen not in MODES:
-        raise ValueError(
-            f"unknown cast lock {value!r} — choose one of: " + ", ".join(MODES)
-        )
+        raise ValueError(f"unknown cast lock {value!r} — choose one of: " + ", ".join(MODES))
     return chosen
 
 
@@ -129,7 +126,11 @@ def derive_identity(char: CharacterProfile) -> IdentityCard:
     if not anchor:
         # no casting notes yet — the role is the only read there is
         role = " ".join(str(char.role or "").split()).strip().rstrip(".")
-        anchor = f"the {role}, one consistent, castable person" if role else "one consistent, castable person"
+        anchor = (
+            f"the {role}, one consistent, castable person"
+            if role
+            else "one consistent, castable person"
+        )
     wardrobe = next(iter(char.wardrobe.values()), "").strip()
     return IdentityCard(
         anchor=anchor,
@@ -316,8 +317,14 @@ def measure_sheet(char: CharacterProfile) -> dict[str, Any]:
 
 
 def _slot_word(slot: str) -> str:
-    return {"front": "the anchor", "board": "the turnaround board", "q34l": "the ¾-left view",
-            "q34r": "the ¾-right view", "profile": "the profile", "full": "the full-body view"}.get(slot, slot)
+    return {
+        "front": "the anchor",
+        "board": "the turnaround board",
+        "q34l": "the ¾-left view",
+        "q34r": "the ¾-right view",
+        "profile": "the profile",
+        "full": "the full-body view",
+    }.get(slot, slot)
 
 
 def sheet_summary(char: CharacterProfile) -> str:
@@ -390,7 +397,7 @@ def stage_face_models(dest: Path | None = None, *, fetch=None) -> tuple[Path, Pa
     def _default_fetch(url: str) -> bytes:
         import urllib.request
 
-        with urllib.request.urlopen(url, timeout=120) as response:  # noqa: S310 - pinned https
+        with urllib.request.urlopen(url, timeout=120) as response:
             return response.read()
 
     fetch = fetch or _default_fetch
@@ -432,7 +439,9 @@ _ROLE_TEXT = {
 }
 
 
-def legend(roles: list[dict[str, str]], provider: str, *, characters: list[str] | None = None) -> str:
+def legend(
+    roles: list[dict[str, str]], provider: str, *, characters: list[str] | None = None
+) -> str:
     """What each reference IS, in the marker dialect the provider documents:
     Grok reads ``<IMAGE_n>`` (docs.x.ai reference-to-video); Flow reads
     ``@referenceImage_n`` and ``@character_n`` (useapi inline markers — every
@@ -449,7 +458,9 @@ def legend(roles: list[dict[str, str]], provider: str, *, characters: list[str] 
         for index, entry in enumerate(roles, start=1):
             template = _ROLE_TEXT.get(entry.get("kind", ""), "")
             if template:
-                lines.append(template.format(ref=f"@referenceImage_{index}", label=entry.get("label", "")))
+                lines.append(
+                    template.format(ref=f"@referenceImage_{index}", label=entry.get("label", ""))
+                )
     return " ".join(lines)
 
 
@@ -458,14 +469,18 @@ def legend(roles: list[dict[str, str]], provider: str, *, characters: list[str] 
 # --------------------------------------------------------------------------
 
 
-def keyframe_prompt(*, camera: str, action: str, chars: list[CharacterProfile], setting, look=None) -> str:
+def keyframe_prompt(
+    *, camera: str, action: str, chars: list[CharacterProfile], setting, look=None
+) -> str:
     """The clip's opening frame, composed as a still: the frame, the first
     beat frozen, every visible character's identity card verbatim, the place,
     the look. The video lane then only animates."""
     cards = " ".join(identity_block(c) for c in chars)
     place = f"{setting.name}"
     details = " ".join(
-        x for x in (getattr(setting, "time_weather", ""), getattr(setting, "architecture_notes", "")) if x
+        x
+        for x in (getattr(setting, "time_weather", ""), getattr(setting, "architecture_notes", ""))
+        if x
     )
     if details:
         place += f" — {details}"
@@ -473,7 +488,11 @@ def keyframe_prompt(*, camera: str, action: str, chars: list[CharacterProfile], 
     if first_beat:
         first_beat = re.split(r"(?<=[.!?])\s+", first_beat, maxsplit=1)[0]
     if look is not None:
-        medium = look.block() if not getattr(look, "photoreal", True) else f"Photorealistic cinema still. {look.block()}"
+        medium = (
+            look.block()
+            if not getattr(look, "photoreal", True)
+            else f"Photorealistic cinema still. {look.block()}"
+        )
     else:
         medium = "Photorealistic cinema still."
     names = ", ".join(c.name for c in chars)
@@ -482,7 +501,9 @@ def keyframe_prompt(*, camera: str, action: str, chars: list[CharacterProfile], 
         for x in (
             f"Opening frame of a shot: {camera.strip().rstrip('.')}.",
             f"{first_beat.rstrip('.')}, frozen at its first instant." if first_beat else "",
-            f"{names} exactly as in the identity references — same face, build, hair, wardrobe." if names else "",
+            f"{names} exactly as in the identity references — same face, build, hair, wardrobe."
+            if names
+            else "",
             cards,
             f"Setting: {place}. This exact place, as in the plate reference.",
             medium,

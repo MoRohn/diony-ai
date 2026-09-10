@@ -20,7 +20,7 @@ def build_package(
     draft: ScreenplayDraft,
     *,
     split: bool = True,
-    provider_policy: str = "auto",
+    provider_policy: str | None = None,
     production_style: str = "narrated",
     cast_lock: str = "standard",
 ) -> ProductionPackage:

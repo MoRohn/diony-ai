@@ -8,7 +8,7 @@ these objects exist so no hero pixel is ever generated from text alone.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -23,12 +23,10 @@ from diony_contracts.director import (
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
-ClipClass = Literal[
-    "sync-dialogue", "vo-over", "silent-picture", "score-led", "ambience-led"
-]
+ClipClass = Literal["sync-dialogue", "vo-over", "silent-picture", "score-led", "ambience-led"]
 
 DEFAULT_FORBIDDEN_DRIFT = [
     "no added jewelry",
@@ -57,7 +55,7 @@ def _as_noun(negative: str) -> str:
     lowered = text.lower()
     for lead in ("never ", "no ", "not "):
         if lowered.startswith(lead):
-            return text[len(lead):].strip()
+            return text[len(lead) :].strip()
     return text
 
 
@@ -90,11 +88,15 @@ class IdentityCard(BaseModel):
         if features:
             parts.append("Non-negotiable: " + "; ".join(features) + ".")
         if self.wardrobe_lock.strip():
-            parts.append(f"Wardrobe, unchanged in every shot: {self.wardrobe_lock.strip().rstrip('.')}.")
+            parts.append(
+                f"Wardrobe, unchanged in every shot: {self.wardrobe_lock.strip().rstrip('.')}."
+            )
         negatives = [_as_noun(n) for n in self.negatives if n and n.strip()]
         if negatives:
             parts.append("Never: " + "; ".join(negatives) + ".")
-        parts.append(f"{name} is the same person in every frame — same face, same build, same hair.")
+        parts.append(
+            f"{name} is the same person in every frame — same face, same build, same hair."
+        )
         return " ".join(parts)
 
 
@@ -114,9 +116,7 @@ class CharacterProfile(BaseModel):
     sheet_retries: dict[str, int] = Field(default_factory=dict)
     wardrobe: dict[str, str] = Field(default_factory=dict)
     age_body_notes: str = ""
-    forbidden_drift: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_FORBIDDEN_DRIFT)
-    )
+    forbidden_drift: list[str] = Field(default_factory=lambda: list(DEFAULT_FORBIDDEN_DRIFT))
     grok_ref_pack: list[str] = Field(default_factory=list)
     flow_media_ids: dict[str, str] = Field(default_factory=dict)
     flow_character_ref: str = ""
@@ -182,14 +182,12 @@ class Script(BaseModel):
     created_at: datetime = Field(default_factory=_utc_now)
 
     @model_validator(mode="after")
-    def scene_lines_exist(self) -> "Script":
+    def scene_lines_exist(self) -> Script:
         known = {line.line_id for line in self.lines}
         for scene in self.scenes:
             missing = [i for i in scene.line_ids if i not in known]
             if missing:
-                raise ValueError(
-                    f"scene {scene.scene_id} references unknown lines: {missing}"
-                )
+                raise ValueError(f"scene {scene.scene_id} references unknown lines: {missing}")
         return self
 
     def lock(self) -> None:
@@ -234,18 +232,16 @@ class AudioPacket(BaseModel):
     # verbatim by every clip in the scene so each generation describes the SAME
     # music instead of inventing a new jingle per clip.
     score_desc: str = ""
-    handles_s: dict[str, float] = Field(
-        default_factory=lambda: {"pre": 0.5, "tail": 1.0}
-    )
+    handles_s: dict[str, float] = Field(default_factory=lambda: {"pre": 0.5, "tail": 1.0})
     forbidden: list[str] = Field(
         default_factory=lambda: ["new accent", "new mic character", "unscripted music"]
     )
 
 
 class ContinuityLock(BaseModel):
-    lock_recipe: Literal[
-        "still", "character_asset", "edit", "ref", "bridge", "hybrid", "none"
-    ] = "none"
+    lock_recipe: Literal["still", "character_asset", "edit", "ref", "bridge", "hybrid", "none"] = (
+        "none"
+    )
     character_packs: list[dict[str, Any]] = Field(default_factory=list)
     setting_plate: dict[str, Any] = Field(default_factory=dict)
     prev_frame_ptr: dict[str, Any] = Field(default_factory=dict)
@@ -261,23 +257,67 @@ MASTER_BEAT_STAGES = (
 )
 
 
-
 # Words that place a look in photographic reality; any of the animation /
 # illustration tells below overrides them (an "animated documentary" is
 # animation). The Grok REALISM ground truth and the Flow baseline cinema
 # clause ride only a photoreal look — under any other medium they are the
 # contradiction that pulls every shot back toward live-action gloss.
 LOOK_PHOTOREAL_TELLS = (
-    "photoreal", "photo-real", "live action", "live-action", "realism", "realistic",
-    "documentary", "filmed", "footage", "cinema camera", "35mm", "16mm", "digital cinema",
+    "photoreal",
+    "photo-real",
+    "live action",
+    "live-action",
+    "realism",
+    "realistic",
+    "documentary",
+    "filmed",
+    "footage",
+    "cinema camera",
+    "35mm",
+    "16mm",
+    "digital cinema",
 )
 LOOK_STYLIZED_TELLS = (
-    "animat", "anime", "cartoon", "illustrat", "2.5d", "2d ", "2-d", "3d render", "cgi",
-    "claymation", "clay", "stop-motion", "stop motion", "pixel", "painterly", "painted",
-    "watercolor", "watercolour", "comic", "cel ", "cel-", "isometric", "low-poly",
-    "low poly", "vector", "line art", "ink", "sketch", "paper cut", "papercut",
-    "collage", "motion graphic", "explainer", "toon", "render", "stylized", "stylised",
-    "graphic novel", "storybook", "puppet",
+    "animat",
+    "anime",
+    "cartoon",
+    "illustrat",
+    "2.5d",
+    "2d ",
+    "2-d",
+    "3d render",
+    "cgi",
+    "claymation",
+    "clay",
+    "stop-motion",
+    "stop motion",
+    "pixel",
+    "painterly",
+    "painted",
+    "watercolor",
+    "watercolour",
+    "comic",
+    "cel ",
+    "cel-",
+    "isometric",
+    "low-poly",
+    "low poly",
+    "vector",
+    "line art",
+    "ink",
+    "sketch",
+    "paper cut",
+    "papercut",
+    "collage",
+    "motion graphic",
+    "explainer",
+    "toon",
+    "render",
+    "stylized",
+    "stylised",
+    "graphic novel",
+    "storybook",
+    "puppet",
 )
 
 
@@ -301,7 +341,7 @@ def _negative_noun(text: str) -> str:
     lowered = cleaned.lower()
     for lead in _NEGATIVE_LEADS:
         if lowered.startswith(lead):
-            return cleaned[len(lead):].strip()
+            return cleaned[len(lead) :].strip()
     return cleaned
 
 
@@ -353,15 +393,12 @@ class LookBible(BaseModel):
             return ""
         never = [_negative_noun(n) for n in self.negatives if n and n.strip()]
         never = [n for n in never if n]
-        never_clause = (
-            " Never: " + "; ".join(never) + "." if never else ""
-        )
+        never_clause = " Never: " + "; ".join(never) + "." if never else ""
         return (
             f"LOOK BIBLE (holds for every shot of this film) — {described}. "
             "Every shot is rendered by the same hand in the same medium, palette, "
             "line, and grain — one studio, one film; never a change of medium, "
-            "never a new palette, never a different studio's hand."
-            + never_clause
+            "never a new palette, never a different studio's hand." + never_clause
         )
 
 
@@ -548,13 +585,11 @@ class ProductionPackage(BaseModel):
     created_at: datetime = Field(default_factory=_utc_now)
 
     @model_validator(mode="after")
-    def clips_belong_to_scenes(self) -> "ProductionPackage":
+    def clips_belong_to_scenes(self) -> ProductionPackage:
         known = {scene.scene_id for scene in self.script.scenes}
         for clip in self.clips:
             if clip.scene_id not in known:
-                raise ValueError(
-                    f"clip {clip.clip_id} references unknown scene {clip.scene_id}"
-                )
+                raise ValueError(f"clip {clip.clip_id} references unknown scene {clip.scene_id}")
         return self
 
     def character(self, char_id: str) -> CharacterProfile:

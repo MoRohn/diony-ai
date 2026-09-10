@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 
@@ -43,9 +43,7 @@ def _iso(expires: float | int | None) -> str:
     if not expires or expires < 0:
         return ""
     try:
-        return datetime.fromtimestamp(float(expires), tz=timezone.utc).isoformat().replace(
-            "+00:00", "Z"
-        )
+        return datetime.fromtimestamp(float(expires), tz=UTC).isoformat().replace("+00:00", "Z")
     except (OverflowError, OSError, ValueError):
         return ""
 
@@ -100,14 +98,14 @@ def push_cookies(cookie_table: str) -> dict:
             ),
             what="account push",
         )
-    except Exception as err:  # noqa: BLE001 - a push reports, never raises
+    except Exception as err:
         return {"ok": False, "status": 0, "detail": f"push failed: {type(err).__name__}: {err}"}
     detail = ""
     try:
         body = response.json()
         if isinstance(body, dict):
             detail = str(body.get("error") or body.get("message") or "")
-    except Exception:  # noqa: BLE001
+    except Exception:
         detail = response.text[:200]
     if response.status_code not in (200, 201):
         return {"ok": False, "status": response.status_code, "detail": detail or "rejected"}

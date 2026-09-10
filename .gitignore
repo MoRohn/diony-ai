@@ -56,8 +56,9 @@ masters/
 *.log
 logs/
 
-# Local agent/session state
+# Local agent/session state (recursive: agents drop state beside the code they touch)
 .claude/
+.benchmarks/
 
 # Local vault runtime state
 .diony-vault/

@@ -67,7 +67,9 @@ def face_threshold() -> float:
 def _engines(detector: str, recognizer: str):
     import cv2  # type: ignore[import-not-found]
 
-    yunet = cv2.FaceDetectorYN.create(detector, "", (FRAME_WIDTH, FRAME_HEIGHT), DETECT_SCORE_MIN, 0.3, 5000)
+    yunet = cv2.FaceDetectorYN.create(
+        detector, "", (FRAME_WIDTH, FRAME_HEIGHT), DETECT_SCORE_MIN, 0.3, 5000
+    )
     sface = cv2.FaceRecognizerSF.create(recognizer, "")
     return yunet, sface
 
@@ -107,23 +109,32 @@ def _load_image_rgb(path: Path):
     return np.asarray(frames[0])
 
 
-def measure_face_identity(negative: Path, reference: Path, *, frame_count: int) -> FaceIdentityReceipt:
+def measure_face_identity(
+    negative: Path, reference: Path, *, frame_count: int
+) -> FaceIdentityReceipt:
     """Cosine similarity between reference faces and each sampled frame's main face."""
     models = staged_face_models()
     if models is None:
         return FaceIdentityReceipt(False, error="face models are not staged")
     threshold = face_threshold()
     try:
-        import cv2  # type: ignore[import-not-found]  # noqa: F401
+        import cv2  # type: ignore[import-not-found]
 
         yunet, sface = _engines(str(models[0]), str(models[1]))
         reference_rgb = _load_image_rgb(reference)
         reference_bgr = _bgr(reference_rgb)
         reference_faces = _detect(yunet, reference_bgr)
         if not reference_faces:
-            return FaceIdentityReceipt(True, reference_faces=0, threshold=threshold, notes=["no face in the conditioning still"])
+            return FaceIdentityReceipt(
+                True,
+                reference_faces=0,
+                threshold=threshold,
+                notes=["no face in the conditioning still"],
+            )
         reference_embeddings = [_embed(sface, reference_bgr, row) for row in reference_faces]
-        frames = decode_sampled_frames(negative, sample_frame_indices(frame_count), width=FRAME_WIDTH, height=FRAME_HEIGHT)
+        frames = decode_sampled_frames(
+            negative, sample_frame_indices(frame_count), width=FRAME_WIDTH, height=FRAME_HEIGHT
+        )
         similarities: list[float] = []
         with_face = 0
         for frame in frames:
@@ -140,7 +151,7 @@ def measure_face_identity(negative: Path, reference: Path, *, frame_count: int) 
             )
             similarities.append(round(score, 4))
             with_face += 1
-    except Exception as exc:  # noqa: BLE001 - unmeasurable identity never fails a take
+    except Exception as exc:
         return FaceIdentityReceipt(False, error=str(exc)[:300], threshold=threshold)
     if not similarities:
         return FaceIdentityReceipt(
@@ -165,7 +176,14 @@ def measure_face_identity(negative: Path, reference: Path, *, frame_count: int) 
     )
 
 
-__all__ = ["DEFAULT_FACE_SIMILARITY_MIN", "FACE_IDENTITY_VERSION", "FaceIdentityReceipt", "face_models", "face_threshold", "measure_face_identity"]
+__all__ = [
+    "DEFAULT_FACE_SIMILARITY_MIN",
+    "FACE_IDENTITY_VERSION",
+    "FaceIdentityReceipt",
+    "face_models",
+    "face_threshold",
+    "measure_face_identity",
+]
 
 
 # --------------------------------------------------------------------------
@@ -185,13 +203,16 @@ def default_face_model_dir() -> Path | None:
     explicit = os.environ.get("DIONY_FACE_ID_DIR", "").strip()
     if explicit:
         return Path(explicit)
-    vault = os.environ.get("DIONY_VAULT", "").strip() or os.environ.get("DIONY_PRODUCER_VAULT", "").strip()
+    vault = (
+        os.environ.get("DIONY_VAULT", "").strip()
+        or os.environ.get("DIONY_PRODUCER_VAULT", "").strip()
+    )
     if not vault:
         try:
             from diony_contracts.cluster import cluster_root
 
             return cluster_root() / "models" / "opencv-zoo"
-        except Exception:  # noqa: BLE001 - contracts may be absent on a bare host
+        except Exception:
             return None
     return Path(vault) / "models" / "opencv-zoo"
 
@@ -231,14 +252,23 @@ def measure_still_identity(reference: Path, candidate: Path) -> FaceIdentityRece
             main = max(faces, key=lambda row: float(row[2]) * float(row[3]))
             pairs.append(_embed(sface, bgr, main))
         if pairs[0] is None:
-            return FaceIdentityReceipt(True, reference_faces=0, threshold=threshold, notes=["no face in the reference still"])
+            return FaceIdentityReceipt(
+                True,
+                reference_faces=0,
+                threshold=threshold,
+                notes=["no face in the reference still"],
+            )
         if pairs[1] is None:
             return FaceIdentityReceipt(
-                True, reference_faces=1, frames_sampled=1, frames_with_face=0, threshold=threshold,
+                True,
+                reference_faces=1,
+                frames_sampled=1,
+                frames_with_face=0,
+                threshold=threshold,
                 notes=["no usable face in the candidate still"],
             )
         score = round(float(sface.match(pairs[0], pairs[1], cv2.FaceRecognizerSF_FR_COSINE)), 4)
-    except Exception as exc:  # noqa: BLE001 - unmeasurable identity never fails a still
+    except Exception as exc:
         return FaceIdentityReceipt(False, error=str(exc)[:300], threshold=threshold)
     return FaceIdentityReceipt(
         True,

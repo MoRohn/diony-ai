@@ -1,21 +1,21 @@
 ---
-description: Diony AI product constitution — quality bar, human gates, local-only cluster, 1080 finish
+description: Diony AI product constitution — the Director on cloud engines, human gates, cost visibility, the quality bar
 alwaysApply: true
 ---
 
 # Diony AI
 
-You are working in the Diony AI proprietary repo. Read `AGENTS.md` and `blueprints/00-product-constitution.md` before changing product behavior.
+You are working in the Diony AI proprietary repo. Read `AGENTS.md`, `blueprints/25-director-pivot.md`, and `blueprints/00-product-constitution.md` (with its 2026-08-31 amendment) before changing product behavior.
 
 Non-negotiable:
 
-- Wan2.2 is native **720p**. Deliverables go through Diony 1080 finish (`blueprints/06` and `10`). Never ship previz as a master.
-- DeepSeek-V4-Flash-0731 is the on-cluster brain. Spark recipes are not GB300 recipes (`blueprints/04`).
-- Never cloud-by-default. No Dashscope, no hosted prompt extend. Local crate is the default. Leased Dual-Spark, Leased B300, and Leased B200 are signed Wizard Site exceptions (`blueprints/14`), still DeepSeek on that site — not a hosted LLM and not a failover. `lease-gpu-v1` is not a Wizard Site.
-- Human gates: bible, distribution. Picture and mix run inside Production. Do not skip bible or distribution.
-- Fleet modes: BRAIN, SPLIT, FARM, FINISH. Drain → unload → load → healthgate. Do not co-resident DeepSeek and Wan A14B on one Spark.
-- Contracts first: if it is not on a Project/Shot/Take/QC object, it does not exist for production. Notes attach to Shot/Take IDs.
-- Blueprints are source of truth. Update the numbered Blueprint in the same change as code that affects BOM, serving, SLA, or quality.
-- NVIDIA Sync owns fabric. Diony wraps it.
-
-1-hour programs take **2–5 wall-clock days** on `spark-4x-v1`. Do not quote that SLA on Dual-Spark, B300, or B200. Do not promise real-time or degrade quality to fake speed.
+- Generation is **cloud by default**: Grok Imagine (xAI) and Google Flow (useapi.net). The Director (`apps/director`) is the primary surface; Studio chooses the engine; Producer holds the Gallery. There is no automatic route: Studio chooses one camera per film. The local Wan/DeepSeek lane was removed on 2026-09-10.
+- **No priced op without a reconciling estimate.** Pricing lives in JSON rate cards with a source and a fetch date, never in code. Flow dollars are modeled from the declared plan, never presented as Google's meter. A failed job that burned money stays on the receipt.
+- **Nothing slow rides a request**: brain calls, submits, waves, and finishes run in workers and are polled.
+- **Every per-op error is named** on the op; nothing is swallowed. A 429 pauses a run, never fails it.
+- **Human gates**: script lock and cast approval; distribution. Retakes reopen the cut.
+- **Quality**: Blueprint 10 stands. Identity is scored against the approved sheet, never the previous shot; unmeasured is never `pass`; a real person is described, never named; a provider-invented voice is measured or muted with a receipt; words are never trimmed.
+- **Contracts first**: if it is not on a `DirectorOp` / `ClipUnit` / `ClipReview`, it does not exist for production.
+- **Provider URLs are ephemeral**: download and hash immediately; refer to the local file.
+- Never a native `confirm()` / `prompt()` in a Diony UI. Bump the Director UI stamp on every UI change.
+- Blueprints are source of truth. Update the numbered Blueprint in the same change as code that affects pricing, gates, or quality.

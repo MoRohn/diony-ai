@@ -1238,14 +1238,45 @@
     };
   }
 
+  // The header meter reads in the route's own currency: Grok Imagine is
+  // metered by xAI in dollars, Google Flow spends the plan's credits. The
+  // ledger snapshot carries each provider's lifetime and today's spend in
+  // both units; with no route yet, both are shown side by side.
+  let lastLedger = null;
+  function credits(n) {
+    return `${Number(n || 0).toLocaleString()} cr`;
+  }
+  function renderMeter() {
+    if (!lastLedger) return;
+    const by = lastLedger.by_provider || {};
+    const grok = by.grok || {};
+    const flow = by["google-flow"] || {};
+    const route = $("provider") ? $("provider").value : "";
+    const chip = $("spent-chip");
+    if (route === "google-flow") {
+      $("spent-total").textContent = credits(flow.credits);
+      $("spent-today").textContent = credits(flow.today_credits);
+      chip.title =
+        `Google Flow credits spent on this desk (about ${usd(flow.usd_micros || 0)} ` +
+        `at the ${lastLedger.flow_plan || "declared"} plan's rate); today is today's credits`;
+    } else if (route === "grok") {
+      $("spent-total").textContent = usd(grok.usd_micros || 0);
+      $("spent-today").textContent = usd(grok.today_usd_micros || 0);
+      chip.title = "Grok Imagine spend in USD, as metered by xAI; today is today's spend";
+    } else {
+      $("spent-total").textContent = `${usd(grok.usd_micros || 0)} · ${credits(flow.credits)}`;
+      $("spent-today").textContent = `${usd(grok.today_usd_micros || 0)} · ${credits(flow.today_credits)}`;
+      chip.title = "Grok in USD (xAI meter) · Google Flow in plan credits";
+    }
+    chip.dataset.route = route;
+  }
   async function refreshMeter() {
     // every event that moves money also re-reads the Production card (and
     // restarts its poll when something is in flight again)
     refreshProduction();
     try {
-      const ledger = await api("/api/director/ledger");
-      $("spent-total").textContent = usd(ledger.totals.cost_usd_micros);
-      $("spent-today").textContent = usd(ledger.today_usd_micros || 0);
+      lastLedger = await api("/api/director/ledger");
+      renderMeter();
     } catch (err) {
       /* meter stays as-is; never invent numbers */
     }
@@ -4061,6 +4092,7 @@
   $("provider").addEventListener("change", () => {
     updateLexiconPillState();
     lintComposer(); // the known-token set depends on the route
+    renderMeter(); // the meter reads in the route's currency
   });
   $("idea").addEventListener("input", lintComposer);
   ["flow-world", "flow-camera", "grok-camera", "grok-atmosphere"].forEach((id) => {

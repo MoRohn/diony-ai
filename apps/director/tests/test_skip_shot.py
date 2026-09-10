@@ -11,10 +11,12 @@ from __future__ import annotations
 import uuid
 
 from fastapi.testclient import TestClient
-
-from diony_director import app as app_module, review as review_mod, session
 from test_look_bible import ANIMATED
 from test_oneshot_chain import _print_link
+
+from diony_director import app as app_module
+from diony_director import review as review_mod
+from diony_director import session
 
 
 def _sid() -> str:
@@ -86,8 +88,12 @@ def test_a_printed_link_that_failed_its_look_review_can_be_skipped(monkeypatch, 
     session.register_review(
         second.id,
         review_mod.ClipReview(
-            id="rev-bad", clip_id=second.id, op_id=second.id, verdict="fail",
-            families={"continuity": "fail"}, issues=["the clip ignored its opening frame"],
+            id="rev-bad",
+            clip_id=second.id,
+            op_id=second.id,
+            verdict="fail",
+            families={"continuity": "fail"},
+            issues=["the clip ignored its opening frame"],
         ),
     )
     assert not session.usable_take(second)
@@ -116,7 +122,9 @@ def test_scripted_skips_follow_the_latest_take_per_clip() -> None:
     third.status = "failed"
     session.skip_op(third, "gave up again")
     assert session.skipped_clip_ids(sid) == {"s1-c2"}
-    assert second.id not in session.batch_targets(sid) and third.id not in session.batch_targets(sid)
+    assert second.id not in session.batch_targets(sid) and third.id not in session.batch_targets(
+        sid
+    )
 
 
 def test_retry_all_re_queues_every_failed_clip_from_the_strip(monkeypatch, tmp_path) -> None:
@@ -128,10 +136,13 @@ def test_retry_all_re_queues_every_failed_clip_from_the_strip(monkeypatch, tmp_p
     proposal = session.propose(sid, ANIMATED, provider="google-flow", duration_s=24)
     first, second, third = proposal.ops
     client = TestClient(app_module.app)
-    assert client.post(
-        f"/api/director/sessions/{sid}/run_batch",
-        json={"op_ids": [op.id for op in proposal.ops], "assemble": True},
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/api/director/sessions/{sid}/run_batch",
+            json={"op_ids": [op.id for op in proposal.ops], "assemble": True},
+        ).status_code
+        == 200
+    )
     _print_link(first, tmp_path)
     for op in (second, third):
         op.status = "failed"
@@ -141,9 +152,9 @@ def test_retry_all_re_queues_every_failed_clip_from_the_strip(monkeypatch, tmp_p
     quote = client.get(f"/api/director/sessions/{sid}/failed").json()
     assert [row["op_id"] for row in quote["ops"]] == [second.id, third.id]
     assert quote["count"] == 2
-    assert quote["total_usd_micros"] == sum(
-        op.estimate.total_usd_micros for op in (second, third)
-    ) > 0
+    assert (
+        quote["total_usd_micros"] == sum(op.estimate.total_usd_micros for op in (second, third)) > 0
+    )
 
     res = client.post(f"/api/director/sessions/{sid}/retry-all")
     assert res.status_code == 200
@@ -163,7 +174,9 @@ def test_retry_all_re_queues_every_failed_clip_from_the_strip(monkeypatch, tmp_p
     assert again["reply"].startswith("Nothing is failed")
 
 
-def test_retry_all_holds_a_clip_whose_ladder_is_spent_and_rolls_the_rest(monkeypatch, tmp_path) -> None:
+def test_retry_all_holds_a_clip_whose_ladder_is_spent_and_rolls_the_rest(
+    monkeypatch, tmp_path
+) -> None:
     monkeypatch.setattr(app_module, "_kick_submitter", lambda _sid: None)
     sid = _sid()
     proposal = session.propose(sid, ANIMATED, provider="google-flow", duration_s=24)

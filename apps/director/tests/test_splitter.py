@@ -47,6 +47,10 @@ def test_every_scene_opens_with_an_establishing_clip() -> None:
 
 
 def test_a_dialogue_line_stays_inside_one_clip_with_its_words() -> None:
+    # this production rolls on Google Flow (the voice-capable Omni lane, the 10 s grid)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     draft = _draft()
     clips = splitter.split_script(draft.script, draft.characters, draft.settings)
     dialogue_clips = [c for c in clips if c.clip_class == "sync-dialogue"]
@@ -59,17 +63,24 @@ def test_a_dialogue_line_stays_inside_one_clip_with_its_words() -> None:
 
 
 def test_dialogue_routes_to_the_voice_capable_lane() -> None:
+    # this production rolls on Google Flow (the voice-capable Omni lane, the 10 s grid)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     draft = _draft()
     clips = splitter.split_script(draft.script, draft.characters, draft.settings)
+    # one camera shoots the whole film: on Google Flow every clip, spoken or
+    # not, rides the voice-capable Omni lane
     for clip in clips:
-        if clip.clip_class in {"sync-dialogue", "vo-over"}:
-            assert clip.provider is CloudProvider.GOOGLE_FLOW
-            assert clip.model == "omni-flash"
-        else:
-            assert clip.provider is CloudProvider.GROK
+        assert clip.provider is CloudProvider.GOOGLE_FLOW
+        assert clip.model == "omni-flash"
 
 
 def test_duration_comes_from_the_spoken_words_not_wishful_runtime() -> None:
+    # this production rolls on Google Flow (the voice-capable Omni lane, the 10 s grid)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     lines = [
         ScriptLine(line_id="ln-1", kind="heading", text="INT. DINER - NIGHT", scene_id="sc-1"),
         ScriptLine(line_id="ln-2", kind="action", text="Mara waits.", scene_id="sc-1"),
@@ -110,13 +121,15 @@ def test_same_scene_clips_share_room_tone() -> None:
     draft = _draft()
     clips = splitter.split_script(draft.script, draft.characters, draft.settings)
     for scene in draft.script.scenes:
-        tones = {
-            c.audio_packet.room_tone_id for c in clips if c.scene_id == scene.scene_id
-        }
+        tones = {c.audio_packet.room_tone_id for c in clips if c.scene_id == scene.scene_id}
         assert len(tones) == 1
 
 
 def test_continuity_locks_attach_character_packs_and_plates() -> None:
+    # this production rolls on Google Flow (the voice-capable Omni lane, the 10 s grid)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     draft = _draft()
     clips = splitter.split_script(draft.script, draft.characters, draft.settings)
     for clip in clips:

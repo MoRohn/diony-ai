@@ -2,7 +2,6 @@
 
 import hashlib
 import importlib
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -40,7 +39,9 @@ def _fake_image_lane(monkeypatch):
         payload = b"png" * 2048
         dest.write_bytes(payload)
         return base.FetchedClip(
-            path=dest, sha256=hashlib.sha256(payload).hexdigest(), bytes=len(payload),
+            path=dest,
+            sha256=hashlib.sha256(payload).hexdigest(),
+            bytes=len(payload),
             media_url=status.result_url,
         )
 
@@ -69,8 +70,10 @@ def test_sheet_stills_run_and_land_in_the_bible(monkeypatch) -> None:
     assert body["ops"]
     front = next(o for o in body["ops"] if o["artifact_refs"]["bible"]["slot"] == "front")
     profile = next(
-        o for o in body["ops"]
-        if o["artifact_refs"]["bible"] == {"char_id": front["artifact_refs"]["bible"]["char_id"], "slot": "profile"}
+        o
+        for o in body["ops"]
+        if o["artifact_refs"]["bible"]
+        == {"char_id": front["artifact_refs"]["bible"]["char_id"], "slot": "profile"}
     )
 
     client.post(f"/api/director/ops/{front['id']}/run")

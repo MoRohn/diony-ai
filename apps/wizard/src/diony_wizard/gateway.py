@@ -206,29 +206,30 @@ def handler_class(
     wizard: int, producer: int, director: int | None = None
 ) -> type[BaseHTTPRequestHandler]:
     director_backend = director if director is not None else director_port()
+
     class Handler(BaseHTTPRequestHandler):
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+        def log_message(self, format: str, *args: object) -> None:
             return
 
-        def do_GET(self) -> None:  # noqa: N802
+        def do_GET(self) -> None:
             self._forward()
 
-        def do_HEAD(self) -> None:  # noqa: N802
+        def do_HEAD(self) -> None:
             self._forward()
 
-        def do_POST(self) -> None:  # noqa: N802
+        def do_POST(self) -> None:
             self._forward()
 
-        def do_PUT(self) -> None:  # noqa: N802
+        def do_PUT(self) -> None:
             self._forward()
 
-        def do_PATCH(self) -> None:  # noqa: N802
+        def do_PATCH(self) -> None:
             self._forward()
 
-        def do_DELETE(self) -> None:  # noqa: N802
+        def do_DELETE(self) -> None:
             self._forward()
 
-        def do_OPTIONS(self) -> None:  # noqa: N802
+        def do_OPTIONS(self) -> None:
             self._forward()
 
         def _label(self) -> str:
@@ -333,7 +334,9 @@ def _gateway_listener_pids(port: int) -> list[int]:
     if os.name == "nt":
         try:
             out = subprocess.check_output(
-                ["netstat", "-ano", "-p", "TCP"], text=True, timeout=8,
+                ["netstat", "-ano", "-p", "TCP"],
+                text=True,
+                timeout=8,
                 stderr=subprocess.DEVNULL,
             )
         except (OSError, subprocess.SubprocessError):
@@ -350,7 +353,9 @@ def _gateway_listener_pids(port: int) -> list[int]:
     try:
         out = subprocess.check_output(
             ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
-            text=True, timeout=5, stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            stderr=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
         return []
@@ -367,17 +372,21 @@ def _process_command(pid: int) -> str:
     try:
         if os.name == "nt":
             query = (
-                "$p=Get-CimInstance Win32_Process -Filter \"ProcessId = "
+                '$p=Get-CimInstance Win32_Process -Filter "ProcessId = '
                 + str(int(pid))
-                + "\"; if ($p) {$p.CommandLine}"
+                + '"; if ($p) {$p.CommandLine}'
             )
             return subprocess.check_output(
                 ["powershell", "-NoProfile", "-Command", query],
-                text=True, timeout=8, stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=8,
+                stderr=subprocess.DEVNULL,
             ).strip()
         return subprocess.check_output(
             ["ps", "-p", str(int(pid)), "-o", "command="],
-            text=True, timeout=5, stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            stderr=subprocess.DEVNULL,
         ).strip()
     except (OSError, subprocess.SubprocessError, ValueError):
         return ""
@@ -515,7 +524,9 @@ def _spawn_privileged_install() -> bool:
     cmd = privileged_install_argv()
     if sys.platform == "darwin":
         script = f"do shell script {json.dumps(_cmdline(cmd))} with administrator privileges"
-        proc = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=180)
+        proc = subprocess.run(
+            ["osascript", "-e", script], capture_output=True, text=True, timeout=180
+        )
         if proc.returncode != 0:
             _note_privilege_error(proc)
         return proc.returncode == 0
@@ -528,7 +539,9 @@ def _spawn_privileged_install() -> bool:
             + json.dumps(subprocess.list2cmdline(gateway_args))
             + " -Verb RunAs -Wait"
         )
-        proc = subprocess.run(["powershell", "-Command", ps], capture_output=True, text=True, timeout=180)
+        proc = subprocess.run(
+            ["powershell", "-Command", ps], capture_output=True, text=True, timeout=180
+        )
         if proc.returncode != 0:
             _note_privilege_error(proc)
         return proc.returncode == 0

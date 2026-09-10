@@ -8,11 +8,10 @@ import json
 import time
 
 import pytest
-from master_brain_fakes import fast_master_derive, is_master_call, master_brain_body
+from master_brain_fakes import is_master_call, master_brain_body
 
 from diony_contracts.director import CloudProvider
 from diony_director import compiler, master_prompt, screenwriter, session
-
 
 # --- the template and its derivation ----------------------------------------
 
@@ -67,7 +66,9 @@ def test_the_user_duration_scales_the_temporal_structure(seconds, beats) -> None
 def test_a_reference_image_opens_the_prompt_and_locks_the_composition(tmp_path) -> None:
     still = tmp_path / "ref.png"
     still.write_bytes(b"\x89PNG\r\n\x1a\npixels")
-    master = master_prompt.derive("she looks up", target_duration_s=4, reference_images=[str(still)])
+    master = master_prompt.derive(
+        "she looks up", target_duration_s=4, reference_images=[str(still)]
+    )
     assert master.reference_image is True
     sentences = master.prompt.split(". ")
     assert master_prompt.REFERENCE_OPENER.rstrip(".") in sentences[1]
@@ -209,7 +210,9 @@ def test_one_shot_camera_lock_hardening_applies_to_the_master_body(monkeypatch) 
         session.master_mod,
         "derive",
         lambda idea, **kw: master_prompt.optimize(
-            master_prompt._template(idea, kw["target_duration_s"], False, {"camera": "steady camera on her"})
+            master_prompt._template(
+                idea, kw["target_duration_s"], False, {"camera": "steady camera on her"}
+            )
         ),
     )
     sid = session.create_session()
@@ -342,14 +345,38 @@ def test_the_master_brief_reaches_the_screenplay_brain(monkeypatch) -> None:
     screenplay = {
         "logline": "A keeper answers.",
         "beats": [{"beat": "the knock", "story_time": "Night 1"}],
-        "settings": [{"setting_id": "set-lh", "name": "Lighthouse", "kind": "INT", "room_tone": "wind",
-                      "time_weather": "night", "grade_language": "brass", "camera_kit": "32mm"}],
-        "characters": [{"char_id": "chr-el", "name": "ELIAS", "wardrobe": "grey peacoat",
-                        "age_body_notes": "sixty, weathered"}],
-        "scenes": [{"heading": "INT. LIGHTHOUSE - NIGHT", "setting_ref": "set-lh", "story_time": "Night 1",
-                    "cast": ["chr-el"], "emotional_job": "dread",
-                    "lines": [{"kind": "action", "text": "ELIAS turns to the door.", "shot": "Wide, locked"},
-                              {"kind": "sound", "text": "Three knocks."}]}],
+        "settings": [
+            {
+                "setting_id": "set-lh",
+                "name": "Lighthouse",
+                "kind": "INT",
+                "room_tone": "wind",
+                "time_weather": "night",
+                "grade_language": "brass",
+                "camera_kit": "32mm",
+            }
+        ],
+        "characters": [
+            {
+                "char_id": "chr-el",
+                "name": "ELIAS",
+                "wardrobe": "grey peacoat",
+                "age_body_notes": "sixty, weathered",
+            }
+        ],
+        "scenes": [
+            {
+                "heading": "INT. LIGHTHOUSE - NIGHT",
+                "setting_ref": "set-lh",
+                "story_time": "Night 1",
+                "cast": ["chr-el"],
+                "emotional_job": "dread",
+                "lines": [
+                    {"kind": "action", "text": "ELIAS turns to the door.", "shot": "Wide, locked"},
+                    {"kind": "sound", "text": "Three knocks."},
+                ],
+            }
+        ],
     }
 
     def fake_post(url, **kwargs):
@@ -382,7 +409,10 @@ def test_every_split_clip_inherits_the_artifact_and_only_the_last_ends_it() -> N
     prompts = [clip.latest_prompt().prompt for clip in package.clips]
     assert len(prompts) >= 3
     for prompt in prompts:
-        assert "Maintain strict continuity throughout: " + ", ".join(master.continuity_anchors) in prompt
+        assert (
+            "Maintain strict continuity throughout: " + ", ".join(master.continuity_anchors)
+            in prompt
+        )
         assert "Constraints: " + "; ".join(master.constraints) in prompt
         assert f"Lighting comes from {master.lighting['source']}" in prompt
     enders = [p for p in prompts if "The clip ends with" in p]
@@ -403,7 +433,9 @@ def test_the_artifact_is_route_neutral_across_dialects() -> None:
     # the Flow policy books one dialect now — omni-flash across the board
     dialects = {clip.model for clip in package.clips}
     assert dialects == {"omni-flash"}
-    anchors = "Maintain strict continuity throughout: " + ", ".join(package.master_prompt.continuity_anchors)
+    anchors = "Maintain strict continuity throughout: " + ", ".join(
+        package.master_prompt.continuity_anchors
+    )
     for clip in package.clips:
         assert anchors in clip.latest_prompt().prompt
 
@@ -411,7 +443,9 @@ def test_the_artifact_is_route_neutral_across_dialects() -> None:
 def test_a_package_without_a_master_compiles_exactly_as_before() -> None:
     from diony_director import packagebuilder
 
-    draft = screenwriter.write_script("a keeper hears a knock at the lighthouse", runtime_target_s=45)
+    draft = screenwriter.write_script(
+        "a keeper hears a knock at the lighthouse", runtime_target_s=45
+    )
     assert draft.master is None
     package = packagebuilder.build_package("s-none", "idea", draft)
     assert package.master_prompt is None
@@ -503,7 +537,9 @@ def test_the_anchor_reads_as_a_sentence_for_any_idea_shape() -> None:
     assert lead.prompt.startswith("Create a cinematic realism video of a man walks into the sea.")
     named = master_prompt.derive("Mara walks into the sea", target_duration_s=6)
     assert "video of Mara walks" in named.prompt
-    camera = master_prompt.derive("x", target_duration_s=6, authored={"camera": "The camera orbits her."})
+    camera = master_prompt.derive(
+        "x", target_duration_s=6, authored={"camera": "The camera orbits her."}
+    )
     assert "The camera orbits her, maintaining" in camera.prompt
     assert "camera the camera" not in camera.prompt.lower()
 
@@ -515,7 +551,9 @@ def test_the_flow_world_is_not_pasted_into_the_style_slot() -> None:
     assert master.prompt.startswith("Create a cinematic realism video of a woman waits")
     assert "Shot on 35mm" not in master.prompt, "the compiler owns the Flow style slot"
     grok = master_prompt.derive(
-        "a woman waits", target_duration_s=6, authored={"atmosphere": "Dust drifts through the light."}
+        "a woman waits",
+        target_duration_s=6,
+        authored={"atmosphere": "Dust drifts through the light."},
     )
     assert ", dust drifts through the light." in grok.prompt
 
@@ -523,7 +561,10 @@ def test_the_flow_world_is_not_pasted_into_the_style_slot() -> None:
 def test_the_optimizer_normalizes_any_ending_lead_and_never_doubles_it() -> None:
     base = master_prompt.derive("a keeper", target_duration_s=8)
     variant = base.model_copy(
-        update={"prompt": "Create a video of a keeper. The video ends on the keeper in the doorway.", "warnings": []}
+        update={
+            "prompt": "Create a video of a keeper. The video ends on the keeper in the doorway.",
+            "warnings": [],
+        }
     )
     out = master_prompt.optimize(variant)
     assert out.prompt.count("ends") == 1
@@ -540,10 +581,20 @@ def test_the_optimizer_is_idempotent_on_warnings_too() -> None:
 
 def test_a_brain_that_paced_to_the_target_needs_no_second_pacing_line() -> None:
     base = master_prompt.derive("a keeper", target_duration_s=8)
-    own = base.model_copy(update={"prompt": "Create a video of a keeper. The whole move plays in 8 seconds.", "warnings": []})
+    own = base.model_copy(
+        update={
+            "prompt": "Create a video of a keeper. The whole move plays in 8 seconds.",
+            "warnings": [],
+        }
+    )
     out = master_prompt.optimize(own)
     assert "Pace the action" not in out.prompt
-    other = base.model_copy(update={"prompt": "Create a video of a keeper. The whole move plays in 12 seconds.", "warnings": []})
+    other = base.model_copy(
+        update={
+            "prompt": "Create a video of a keeper. The whole move plays in 12 seconds.",
+            "warnings": [],
+        }
+    )
     out2 = master_prompt.optimize(other)
     assert "Pace the action to play in about 8 seconds." in out2.prompt
     assert any("also mentions 12 seconds" in w for w in out2.warnings)
@@ -568,7 +619,13 @@ def test_a_one_shot_room_still_answers_the_master_endpoint() -> None:
 
     client = TestClient(app_module.app)
     sid = client.post("/api/director/sessions").json()["session_id"]
-    client.post(f"/api/director/sessions/{sid}/message", json={"text": "a woman dances", "provider": "grok", "duration_s": 6})
-    client.post(f"/api/director/sessions/{sid}/message", json={"text": "a man waits", "provider": "grok", "duration_s": 4})
+    client.post(
+        f"/api/director/sessions/{sid}/message",
+        json={"text": "a woman dances", "provider": "grok", "duration_s": 6},
+    )
+    client.post(
+        f"/api/director/sessions/{sid}/message",
+        json={"text": "a man waits", "provider": "grok", "duration_s": 4},
+    )
     master = client.get(f"/api/director/sessions/{sid}/master").json()["master"]
     assert master["idea"] == "a man waits", "the newest shot's artifact"

@@ -8,7 +8,7 @@ stated total that disagrees with its lines is refused, not repaired.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, model_validator
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class EngineMode(StrEnum):
@@ -118,7 +118,7 @@ class CostEstimate(BaseModel):
     created_at: datetime = Field(default_factory=_utc_now)
 
     @model_validator(mode="after")
-    def total_reconciles(self) -> "CostEstimate":
+    def total_reconciles(self) -> CostEstimate:
         computed = sum(line.usd_micros for line in self.lines)
         computed += self.revision_allowance_usd_micros
         if self.total_usd_micros == 0:
@@ -167,21 +167,25 @@ class DirectorOp(BaseModel):
     # deriving the master prompt for a one-shot; the op is priced but not yet
     # runnable, and it carries a provisional prompt until the artifact lands.
     status: Literal[
-        "proposed", "deriving", "approved", "submitting", "submitted", "completed",
-        "failed", "discarded",
+        "proposed",
+        "deriving",
+        "approved",
+        "submitting",
+        "submitted",
+        "completed",
+        "failed",
+        "discarded",
     ] = "proposed"
     job_id: str = ""
     created_at: datetime = Field(default_factory=_utc_now)
 
     @model_validator(mode="after")
-    def priced_ops_are_locked(self) -> "DirectorOp":
+    def priced_ops_are_locked(self) -> DirectorOp:
         if self.op in PRICED_OPS:
             if self.estimate is None:
                 raise ValueError(
                     f"a {self.op.value} op spends money and requires a locked cost estimate"
                 )
             if self.provider is None or not self.model:
-                raise ValueError(
-                    f"a {self.op.value} op requires an explicit provider and model"
-                )
+                raise ValueError(f"a {self.op.value} op requires an explicit provider and model")
         return self

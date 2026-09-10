@@ -1,128 +1,13 @@
 Diony AI
 Copyright (c) 2026 Diony AI. All rights reserved.
 See LICENSE for the proprietary terms covering Diony AI software, Blueprints,
-cluster profiles, Studio, Producer, and Conductor.
+Studio, Director, and Producer.
 
 This product includes or invokes third-party open-source components. Those
 components remain under their original licenses. Diony AI claims no ownership
 of those upstream works. Generated audiovisual content is the licensee's
 responsibility and must comply with applicable law and the upstream model
 licenses.
-
-==============================================================================
-Wan2.2 (Apache License 2.0)
-==============================================================================
-
-Project: Wan: Open and Advanced Large-Scale Video Generative Models
-Source: https://github.com/Wan-Video/Wan2.2
-Weights: https://huggingface.co/Wan-AI
-License: Apache License 2.0
-
-The Wan2.2 models (T2V-A14B, I2V-A14B, TI2V-5B, S2V-14B, Animate-14B) and
-related inference code are licensed under the Apache License, Version 2.0.
-A copy of the Apache 2.0 license text is typically shipped with the upstream
-repository (LICENSE.txt). You may obtain a copy at:
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Wan-Video / Wan-AI claim no rights over generated contents, granting freedom
-to use them while requiring that usage comply with the Apache 2.0 license
-and their stated restrictions (no unlawful, harmful, or privacy-violating
-use). See the upstream LICENSE.txt for the full restriction list.
-
-Related Apache-2.0 companion used for prompted video editing:
-
-    alibaba-pai/Wan2.2-VACE-Fun-A14B
-    https://huggingface.co/alibaba-pai/Wan2.2-VACE-Fun-A14B
-
-==============================================================================
-DeepSeek-V4-Flash-0731 (MIT License)
-==============================================================================
-
-Project: DeepSeek-V4-Flash-0731
-Source: https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731
-License: MIT License
-
-Copyright (c) DeepSeek-AI
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-Citation (upstream request):
-
-    @misc{deepseekai2026deepseekv4,
-          title={DeepSeek-V4: Towards Highly Efficient Million-Token Context Intelligence},
-          author={DeepSeek-AI},
-          year={2026},
-    }
-
-==============================================================================
-NVIDIA software (not redistributed here)
-==============================================================================
-
-NVIDIA DGX OS, NVIDIA Sync, Cluster Assistant, CUDA, NCCL, and related
-NVIDIA software remain NVIDIA's property and are used under NVIDIA's own
-license terms on DGX Spark hardware. Diony AI does not replace or
-redistribute those components. The Studio wraps NVIDIA Sync Cluster
-Assistant; it does not reimplement it.
-
-==============================================================================
-Real-ESRGAN x2 (BSD 3-Clause) — diony_sr_v1 bootstrap checkpoint
-==============================================================================
-
-Project: Real-ESRGAN
-Source: https://github.com/xinntao/Real-ESRGAN
-Weights used as bootstrap: https://huggingface.co/ai-forever/Real-ESRGAN
-  (file RealESRGAN_x2.pth → /models/diony/diony_sr_v1)
-License: BSD 3-Clause License
-
-Copyright (c) 2021, Xintao Wang
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
-
-3. Neither the name of the copyright holder nor the names of its
-   contributors may be used to endorse or promote products derived from
-   this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-Diony finish (`diony-finish`, tiled temporal SR, Rec.709 legalizer, program
-stitch) is proprietary Diony AI software. The upstream x2 checkpoint is a
-bootstrap until the proprietary `diony_sr_v1` net is pulled. Lanczos scale
-is not a deliverable.
 
 ==============================================================================
 Launch control-plane runtime libraries
@@ -132,51 +17,8 @@ Launch control-plane runtime libraries
 envelopes and is distributed under the Apache License 2.0 or BSD 3-Clause
 License. Source: https://github.com/pyca/cryptography
 
-`boto3` and `botocore` (Amazon Web Services) are optional runtime clients for
-AWS S3-compatible object storage, including an explicitly configured
-Cloudflare R2 endpoint. They are distributed under the Apache License 2.0.
-Source: https://github.com/boto/boto3 and https://github.com/boto/botocore
-
 These libraries do not change Diony's proprietary software license. Their own
 license and notice files remain controlling for the upstream components.
-
-==============================================================================
-ThinkSound (Apache License 2.0)
-==============================================================================
-
-Project: ThinkSound — Chain-of-Thought reasoning for audio generation/editing
-Source: https://github.com/FunAudioLLM/ThinkSound
-Weights: https://huggingface.co/FunAudioLLM/ThinkSound
-License: Apache License 2.0 (code and model weights)
-
-Used, when a site enables generated soundtrack cues, as the local
-video-conditioned Foley/ambience instrument. Never a hosted service.
-
-==============================================================================
-ACE-Step (Apache License 2.0)
-==============================================================================
-
-Project: ACE-Step — A Step Towards Music Generation Foundation Model
-Source: https://github.com/ace-step/ACE-Step
-Weights: https://huggingface.co/ACE-Step/ACE-Step-v1-3.5B
-License: Apache License 2.0 (code and model weights)
-
-Used, when a site enables generated soundtrack cues, as the local score
-instrument. Never a hosted service.
-
-==============================================================================
-Stable Audio Open 1.0 (Stability AI Community License)
-==============================================================================
-
-Project: Stable Audio Open
-Weights: https://huggingface.co/stabilityai/stable-audio-open-1.0
-License: Stability AI Community License Agreement
-
-Optional local texture/SFX instrument for generated soundtrack cues. The
-Stability AI Community License permits free commercial use below USD $1M
-annual revenue with registration; larger organizations require a Stability AI
-Enterprise License. Operators enabling this instrument are responsible for
-that registration/licensing. Never a hosted service.
 
 ==============================================================================
 faster-whisper / CTranslate2 (MIT License) — optional Blueprint 24 lane
@@ -190,7 +32,7 @@ License: MIT License (code); the converted Whisper large-v3 weights follow
 OpenAI Whisper's MIT License (https://github.com/openai/whisper).
 
 Used only when the weights are staged on the site (`DIONY_WHISPER_MODEL`) to
-transcribe, locally, the speech Wan2.2 delivered so the authored line can be
+transcribe, locally, the speech a provider delivered so the authored line can be
 measured against it. Never contacted over the network by Production.
 
 ==============================================================================
@@ -240,3 +82,27 @@ Used only when both models are staged on the site (`DIONY_FACE_ID_DETECTOR_MODEL
 `DIONY_FACE_ID_RECOGNIZER_MODEL`) to measure, locally, whether the face a
 negative animates is the face in its conditioning still. Never contacted
 over the network by Production.
+
+==============================================================================
+Third-party generation services (Director lane, Blueprint 25)
+==============================================================================
+
+Diony AI does not bundle these services; it calls them with credentials the
+licensee supplies, and each call is governed by that provider's own terms.
+
+xAI — Grok Imagine video and image models, the Grok voice API, and the Grok
+language models used as the screenwriter brain.
+  Service: https://x.ai/  ·  API docs: https://docs.x.ai/
+  Terms: xAI's API terms of service and usage policies. Metered billing on the
+  licensee's xAI account.
+
+Google Flow (Veo 3.1, Omni Flash, Nano Banana) reached through useapi.net.
+  Service: https://labs.google/flow/  ·  Relay: https://useapi.net/docs/api-google-flow-v1
+  Terms: Google's Terms of Service, the Google AI plan subscribed to by the
+  licensee's Google account (Flow credits are consumed on that account), and
+  useapi.net's terms for its relay subscription. Captcha solving may involve a
+  third-party solver configured by the licensee.
+
+Generated content remains the licensee's responsibility under each provider's
+content and likeness policies. Diony's likeness guard (Blueprint 27 §3a) is a
+best-effort control, not a licence.

@@ -229,9 +229,7 @@ prompt (the finished generator-ready prompt, following FINAL GENERATOR-READY PRO
 
 OUTPUT_CONTRACT = output_contract("post")
 
-REFERENCE_OPENER = (
-    "Use the reference image as the exact visual setting and starting composition."
-)
+REFERENCE_OPENER = "Use the reference image as the exact visual setting and starting composition."
 REFERENCE_PRESERVE = (
     "Preserve the important character, environment, framing, object placement, "
     "and spatial relationships visible in the reference."
@@ -327,7 +325,10 @@ def user_message(
     """The INPUT block. `authored` carries elements the user already
     established outside the prose — a session camera/atmosphere/world
     template or an inline /token — which the template says to preserve."""
-    lines = [f"IDEA / STORY / SCENE:\n{idea.strip()}", f"TARGET DURATION: {int(target_duration_s)} seconds."]
+    lines = [
+        f"IDEA / STORY / SCENE:\n{idea.strip()}",
+        f"TARGET DURATION: {int(target_duration_s)} seconds.",
+    ]
     from diony_director import screenwriter  # lazy — module cycles both ways
 
     if screenwriter.authored_breakdown(idea)["is_authored"]:
@@ -457,19 +458,20 @@ def _parse(
                 narration = ""
                 scene_change, opening = False, ""
             if text:
-                clips.append({
-                    "prompt": text,
-                    "duration_s": 0,
-                    "narration": narration,
-                    "scene_change": scene_change,
-                    "opening": opening,
-                })
+                clips.append(
+                    {
+                        "prompt": text,
+                        "duration_s": 0,
+                        "narration": narration,
+                        "scene_change": scene_change,
+                        "opening": opening,
+                    }
+                )
         if len(clips) != len(clip_plan):
             # a chained booking without its clips is unusable — raising here
             # retries the derivation rather than shipping half a chain
             raise ValueError(
-                f"brain returned {len(clips)} clip prompt(s) for a "
-                f"{len(clip_plan)}-clip booking"
+                f"brain returned {len(clips)} clip prompt(s) for a {len(clip_plan)}-clip booking"
             )
         for index, duration in enumerate(clip_plan):
             # the BOOKED durations are law — the brain's numbers are advisory
@@ -548,7 +550,7 @@ def guard_likeness(master: MasterPrompt, *, brain: bool) -> MasterPrompt:
                 found, invented = likeness_mod.audit_all(
                     master.prompt, phrases, has_reference=master.reference_image
                 )
-            except Exception as err:  # noqa: BLE001 — the audit is a net, not a gate
+            except Exception as err:
                 master.warnings.append(
                     f"master: likeness audit unavailable ({type(err).__name__}) — "
                     "the brain's own real_people list was enforced; review names by eye"
@@ -585,9 +587,7 @@ def _from_brain(
     from diony_director.providers import base as provider_base
 
     refs = [r for r in reference_images if r]
-    text = user_message(
-        idea, target_duration_s, reference_count=len(refs), authored=authored
-    )
+    text = user_message(idea, target_duration_s, reference_count=len(refs), authored=authored)
     if refs:
         user_content: str | list = [{"type": "text", "text": text}] + [
             screenwriter._image_part(r) for r in refs[:4]
@@ -618,11 +618,7 @@ def _from_brain(
         used = int((payload.get("usage") or {}).get("completion_tokens") or 0)
         raise BrainTruncated(
             f"brain reply truncated at {used or BRAIN_MAX_TOKENS} tokens (finish_reason=length)"
-            + (
-                f" — the {len(clip_plan)}-clip split did not fit one reply"
-                if clip_plan
-                else ""
-            )
+            + (f" — the {len(clip_plan)}-clip split did not fit one reply" if clip_plan else "")
         )
     body = screenwriter._json_object(choice["message"]["content"])
     master = _parse(
@@ -654,14 +650,62 @@ _STYLE_TELLS = (
 )
 
 _LIGHT_TELLS = (
-    (("neon",), {"source": "neon signage", "quality": "cool saturated glow", "shadows": "soft colored shadows"}),
-    (("night", "midnight", "after dark"), {"source": "streetlights and practicals", "quality": "warm, directional", "shadows": "long pooled shadows"}),
-    (("sunset", "golden hour", "dusk"), {"source": "low sunlight", "quality": "warm, raking", "shadows": "long directional shadows"}),
-    (("overcast", "grey sky", "gray sky", "rain"), {"source": "overcast daylight", "quality": "soft, diffused", "shadows": "soft natural shadows"}),
-    (("window",), {"source": "window light", "quality": "soft, directional", "shadows": "subdued interior shadows"}),
-    (("fire", "campfire", "candle"), {"source": "firelight", "quality": "warm, flickering", "shadows": "moving soft shadows"}),
-    (("office", "fluorescent", "hospital"), {"source": "fluorescent ceiling light", "quality": "flat, cool", "shadows": "subdued interior shadows"}),
-    (("sun", "daylight", "noon", "beach", "desert"), {"source": "sunlight", "quality": "hard, directional", "shadows": "sharp contrast"}),
+    (
+        ("neon",),
+        {
+            "source": "neon signage",
+            "quality": "cool saturated glow",
+            "shadows": "soft colored shadows",
+        },
+    ),
+    (
+        ("night", "midnight", "after dark"),
+        {
+            "source": "streetlights and practicals",
+            "quality": "warm, directional",
+            "shadows": "long pooled shadows",
+        },
+    ),
+    (
+        ("sunset", "golden hour", "dusk"),
+        {
+            "source": "low sunlight",
+            "quality": "warm, raking",
+            "shadows": "long directional shadows",
+        },
+    ),
+    (
+        ("overcast", "grey sky", "gray sky", "rain"),
+        {
+            "source": "overcast daylight",
+            "quality": "soft, diffused",
+            "shadows": "soft natural shadows",
+        },
+    ),
+    (
+        ("window",),
+        {
+            "source": "window light",
+            "quality": "soft, directional",
+            "shadows": "subdued interior shadows",
+        },
+    ),
+    (
+        ("fire", "campfire", "candle"),
+        {"source": "firelight", "quality": "warm, flickering", "shadows": "moving soft shadows"},
+    ),
+    (
+        ("office", "fluorescent", "hospital"),
+        {
+            "source": "fluorescent ceiling light",
+            "quality": "flat, cool",
+            "shadows": "subdued interior shadows",
+        },
+    ),
+    (
+        ("sun", "daylight", "noon", "beach", "desert"),
+        {"source": "sunlight", "quality": "hard, directional", "shadows": "sharp contrast"},
+    ),
 )
 
 _MOOD_TELLS = (
@@ -672,10 +716,38 @@ _MOOD_TELLS = (
 )
 
 _SETTING_TELLS = (
-    "diner", "bar", "office", "warehouse", "desert", "town", "street", "beach",
-    "forest", "rooftop", "kitchen", "bedroom", "car", "train", "subway", "market",
-    "harbor", "harbour", "field", "bridge", "alley", "station", "church", "stadium",
-    "lab", "hospital", "school", "garage", "river", "lake", "mountain", "city",
+    "diner",
+    "bar",
+    "office",
+    "warehouse",
+    "desert",
+    "town",
+    "street",
+    "beach",
+    "forest",
+    "rooftop",
+    "kitchen",
+    "bedroom",
+    "car",
+    "train",
+    "subway",
+    "market",
+    "harbor",
+    "harbour",
+    "field",
+    "bridge",
+    "alley",
+    "station",
+    "church",
+    "stadium",
+    "lab",
+    "hospital",
+    "school",
+    "garage",
+    "river",
+    "lake",
+    "mountain",
+    "city",
 )
 
 
@@ -692,8 +764,28 @@ def _lower_first(text: str) -> str:
 
 _CAMERA_LEAD = re.compile(r"^(?:the\s+)?camera\s+", re.IGNORECASE)
 _DETERMINERS = {
-    "a", "an", "the", "two", "three", "four", "some", "one", "my", "our", "his", "her",
-    "their", "he", "she", "they", "it", "we", "this", "that", "these", "those",
+    "a",
+    "an",
+    "the",
+    "two",
+    "three",
+    "four",
+    "some",
+    "one",
+    "my",
+    "our",
+    "his",
+    "her",
+    "their",
+    "he",
+    "she",
+    "they",
+    "it",
+    "we",
+    "this",
+    "that",
+    "these",
+    "those",
 }
 
 
@@ -748,7 +840,11 @@ def _template(
             setting = f"the {tell}"
             break
 
-    lighting = {"source": "soft available light from one motivated source", "quality": "soft, directional", "shadows": "soft natural shadows"}
+    lighting = {
+        "source": "soft available light from one motivated source",
+        "quality": "soft, directional",
+        "shadows": "soft natural shadows",
+    }
     for tells, mapped in _LIGHT_TELLS:
         if any(t in lowered for t in tells):
             lighting = dict(mapped)
@@ -787,7 +883,9 @@ def _template(
     else:
         chosen = bank
     beats = [{"stage": stage, "text": text} for stage, text in chosen]
-    ending = "the subject settled in a held final pose, the movement resolved, the composition unchanged"
+    ending = (
+        "the subject settled in a held final pose, the movement resolved, the composition unchanged"
+    )
     anchors = [
         "same subject identity and wardrobe",
         "same environment and object placement",
@@ -895,7 +993,11 @@ def assemble(master: MasterPrompt) -> str:
     if master.camera:
         cam.append(
             f"The camera {_camera_clause(master.camera)}"
-            + (f", maintaining {_lower_first(master.spatial).rstrip('.')}" if master.spatial else "")
+            + (
+                f", maintaining {_lower_first(master.spatial).rstrip('.')}"
+                if master.spatial
+                else ""
+            )
             + "."
         )
     light = master.lighting
@@ -942,7 +1044,9 @@ def split_clips(master: MasterPrompt, clip_plan: list[int]) -> list[dict]:
         if master.continuity_anchors
         else ""
     )
-    constraints = "Constraints: " + "; ".join(master.constraints) + "." if master.constraints else ""
+    constraints = (
+        "Constraints: " + "; ".join(master.constraints) + "." if master.constraints else ""
+    )
     camera = f"The camera {_camera_clause(master.camera)}." if master.camera else ""
     clips: list[dict] = []
     for index, (duration, bucket) in enumerate(zip(clip_plan, buckets)):
@@ -956,7 +1060,10 @@ def split_clips(master: MasterPrompt, clip_plan: list[int]) -> list[dict]:
                 "the previous clip ended — same subject, wardrobe, setting, "
                 "light, and camera position."
             )
-        action = " ".join(f"{_lower_first(text).rstrip('.')[:1].upper()}{_lower_first(text).rstrip('.')[1:]}." for text in bucket)
+        action = " ".join(
+            f"{_lower_first(text).rstrip('.')[:1].upper()}{_lower_first(text).rstrip('.')[1:]}."
+            for text in bucket
+        )
         if action:
             parts.append(action)
         else:
@@ -973,16 +1080,18 @@ def split_clips(master: MasterPrompt, clip_plan: list[int]) -> list[dict]:
             parts.append("The clip closes on a stable, holdable frame the next clip opens from.")
         if constraints:
             parts.append(constraints)
-        clips.append({
-            "prompt": " ".join(parts),
-            "duration_s": int(duration),
-            # the template has no understanding to split narration with — a
-            # brainless chain carries none, and the derivation warning names it
-            "narration": "",
-            # the template splits ONE continuous action — no link is a cut
-            "scene_change": False,
-            "opening": bucket[0] if bucket else "",
-        })
+        clips.append(
+            {
+                "prompt": " ".join(parts),
+                "duration_s": int(duration),
+                # the template has no understanding to split narration with — a
+                # brainless chain carries none, and the derivation warning names it
+                "narration": "",
+                # the template splits ONE continuous action — no link is a cut
+                "scene_change": False,
+                "opening": bucket[0] if bucket else "",
+            }
+        )
     return clips
 
 
@@ -1019,7 +1128,9 @@ def optimize(master: MasterPrompt) -> MasterPrompt:
         seen.add(key)
         deduped.append(sentence)
     if len(deduped) != len(sentences):
-        warnings.append(f"master: optimizer removed {len(sentences) - len(deduped)} repeated sentence(s)")
+        warnings.append(
+            f"master: optimizer removed {len(sentences) - len(deduped)} repeated sentence(s)"
+        )
     sentences = deduped
 
     # reference opener: present exactly when a reference image is supplied
@@ -1028,9 +1139,15 @@ def optimize(master: MasterPrompt) -> MasterPrompt:
         sentences.insert(min(1, len(sentences)), f"{REFERENCE_OPENER} {REFERENCE_PRESERVE}")
         warnings.append("master: optimizer added the reference-image opener")
     elif not master.reference_image and has_opener:
-        sentences = [s for s in sentences if REFERENCE_OPENER.lower() not in s.lower()
-                     and REFERENCE_PRESERVE.lower() not in s.lower()]
-        warnings.append("master: optimizer dropped a reference-image opener (no reference supplied)")
+        sentences = [
+            s
+            for s in sentences
+            if REFERENCE_OPENER.lower() not in s.lower()
+            and REFERENCE_PRESERVE.lower() not in s.lower()
+        ]
+        warnings.append(
+            "master: optimizer dropped a reference-image opener (no reference supplied)"
+        )
 
     # constraints: 3–6, scene-specific; trimmed here, never padded with generics
     constraints = [c for c in master.constraints if c]
@@ -1076,11 +1193,7 @@ def optimize(master: MasterPrompt) -> MasterPrompt:
         # left standing (it is the brain's honest estimate) and the target
         # line is added so the booked duration is what the generator hears
         target = master.target_duration_s
-        own = [
-            m.group(0)
-            for s in body
-            for m in _DURATION_MENTION.finditer(s)
-        ]
+        own = [m.group(0) for s in body for m in _DURATION_MENTION.finditer(s)]
         if any(re.match(rf"^{target}\b", m) for m in own):
             pacing_line = ""
         else:
@@ -1157,7 +1270,7 @@ def derive(
             except BrainTruncated as err:
                 last_error = err
                 break  # the cap is deterministic — a blind retry is the same cut
-            except Exception as err:  # noqa: BLE001 — retried, then raised as a named state
+            except Exception as err:
                 last_error = err
         raise MasterUnavailable(
             f"{brain_model()} could not derive the master prompt after "
@@ -1211,7 +1324,7 @@ def from_doc(doc: dict | None) -> MasterPrompt | None:
         return None
     try:
         return MasterPrompt.model_validate(doc)
-    except Exception:  # noqa: BLE001 — a corrupt artifact must not brick rehydration
+    except Exception:
         return None
 
 
@@ -1248,4 +1361,3 @@ __all__ = [
     "user_message",
     "look_block",
 ]
-

@@ -5,8 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "diony-director"
 version = "0.1.0"
-description = "Diony Director Agent: cloud generation conductor (Blueprints 25/26)"
+description = "Diony AI Director — the chat-first filmmaker on Grok Imagine and Google Flow (Blueprints 25–33)"
 requires-python = ">=3.11"
+authors = [{ name = "Diony AI" }]
 license = { text = "Proprietary" }
 dependencies = [
     "fastapi>=0.115",
@@ -17,7 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff"]
 
 [project.scripts]
 diony-director = "diony_director.app:main"

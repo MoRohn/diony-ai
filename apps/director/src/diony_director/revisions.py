@@ -18,7 +18,8 @@ from diony_contracts.director import (
     DirectorOpType,
 )
 from diony_contracts.production import ClipReview, ClipUnit, ProductionPackage, PromptVersion
-from diony_director import compiler, estimate as estimate_mod
+from diony_director import compiler
+from diony_director import estimate as estimate_mod
 
 DEFAULT_MAX_REVISIONS_PER_CLIP = 3
 
@@ -122,7 +123,13 @@ def plan_revision(
 
     version = compiler.revise_prompt(clip, package, note=note)
 
-    def _build(provider_: CloudProvider, model_: str, mode_: CloudGenerationMode, prompt: str, prompt_version: str) -> DirectorOp:
+    def _build(
+        provider_: CloudProvider,
+        model_: str,
+        mode_: CloudGenerationMode,
+        prompt: str,
+        prompt_version: str,
+    ) -> DirectorOp:
         from diony_director import capabilities
 
         is_video_input = provider_ is CloudProvider.GROK and op_type in {
@@ -151,9 +158,7 @@ def plan_revision(
             mode=mode_,
             duration_s=duration_,
             resolution=resolution_,
-            image_inputs=0
-            if is_video_input
-            else estimate_mod.image_inputs_for(clip, provider_),
+            image_inputs=0 if is_video_input else estimate_mod.image_inputs_for(clip, provider_),
             video_input_s=duration_ if is_video_input else 0,
         )
         return DirectorOp(
@@ -186,11 +191,11 @@ def plan_revision(
                 swapped = (CloudProvider.GROK, "grok-imagine-video-1.5")
             op_type = DirectorOpType.GENERATE
             retry = compiler.revise_prompt(clip, package, note=f"{note}-retry")
-            op = _build(swapped[0], swapped[1], CloudGenerationMode.T2V, retry.prompt, retry.version)
-        else:
-            retry = compiler.revise_prompt(
-                clip, package, note=f"{note}-take{revision_count + 2}"
+            op = _build(
+                swapped[0], swapped[1], CloudGenerationMode.T2V, retry.prompt, retry.version
             )
+        else:
+            retry = compiler.revise_prompt(clip, package, note=f"{note}-take{revision_count + 2}")
             op = _build(provider, model, mode, retry.prompt, retry.version)
 
     narration = (

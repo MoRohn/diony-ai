@@ -57,10 +57,9 @@ def test_fixed_point_cost_allocation_is_idempotent_and_reconciles_rollups(tmp_pa
     assert summary["reconciliation"]["difference_usd_micros"] == 0
     assert summary["reconciliation"]["component_difference_usd_micros"] == 0
     assert summary["rollups"]["cost_centers"][0]["id"] == "local-production"
-    assert sum(
-        row["share_basis_points"]
-        for row in summary["distributions"]["cost_centers"]
-    ) == 10_000
+    assert (
+        sum(row["share_basis_points"] for row in summary["distributions"]["cost_centers"]) == 10_000
+    )
 
 
 def test_cost_center_budget_is_monitoring_not_a_paywall(tmp_path: Path) -> None:

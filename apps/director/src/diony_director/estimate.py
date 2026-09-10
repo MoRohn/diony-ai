@@ -150,23 +150,41 @@ def estimate_op(
                 unit = "generation"
             rate = ratecards.resolve(files, provider.value, model, unit)
             count = max(1, int(duration_s) or 1)
+            lines = [
+                CostEstimateLine(
+                    label=f"{model} still × {count}",
+                    provider_id=provider.value,
+                    model=model,
+                    unit=rate.unit,
+                    unit_rate_usd_micros=rate.usd_micros_per_unit,
+                    quantity_microunits=count * 1_000_000,
+                    internal_credits=count * rate.internal_credits_per_unit,
+                    usd_micros=count * rate.usd_micros_per_unit,
+                    rate_card_id=rate.rate_card_id,
+                )
+            ]
+            if provider is CloudProvider.GOOGLE_FLOW:
+                # Flow stills are included in the Google AI plan (no credits),
+                # but every Flow request still solves a captcha — the solve is
+                # the still's whole price and belongs on the ledger.
+                captcha = ratecards.captcha_usd_micros(files)
+                if captcha:
+                    lines.append(
+                        CostEstimateLine(
+                            label=f"captcha solve × {count}",
+                            provider_id=provider.value,
+                            model="captcha",
+                            unit="solve",
+                            unit_rate_usd_micros=captcha,
+                            quantity_microunits=count * 1_000_000,
+                            usd_micros=count * captcha,
+                        )
+                    )
             return CostEstimate(
                 id=f"est-{uuid.uuid4().hex[:12]}",
                 workspace_id=workspace_id,
                 project_id=project_id,
-                lines=[
-                    CostEstimateLine(
-                        label=f"{model} still × {count}",
-                        provider_id=provider.value,
-                        model=model,
-                        unit=rate.unit,
-                        unit_rate_usd_micros=rate.usd_micros_per_unit,
-                        quantity_microunits=count * 1_000_000,
-                        internal_credits=count * rate.internal_credits_per_unit,
-                        usd_micros=count * rate.usd_micros_per_unit,
-                        rate_card_id=rate.rate_card_id,
-                    )
-                ],
+                lines=lines,
                 rate_cards_stale=rate.stale,
             )
         if provider is CloudProvider.GROK:

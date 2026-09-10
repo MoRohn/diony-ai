@@ -42,7 +42,7 @@ class AssemblyResult:
 def _ffmpeg() -> str:
     # resolve_media_tool also checks DIONY_FFMPEG and Finder-safe locations —
     # the packaged app's PATH has no /opt/homebrew/bin
-    from diony_producer.gallery_join import resolve_media_tool
+    from diony_producer.media_tools import resolve_media_tool
 
     binary = resolve_media_tool("ffmpeg") or shutil.which("ffmpeg")
     if not binary:
@@ -54,7 +54,7 @@ def _ffmpeg() -> str:
 
 
 def _probe(path: Path) -> dict:
-    from diony_producer.gallery_join import resolve_media_tool
+    from diony_producer.media_tools import resolve_media_tool
 
     ffprobe = resolve_media_tool("ffprobe") or shutil.which("ffprobe")
     if not ffprobe:
@@ -63,7 +63,16 @@ def _probe(path: Path) -> dict:
             "(brew install ffmpeg) or set DIONY_FFPROBE to its path"
         )
     raw = subprocess.run(
-        [ffprobe, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", str(path)],
+        [
+            ffprobe,
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            str(path),
+        ],
         check=True,
         capture_output=True,
         timeout=60,
@@ -195,9 +204,7 @@ def build_filter(
         f"aformat=channel_layouts=stereo[dither]"
     )
     chains.append("[ac][dither]amix=inputs=2:duration=first:normalize=0[acd]")
-    chains.append(
-        f"[acd]loudnorm=I={target}:TP=-1.0:LRA=11,aresample=48000[locked]"
-    )
+    chains.append(f"[acd]loudnorm=I={target}:TP=-1.0:LRA=11,aresample=48000[locked]")
     chains.append("[locked][bed]amix=inputs=2:duration=first:normalize=0[aout]")
     return chains
 
@@ -217,9 +224,7 @@ def assemble(
         raise AssemblyFailed("nothing to assemble: no completed clips")
     ffmpeg = _ffmpeg()
     probes = [_probe(p) for p in clip_paths]
-    dead = [
-        clip_paths[i].name for i, probe in enumerate(probes) if probe["duration_s"] <= 0.05
-    ]
+    dead = [clip_paths[i].name for i, probe in enumerate(probes) if probe["duration_s"] <= 0.05]
     if dead:
         # name the truncated clip instead of letting ffmpeg fail the whole
         # concat with an anonymous stderr tail
@@ -242,8 +247,12 @@ def assemble(
         muted = bool(((specs[index] if specs and index < len(specs) else {}) or {}).get("mute"))
         if muted or not probe["has_audio"]:
             cmd += [
-                "-f", "lavfi", "-t", f"{max(windows[index][1], 0.1):.3f}",
-                "-i", "anullsrc=r=48000:cl=stereo",
+                "-f",
+                "lavfi",
+                "-t",
+                f"{max(windows[index][1], 0.1):.3f}",
+                "-i",
+                "anullsrc=r=48000:cl=stereo",
             ]
             silent_index[index] = next_input
             next_input += 1
@@ -262,10 +271,22 @@ def assemble(
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     cmd += [
-        "-filter_complex", ";".join(chains),
-        "-map", video_out, "-map", "[aout]",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-        "-c:a", "aac", "-b:a", "192k",
+        "-filter_complex",
+        ";".join(chains),
+        "-map",
+        video_out,
+        "-map",
+        "[aout]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "20",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
         str(dest),
     ]
     result = subprocess.run(cmd, capture_output=True, timeout=1800)

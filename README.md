@@ -4,201 +4,296 @@
 
 <br />
 
-**OWN YOUR STUDIO&nbsp;&nbsp;·&nbsp;&nbsp;PRODUCE AT COST**
+**ONE LINE IN&nbsp;&nbsp;·&nbsp;&nbsp;A PRICED, FINISHED FILM OUT**
 
 <br />
 
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11+-0D0D0D?style=flat-square&logo=python&logoColor=F6F6F6)
-![Output](https://img.shields.io/badge/Master-1080p_Rec.709-FF402F?style=flat-square)
-![Compute](https://img.shields.io/badge/Compute-DGX_Spark_·_B200_·_B300-FF7A2F?style=flat-square)
-![Platforms](https://img.shields.io/badge/Desktop-macOS_·_Windows-0D0D0D?style=flat-square)
+![Engines](https://img.shields.io/badge/Engines-Grok_Imagine_·_Google_Flow-FF7A2F?style=flat-square)
+![Master](https://img.shields.io/badge/Master-1080p_·_Rec.709-FF402F?style=flat-square)
+![Platforms](https://img.shields.io/badge/Desktop-macOS_·_Windows_·_Linux-0D0D0D?style=flat-square)
 ![License](https://img.shields.io/badge/License-Proprietary-8A8A8A?style=flat-square)
 
 <br />
 
-[Open Diony AI](#open-diony-ai) · [Surfaces](#the-surfaces) · [Capabilities](#what-diony-does-today) · [Hardware](#hardware--compute-paths) · [Models](#models-local-never-cloud-by-default) · [Engineers](#run-the-shells-engineers) · [Blueprints](blueprints/)
+[Quick start](#quick-start) · [How a film is made](#how-a-film-is-made) · [Engines and pricing](#engines-and-pricing) · [Configuration](#configuration) · [FAQ](#faq) · [Engineers](#engineers) · [Blueprints](blueprints/)
 
 </div>
 
 <img src="docs/brand/gradient-rule.png" alt="" width="100%" height="4" />
 
-Diony AI is the packaged product that turns a **4× NVIDIA DGX Spark** desk cluster into a local TV/movie production appliance. Unbox the hardware, run the **Studio**, and the cluster becomes the **Producer**: a showrunner tool that can spend days making a **1-hour 1080p** audiovisual program with dialogue, score, and SFX. Humans stay in the loop only for review, notes, and distribution.
+Diony AI is a desktop film studio that shoots on cloud video models. You type an idea, the **Director** writes the script, prices every shot, rolls the clips on **Grok Imagine** (xAI) or **Google Flow** (Veo 3.1 and Omni Flash through useapi.net), reviews each print against the script, cuts the film, narrates it, and hands you the master with its subtitles, edit list, QC packet, and receipt. Nothing rolls until you see the price. Nothing you paid for is hidden, including a failure that burned money.
 
-Diony is an **Open Source Content Producer** in spirit: a maker-first production system where prompts, assets, model lineage, costs, and masters stay visible and portable. Your studio is not a black box and your project has an exit door — a complete `.diony.zip` carries its contracts, media, lineage, audit history, and checksums without credentials. This creator-sovereignty promise does not change the repository license; see [LICENSE](LICENSE) and [NOTICE](NOTICE).
-
-This is not a notebook, a loose ComfyUI graph, or a cloud API wrapper. It is **Infrastructure as a Product**: versioned cluster profiles, a crate-to-cluster Studio, and a Producer that treats the fleet as a mode-switching camera-and-cutting-room. A validated official ComfyUI Wan workflow can be selected as a controlled camera backend; Diony still owns contracts, gates, logging, finish, and distribution.
-
-## The product
-
-| | |
-|:---:|:---:|
-| <img src="docs/brand/shot-studio-intro.png" alt="Studio entry — From idea to moving image" width="100%" /><br /><sub>**Studio** — enter, start your own, or join a team</sub> | <img src="docs/brand/shot-studio-compute.png" alt="Studio compute step with cluster blueprints" width="100%" /><br /><sub>**Studio** — pick compute; the agent takes it from there</sub> |
-| <img src="docs/brand/shot-producer-idea.png" alt="Producer Idea bay" width="100%" /><br /><sub>**Producer** — write the picture, set a length goal, Produce</sub> | <img src="docs/brand/shot-producer-production.png" alt="Producer live production monitor" width="100%" /><br /><sub>**Producer** — live production monitor: shots, pipeline, activity</sub> |
+No GPU is required. You bring your own provider keys, they never leave your machine, and every clip, frame, and film is downloaded into a local vault the moment it exists. The lineage, the prompts, and the costs are yours.
 
 ## The surfaces
 
-| Surface | Who | Job |
+| Surface | URL | Job |
 |---|---|---|
-| **Desk** | Everyone, first open | Open **Diony.app** (Mac) — or the script launcher on Windows/Linux; the desk lays itself and opens the Studio |
-| **Studio** | Technician / owner | Site first: Local Quad-Spark, Leased Dual-Spark, Leased B300, or Leased B200. Local: crate-to-system. Leases: Connect → App → Ready → Producer. Sign locks the last line. Owners invite makers, name Cost Centers, and govern access |
-| **Producer** | Director / showrunner / agency / artist / creator | Idea → Production (the live run) → Gallery. Sample a 5–10s finished clip before committing to a show |
-| **Conductor** | Autonomous (DeepSeek) | Shot planning, dispatch, QC, retakes, fleet mode, disk pressure |
-| **Blueprints** | Operators and coding agents | The constitution: BOM, topology, serving recipes, quality bar, brand ([00–21](blueprints/)) |
+| **Studio** | `http://studio.diony.local` | The front door. Choose the camera: Grok Imagine or Google Flow. Shows whether each provider key is loaded. |
+| **Director** | `http://director.diony.local` | The room where films are made. Idea in, script out, every shot priced, faces approved, clips rolled, film cut and narrated. |
+| **Producer** | `http://producer.diony.local` | The Gallery of finished clips and films. Watch, read the prompt that rolled, download, stitch, or delete, with every receipt. |
 
-North Star deliverable: **one hour of TV/movie-ready audiovisual**, 1920×1080, 23.976 or 24.000 fps, Rec.709 legal, stereo or 5.1 stems, broadcast or streaming loudness.
+The Desk opens all three and lays the `*.diony.local` names on first launch. The whole flow is Studio → Director → Producer.
 
-## What Diony does today
+## Quick start
 
-**Idea to finished clip**
-- **Sample** is a real action: a finished **5s/10s clip** from the current idea and its references — bounded Wan2.2 camera takes through AutoQC, exact time-frame assembly, mandatory `diony_sr_v1` 1080 finish and mix, entering Gallery only with checksum-verified master lineage.
-- **Binding image references**: subject-defining stills lock the whole show to Wan **I2V** — characters and character teams hold across shots, adjacent shots condition on the prior print's last frame, boundary QC and an eight-frame temporal blend keep continuity, and I2V can never silently downgrade to T2V. ([Blueprint 20](blueprints/20-wan22-prompt-intelligence.md))
-- **Length goals**, not stopwatches: shot count scales so the stitched program lands the goal exactly, on the native Wan 81-frame quality lane — booked picture is trimmed at conform, never stretched.
+**1. Requirements**
 
-**Production craft, measured (Blueprint 24)**
-- Every rundown is reviewed for variety before GPU time (framing runs, locked-off monotony, lighting, hero contrast, generic subjects) and diversified deterministically; mood adjectives never reach a Wan prompt.
-- Every print carries sampled-frame evidence (sharpness, exposure, black frames, chain colour drift) beside its temporal and reference QC; every automatic choice — retake direction, settle ranking, hero selection, look, sizing — lands in an append-only decision log.
-- One program look per master (`Bible.look`, Bible LUT honoured), chain colour matching at Finish, a post-mix final review that refuses the lock on failure, dialogue subtitle sidecars, and a QC packet as deliverables. Optional local Whisper and CLIP lanes measure speech and prompt adherence when their weights are staged — never a network call. ([Blueprint 24](blueprints/24-montage-intelligence.md))
+- macOS 13+, Windows, or Linux. Python 3.11+ for a source checkout; the packaged `Diony.app` bundles its own runtime.
+- `ffmpeg` and `ffprobe` on the PATH (`brew install ffmpeg`), or point `DIONY_FFMPEG` / `DIONY_FFPROBE` at them. They cut, mix, and review every film.
+- An xAI API key, a useapi.net token with a connected Google Flow account, or both.
 
-**Production you can watch and stop**
-- Production is a **live monitor**: overall tally and clock, per-shot clip milestones, pipeline stages, GPU/compute activity, and a production log — not server access logs.
-- **STOP** is a governed choice: keep completed clips as a stitched incomplete result, or delete them from the run. Restart adoption resumes only currently selected work. ([Blueprint 21](blueprints/21-production-performance-assurance.md))
-- The finished master is held to a fixed standard: Wan2.2 720p negative → `diony_sr_v1` temporal 720→1080 → 1920×1080 Rec.709 legal picture, −24 LUFS broadcast mix. ([Blueprint 19](blueprints/19-producer-final-production-standard.md))
+**2. Put the keys in one file**
 
-**A persistent Gallery with a cutting room**
-- Gallery is an independent library: finished programs load from the vault with checksum-versioned playback, posters, and downloads; source slates carry the exact original prompt and reference files.
-- **Join / stitch**: select clips and build a new version in a frame-accurate splice workspace — sequence, join points, preview, then a new 1920×1080 Rec.709 asset with source lineage and cost attribution.
-
-**A governed Studio, not a login wall**
-- Owners **invite makers** by email with roles and expiries; joiners verify, pick a **Profile Name**, and get a personal **Cost Center**. Named Cost Centers group members under production budgets. The Studio checks invitations — Diony cloud does not. ([Blueprint 18](blueprints/18-studio-entry-and-governance.md))
-- The **launch control plane** lives in `{vault}/.control/diony.sqlite3`: durable workflow checkpoints, workspace isolation, generation jobs, progress events, fixed-point internal-credit and cost analytics, audit records, AES-256-GCM BYOK configuration, and optional S3/R2 delivery. Internal credits are not money and never block a run. ([Blueprint 16](blueprints/16-launch-control-plane.md))
-
-**A Studio that builds the studio**
-- Compute is line 01: **Local Quad-Spark**, **Leased Dual-Spark**, **Leased B300**, or **Leased B200** — or point the **autonomous setup agent** at existing compute: discover, validate, open Producer.
-- Local path teaches crate-to-cluster with wiring blueprints (RoCE fabric vs management, drawn on the page); lease paths run Connect → App → Ready (**Test GPU**) → Producer. Sign writes the site contract. ([Blueprint 14](blueprints/14-compute-paths.md))
-
-**A real desktop product**
-- Customer distribution is two downloads: **Mac** (`.dmg`, notarized) and **Windows** (`Setup.exe`, Authenticode) — self-contained apps, no Python or terminal. Signed release builders and the `downloads.json` contract live under [`packaging/`](packaging/) and [`scripts/release/`](scripts/release/). ([Blueprint 17](blueprints/17-desktop-distribution.md))
-- On a Mac checkout, **Build Diony AI.command** produces the real local app at `dist/desktop/{version}/development/Diony.app` — the primary way to open and use Diony today ([Open Diony AI](#open-diony-ai)). It is ad-hoc signed and local-only, never represented as publishable.
-
-## Open Diony AI
-
-**Mac — `Diony.app` is the primary way to open and use Diony.** From a checkout, double-click **Build Diony AI.command** in Finder: it builds the real self-contained desktop app and opens it. The app lands at a stable path you can keep in your Dock:
-
-```
-dist/desktop/{version}/development/Diony.app
-```
-
-From then on, open Diony from the Dock or Finder like any Mac app — no Python, no terminal, no first-run `pip`; the app bundles its own runtime and opens straight into the Desk, then Studio at `http://studio.diony.local` (Producer waits until you Sign, at `http://producer.diony.local`). Re-run the builder to pick up repo changes; it skips with "already current" when nothing changed. If macOS says the file cannot be opened: right-click it, choose Open, then Open.
-
-Signed customer installers — **Mac** `.dmg` and **Windows** `Setup.exe` — ship the same product and replace this path once published ([Blueprint 17](blueprints/17-desktop-distribution.md)).
-
-**Windows / Linux — script launchers (until the signed installers ship).** Open **START HERE.txt**, then double-click:
-
-| You are on | Open this |
-|---|---|
-| Windows | `Open Diony AI.bat` |
-| Linux / DGX OS | `open-diony.sh` |
-| Mac (fallback, no app build) | `Open Diony AI.command` |
-
-A page opens. First time it lays the desk (Python 3.11, a private environment, Studio and Producer) — once. **Continue** is Studio; if it asks for Python 3.11, install that, then double-click again. Leave the small Terminal window open until it says you can close it.
-
-## Hardware & compute paths
-
-Default site: the Local Quad-Spark crate (`spark-4x-v1`).
-
-- 4× NVIDIA DGX Spark (GB10, 128 GB unified memory, 4 TB NVMe, ConnectX-7)
-- RoCE v2 fabric switch (MikroTik CRS804 or CRS812), **200G forced**, MTU 9000
-- 10GbE management switch + NAS (≥50 TB) mounted at `/diony/vault`
-- UPS/PDU, matched DGX OS across all four nodes
-
-Leased sites are Studio Site exceptions, never failovers: **Dual-Spark** (`spark-2x-v1`, two GB10 with fabric — Runpod Instant Clusters or Enverge), **B300** (`b300-v1`, one Blackwell, TP=1), and **B200** (`b200-v1`, one 180 GB Blackwell, TP=1, `max_model_len 16384`). Full BOM and cabling: [Blueprint 01](blueprints/01-crate-to-cluster.md) and [Blueprint 09](blueprints/09-bom-and-sku.md); paths: [Blueprint 14](blueprints/14-compute-paths.md).
-
-### Fleet modes
-
-The cluster is a mode-switching appliance, not a static 4-way tensor-parallel box. Mode changes are drain → unload → load → healthgate.
-
-| Mode | Layout | When |
-|---|---|---|
-| `BRAIN` | 4× DeepSeek TP=4 | Hour-long bible, shotlist, continuity |
-| `SPLIT` | 2× DeepSeek TP=2 + 2× Wan | Default production |
-| `FARM` | 4× Wan | Picture generation sprint |
-| `FINISH` | Super-res / NVENC / mix | 1080 conform, loudness, masters |
-
-## Models (local, never cloud by default)
-
-- **Brain:** [DeepSeek-V4-Flash-0731](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731) (MIT) — showrunner, prompt expansion, QC, retakes. ~167 GB. 2-node TP=2 default; 4-node TP=4 for hour-long bible context.
-- **Camera:** [Wan2.2](https://github.com/Wan-Video/Wan2.2) (Apache 2.0) — T2V-A14B, I2V-A14B, TI2V-5B, S2V-14B, Animate-14B. Native **720p**.
-- **Finish:** Diony proprietary `diony_sr_v1` 720→1080 super-res, legalizer, grade, conform.
-
-Wan2.2 does not ship a 1080p checkpoint. 1080p is a **Diony finish line**, not an upstream toggle. See [Blueprint 06](blueprints/06-1080p-sota-finish.md).
-
-### Honest clock
-
-A 1-hour episode is **~2–5 wall-clock days** on this desk cluster, including retakes, 1080 finish, and mix. GB10 bandwidth is 273 GB/s. This is "given enough time and energy," not real-time.
-
-## Run the shells (engineers)
-
-Studio and Producer are Day 1 dry-run apps on a laptop (`DIONY_DRY_RUN=1`); they do not mutate fabric. Requires **Python 3.11+**. Prefer **Diony.app** ([Open Diony AI](#open-diony-ai)) unless you specifically need editable installs.
+Create `~/.diony/keys.env` (override the location with `DIONY_KEYS_FILE`) and make it private:
 
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -e packages/contracts -e apps/wizard -e apps/wan -e apps/finish \
-            -e apps/producer -e apps/conductor -e apps/desk
+mkdir -p ~/.diony && chmod 700 ~/.diony
+cat > ~/.diony/keys.env <<'EOF'
+# xAI — Grok Imagine video, Grok Imagine image, the Grok narrator voice, and the screenwriter brain
+XAI_API_KEY=xai-...
 
-diony-desk         # first-open lobby, then Studio + Producer
-diony-wizard       # :8787
-diony-producer     # :8788
+# useapi.net — Google Flow (Veo 3.1, Omni Flash, Nano Banana stills, 1080p upscale)
+USEAPI_TOKEN=user:...
+DIONY_FLOW_EMAIL=you@gmail.com      # optional: pin one connected Flow account
+DIONY_FLOW_PLAN=pro                 # plus | pro | ultra-99 | ultra-199 — prices Flow credits
+EOF
+chmod 600 ~/.diony/keys.env
 ```
 
-Open Studio at `http://studio.diony.local` and Producer at `http://producer.diony.local`. Day 2 laptop binds are `:8787` and `:8788`. Tests: `python -m pytest packages/contracts apps`.
+An explicit environment variable always wins over the file. There is no key form in the UI by design.
 
-### App development and testing (Mac): use Diony.app
+**3. Open Diony**
 
-For app development and application testing, validate against the same **Diony.app** you open every day ([Open Diony AI](#open-diony-ai)) — not the editable-install shells. Build it from the current checkout:
+- Mac: double-click **Build Diony AI.command** to build and open `Diony.app`, or **Open Diony AI.command** for the source launcher.
+- Windows: **Open Diony AI.bat**. Linux: `./open-diony.sh`.
+
+The lobby installs the desk once, opens Studio, and may ask for your password one time to lay the product names. Pick a camera on the Studio page and press **Continue to the Director**.
+
+**4. Prove the keys before spending**
 
 ```bash
-# double-click "Build Diony AI.command" in Finder (builds, then opens the app), or:
-./scripts/release/build-local-macos.sh
+diony-director-check            # offline: engine, keys found, plan, rate-card age, vault path
+diony-director-check --live     # $0 auth probes: xAI model list, Flow accounts and credits
+diony-director-check --roll-one grok --yes   # one 1 s 480p clip, about $0.08, lands in {vault}/director/live-check/
 ```
 
-How to use it:
+Optional staging, both free: `--stage-face-models` downloads OpenCV Zoo's YuNet and SFace (about 37 MB, SHA-256 pinned) so Cast Lock can measure faces; `--reconnect` re-links a signed-out Flow account from a live browser session.
 
-- **Rebuild after every change you want to test.** The builder stages a fresh secret-free payload from the repo, hashes it, and skips with "already current" when nothing changed — so re-running is cheap and always safe.
-- The stable `Diony.app` path is a symlink that atomically flips to the newest build (hashed under `dist/desktop/{version}/development/builds/`), and the running Desk replaces an older local build and its services automatically — **testing can never silently fall back to stale bundled UI**.
-- The app bundles its own runtime (no system Python, no first-run `pip`) and runs the exact staged payload, so what you test is what the installed product will do. `development-build.json` next to the app records the version, architecture, and payload SHA-256 you tested against.
-- This artifact is **ad-hoc signed and local-only**: never notarized, never publishable. Shipping builds come from the signed release builders in [`scripts/release/`](scripts/release/) ([Blueprint 17](blueprints/17-desktop-distribution.md)).
+## How a film is made
 
-## Repo map
+1. **Describe the film** in the Director console. One line is enough. Drop or paste reference stills; mark one as the opener to open the frame on it.
+2. **Draft script** or **One shot**. The screenwriter brain (Grok, `grok-4.6` by default) writes a screenplay with characters, settings, and lines, then the Master Video Prompt stage derives the exact prompt every clip inherits. Drafting takes a minute or two on a reasoning model; the room shows the elapsed time. A one shot of any length chains into sequential clips that open on the previous clip's last frame.
+3. **Edit the lines** on the script sheet. Every line and its authored shot is editable until the lock.
+4. **Lock script & price the clips.** Scenes are packed into route-length takes (15 s on Grok, 10 s on Omni Flash), one spoken line per take. The lock reply itemises clips, plates and character sheets, and a revision allowance, and states the session total. Nothing has rolled yet.
+5. **Approve the cast.** Character sheets draw in the background; the cast dock shows each face with its measured verdict. Approve one, or **Approve all**. Under **Cast: Locked** the approved sheet rides every prompt verbatim and cast keyframes are composed before each clip.
+6. **Run & Assemble All**, **Run & Assemble Selected**, or **Run, Assemble & Upscale All** (Google Flow takes finish at 1080p server-side, free on a paid Google plan). The console folds into a live run strip. A provider quota pause is a card with a resume time, never a failure. A refused clip gets its opening frame redrawn on **Retake**; **Skip shot** leaves a stubborn clip out and the run carries on; **Retry all** re-queues every failed clip.
+7. **The cut.** Clips are reviewed (delivery, duration, audio, sampled frames, identity against the approved sheet, spoken lines when a whisper model is staged), assembled with fades and a room-tone floor, loudness-locked, and narrated in post by one cast Grok voice with cues placed at each line's mark. The film ends when the last line ends.
+8. **Deliverables and receipt.** `film.mp4`, `film.srt`, `film.vtt`, `edl.json`, `assembly-map.json`, and `qc-packet.json` land beside each other in the vault. The receipt lists estimate versus actual per operation. The Producer's Finished Clips gallery lists every clip and the film with its spend.
+
+### Console controls
+
+| Pill | Choices | What it does |
+|---|---|---|
+| **Provider** | Grok Imagine · Google Flow | The camera the film rolls on. It opens on the Studio choice; one camera shoots the whole film. |
+| **Duration** | m:ss, up to 180 minutes | Runtime. Long one-shots chain; scripted films scale their scene count. |
+| **Res** / **Aspect** | 720p · 480p / 16:9 · 9:16 | Render resolution and program shape, held by every shot, plate, and the cut. |
+| **Grok cam** / **Grok atmo** | Authored + the Imagine 1.5 lexicon | Camera moves and atmosphere on the Grok route. Inline shorthand works too (`/pushin`, `/dust`). |
+| **Flow style** / **Flow cam** | Baseline + worlds and camera commands | WORLD and CAMERA templating on the Google route (`/filmic`, `/orbit`). |
+| **Style** | Narrated · Dialogue · Mix | One post narrator; characters speak on camera; or both where each belongs. Fixed at the lock. |
+| **Cast** | Standard · Locked | Cast Lock: the approved identity card at priority 0 on every prompt. Fixed at the lock. |
+| **Voice** | Auto + the Grok roster | One narrator per film, cast from the tone or chosen by name. Changeable until the cut. |
+| **Budget $** | number or empty | A session ceiling. Autopilot holds at the ceiling instead of overspending. |
+
+The header meter reads in the camera's own currency: dollars for Grok Imagine as metered by xAI, plan credits for Google Flow. Total is lifetime spend on this desk; today is today's.
+
+## Engines and pricing
+
+Prices live in versioned JSON rate cards at `apps/director/src/diony_director/ratecards/`, each naming its source and fetch date. A card older than 45 days is reported as stale on every estimate. Override the directory with `DIONY_RATECARD_DIR`.
+
+**Grok Imagine (xAI), metered per second.** Default video model `grok-imagine-video-1.5`; stills and character sheets on `grok-imagine-image-2.0`; the narrator on the Grok voice API; the screenwriter on `grok-4.6`.
+
+| Model | Unit | USD |
+|---|---|---|
+| `grok-imagine-video-1.5` | second at 480p / 720p / 1080p | 0.08 / 0.14 / 0.25 |
+| `grok-imagine-video` | second at 480p / 720p | 0.05 / 0.07 |
+| `grok-imagine-image-2.0` | still at 1K / 2K | 0.04 / 0.08 |
+
+Clips run 1 to 15 seconds. Up to 3 reference images. Native audio. The 1.5 model shoots; the 1.0 model carries the extension and edit lanes.
+
+**Google Flow via useapi.net, priced in Google's published credits.** Default video model `omni-flash` (Omni 1.1 Flash: audio-native, voices, characters, first and last frames, 4/6/8/10 s at 360p or 720p). Veo 3.1 tiers stay reachable by explicit model choice and carry the extension lane. The credit costs below are the ones Google charges your account per generation; the Director converts them to dollars from your plan's price per credit, which is a model of your subscription, never Google's meter.
+
+| Model | Unit | Credits | Ultra plans |
+|---|---|---|---|
+| `omni-flash` | 720p clip at 4 / 6 / 8 / 10 s | 7 / 10 / 12 / 15 | same |
+| `omni-flash` | 360p clip at 4 / 6 / 8 / 10 s | 4 / 5 / 6 / 7 | same |
+| `omni-flash` | video edit (v2v) | 40 | same |
+| `veo-3.1-lite` | one generation or extend (8 s; 4 and 6 s on Ultra) | 10 | 5 |
+| `veo-3.1-lite-low-priority` | same lane, queued | 10 | 5, free and unlimited on Ultra $199.99 |
+| `veo-3.1-fast` | one generation or extend | 20 | 10 |
+| `veo-3.1-quality` | one 8 s generation or extend | 100 | 100 |
+| `video-upscale` | 720p / 1080p / 4K finish | 0 / 0 / 50 | 4K needs Ultra |
+| `nano-banana-2`, `-lite`, `-pro` | one still | included | included |
+
+| Google AI plan | Per month | Credits per month | Modeled price per credit |
+|---|---|---|---|
+| Plus | $7.99 | 200 | $0.040 |
+| Pro | $19.99 | 1,000 | $0.020 |
+| Ultra | $99.99 | 10,000 | $0.010 |
+| Ultra | $199.99 | 25,000 | $0.008 |
+
+Credits refresh monthly and do not roll over; a free daily allowance exists but is not modeled. useapi.net is a flat subscription on top and adds no per-generation fee; captcha solves are metered separately (about $0.003 each after the free ones) and appear as their own line on every Flow estimate. Every Flow API call passes one process-wide pacing gate (`DIONY_FLOW_REQUEST_GAP_S`, default 5 s) so a wave never trips the throttle. Sources: [Google Flow Help, Manage your Google Flow credits](https://support.google.com/flow/answer/16526234) and the [useapi.net Google Flow API docs](https://useapi.net/docs/api-google-flow-v1), both read 2026-09-10.
+
+**Cost doctrine.** No priced operation exists without a reconciling estimate. Estimates commit on submit, actuals reconcile on completion, and a failed job that burned money stays on the receipt. A 429 pauses the run until the provider's window resets and spends nothing. Prompts are fitted to the 4096-character provider limit before any request leaves, with dialogue, camera, and the identity card untouchable.
+
+## What the Director guards
+
+- **Likeness.** A real person recognised in an idea or a still is described, never named, in every prompt. Google Flow refuses named people beside a reference picture; the guard closes that before render (`DIONY_LIKENESS_AUDIT`).
+- **Continuity.** A film-level Look Bible and style frames ride every prompt; setting plates open scenes; chained clips open on the previous last frame; identity is scored against the approved sheet, never the previous shot.
+- **Speech.** Location tracks are speechless by law on the narrated style; a provider-invented voice is measured (with `DIONY_WHISPER_MODEL`) or muted with a named receipt. Narration cues never overlap.
+- **The script reaches the cut.** A provisional prompt never spends. A cut that expects lines and carries none is refused.
+- **One film per room.** A new script retires the earlier chain; its prints stay in the Gallery and on the ledger.
+
+The doctrine is written down in [Blueprints 25 to 33](blueprints/README.md).
+
+## Where everything lands
+
+The vault is `DIONY_VAULT`, else `/diony/vault` when it exists, else `apps/producer/data` in a checkout.
 
 ```
-AGENTS.md                 How humans and agents operate this product
-blueprints/               Numbered operational constitution (00–21)
-infra/                    Cluster profiles, compose stubs, switch snippets
-docs/brand/               Brand assets: banner, mark, UI captures
-START HERE.txt            First open for people who should not see pip
-apps/desk                 First open (Diony.app / script launchers)
-apps/wizard               Crate-to-system Studio (Site → signed report)
-apps/producer             Idea-to-Studio (Idea, Production, Gallery, governance)
-apps/wan                  Wan2.2 native / validated ComfyUI worker (:8010)
-apps/finish               720→1080 diony_sr_v1 (:8020)
-apps/conductor            DeepSeek tool loop (dispatch, QC, retakes)
-packages/contracts        Project / Shot / Take / QC / governance / cost schemas
-packaging/, scripts/      Desktop distribution and signed release builders
-.cursor/                  Persistent agent rules and skills
+{vault}/director/{session}/   state.json, every clip as {job}.mp4, uploads/, frames/,
+                              film.mp4, film.srt, film.vtt, edl.json, assembly-map.json, qc-packet.json
+{vault}/director/live-check/  --roll-one output
+{vault}/.cluster/engine.json  the Studio engine choice
+{vault}/.control/             the cost ledger and control plane (sqlite)
+{vault}/models/opencv-zoo/    staged YuNet + SFace
+```
+
+Provider URLs are never stored or played. Completed media is downloaded and content-hashed the moment it completes.
+
+## Configuration
+
+Everything is an environment variable; the keys file is loaded first with set-default semantics.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `XAI_API_KEY` | unset | xAI bearer token: Grok video, image, voice, and the brain |
+| `USEAPI_TOKEN` | unset | useapi.net bearer token for Google Flow |
+| `DIONY_FLOW_EMAIL` / `DIONY_FLOW_PLAN` | Flow picks / `pro` | Pin one Flow account; price its credits |
+| `DIONY_KEYS_FILE` | `~/.diony/keys.env` | Where the keys live |
+| `DIONY_DIRECTOR_BRAIN_URL` / `_MODEL` / `_KEY` | `https://api.x.ai` / `grok-4.6` / the xAI key | Any OpenAI-compatible chat endpoint writes the script. Set the URL empty to run the deterministic template writer. |
+| `DIONY_DIRECTOR_BRAIN_TIMEOUT` | `600` | Seconds per brain call; the draft is asynchronous |
+| `DIONY_XAI_BASE` / `DIONY_USEAPI_BASE` | provider defaults | API bases, for mocks and proxies |
+| `DIONY_FLOW_REQUEST_GAP_S` / `DIONY_FLOW_UPSCALE_PARALLEL` | `5` / `4` | Flow pacing gap; parallel 1080p finishes |
+| `DIONY_PROMPT_LIMIT_GROK` / `_GOOGLE_FLOW` | `4096` | Prompt character caps |
+| `DIONY_NARRATOR_BACKEND` / `DIONY_NARRATOR_CLI` | Grok voice API | Force a backend, or an on-host command template (`{text}`, `{output}`, `{voice}`) |
+| `DIONY_GROK_VOICE` / `DIONY_GROK_VOICE_ROSTER` | cast per film | Pin a narrator voice; override the roster as JSON |
+| `DIONY_WHISPER_MODEL` | unset | faster-whisper model path; turns the speech guard into a measurement |
+| `DIONY_FACE_ID_DIR` | `{vault}/models/opencv-zoo` | Staged face models for Cast Lock |
+| `DIONY_LIKENESS_AUDIT` | `1` | Second-pass audit for unconfessed real names |
+| `DIONY_FFMPEG` / `DIONY_FFPROBE` | PATH | Explicit media tool paths |
+| `DIONY_VAULT` | see above | Vault root |
+| `DIONY_DIRECTOR_PORT` | `8790` | Director bind port |
+| `DIONY_DIRECTOR_DRY_RUN` | unset | `1` refuses every paid run with a 409 |
+| `DIONY_ENGINE` | cloud | Only `local_legacy` turns the cloud engine off |
+
+## FAQ
+
+**What do I need to make a film?**
+A Mac, Windows, or Linux machine with ffmpeg, and at least one provider account: an xAI API key (Grok Imagine, the Grok narrator voice, and the screenwriter brain) or a useapi.net token linked to a Google account with a Google AI plan (Google Flow). No GPU, no model downloads. With only an xAI key the whole pipeline runs on Grok; with only a Flow token, set an OpenAI-compatible brain with `DIONY_DIRECTOR_BRAIN_URL` or the deterministic template writer drafts the script.
+
+**Which camera should I pick?**
+Studio asks you to choose one, and one camera shoots the whole film so every clip carries one look. Pick Grok Imagine when you want exact per-second pricing, 15 s takes, and the fastest drafts. Pick Google Flow when you want Omni Flash's native voices, registered characters, first-and-last-frame shots, Veo 3.1, and the free 1080p finish. The choice can change any time on the Studio page or the Director's Provider pill; a room already rolling keeps its camera.
+
+**How much does a film cost?**
+The lock reply tells you before anything rolls, itemised: clips, plates and character sheets, and a revision allowance for retakes. As a guide, one minute of 720p picture costs about $8.40 on Grok Imagine 1.5 (60 s at $0.14) and, cut as six 10 s Omni Flash takes, 90 Flow credits (about $1.80 on Pro, $0.90 on Ultra $99.99). Character sheets and plates add a few cents on Grok and are included on Flow. Grok is billed by xAI per second; Flow is charged in credits against your Google AI plan's monthly pool, priced here from the plan you declare in `DIONY_FLOW_PLAN`.
+
+**Where do Google Flow credits come from, and are your numbers Google's?**
+Credits come from your Google AI plan (Plus 200, Pro 1,000, Ultra $99.99 10,000, Ultra $199.99 25,000 per month, plus a free daily allowance) and are spent on Google's side per generation. The Director quotes the per-generation credit costs Google publishes and converts them to dollars from your plan's price per credit; that conversion is a model of your subscription, not a meter Google runs. The receipt shows credits and dollars side by side.
+
+**Why did my run pause?**
+A provider answered 429: the Flow account's quota window, a per-model daily limit, a captcha, or xAI throttling. Nothing was spent. The run card shows the reason and the resume time in your local clock, and the queued clips roll on their own when the window opens. Flow calls are also paced (one at a time, five seconds apart) so a wave never triggers the pause in the first place.
+
+**Why was a clip refused, and what does Retake do?**
+Google Flow refuses a prompt that names a recognisable person beside a reference picture, and both providers moderate content. The likeness guard describes people instead of naming them before the prompt leaves, and a refusal on a chained clip redraws the opening frame without the recognisable face, then retries from your own stills alone. After three redraws the room tells you the prompt itself is what the filter matches. Skip shot leaves a stubborn clip out; the cut ignores it.
+
+**How long does a film take?**
+Drafting on a reasoning model takes one to two minutes. Clips render in parallel waves; a 10 s Omni Flash clip or a 15 s Grok clip typically lands in one to three minutes, chained one-shots are sequential because each link opens on the previous last frame. A one-minute film is usually cut, narrated, and in the Gallery within ten to fifteen minutes; long runtimes scale with the number of clips and the provider's queue.
+
+**Can I bring my own script?**
+Yes. Paste a screenplay or a beat list into the console and press Draft script: authored lines are realised verbatim, authored shots ride each take, and `(O.S.)` lines are heard from off screen. You can also paste a full master prompt for a one-shot. Every line stays editable on the script sheet until the lock.
+
+**Do characters speak, or is it narrated?**
+Both. The default style is Narrated: one Grok voice reads every line onto the finished cut, the location tracks stay speechless, and the cues land at each line's mark. Dialogue puts the lines into the generation prompt so the character speaks on camera with the provider's native audio. Mix uses on-camera dialogue where a character is in frame and post narration for voice-over. Cast Lock keeps a face consistent across the film; Voice picks the narrator.
+
+**Is my footage uploaded anywhere or kept by anyone?**
+Prompts and reference stills go to the provider you chose, because that is where the clip is rendered; nothing goes anywhere else. Finished media is downloaded to your vault the moment it completes, provider URLs are never stored or played, keys stay in `~/.diony/keys.env` on your machine, and the ledger is a local SQLite file. Delete a session from the Gallery and its media is gone; the spend stays on the receipt.
+
+**What is the 1080p finish?**
+Providers render at 720p. Run, Assemble & Upscale All sends every Flow take through Google's server-side upscale, free at 1080p on a paid plan (4K costs 50 credits and needs Ultra), and cuts the film at 1920×1080. Grok takes are conformed up at the cut. A finish that comes back short fails its review and the native take is used instead.
+
+**What happens when a rate card is stale?**
+Every estimate says so, and the run still proceeds. Cards carry a fetch date and go stale after 45 days; update the JSON under `apps/director/src/diony_director/ratecards/` or point `DIONY_RATECARD_DIR` at your own copy. The receipt always shows what the provider actually charged where the API reports it.
+
+**Why does the first launch ask for my password?**
+To write `studio.diony.local`, `director.diony.local`, and `producer.diony.local` into the hosts file and bind the name router on port 80. It happens once. Cancel it and the lobby's Continue retries; the services still run on `:8787`, `:8790`, and `:8788` meanwhile.
+
+**Can I use a local GPU instead of the cloud engines?**
+No. Diony shot on local DGX Spark clusters and leased GPUs until September 2026; that lane was removed from the product on 2026-09-10. The two cameras are Grok Imagine and Google Flow, and the desk needs no GPU at all. The history is in the [changelog](CHANGELOG.md).
+
+**How do I start over?**
+＋ NEW SESSION in the Director masthead opens a fresh room; the ledger keeps every dollar. A room you left with a priced script or unfinished clips comes back whole the next time the Director opens, with its cards, its batch bar, and a Retry on every failed clip. Pasting a new script into a room that holds a film retires the earlier chain rather than stacking the two.
+
+## Engineers
+
+```bash
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -e packages/contracts -e apps/wizard -e apps/producer -e apps/director -e apps/desk
+pip install ruff pytest
+
+diony-desk               # the lobby: starts Studio, Producer, Director and lays the names
+diony-wizard             # Studio alone, :8787
+diony-director           # Director alone, :8790
+diony-producer           # Producer alone, :8788
+
+pytest                   # the whole repository, offline (root pyproject.toml + conftest.py)
+ruff check . && ruff format --check .
+```
+
+Tests never open a socket: the root `conftest.py` blocks every non-loopback connection for the session (`DIONY_ALLOW_NETWORK=1` only for a deliberate live run). Never run two pytest invocations at once; the desk's instance-lock tests deadlock across processes. Tests that cut real media skip without ffmpeg.
+
+**Packaged app.** `Build Diony AI.command` stages a secret-free payload, hashes it, bundles a runtime, and opens `dist/desktop/{version}/development/Diony.app`. Rebuild after every change you want to test in the app; a rebuild is skipped when nothing changed. The version is `packaging/desktop/version.json`. Signed, notarised releases come from `scripts/release/` (Blueprint 17).
+
+**UI stamps.** Each surface's static assets carry a `?v=` stamp that the desk uses to detect a stale build. Bump the Director stamp in `apps/director/src/diony_director/static/index.html` when you change its UI; the Producer and Studio stamps are pinned by tests, update the pins with them.
+
+**Rules of the house.** Anything slow (a brain call, a provider submit) runs in a worker and is polled; nothing slow rides a request through the name router. Never use native `confirm()` or `prompt()` in a Diony UI. Pricing lives in JSON, never in code. See [AGENTS.md](AGENTS.md) for the full operating notes.
+
+## Repository map
+
+```
+apps/director/          The Director: sessions, screenwriter, master prompt, splitter, compiler,
+                        providers/{grok,flow}, review, revisions, assembly, narration, deliverables,
+                        ledger, rate cards, cast lock, likeness guard, static console
+apps/wizard/            Studio: the opening page (camera choice) and the :80 name router
+apps/producer/          Producer: the Gallery of Director films, the launch control plane (workspaces,
+                        members, Cost Centers, workflows, the cost ledger), and the review services the
+                        Director imports (face identity, frame and speech QC)
+apps/desk/              First open: lobby, service supervision, packaged-app payload staging
+packages/contracts/     Pydantic contracts and JSON Schema: Director ops, cost estimates, production
+                        packages, the launch control plane, the engine choice, look and subtitles
+blueprints/             The numbered constitution; 25–33 are the cloud era
+packaging/, scripts/    Desktop payload, PyInstaller spec, signed release builders
+docs/brand/             Banner, mark, gradient rule
 ```
 
 ## Design system
 
-The Diony identity is the **bar mark** — three gradient bars converging into charcoal and a rounded D, a play-forward built from signal. Charcoal `#0D0D0D`, Light `#F6F6F6`, and the gradient `#FFA23A → #FF7A2F → #FF402F → #E43B4B`; Archivo Expanded for display, Inter for interface. Every surface ships the fully dark product UI with orange primary actions and gradient progress. Brand, motion, accessibility, and the originality boundary are governed by [Blueprint 15](blueprints/15-creative-design-system.md); reusable assets live in [`docs/brand/`](docs/brand/) and [`packaging/desktop/icons/`](packaging/desktop/icons/).
+The Diony identity is the bar mark: three gradient bars converging into charcoal and a rounded D. Charcoal `#0D0D0D`, Light `#F6F6F6`, and the gradient `#FFA23A → #FF7A2F → #FF402F → #E43B4B`; Archivo Expanded for display, Inter for interface, IBM Plex Mono for chips. Every surface is dark with orange primary actions. Brand, motion, and accessibility are governed by [Blueprint 15](blueprints/15-creative-design-system.md); assets live in [`docs/brand/`](docs/brand/) and [`packaging/desktop/icons/`](packaging/desktop/icons/).
 
 ## License
 
-Diony AI software and Blueprints are **proprietary**. See [LICENSE](LICENSE). Wan2.2 remains Apache 2.0. DeepSeek-V4-Flash-0731 remains MIT. Real-ESRGAN x2 (bootstrap `diony_sr_v1`) remains BSD-3. NVIDIA DGX OS / Sync remain NVIDIA's. Attribution and terms: [NOTICE](NOTICE).
-
-## Contributing
-
-This is a proprietary product. Internal agents and authorized engineers follow [AGENTS.md](AGENTS.md), the Blueprints, and `.cursor/rules`. Do not weaken the 1080p mandate. Do not send jobs to the cloud by default. Human gates stay at bible and distribution. Picture and mix run inside Production.
+Diony AI software and Blueprints are proprietary; see [LICENSE](LICENSE). Generation runs on third-party services under their own terms: xAI (Grok Imagine and the Grok voice API) and Google Flow through useapi.net. Bundled and optional open-source components, including OpenCV Zoo face models and faster-whisper, keep their licenses; see [NOTICE](NOTICE). Generated content is the licensee's responsibility.
 
 <br />
 

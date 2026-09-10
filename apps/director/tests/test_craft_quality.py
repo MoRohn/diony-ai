@@ -84,7 +84,10 @@ def test_a_clean_script_lints_clean() -> None:
                         "text": "COLE pockets the keys without looking down.",
                         "shot": "Medium two-shot, rack focus to the hand",
                     },
-                    {"kind": "sound", "text": "A slow surf-rock instrumental from the kitchen radio."},
+                    {
+                        "kind": "sound",
+                        "text": "A slow surf-rock instrumental from the kitchen radio.",
+                    },
                 ]
             },
         ]
@@ -105,22 +108,35 @@ def _minimal_body(logline: str, *, clean: bool) -> dict:
     return {
         "logline": logline,
         "beats": [{"beat": "b", "story_time": "Night 1"}],
-        "settings": [{
-            "setting_id": "set-a", "name": "Pier", "kind": "EXT",
-            "room_tone": "waves", "time_weather": "Night 1, fog",
-            "grade_language": "sodium against black water",
-            "camera_kit": "32/50mm, slow arcs",
-        }],
-        "characters": [{
-            "char_id": "chr-a", "name": "AVA",
-            "age_body_notes": "late 30s, wiry, cropped grey-streaked hair",
-            "wardrobe": "yellow oilskin over a navy sweater",
-        }],
-        "scenes": [{
-            "heading": "EXT. PIER - NIGHT", "setting_ref": "set-a",
-            "story_time": "Night 1", "cast": ["chr-a"], "emotional_job": "unease",
-            "lines": lines,
-        }],
+        "settings": [
+            {
+                "setting_id": "set-a",
+                "name": "Pier",
+                "kind": "EXT",
+                "room_tone": "waves",
+                "time_weather": "Night 1, fog",
+                "grade_language": "sodium against black water",
+                "camera_kit": "32/50mm, slow arcs",
+            }
+        ],
+        "characters": [
+            {
+                "char_id": "chr-a",
+                "name": "AVA",
+                "age_body_notes": "late 30s, wiry, cropped grey-streaked hair",
+                "wardrobe": "yellow oilskin over a navy sweater",
+            }
+        ],
+        "scenes": [
+            {
+                "heading": "EXT. PIER - NIGHT",
+                "setting_ref": "set-a",
+                "story_time": "Night 1",
+                "cast": ["chr-a"],
+                "emotional_job": "unease",
+                "lines": lines,
+            }
+        ],
     }
 
 
@@ -142,7 +158,7 @@ def test_script_doctor_round_replaces_a_flagged_draft(monkeypatch) -> None:
     monkeypatch.delenv("DIONY_DIRECTOR_BRAIN_REFINE", raising=False)
     calls = []
 
-    def fake_post(url, *, what, json: dict, headers, timeout):  # noqa: A002
+    def fake_post(url, *, what, json: dict, headers, timeout):
         calls.append(what)
         if what == "brain draft":
             return _Resp(_minimal_body("first draft", clean=False))
@@ -163,7 +179,7 @@ def test_script_doctor_failure_ships_the_first_draft_named(monkeypatch) -> None:
     monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_URL", "http://127.0.0.1:9999")
     monkeypatch.delenv("DIONY_DIRECTOR_BRAIN_REFINE", raising=False)
 
-    def fake_post(url, *, what, json: dict, headers, timeout):  # noqa: A002
+    def fake_post(url, *, what, json: dict, headers, timeout):
         if what == "brain draft":
             return _Resp(_minimal_body("first draft", clean=False))
         raise RuntimeError("refine transport died")
@@ -181,7 +197,7 @@ def test_a_clean_draft_skips_the_doctor_round(monkeypatch) -> None:
     monkeypatch.delenv("DIONY_DIRECTOR_BRAIN_REFINE", raising=False)
     calls = []
 
-    def fake_post(url, *, what, json: dict, headers, timeout):  # noqa: A002
+    def fake_post(url, *, what, json: dict, headers, timeout):
         calls.append(what)
         return _Resp(_minimal_body("clean first try", clean=True))
 
@@ -200,11 +216,17 @@ def _script_with_shots():
     lines = [
         ScriptLine(line_id="ln-1", kind="heading", text="INT. DINER - NIGHT", scene_id="sc-1"),
         ScriptLine(
-            line_id="ln-2", kind="action", text="Mara wipes the counter.", scene_id="sc-1",
+            line_id="ln-2",
+            kind="action",
+            text="Mara wipes the counter.",
+            scene_id="sc-1",
             shot="Overhead top-shot, the rag carving clean arcs through spilt sugar",
         ),
         ScriptLine(
-            line_id="ln-3", kind="dialogue", text="We leave tonight.", speaker="MARA",
+            line_id="ln-3",
+            kind="dialogue",
+            text="We leave tonight.",
+            speaker="MARA",
             scene_id="sc-1",
             shot="Low-angle close-up, jukebox glow under her jaw",
         ),
@@ -214,8 +236,11 @@ def _script_with_shots():
         runtime_target_s=30,
         scenes=[
             Scene(
-                scene_id="sc-1", heading="INT. DINER - NIGHT", setting_ref="set-primary",
-                cast=["chr-lead"], line_ids=[l.line_id for l in lines],
+                scene_id="sc-1",
+                heading="INT. DINER - NIGHT",
+                setting_ref="set-primary",
+                cast=["chr-lead"],
+                line_ids=[l.line_id for l in lines],
             )
         ],
         lines=lines,
@@ -230,7 +255,9 @@ def test_authored_shots_become_the_camera_verbatim() -> None:
     assert len(clips) == 1
     take = clips[0]
     assert take.clip_class == "sync-dialogue"
-    assert take.camera_idea.startswith("Overhead top-shot, the rag carving clean arcs through spilt sugar")
+    assert take.camera_idea.startswith(
+        "Overhead top-shot, the rag carving clean arcs through spilt sugar"
+    )
     assert "; then low-angle close-up, jukebox glow under her jaw" in take.camera_idea
     assert take.audio_packet.line_at_s > 0, "the words sit after the opening beat"
 
@@ -238,14 +265,33 @@ def test_authored_shots_become_the_camera_verbatim() -> None:
 def _picture_only_script(opener_shot: str):
     lines = [
         ScriptLine(line_id="ln-1", kind="heading", text="INT. DINER - NIGHT", scene_id="sc-1"),
-        ScriptLine(line_id="ln-2", kind="action", text="Mara wipes the counter.", scene_id="sc-1", shot=opener_shot),
-        ScriptLine(line_id="ln-3", kind="action", text="She folds the rag once.", scene_id="sc-1",
-                   shot="Low-angle close-up, jukebox glow under her jaw"),
+        ScriptLine(
+            line_id="ln-2",
+            kind="action",
+            text="Mara wipes the counter.",
+            scene_id="sc-1",
+            shot=opener_shot,
+        ),
+        ScriptLine(
+            line_id="ln-3",
+            kind="action",
+            text="She folds the rag once.",
+            scene_id="sc-1",
+            shot="Low-angle close-up, jukebox glow under her jaw",
+        ),
     ]
     return Script(
-        id="scr-pic", runtime_target_s=30,
-        scenes=[Scene(scene_id="sc-1", heading="INT. DINER - NIGHT", setting_ref="set-primary",
-                      cast=["chr-lead"], line_ids=[l.line_id for l in lines])],
+        id="scr-pic",
+        runtime_target_s=30,
+        scenes=[
+            Scene(
+                scene_id="sc-1",
+                heading="INT. DINER - NIGHT",
+                setting_ref="set-primary",
+                cast=["chr-lead"],
+                line_ids=[l.line_id for l in lines],
+            )
+        ],
         lines=lines,
     )
 
@@ -254,7 +300,8 @@ def test_a_wide_authored_opener_lets_the_plate_open_the_take() -> None:
     draft = _draft()
     clips = splitter.split_script(
         _picture_only_script("Overhead top-shot, the rag carving clean arcs through spilt sugar"),
-        draft.characters, draft.settings,
+        draft.characters,
+        draft.settings,
     )
     assert len(clips) == 1 and clips[0].camera_idea.startswith("Overhead top-shot")
     # a top-shot opener reads as the room — the plate may open it
@@ -265,7 +312,8 @@ def test_non_wide_authored_opener_releases_the_plate_first_frame() -> None:
     draft = _draft()
     clips = splitter.split_script(
         _picture_only_script("Macro insert on a sugar spoon, everything else falling away"),
-        draft.characters, draft.settings,
+        draft.characters,
+        draft.settings,
     )
     assert clips[0].continuity.lock_recipe == "ref", (
         "a macro opener generated FROM a wide plate first-frame fights itself"
@@ -276,9 +324,7 @@ def test_non_wide_authored_opener_releases_the_plate_first_frame() -> None:
 
 
 def test_grok_prompts_carry_realism_and_no_filler() -> None:
-    package = packagebuilder.build_package(
-        "s-real", "a getaway", _draft(), provider_policy="grok"
-    )
+    package = packagebuilder.build_package("s-real", "a getaway", _draft(), provider_policy="grok")
     for clip in package.clips:
         prompt = compiler.compile_clip_prompt(clip, package).prompt
         assert "natural skin texture" in prompt
@@ -289,9 +335,7 @@ def test_grok_prompts_carry_realism_and_no_filler() -> None:
 
 
 def test_blocking_cues_become_camera_law() -> None:
-    package = packagebuilder.build_package(
-        "s-block", "a getaway", _draft(), provider_policy="grok"
-    )
+    package = packagebuilder.build_package("s-block", "a getaway", _draft(), provider_policy="grok")
     clip = next(c for c in package.clips if c.clip_class not in {"sync-dialogue", "vo-over"})
     clip.camera_idea = "Wide full shot from directly behind the hooded figure"
     prompt = compiler.compile_clip_prompt(clip, package).prompt
@@ -304,11 +348,10 @@ def test_blocking_cues_become_camera_law() -> None:
 
 
 def test_peopled_openers_compose_cast_into_the_plate() -> None:
-    package = packagebuilder.build_package(
-        "s-open", "a getaway", _draft(), provider_policy="grok"
-    )
+    package = packagebuilder.build_package("s-open", "a getaway", _draft(), provider_policy="grok")
     opener = next(
-        c for c in package.clips
+        c
+        for c in package.clips
         if c.continuity.lock_recipe == "still" and c.continuity.character_packs
     )
     setting = package.setting(str(opener.continuity.setting_plate["setting_id"]))
@@ -340,21 +383,41 @@ def test_anchor_drift_fails_a_mutated_set(tmp_path) -> None:
     anchor = tmp_path / "anchor.jpg"
     clip_path = tmp_path / "clip.mp4"
     subprocess.run(
-        [ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi",
-         "-i", "color=c=navy:s=320x180:d=1", "-frames:v", "1", str(anchor)],
-        check=True, capture_output=True,
+        [
+            ffmpeg,
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=navy:s=320x180:d=1",
+            "-frames:v",
+            "1",
+            str(anchor),
+        ],
+        check=True,
+        capture_output=True,
     )
     subprocess.run(
-        [ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi",
-         "-i", "color=c=cyan:s=320x180:d=2:r=24", str(clip_path)],
-        check=True, capture_output=True,
+        [
+            ffmpeg,
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=cyan:s=320x180:d=2:r=24",
+            str(clip_path),
+        ],
+        check=True,
+        capture_output=True,
     )
     families: dict = {}
     measured: dict = {}
     issues: list = []
-    review_mod._measure_continuity(
-        clip_path, None, families, measured, issues, anchor_path=anchor
-    )
+    review_mod._measure_continuity(clip_path, None, families, measured, issues, anchor_path=anchor)
     assert measured["anchor_color_drift"] > review_mod.ANCHOR_DRIFT_FAIL
     assert families["continuity"] == "fail"
     assert any("master look" in i for i in issues)
@@ -381,14 +444,17 @@ def test_flow_picture_lane_rides_omni_and_quality_refs_stay_legal() -> None:
         # quality has NO reference lane — the plate may only ride as an i2v
         # start frame; an illegal referenceImage payload must never compile
         assert not refs.get("references"), f"{clip.clip_id} built an illegal reference payload"
-        from diony_director import capabilities
-
-        from diony_contracts.director import CloudGenerationMode, DirectorOpType
         from test_continuity_music import _gen_op
 
+        from diony_director import capabilities
+
         op = _gen_op(
-            "op-q", "s-veo-q", clip.clip_id,
-            provider=clip.provider, model=clip.model, duration_s=clip.duration_s,
+            "op-q",
+            "s-veo-q",
+            clip.clip_id,
+            provider=clip.provider,
+            model=clip.model,
+            duration_s=clip.duration_s,
         )
         op.artifact_refs = dict(refs)
         assert capabilities.violations(op) == []
@@ -397,9 +463,11 @@ def test_flow_picture_lane_rides_omni_and_quality_refs_stay_legal() -> None:
 def test_quality_re_anchor_opens_from_the_scene_master_frame(monkeypatch, tmp_path) -> None:
     from types import SimpleNamespace
 
-    from diony_contracts.director import CloudProvider
-    from diony_director import app as app_module, session
     from test_continuity_music import _gen_op
+
+    from diony_contracts.director import CloudProvider
+    from diony_director import app as app_module
+    from diony_director import session
 
     package = packagebuilder.build_package(
         "s-veo-anchor", "a getaway", _draft(), provider_policy="google-flow"
@@ -408,12 +476,19 @@ def test_quality_re_anchor_opens_from_the_scene_master_frame(monkeypatch, tmp_pa
     clip.model = "veo-3.1-quality"  # force the Ultra lane to test its re-anchor
 
     op = _gen_op(
-        "op-vq", "s-veo-anchor", clip.clip_id,
-        provider=CloudProvider.GOOGLE_FLOW, model="veo-3.1-quality",
+        "op-vq",
+        "s-veo-anchor",
+        clip.clip_id,
+        provider=CloudProvider.GOOGLE_FLOW,
+        model="veo-3.1-quality",
     )
     prev = _gen_op(
-        "op-vp", "s-veo-anchor", "cl-prev",
-        provider=CloudProvider.GOOGLE_FLOW, model="veo-3.1-quality", status="completed",
+        "op-vp",
+        "s-veo-anchor",
+        "cl-prev",
+        provider=CloudProvider.GOOGLE_FLOW,
+        model="veo-3.1-quality",
+        status="completed",
     )
     frame_path = str(tmp_path / "frames" / "op-vp.jpg")
     master_path = str(tmp_path / "frames" / "master-op-first.jpg")
@@ -443,10 +518,10 @@ def test_flow_still_opener_with_cast_builds_a_gate_legal_payload() -> None:
     frames-exclusive gate rejects, stalling the paid batch. The compiler must
     route the plate to references (cast composed into the master room), the
     same doctrine as the Grok branch, so the gate passes."""
-    from diony_director import capabilities, compiler, packagebuilder
+    from test_continuity_music import _gen_op
 
     from diony_contracts.director import CloudProvider
-    from test_continuity_music import _gen_op
+    from diony_director import capabilities, compiler, packagebuilder
 
     package = packagebuilder.build_package(
         "s-flow-open", "a getaway", _draft(), provider_policy="google-flow"
@@ -469,8 +544,12 @@ def test_flow_still_opener_with_cast_builds_a_gate_legal_payload() -> None:
     if refs.get("characters"):
         assert "/vault/plates/diner.jpg" in (refs.get("references") or []), "plate rides as a ref"
     op = _gen_op(
-        "op-open", "s-flow-open", opener.clip_id,
-        provider=CloudProvider.GOOGLE_FLOW, model=opener.model, duration_s=opener.duration_s,
+        "op-open",
+        "s-flow-open",
+        opener.clip_id,
+        provider=CloudProvider.GOOGLE_FLOW,
+        model=opener.model,
+        duration_s=opener.duration_s,
     )
     op.artifact_refs = dict(refs)
     assert capabilities.violations(op) == [], "the compiler never hands the gate an illegal combo"

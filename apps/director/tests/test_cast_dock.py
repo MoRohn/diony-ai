@@ -96,5 +96,7 @@ def test_the_board_reads_each_sheets_state_from_its_ops() -> None:
     assert states[package.characters[1].char_id] == "waiting"
     # Blueprint 33: every clip says how many beats its take packs
     assert all(c["beats"] >= 1 for c in board["clips"])
-    assert any(c["beats"] > 1 for c in board["clips"]), "the template packs a line with its reaction"
+    assert any(c["beats"] > 1 for c in board["clips"]), (
+        "the template packs a line with its reaction"
+    )
     session.reset()

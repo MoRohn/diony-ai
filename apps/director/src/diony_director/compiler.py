@@ -256,7 +256,7 @@ def _spoken_clause(clip: ClipUnit) -> str:
         return cast_mod.offscreen_spoken_clause(who, line, read, list(entry.get("listeners") or []))
     if clip.audio_packet.on_camera:
         return (
-            f'{who} speaks aloud, on camera, lips in sync with the words, exactly '
+            f"{who} speaks aloud, on camera, lips in sync with the words, exactly "
             f'these words and nothing else: "{line}"{read}. A natural, clear, '
             "close-miked voice that stays the same voice for the whole line."
         )
@@ -339,9 +339,7 @@ _BEHIND_TRIGGERS = ("back to camera", "from behind", "from directly behind", "se
 _CONCEAL_TRIGGERS = ("concealed", "faceless", "face hidden", "never seen", "hood drawn", "hooded")
 
 
-def _blocking_locks(
-    clip: ClipUnit, char_text: str, action: str, *, camera_text: str = ""
-) -> str:
+def _blocking_locks(clip: ClipUnit, char_text: str, action: str, *, camera_text: str = "") -> str:
     # Scan the camera text that will actually ship — a lexicon clause that
     # expands to "seen from behind" must arm the lock like authored prose.
     haystack = f"{camera_text or clip.camera_idea} {action} {char_text}".lower()
@@ -522,8 +520,7 @@ def _base_prompt(
                 (continuity, 1),
                 (master["anchors"], 1),
                 (
-                    action
-                    or "The action continues truthfully; no reset, no new business.",
+                    action or "The action continues truthfully; no reset, no new business.",
                     3,
                 ),
                 (master["physics"], 2),
@@ -783,7 +780,9 @@ def _locked_identity_images(chars: list[CharacterProfile], budget: int) -> list[
     return images
 
 
-def reference_roles(refs: dict, clip: ClipUnit, package: ProductionPackage, *, frames: list[str] | None = None) -> dict:
+def reference_roles(
+    refs: dict, clip: ClipUnit, package: ProductionPackage, *, frames: list[str] | None = None
+) -> dict:
     """Blueprint 32: label every reference the op will send with what it IS,
     so the adapters can tag them the way the providers document. Classified
     by path, so late binding can reorder or add references freely. Only a

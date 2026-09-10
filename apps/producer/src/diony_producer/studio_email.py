@@ -11,7 +11,6 @@ import time
 from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
-from pathlib import Path
 
 from diony_contracts.launch import (
     EmailDeliveryStatus,
@@ -96,7 +95,7 @@ def render_invitation_email(
 <p style="font-size:12px;font-weight:700;letter-spacing:.08em;margin:0 0 6px;">PRODUCTION SITE</p>
 <p style="font-size:16px;line-height:1.55;margin:0;"><strong>{_safe(site_label)}</strong><br>You join the Studio. You do not receive cluster credentials.</p>
 {note_html}
-<p style="font-size:14px;line-height:1.55;margin:18px 0 0;">This invitation expires <strong>{_safe(invitation.expires_at.strftime('%B %d, %Y at %H:%M UTC'))}</strong>.</p>"""
+<p style="font-size:14px;line-height:1.55;margin:18px 0 0;">This invitation expires <strong>{_safe(invitation.expires_at.strftime("%B %d, %Y at %H:%M UTC"))}</strong>.</p>"""
     heading = f"YOU'VE BEEN CALLED INTO {studio.upper()}."
     html_body = _email_shell(
         preheader=preheader,
@@ -123,12 +122,12 @@ PRODUCTION SITE
 {site_label}
 You join the Studio. You do not receive cluster credentials.
 
-{('A note from ' + inviter_profile_name + ': ' + note_text) if note_text else ''}
+{("A note from " + inviter_profile_name + ": " + note_text) if note_text else ""}
 
 Review and accept invitation:
 {accept_url}
 
-This invitation expires {invitation.expires_at.strftime('%B %d, %Y at %H:%M UTC')}.
+This invitation expires {invitation.expires_at.strftime("%B %d, %Y at %H:%M UTC")}.
 
 Only accept if you expected this invitation. Diony AI will never ask for the Studio Admin's password, an SSH command, or a GPU credential.
 """
@@ -139,7 +138,9 @@ def render_verification_email(
     *, workspace: Workspace, invitation: StudioInvitation, code: str
 ) -> RenderedEmail:
     subject = f"Your {workspace.name} verification code"
-    text = f"Your Diony AI verification code for {workspace.name} is {code}. It expires in 10 minutes."
+    text = (
+        f"Your Diony AI verification code for {workspace.name} is {code}. It expires in 10 minutes."
+    )
     body = f'<p style="font-size:18px;line-height:1.55;">Use this one-time code to verify the invitation for <strong>{_safe(workspace.name)}</strong>.</p><p style="font-family:monospace;font-size:34px;letter-spacing:.18em;font-weight:700;">{_safe(code)}</p><p style="font-size:15px;line-height:1.55;">It expires in 10 minutes. If you did not request it, leave the invitation closed.</p>'
     html_body = _email_shell(
         preheader=f"Your verification code for {workspace.name}",
@@ -182,9 +183,7 @@ Internal credits show production use. They are not money and they do not block a
         action="Open Diony AI Producer",
         url=producer_url,
     )
-    return RenderedEmail(
-        to=invitation.email, subject=subject, text=text, html=html_body
-    )
+    return RenderedEmail(to=invitation.email, subject=subject, text=text, html=html_body)
 
 
 def render_membership_status_email(
@@ -297,9 +296,7 @@ class StudioMailer:
         message = EmailMessage()
         message["Date"] = formatdate(localtime=False)
         message["Message-ID"] = make_msgid(idstring=delivery.id, domain="diony.local")
-        message["From"] = os.environ.get(
-            "DIONY_EMAIL_FROM", "Diony AI <invites@diony.local>"
-        )
+        message["From"] = os.environ.get("DIONY_EMAIL_FROM", "Diony AI <invites@diony.local>")
         reply_to = os.environ.get("DIONY_EMAIL_REPLY_TO", "").strip()
         if reply_to:
             message["Reply-To"] = reply_to
@@ -325,9 +322,7 @@ class StudioMailer:
         if not host:
             raise RuntimeError("DIONY_SMTP_HOST is required for Studio email.")
         port = int(os.environ.get("DIONY_SMTP_PORT", "587"))
-        user = os.environ.get("DIONY_SMTP_USERNAME", "") or os.environ.get(
-            "DIONY_SMTP_USER", ""
-        )
+        user = os.environ.get("DIONY_SMTP_USERNAME", "") or os.environ.get("DIONY_SMTP_USER", "")
         password = os.environ.get("DIONY_SMTP_PASSWORD", "")
         message = self._message(delivery, rendered)
         with smtplib.SMTP(host, port, timeout=20) as client:

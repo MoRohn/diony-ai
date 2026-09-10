@@ -6,9 +6,8 @@ import json
 import logging
 import sys
 from contextvars import ContextVar, Token
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
-
 
 _correlation: ContextVar[str] = ContextVar("diony_correlation_id", default="")
 logger = logging.getLogger("diony.control")
@@ -30,7 +29,7 @@ def reset_correlation(token: Token[str]) -> None:
 
 def log_event(event: str, *, level: str = "info", **fields: Any) -> None:
     payload = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "level": level,
         "event": event,
         "correlation_id": fields.pop("correlation_id", "") or _correlation.get(),

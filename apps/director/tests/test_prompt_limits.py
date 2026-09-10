@@ -17,7 +17,9 @@ def _bloated_package():
     draft = screenwriter.write_script("a heist across a sleeping city " * 200, runtime_target_s=90)
     for char in draft.characters:
         char.age_body_notes = "an intensely specific person " * 120
-        char.forbidden_drift = [f"no wardrobe deviation of kind {i} under any lighting" for i in range(60)]
+        char.forbidden_drift = [
+            f"no wardrobe deviation of kind {i} under any lighting" for i in range(60)
+        ]
     for setting in draft.settings:
         setting.architecture_notes = "a very long acoustic description " * 100
         setting.grade_language = "an elaborate grade description " * 80
@@ -84,8 +86,11 @@ def test_adapters_refuse_oversize_prompts_before_any_network_call(monkeypatch) -
         prompt="x" * 5000,
         duration_s=6,
         estimate=CostEstimate(
-            id="e", workspace_id="w",
-            lines=[CostEstimateLine(label="s", provider_id="grok", model="m", unit="u", usd_micros=1)],
+            id="e",
+            workspace_id="w",
+            lines=[
+                CostEstimateLine(label="s", provider_id="grok", model="m", unit="u", usd_micros=1)
+            ],
         ),
     )
     with pytest.raises(base.CloudAdapterError) as err:
@@ -95,7 +100,7 @@ def test_adapters_refuse_oversize_prompts_before_any_network_call(monkeypatch) -
 
 def test_screenwriter_caps_a_pasted_novel_of_an_idea() -> None:
     draft = screenwriter.write_script("an idea " * 2000, runtime_target_s=60)
-    clips = splitter.split_script(draft.script, draft.characters, draft.settings)
+    splitter.split_script(draft.script, draft.characters, draft.settings)
     package = packagebuilder.build_package("s-nov", "an idea", draft)
     for clip in package.clips:
         version = compiler.compile_clip_prompt(clip, package)
@@ -119,14 +124,20 @@ STRATEGIST = {
 def _flow_package_with_a_real_person():
     from diony_contracts.production import MasterPrompt
 
-    draft = screenwriter.write_script("a campaign ad across a sleeping city " * 200, runtime_target_s=90)
+    draft = screenwriter.write_script(
+        "a campaign ad across a sleeping city " * 200, runtime_target_s=90
+    )
     for char in draft.characters:
         char.age_body_notes = "an intensely specific person " * 120
-        char.forbidden_drift = [f"no wardrobe deviation of kind {i} under any lighting" for i in range(60)]
+        char.forbidden_drift = [
+            f"no wardrobe deviation of kind {i} under any lighting" for i in range(60)
+        ]
     for setting in draft.settings:
         setting.architecture_notes = "a very long acoustic description " * 100
         setting.grade_language = "an elaborate grade description " * 80
-    package = packagebuilder.build_package("s-lim-flow", "a campaign ad", draft, provider_policy="google-flow")
+    package = packagebuilder.build_package(
+        "s-lim-flow", "a campaign ad", draft, provider_policy="google-flow"
+    )
     lead = package.characters[0]
     person = dict(STRATEGIST, name=lead.name, aliases=[lead.name, lead.name.split()[0]])
     package.master_prompt = MasterPrompt(
@@ -138,9 +149,13 @@ def _flow_package_with_a_real_person():
 def _lead_clip(package, person):
     """A clip that shows the lead, named in its camera line — the piece that
     never gives way under length pressure, so the description must fit."""
-    clip = next(c for c in package.clips if any(
-        p.get("char_id") == package.characters[0].char_id for p in c.continuity.character_packs
-    ))
+    clip = next(
+        c
+        for c in package.clips
+        if any(
+            p.get("char_id") == package.characters[0].char_id for p in c.continuity.character_packs
+        )
+    )
     clip.camera_idea = f"Locked medium on {person['name']} at the rail, blazer sharp"
     return clip
 
@@ -189,13 +204,25 @@ def test_the_submit_gate_refits_a_prompt_the_description_outgrew(monkeypatch) ->
     named = named[: -len(guard)] + ("The rail holds. " * (room // 16 + 1))[:room] + guard
     assert len(named) == limit
     op = DirectorOp(
-        id="op-outgrown", session_id=sid, op=DirectorOpType.GENERATE, clip_id=clip.clip_id,
-        provider=clip.provider, model=clip.model, mode=CloudGenerationMode.I2V,
-        prompt=named, prompt_version="v1", duration_s=clip.duration_s,
+        id="op-outgrown",
+        session_id=sid,
+        op=DirectorOpType.GENERATE,
+        clip_id=clip.clip_id,
+        provider=clip.provider,
+        model=clip.model,
+        mode=CloudGenerationMode.I2V,
+        prompt=named,
+        prompt_version="v1",
+        duration_s=clip.duration_s,
         artifact_refs={"start_image": "user:frame"},
         estimate=CostEstimate(
-            id="e", workspace_id="w",
-            lines=[CostEstimateLine(label="s", provider_id="google-flow", model="m", unit="u", usd_micros=1)],
+            id="e",
+            workspace_id="w",
+            lines=[
+                CostEstimateLine(
+                    label="s", provider_id="google-flow", model="m", unit="u", usd_micros=1
+                )
+            ],
         ),
     )
     session._OPS[op.id] = op
@@ -230,7 +257,9 @@ def test_a_revision_keeps_the_base_instead_of_capping_it_at_400_chars() -> None:
 def test_refit_text_keeps_the_camera_and_the_guard_and_trims_between() -> None:
     first = "Locked medium on the keeper at the rail."
     last = "No morphing, no floating motion, no warped anatomy."
-    middle = " ".join(f"Sentence number {i} carries some scene business that can give way." for i in range(80))
+    middle = " ".join(
+        f"Sentence number {i} carries some scene business that can give way." for i in range(80)
+    )
     text = f"{first} {middle} {last}"
     out = compiler.refit_text(text, 1200)
     assert len(out) <= 1200

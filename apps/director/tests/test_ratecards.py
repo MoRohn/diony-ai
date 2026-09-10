@@ -1,6 +1,6 @@
 """Rate cards: versioned provider pricing loaded from config, never hardcoded in code."""
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from diony_director import ratecards
 
@@ -41,7 +41,7 @@ def test_unknown_unit_raises_a_named_error() -> None:
 def test_staleness_is_computed_from_fetched_at() -> None:
     files = ratecards.load_files()
     grok = files["grok"]
-    fresh_now = datetime.combine(grok.fetched_at, datetime.min.time(), tzinfo=timezone.utc)
+    fresh_now = datetime.combine(grok.fetched_at, datetime.min.time(), tzinfo=UTC)
     assert ratecards.is_stale(grok, now=fresh_now) is False
     old = grok.model_copy(update={"fetched_at": date(2025, 1, 1)})
     assert ratecards.is_stale(old, now=fresh_now) is True
@@ -56,3 +56,42 @@ def test_contract_rate_cards_are_valid_and_matchable() -> None:
     assert grok.active is True
     flow = by_key[("google-flow", "veo-3.1-quality", "generation")]
     assert flow.internal_credits_per_unit == 100
+
+
+def test_flow_stills_are_included_in_the_subscription() -> None:
+    files = ratecards.load_files()
+    for model in ("nano-banana-2-lite", "nano-banana-2"):
+        rate = ratecards.resolve(files, "google-flow", model, "generation")
+        assert rate.internal_credits_per_unit == 0
+        assert rate.usd_micros_per_unit == 0
+
+
+def test_flow_omni_edits_cost_forty_credits_and_carry_no_ultra_discount(monkeypatch) -> None:
+    files = ratecards.load_files()
+    pro = ratecards.resolve(files, "google-flow", "omni-flash", "v2v:720p")
+    assert pro.internal_credits_per_unit == 40
+    monkeypatch.setenv("DIONY_FLOW_PLAN", "ultra-199")
+    ultra = ratecards.resolve(files, "google-flow", "omni-flash", "generation:720p:10s")
+    assert ultra.internal_credits_per_unit == 15
+
+
+def test_lite_lower_priority_is_free_only_on_the_top_ultra_plan(monkeypatch) -> None:
+    files = ratecards.load_files()
+    pro = ratecards.resolve(files, "google-flow", "veo-3.1-lite-low-priority", "generation")
+    assert pro.internal_credits_per_unit == 10
+    monkeypatch.setenv("DIONY_FLOW_PLAN", "ultra-99")
+    mid = ratecards.resolve(files, "google-flow", "veo-3.1-lite-low-priority", "generation")
+    assert mid.internal_credits_per_unit == 5
+    monkeypatch.setenv("DIONY_FLOW_PLAN", "ultra-199")
+    top = ratecards.resolve(files, "google-flow", "veo-3.1-lite-low-priority", "generation")
+    assert top.internal_credits_per_unit == 0
+    assert top.usd_micros_per_unit == 0
+
+
+def test_plan_prices_per_credit_follow_the_published_plans() -> None:
+    files = ratecards.load_files()
+    flow = files["google-flow"]
+    for plan, monthly_usd in flow.plans_usd_per_month.items():
+        credits = flow.plans_monthly_credits[plan]
+        expected = round(monthly_usd * 1_000_000 / credits)
+        assert abs(flow.plans_usd_micros_per_credit[plan] - expected) <= 1, plan

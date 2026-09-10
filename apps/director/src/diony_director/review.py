@@ -24,7 +24,7 @@ AUDIO_REQUIRED_CLASSES = {"sync-dialogue", "vo-over", "ambience-led"}
 
 
 def _probe(path: Path) -> dict | None:
-    from diony_producer.gallery_join import resolve_media_tool
+    from diony_producer.media_tools import resolve_media_tool
 
     ffprobe = resolve_media_tool("ffprobe") or shutil.which("ffprobe")
     if not ffprobe:
@@ -32,8 +32,14 @@ def _probe(path: Path) -> dict | None:
     try:
         raw = subprocess.run(
             [
-                ffprobe, "-v", "quiet", "-print_format", "json",
-                "-show_format", "-show_streams", str(path),
+                ffprobe,
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                str(path),
             ],
             check=True,
             capture_output=True,
@@ -149,7 +155,11 @@ LINE_ACCURACY_FAIL = 0.6
 
 
 def _measure_frames(
-    path: Path, clip: ClipUnit, families: dict[str, str], measured: dict[str, float], issues: list[str]
+    path: Path,
+    clip: ClipUnit,
+    families: dict[str, str],
+    measured: dict[str, float],
+    issues: list[str],
 ) -> None:
     """Sampled-frame evidence (black frames are a hard fail; exposure advisory)."""
     _measure_frames_for(path, int(clip.duration_s), families, measured, issues)
@@ -184,7 +194,7 @@ def _measure_frames_for(
         return
     try:
         receipt = measure_frame_quality(path, frame_count=max(1, duration_s * 24))
-    except Exception:  # noqa: BLE001 - optional evidence never crashes a review
+    except Exception:
         return
     if not receipt.measured:
         return
@@ -255,9 +265,7 @@ def _measure_continuity(
             else:
                 verdicts.append("pass")
                 if anchor_drift > ANCHOR_DRIFT_ADVISORY:
-                    issues.append(
-                        f"set drift {anchor_drift:.3f} vs the scene anchor (advisory)"
-                    )
+                    issues.append(f"set drift {anchor_drift:.3f} vs the scene anchor (advisory)")
     if verdicts:
         families["continuity"] = "fail" if "fail" in verdicts else "pass"
 
@@ -271,7 +279,7 @@ def location_speech(path: Path):
         return None
     try:
         return detect_speech(path)
-    except Exception:  # noqa: BLE001 - optional evidence never crashes a review
+    except Exception:
         return None
 
 
@@ -342,7 +350,11 @@ def _measure_spoken_line(
 
 
 def _measure_adherence(
-    path: Path, clip: ClipUnit, families: dict[str, str], measured: dict[str, float], issues: list[str]
+    path: Path,
+    clip: ClipUnit,
+    families: dict[str, str],
+    measured: dict[str, float],
+    issues: list[str],
 ) -> None:
     """CLIP subject match: a beautiful clip of the wrong thing must not pass."""
     try:
@@ -397,9 +409,7 @@ def review_clip(
             families["duration"] = "pass"
         else:
             families["duration"] = "fail"
-            issues.append(
-                f"measured {probe['duration_s']:.1f}s vs booked {clip.duration_s}s"
-            )
+            issues.append(f"measured {probe['duration_s']:.1f}s vs booked {clip.duration_s}s")
         if clip.clip_class in AUDIO_REQUIRED_CLASSES:
             if probe["has_audio"]:
                 families["audio"] = "pass"
@@ -430,15 +440,23 @@ def review_clip(
         # crash on record — it never aborts the whole review (an evidence-free
         # take slipping into the film is worse than a missing family).
         for family_name, measure in (
-            ("identity", lambda: _measure_identity(path, clip, package, families, measured, issues)),
+            (
+                "identity",
+                lambda: _measure_identity(path, clip, package, families, measured, issues),
+            ),
             ("frames", lambda: _measure_frames(path, clip, families, measured, issues)),
-            ("continuity", lambda: _measure_continuity(path, prev_clip_path, families, measured, issues, anchor_path)),
+            (
+                "continuity",
+                lambda: _measure_continuity(
+                    path, prev_clip_path, families, measured, issues, anchor_path
+                ),
+            ),
             ("speech", _speech_check),
             ("adherence", lambda: _measure_adherence(path, clip, families, measured, issues)),
         ):
             try:
                 measure()
-            except Exception as err:  # noqa: BLE001 - optional evidence never kills a review
+            except Exception as err:
                 families[family_name] = "unmeasured"
                 issues.append(f"{family_name} measurement crashed: {type(err).__name__}: {err}")
 
@@ -458,7 +476,9 @@ def review_clip(
     elif clip.continuity.character_packs and families["identity"] == "unmeasured":
         verdict = "warn"
         recommended = "accept"
-        issues.append("identity unmeasured on this host — accepting requires a human eye on the face")
+        issues.append(
+            "identity unmeasured on this host — accepting requires a human eye on the face"
+        )
     else:
         verdict = "pass"
         recommended = "accept"
@@ -620,7 +640,7 @@ def review_chain_link(
         ):
             try:
                 measure()
-            except Exception as err:  # noqa: BLE001 - optional evidence never kills a review
+            except Exception as err:
                 families[family_name] = "unmeasured"
                 issues.append(f"{family_name} measurement crashed: {type(err).__name__}: {err}")
 

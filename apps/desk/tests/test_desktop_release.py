@@ -19,12 +19,12 @@ from diony_desk.release import (
 
 def test_desktop_release_version_matches_packaged_desk() -> None:
     root = Path(__file__).resolve().parents[3]
-    release_version = json.loads(
-        (root / "packaging" / "desktop" / "version.json").read_text()
-    )["version"]
-    desk_version = tomllib.loads(
-        (root / "apps" / "desk" / "pyproject.toml").read_text()
-    )["project"]["version"]
+    release_version = json.loads((root / "packaging" / "desktop" / "version.json").read_text())[
+        "version"
+    ]
+    desk_version = tomllib.loads((root / "apps" / "desk" / "pyproject.toml").read_text())[
+        "project"
+    ]["version"]
 
     assert desk_version == release_version
 
@@ -108,9 +108,7 @@ def test_release_environment_has_exact_direct_dependency_pins() -> None:
     assert requirements
     assert all("==" in line for line in requirements)
     assert not any(
-        operator in line
-        for line in requirements
-        for operator in (">=", "<=", "~=", "<", ">")
+        operator in line for line in requirements for operator in (">=", "<=", "~=", "<", ">")
     )
 
 
@@ -122,7 +120,6 @@ def test_stage_product_is_complete_but_excludes_machine_state(tmp_path: Path) ->
     (source / "apps" / "wizard" / "build" / "lib").mkdir(parents=True)
     (source / "apps" / "producer" / "data").mkdir(parents=True)
     (source / "packages" / "contracts").mkdir(parents=True)
-    (source / "infra" / "profiles").mkdir(parents=True)
     (source / "blueprints").mkdir(parents=True)
     for name in ("LICENSE", "NOTICE", "README.md", "CHANGELOG.md", "START HERE.txt"):
         (source / name).write_text(f"{name}\n")
@@ -131,12 +128,9 @@ def test_stage_product_is_complete_but_excludes_machine_state(tmp_path: Path) ->
     (source / "apps" / "wizard" / "src" / "diony_wizard.egg-info" / "PKG-INFO").write_text(
         "generated metadata\n"
     )
-    (source / "apps" / "wizard" / "build" / "lib" / "stale.py").write_text(
-        "generated wheel copy\n"
-    )
+    (source / "apps" / "wizard" / "build" / "lib" / "stale.py").write_text("generated wheel copy\n")
     (source / "apps" / "producer" / "data" / "project.json").write_text("private\n")
     (source / "packages" / "contracts" / "pyproject.toml").write_text("[project]\n")
-    (source / "infra" / "profiles" / "spark-4x-v1.yaml").write_text("sku: spark\n")
     (source / "blueprints" / "00-product-constitution.md").write_text("truth\n")
     for relatives in FEATURE_FILE_SETS.values():
         for relative in relatives:
@@ -149,11 +143,8 @@ def test_stage_product_is_complete_but_excludes_machine_state(tmp_path: Path) ->
     report = stage_product(source, target, version="1.2.3")
 
     assert (target / "apps" / "wizard" / "src" / "app.py").is_file()
-    assert (target / "infra" / "profiles" / "spark-4x-v1.yaml").is_file()
     assert not (target / "apps" / "wizard" / "tests").exists()
-    assert not (
-        target / "apps" / "wizard" / "src" / "diony_wizard.egg-info"
-    ).exists()
+    assert not (target / "apps" / "wizard" / "src" / "diony_wizard.egg-info").exists()
     assert not (target / "apps" / "wizard" / "build").exists()
     assert not (target / "apps" / "producer" / "data").exists()
     assert not (target / ".env").exists()
@@ -163,98 +154,21 @@ def test_stage_product_is_complete_but_excludes_machine_state(tmp_path: Path) ->
     assert metadata["files"] == report["files"]
 
 
-def test_stage_product_preserves_wan_prompt_intelligence_exactly(tmp_path: Path) -> None:
-    """Future desktop builds must ship the reviewed prompt system, byte for byte."""
-    root = Path(__file__).resolve().parents[3]
-    target = tmp_path / "payload"
+def test_stage_product_rejects_an_incomplete_feature_set(tmp_path: Path, monkeypatch) -> None:
+    """A reviewed feature ships byte for byte or the payload is refused."""
+    from diony_desk import release
 
-    stage_product(root, target, version="test-wan-prompt")
-
-    required = (
-        Path("blueprints/20-wan22-prompt-intelligence.md"),
-        Path("packages/contracts/jsonschema/wan_prompt_plan.schema.json"),
-        Path("packages/contracts/src/diony_contracts/wan_prompt.py"),
+    monkeypatch.setattr(
+        release,
+        "FEATURE_FILE_SETS",
+        {"cast_lock": (Path("apps/director/src/diony_director/cast.py"),)},
     )
-    for relative in required:
-        assert (target / relative).read_bytes() == (root / relative).read_bytes()
-
-
-def test_stage_product_preserves_voice_performance_system_exactly(tmp_path: Path) -> None:
-    """Desktop payloads must carry the complete reviewed voice system and receipt."""
-    root = Path(__file__).resolve().parents[3]
-    target = tmp_path / "payload"
-    required = (
-        Path("apps/desk/src/diony_desk/boot.py"),
-        Path("apps/producer/src/diony_producer/app.py"),
-        Path("apps/producer/src/diony_producer/farm.py"),
-        Path("apps/producer/src/diony_producer/gpu.py"),
-        Path("apps/producer/src/diony_producer/mix.py"),
-        Path("apps/producer/src/diony_producer/voice.py"),
-        Path("packages/contracts/src/diony_contracts/__init__.py"),
-        Path("packages/contracts/src/diony_contracts/enums.py"),
-        Path("packages/contracts/src/diony_contracts/export_schema.py"),
-        Path("packages/contracts/src/diony_contracts/models.py"),
-        Path("packages/contracts/src/diony_contracts/voice.py"),
-        Path("packages/contracts/jsonschema/bible.schema.json"),
-        Path("packages/contracts/jsonschema/speech_clip_package.schema.json"),
-        Path("packages/contracts/jsonschema/speech_qc_receipt.schema.json"),
-        Path("packages/contracts/jsonschema/project.schema.json"),
-        Path("packages/contracts/jsonschema/qc_report.schema.json"),
-        Path("packages/contracts/jsonschema/shot.schema.json"),
-        Path("packages/contracts/jsonschema/take.schema.json"),
-        Path("packages/contracts/jsonschema/voice_casting.schema.json"),
-        Path("packages/contracts/jsonschema/wan_speech_request.schema.json"),
-        Path("blueprints/22-voice-performance-system.md"),
-    )
-
-    stage_product(root, target, version="test-voice-performance")
-
-    for relative in required:
-        assert (target / relative).read_bytes() == (root / relative).read_bytes()
-    metadata = json.loads((target / "desktop-release.json").read_text())
-    receipt = metadata["features"]["voice_performance"]
-    assert receipt["paths"] == [path.as_posix() for path in required]
-    assert receipt["files"] == len(required)
-    assert len(receipt["sha256"]) == 64
-
-
-def test_stage_product_preserves_optimal_clip_flow_and_gpu_qualifier(tmp_path: Path) -> None:
-    root = Path(__file__).resolve().parents[3]
-    target = tmp_path / "payload"
-    required = (
-        Path("apps/producer/src/diony_producer/farm.py"),
-        Path("apps/producer/src/diony_producer/gpu.py"),
-        Path("apps/producer/src/diony_producer/run.py"),
-        Path("apps/producer/src/diony_producer/static/app.js"),
-        Path("apps/producer/src/diony_producer/static/index.html"),
-        Path("apps/wan/src/diony_wan/attention_qualification.py"),
-        Path("apps/wan/src/diony_wan/runner.py"),
-        Path("packages/contracts/src/diony_contracts/models.py"),
-        Path("packages/contracts/src/diony_contracts/studio.py"),
-        Path("packages/contracts/jsonschema/generation_execution_receipt.schema.json"),
-        Path("scripts/benchmark/measure_wan_attention.py"),
-        Path("blueprints/23-optimal-clip-production-flow.md"),
-    )
-
-    stage_product(root, target, version="test-optimal-clip-flow")
-
-    for relative in required:
-        assert (target / relative).read_bytes() == (root / relative).read_bytes()
-    receipt = json.loads((target / "desktop-release.json").read_text())["features"][
-        "optimal_clip_flow"
-    ]
-    assert receipt["paths"] == [path.as_posix() for path in required]
-    assert receipt["files"] == len(required)
-    assert len(receipt["sha256"]) == 64
-
-
-def test_stage_product_rejects_an_incomplete_voice_performance_feature(tmp_path: Path) -> None:
     source = tmp_path / "source"
     product = source / "apps" / "wizard" / "src" / "wizard.py"
     product.parent.mkdir(parents=True)
     product.write_text("PRODUCT = True\n")
 
-    with pytest.raises(ValueError, match="voice_performance"):
+    with pytest.raises(ValueError, match="cast_lock"):
         stage_product(source, tmp_path / "payload", version="1.2.3")
 
 
@@ -380,7 +294,7 @@ def test_desktop_release_scripts_require_supported_build_python() -> None:
     assert "DIONY_RELEASE_PYTHON" in mac
     assert "sys.version_info >= (3, 11)" in mac
     assert '"$RELEASE_PYTHON" -m venv' in mac
-    assert '/usr/bin/python3 -m venv' not in mac
+    assert "/usr/bin/python3 -m venv" not in mac
     assert "DIONY_RELEASE_PYTHON" in windows
     assert "sys.version_info >= (3, 11)" in windows
     assert "py -3.11 -m venv" not in windows
@@ -430,5 +344,5 @@ def test_release_builders_do_not_mutate_the_hashed_payload_during_wheel_builds()
     windows = (root / "scripts" / "release" / "build-windows.ps1").read_text()
     assert 'INSTALL_PAYLOAD="$BUILD_ROOT/install-payload"' in mac
     assert '"$INSTALL_PAYLOAD/apps/wizard"' in mac
-    assert "$InstallPayload = Join-Path $BuildRoot \"install-payload\"" in windows
+    assert '$InstallPayload = Join-Path $BuildRoot "install-payload"' in windows
     assert '(Join-Path $InstallPayload "apps\\wizard")' in windows

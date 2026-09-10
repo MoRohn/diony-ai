@@ -48,6 +48,7 @@ def sheet_lane() -> tuple[CloudProvider, str]:
         return CloudProvider.GROK, GROK_SHEET_MODEL
     return CloudProvider.GOOGLE_FLOW, SHEET_MODEL
 
+
 _SLOT_DIRECTION = {
     "front": "straight-on head-and-shoulders portrait, eye level, neutral expression",
     "q34l": "three-quarter view from the subject's left, head and shoulders",
@@ -62,7 +63,9 @@ def _look_of(package: ProductionPackage | None):
     return master.look if master is not None else None
 
 
-def _sheet_prompt(char: CharacterProfile, slot: str, package: ProductionPackage | None = None) -> str:
+def _sheet_prompt(
+    char: CharacterProfile, slot: str, package: ProductionPackage | None = None
+) -> str:
     wardrobe = next(iter(char.wardrobe.values()), "practical, lived-in wardrobe")
     look = _look_of(package)
     if package is not None and getattr(package, "cast_lock", "standard") == "locked":
@@ -125,7 +128,7 @@ def references_for(package: ProductionPackage, op: DirectorOp) -> list[str]:
         # different studio's room (Blueprint 29).
         refs: list[str] = list(_session.all_upload_paths(op.session_id))
         look = _look_of(package)
-        for asset in (look.anchor_assets if look is not None else []):
+        for asset in look.anchor_assets if look is not None else []:
             if asset and asset not in refs:
                 refs.append(asset)
         return refs[:7]

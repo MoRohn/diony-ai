@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from diony_contracts.launch import JobStatus, ProviderCapability, WorkflowStage
+from diony_contracts.launch import CostBreakdown, JobStatus, ProviderCapability, WorkflowStage
 from diony_producer.control_plane import ControlPlane
-from diony_contracts.launch import CostBreakdown
 from diony_producer.providers import ProviderRegistry, ProviderResult, ProviderSpec
-from diony_producer.workflow import DurableWorkflowEngine
 from diony_producer.worker import run_once
+from diony_producer.workflow import DurableWorkflowEngine
 
 
 class RecordingProvider:
-    def __init__(self, provider_id: str, capability: ProviderCapability, fail_times: int = 0) -> None:
+    def __init__(
+        self, provider_id: str, capability: ProviderCapability, fail_times: int = 0
+    ) -> None:
         self.spec = ProviderSpec(
             id=provider_id,
             label=provider_id,
@@ -27,7 +28,7 @@ class RecordingProvider:
         self.fail_times = fail_times
         self.calls = 0
 
-    def invoke(self, job, payload):  # noqa: ANN001
+    def invoke(self, job, payload):
         self.calls += 1
         if self.calls <= self.fail_times:
             raise RuntimeError("worker warming up")
@@ -69,18 +70,21 @@ def test_durable_workflow_retries_resumes_and_never_repeats_completed_stage(tmp_
         created_by="local-user",
         stages=[WorkflowStage.INTAKE],
     )
-    first = engine.advance(run.id, now=datetime.now(timezone.utc))
+    first = engine.advance(run.id, now=datetime.now(UTC))
     assert first.status == JobStatus.RETRY_WAIT
     retry_job = plane.jobs("local-workspace", run.id)[0]
     assert retry_job.attempt == 1
-    due = (retry_job.next_attempt_at or datetime.now(timezone.utc)) + timedelta(seconds=1)
+    due = (retry_job.next_attempt_at or datetime.now(UTC)) + timedelta(seconds=1)
     second = engine.advance(run.id, now=due)
     assert second.status == JobStatus.SUCCEEDED
     third = engine.advance(run.id, now=due + timedelta(seconds=1))
     assert third.status == JobStatus.SUCCEEDED
     assert provider.calls == 2
     assert plane.usage("local-workspace", project_id="project-1")[0].internal_credits == 10
-    assert plane.usage("local-workspace", project_id="project-1")[0].cost_center_id == "local-production"
+    assert (
+        plane.usage("local-workspace", project_id="project-1")[0].cost_center_id
+        == "local-production"
+    )
 
 
 def test_pause_resume_cancel_and_progress_events_are_durable(tmp_path: Path) -> None:
@@ -102,7 +106,11 @@ def test_pause_resume_cancel_and_progress_events_are_durable(tmp_path: Path) -> 
     canceled = engine.cancel(run.id, actor_user_id="local-user")
     assert canceled.status == JobStatus.CANCELED
     events = plane.events("local-workspace", run.id)
-    assert [event.kind for event in events][-3:] == ["workflow.paused", "workflow.resumed", "workflow.canceled"]
+    assert [event.kind for event in events][-3:] == [
+        "workflow.paused",
+        "workflow.resumed",
+        "workflow.canceled",
+    ]
 
 
 def test_worker_advances_queued_runs_one_durable_checkpoint(tmp_path: Path) -> None:

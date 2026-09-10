@@ -75,7 +75,9 @@ DEFAULT_ROSTER: dict[str, list[str]] = {
     "atlas": ["male", "deep", "solemn", "grave", "monumental", "slow"],
 }
 
-_FEMALE_TELLS = re.compile(r"\b(she|her|hers|woman|women|female|girl|mother|sister|queen|actress|lady)\b")
+_FEMALE_TELLS = re.compile(
+    r"\b(she|her|hers|woman|women|female|girl|mother|sister|queen|actress|lady)\b"
+)
 _MALE_TELLS = re.compile(r"\b(he|him|his|man|men|male|boy|father|brother|king|actor|gentleman)\b")
 
 # Performed direction (Blueprint 28): the authored parenthetical becomes
@@ -169,6 +171,7 @@ def perform_line(line: str, direction: str) -> str:
         text = " ".join(inline[:2]) + " " + text
     return text
 
+
 CUE_LEAD_IN_S = 0.15  # a cue lands just after its clip's cut, never on it
 # One narrator rail means ONE voice at a time: a line that overruns its clip
 # must finish (plus a breath) before the next cue may start. Without this
@@ -248,8 +251,12 @@ def roster_catalog() -> list[dict]:
     """The selectable narrator voices (the curated Grok roster, env-overridable)
     for the Director console: key = voice_id, label, and the casting tags."""
     return [
-        {"key": name, "label": name[:1].upper() + name[1:], "tags": list(tags),
-         "hint": ", ".join(t for t in tags if t not in {"male", "female"})}
+        {
+            "key": name,
+            "label": name[:1].upper() + name[1:],
+            "tags": list(tags),
+            "hint": ", ".join(t for t in tags if t not in {"male", "female"}),
+        }
         for name, tags in _roster().items()
     ]
 
@@ -392,7 +399,9 @@ class NarrationReport:
     duration_s: float = 0.0
 
 
-def tail_hold_for(cues: list[NarrationCue], durations: list[float], film_s: float) -> tuple[float, float]:
+def tail_hold_for(
+    cues: list[NarrationCue], durations: list[float], film_s: float
+) -> tuple[float, float]:
     """(hold, surplus): the seconds the last frame must hold after the picture
     ends so the last spoken line completes with a breath, capped at
     MAX_TAIL_HOLD_S; `surplus` is what the cap still cuts (0 when it fits)."""
@@ -419,7 +428,9 @@ def layout_cues(cues: list[NarrationCue], durations: list[float]) -> list[str]:
     previous_end: float | None = None
     for cue, duration in zip(cues, durations):
         scheduled = cue.start_s
-        earliest = scheduled if previous_end is None else max(scheduled, previous_end + MIN_CUE_GAP_S)
+        earliest = (
+            scheduled if previous_end is None else max(scheduled, previous_end + MIN_CUE_GAP_S)
+        )
         if earliest > scheduled:
             cue.start_s = round(earliest, 3)
             shifts.append(
@@ -487,11 +498,14 @@ def cue_sheet(entries: list[dict]) -> list[NarrationCue]:
         direction = ""
         voice_ref = ""
         line_at_s = 0.0
-        voicing = str(
-            getattr(clip.audio_packet, "voicing", "post")
-            if clip is not None
-            else getattr(op, "voicing", "post")
-        ) or "post"
+        voicing = (
+            str(
+                getattr(clip.audio_packet, "voicing", "post")
+                if clip is not None
+                else getattr(op, "voicing", "post")
+            )
+            or "post"
+        )
         if voicing == "generated" and not entry.get("narrate_anyway"):
             timeline_s += duration
             continue
@@ -505,12 +519,8 @@ def cue_sheet(entries: list[dict]) -> list[NarrationCue]:
             speaker = str(excerpt.get("speaker", ""))
             # the parenthetical plus the packet's delivery notes — both feed
             # the casting AND the performed speech tags
-            delivery = "; ".join(
-                f"{k}: {v}" for k, v in clip.audio_packet.delivery.items()
-            )
-            direction = "; ".join(
-                x for x in (str(excerpt.get("parenthetical", "")), delivery) if x
-            )
+            delivery = "; ".join(f"{k}: {v}" for k, v in clip.audio_packet.delivery.items())
+            direction = "; ".join(x for x in (str(excerpt.get("parenthetical", "")), delivery) if x)
             voice_ref = str(clip.audio_packet.voice_ref or "")
             # Blueprint 33: the line begins where the take's picture beats
             # put it, never past the clip's own end
@@ -610,8 +620,7 @@ def _synthesize_grok(cue: NarrationCue, output: Path) -> None:
     )
     if response.status_code >= 400:
         raise NarrationFailed(
-            f"Grok voice rejected {cue.clip_id} ({response.status_code}): "
-            f"{response.text[:300]}"
+            f"Grok voice rejected {cue.clip_id} ({response.status_code}): {response.text[:300]}"
         )
     body = response.content
     if response.headers.get("content-type", "").startswith("application/json"):
@@ -764,7 +773,18 @@ def narrate(
     if tail_hold_s > 0:
         # the held frame is new picture: this is the one case narration
         # re-encodes the cut (same codec/quality as assembly)
-        cmd += ["-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+        cmd += [
+            "-map",
+            "[vout]",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+        ]
     else:
         cmd += ["-map", "0:v", "-map", "[aout]", "-c:v", "copy"]
     cmd += ["-c:a", "aac", "-b:a", "192k", str(dest)]

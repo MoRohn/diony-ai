@@ -10,7 +10,7 @@ from __future__ import annotations
 import functools
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from diony_contracts.director import CloudProvider, DirectorOp
 from diony_contracts.launch import (
@@ -21,10 +21,9 @@ from diony_contracts.launch import (
     WorkflowRun,
     WorkflowStage,
 )
+from diony_director import ratecards
 from diony_producer.control_plane import ControlPlane, DocumentNotFound
 from diony_producer.costs import CostAnalyticsService, UsageSample
-
-from diony_director import ratecards
 
 DIRECTOR_PROJECT_ID = "director"
 
@@ -57,7 +56,9 @@ def seed_rate_cards(plane: ControlPlane, workspace_id: str) -> int:
 
 
 @_serialized
-def ensure_run(plane: ControlPlane, workspace_id: str, created_by: str, session_id: str) -> WorkflowRun:
+def ensure_run(
+    plane: ControlPlane, workspace_id: str, created_by: str, session_id: str
+) -> WorkflowRun:
     run_id = f"director-{session_id}"
     try:
         return plane.run(workspace_id, run_id)
@@ -196,7 +197,7 @@ def reconcile_completion(
     job.status = JobStatus.SUCCEEDED
     job.actual_internal_credits = recorded.usage.internal_credits
     job.actual_cost_usd_micros = recorded.usage.cost_breakdown.total_usd_micros
-    job.completed_at = datetime.now(timezone.utc)
+    job.completed_at = datetime.now(UTC)
     return plane.save_job(job)
 
 
@@ -231,7 +232,7 @@ def record_failure(
         )
     job.status = JobStatus.FAILED
     job.error_message = detail
-    job.completed_at = datetime.now(timezone.utc)
+    job.completed_at = datetime.now(UTC)
     return plane.save_job(job)
 
 
@@ -288,30 +289,69 @@ def build_receipt(
 
 
 @_serialized
-def spent_today_usd_micros(plane: ControlPlane, workspace_id: str, *, now: datetime | None = None) -> int:
-    """Cost allocated to usage that occurred on the current local calendar day."""
-    now = now if now is not None else datetime.now(timezone.utc).astimezone()
+def spent_today_by_provider(
+    plane: ControlPlane, workspace_id: str, *, now: datetime | None = None
+) -> dict[str, dict[str, int]]:
+    """Cost and credits allocated to usage on the current local calendar day,
+    per provider — Grok spends dollars, Google Flow spends plan credits, and
+    the meter reads each in its own currency."""
+    now = now if now is not None else datetime.now(UTC).astimezone()
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     usage_by_id = {row.id: row for row in plane.usage(workspace_id)}
-    total = 0
+    today: dict[str, dict[str, int]] = {}
     for allocation in plane.cost_allocations(workspace_id):
         usage = usage_by_id.get(allocation.usage_event_id)
         if usage is None:
             continue
         occurred = usage.occurred_at
         if occurred.tzinfo is None:
-            occurred = occurred.replace(tzinfo=timezone.utc)
-        if occurred.astimezone(now.tzinfo) >= day_start:
-            total += allocation.cost_usd_micros
-    return total
+            occurred = occurred.replace(tzinfo=UTC)
+        if occurred.astimezone(now.tzinfo) < day_start:
+            continue
+        bucket = today.setdefault(usage.provider_id, {"usd_micros": 0, "credits": 0})
+        bucket["usd_micros"] += allocation.cost_usd_micros
+        bucket["credits"] += int(usage.internal_credits)
+    return today
+
+
+def spent_today_usd_micros(
+    plane: ControlPlane, workspace_id: str, *, now: datetime | None = None
+) -> int:
+    """Cost allocated to usage that occurred on the current local calendar day."""
+    return sum(
+        bucket["usd_micros"]
+        for bucket in spent_today_by_provider(plane, workspace_id, now=now).values()
+    )
+
+
+def by_provider(
+    plane: ControlPlane, workspace_id: str, summary: dict, *, now: datetime | None = None
+) -> dict[str, dict[str, int]]:
+    """Lifetime and today's spend per provider, in dollars AND credits."""
+    today = spent_today_by_provider(plane, workspace_id, now=now)
+    out: dict[str, dict[str, int]] = {}
+    for row in summary["rollups"]["providers"]:
+        provider_id = str(row["id"])
+        day = today.get(provider_id, {"usd_micros": 0, "credits": 0})
+        out[provider_id] = {
+            "usd_micros": int(row["cost_usd_micros"]),
+            "credits": int(row["internal_credits"]),
+            "usage_events": int(row["usage_events"]),
+            "today_usd_micros": day["usd_micros"],
+            "today_credits": day["credits"],
+        }
+    return out
 
 
 @_serialized
 def snapshot(plane: ControlPlane, workspace_id: str, *, committed_usd_micros: int = 0) -> dict:
     summary = CostAnalyticsService(plane).summary(workspace_id, organization_wide=True)
+    providers = by_provider(plane, workspace_id, summary)
     return {
         "totals": summary["totals"],
-        "today_usd_micros": spent_today_usd_micros(plane, workspace_id),
+        "today_usd_micros": sum(row["today_usd_micros"] for row in providers.values()),
+        "by_provider": providers,
+        "flow_plan": ratecards.flow_plan(),
         "providers": summary["rollups"]["providers"],
         "models": summary["rollups"]["models"],
         "committed_usd_micros": committed_usd_micros,

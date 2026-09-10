@@ -15,7 +15,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 
-import httpx
+import httpx  # noqa: F401 - module-level seam: tests monkeypatch screenwriter.httpx.post
 
 from diony_contracts.production import (
     CharacterProfile,
@@ -27,6 +27,7 @@ from diony_contracts.production import (
     VoiceProfile,
 )
 from diony_director import likeness as _likeness
+
 
 def brain_timeout_s() -> float:
     raw = os.environ.get("DIONY_DIRECTOR_BRAIN_TIMEOUT", "").strip()
@@ -127,7 +128,9 @@ _NARRATION_LINE = re.compile(
     r"(?is)\b(?:narration|voice[- ]?over|narrator|v\.\s?o\.)\s*(?:\([^)\n]{0,40}\))?\s*:\s*"
     r"(?:[“\"]\s*(.+?)\s*[”\"]|([^\n]+))"
 )
-_VISUAL_LINE = re.compile(r"(?is)\bvisual\s*:\s*(.+?)(?=\bnarration|\bvoice[- ]?over|\bnarrator\b|$)")
+_VISUAL_LINE = re.compile(
+    r"(?is)\bvisual\s*:\s*(.+?)(?=\bnarration|\bvoice[- ]?over|\bnarrator\b|$)"
+)
 _SPEECH_STRIP = re.compile(r"[^a-z0-9 ]+")
 
 
@@ -149,7 +152,9 @@ def authored_breakdown(idea: str) -> dict:
     scenes: list[dict] = []
     marks = list(_AUTHORED_SCENE_NUM.finditer(text))
     for index, mark in enumerate(marks):
-        segment = text[mark.end() : marks[index + 1].start() if index + 1 < len(marks) else len(text)]
+        segment = text[
+            mark.end() : marks[index + 1].start() if index + 1 < len(marks) else len(text)
+        ]
         title = " ".join(segment.split("\n", 1)[0].split())
         visual_match = _VISUAL_LINE.search(segment)
         if visual_match:
@@ -292,9 +297,7 @@ def _restore_narration(body: dict, narration: list[str]) -> tuple[int, int, int]
         if a_index in matched:
             continue
         new_line = {"kind": "vo", "text": authored_line, "speaker": "", "shot": ""}
-        anchor = next(
-            (matched[j] for j in range(a_index - 1, -1, -1) if j in matched), None
-        )
+        anchor = next((matched[j] for j in range(a_index - 1, -1, -1) if j in matched), None)
         placed = False
         if anchor is not None:
             for scene in scenes:
@@ -305,7 +308,9 @@ def _restore_narration(body: dict, narration: list[str]) -> tuple[int, int, int]
                     placed = True
                     break
         if not placed:
-            follower = next((matched[j] for j in range(a_index + 1, len(narration)) if j in matched), None)
+            follower = next(
+                (matched[j] for j in range(a_index + 1, len(narration)) if j in matched), None
+            )
             for scene in scenes:
                 lines = scene.get("lines") or []
                 if follower is not None and any(candidate is follower for candidate in lines):
@@ -338,6 +343,7 @@ def _restore_narration(body: dict, narration: list[str]) -> tuple[int, int, int]
             _remove(scene, line)
             dropped += 1
     return restored, inserted, dropped
+
 
 _BRAIN_INSTRUCTIONS = (
     "You are the Director's head of story, cinematography, costume, and sound, "
@@ -408,8 +414,15 @@ _BRAIN_INSTRUCTIONS = (
 # Deterministic craft lint: the notes a script supervisor would write before
 # anyone spends a cent on pixels. Feeds the brain's revision round verbatim.
 _ABSTRACTION_TELLS = (
-    "tension fills", "a sense of", "palpable", "we see", "we hear",
-    "atmosphere of", "feeling of", "an air of", "emotions run",
+    "tension fills",
+    "a sense of",
+    "palpable",
+    "we see",
+    "we hear",
+    "atmosphere of",
+    "feeling of",
+    "an air of",
+    "emotions run",
 )
 
 
@@ -427,7 +440,9 @@ def _script_lint(body: dict, *, verbatim_speech: frozenset[str] = frozenset()) -
             text = str(line.get("text", ""))
             shot = str(line.get("shot", "") or "").strip()
             if kind in {"action", "dialogue", "vo"} and not shot:
-                notes.append(f"scene {index}: a {kind} line has no authored shot — the frame is unwritten")
+                notes.append(
+                    f"scene {index}: a {kind} line has no authored shot — the frame is unwritten"
+                )
             if shot and shot.lower() == prev_shot.lower():
                 notes.append(f"scene {index}: the same shot repeats back-to-back ({shot[:60]})")
             if shot:
@@ -440,9 +455,15 @@ def _script_lint(body: dict, *, verbatim_speech: frozenset[str] = frozenset()) -
                             f"scene {index}: action line is abstract, not filmable ('{text[:60]}')"
                         )
                         break
-            if kind == "dialogue" and len(text.split()) > 18 and _norm_speech(text) not in verbatim_speech:
+            if (
+                kind == "dialogue"
+                and len(text.split()) > 18
+                and _norm_speech(text) not in verbatim_speech
+            ):
                 # authored narration is the user's finished words — never trimmed
-                notes.append(f"scene {index}: dialogue runs {len(text.split())} words — trim under 18")
+                notes.append(
+                    f"scene {index}: dialogue runs {len(text.split())} words — trim under 18"
+                )
             if kind == "sound":
                 has_sound = True
         if not has_sound:
@@ -497,7 +518,9 @@ def master_brief(master: MasterPrompt | None) -> str:
         f"{b.get('stage', '').replace('_', ' ')}: {b.get('text', '')}" for b in master.beats
     )
     light = master.lighting
-    lighting = ", ".join(x for x in (light.get("source"), light.get("quality"), light.get("shadows")) if x)
+    lighting = ", ".join(
+        x for x in (light.get("source"), light.get("quality"), light.get("shadows")) if x
+    )
     parts = [
         "MASTER PROMPT — the pre-split finalized artifact this screenplay REALIZES. "
         "Its subject, setting, camera philosophy, lighting system, continuity "
@@ -581,9 +604,7 @@ def _from_brain(
             + ". REALIZE it — do not re-derive, merge away, or paraphrase it. "
             "Cover every authored scene's imagery, in the authored order; "
             "adjacent scenes in one location may share a heading, but no "
-            "scene's visual content may be dropped."
-            + scene_budget
-            + " Carry EVERY authored "
+            "scene's visual content may be dropped." + scene_budget + " Carry EVERY authored "
             "narration line into the script as a vo line, VERBATIM and in "
             "order — the narration is the user's finished voiceover, exempt "
             "from the dialogue word cap. Author every shot."
@@ -623,8 +644,7 @@ def _from_brain(
         user_content: str | list = [
             {
                 "type": "text",
-                "text": user_text
-                + "\nThe attached reference images show the intended people, "
+                "text": user_text + "\nThe attached reference images show the intended people, "
                 "wardrobe, and places. Describe wardrobe, age_body_notes, and "
                 "settings to MATCH what the images actually show.",
             }
@@ -652,9 +672,7 @@ def _from_brain(
         timeout=brain_timeout_s(),
     )
     if response.status_code >= 400:
-        raise RuntimeError(
-            f"brain rejected ({response.status_code}): {response.text[:200]}"
-        )
+        raise RuntimeError(f"brain rejected ({response.status_code}): {response.text[:200]}")
     payload = response.json()
     body = _json_object(payload["choices"][0]["message"]["content"])
     usage = dict(payload.get("usage") or {})
@@ -712,15 +730,13 @@ def _from_brain(
                 for key, value in (refine_payload.get("usage") or {}).items():
                     if isinstance(value, int):
                         usage[key] = int(usage.get(key) or 0) + value
-        except Exception as err:  # noqa: BLE001 - the first draft still ships, named
+        except Exception as err:
             warnings.append(
                 f"screenwriter: script-doctor pass unavailable ({type(err).__name__}) — "
                 f"first draft shipped with {len(notes)} open note(s)"
             )
     elif notes:
-        warnings.append(
-            f"screenwriter: {len(notes)} supervisor note(s) open (refine disabled)"
-        )
+        warnings.append(f"screenwriter: {len(notes)} supervisor note(s) open (refine disabled)")
 
     if authored["narration"] and _narration_gaps(body, authored["narration"]):
         # the FINAL body still paraphrases or drops the user's words — the
@@ -763,7 +779,7 @@ def _from_brain(
                 found = _likeness.audit(
                     " ".join(_likeness.script_texts(body)), phrases, has_reference=bool(refs)
                 )
-            except Exception as err:  # noqa: BLE001 — the audit is a net, not a gate
+            except Exception as err:
                 warnings.append(
                     f"screenwriter: likeness audit unavailable ({type(err).__name__}) — "
                     "the brains' own real_people lists were enforced; review names by eye"
@@ -775,7 +791,9 @@ def _from_brain(
         hits = _likeness.enforce_script_body(body, people)
         warnings.append(
             _likeness.note(
-                hits, people, owner="screenwriter",
+                hits,
+                people,
+                owner="screenwriter",
                 where="reference image" if refs else "idea",
             )
         )
@@ -840,7 +858,13 @@ def _from_brain(
     counter = 0
 
     def _add(
-        kind: str, text: str, scene_id: str, speaker: str = "", shot: str = "", *, off_screen: bool = False
+        kind: str,
+        text: str,
+        scene_id: str,
+        speaker: str = "",
+        shot: str = "",
+        *,
+        off_screen: bool = False,
     ) -> str:
         nonlocal counter
         counter += 1
@@ -871,7 +895,9 @@ def _from_brain(
             shot = str(raw.get("shot", "") or "").strip()
             if kind == "dialogue" and speaker:
                 line_ids.append(_add("cue", speaker, scene_id, speaker))
-            line_ids.append(_add(kind, str(raw["text"]), scene_id, speaker, shot, off_screen=off_screen))
+            line_ids.append(
+                _add(kind, str(raw["text"]), scene_id, speaker, shot, off_screen=off_screen)
+            )
         scenes.append(
             Scene(
                 scene_id=scene_id,
@@ -1035,46 +1061,70 @@ def _template(
     # opener/coverage flush (~6s) + one spoken line (~6s) + a reaction (~4s)
     # plans roughly 16 seconds per scene through the splitter.
     beats = [
-        ("LEAD stops moving. A decision lands.", "low, deciding",
-         "We finish this tonight. Then we are gone.",
-         "SECOND holds the look, then nods once.",
-         "Medium close-up, slow push-in as the stillness sets, face half in shadow",
-         "Reverse single at eye level, holding on the nod, background falling soft"),
-        ("SECOND spreads the map across the table.", "quick, certain",
-         "Two ways in. Only one way back out.",
-         "LEAD traces the route without touching it.",
-         "Overhead top-shot of the map unrolling, hands entering from both sides",
-         "Tight insert on a finger hovering over the route, lamplight raking the paper"),
-        ("Headlights sweep the window and pass.", "barely above the hum",
-         "They are already looking for us.",
-         "Neither of them moves until the light dies.",
-         "Wide from the back wall, the beam wiping across both figures",
-         "Two-shot in profile, frozen, the last of the light sliding off their faces"),
-        ("LEAD counts what is left. It is not much.", "flat, honest",
-         "After this, we start clean. All of it.",
-         "SECOND laughs once, without any joy in it.",
-         "Close on hands counting worn bills, shallow focus, tabletop grain sharp",
-         "Medium single, a laugh that dies early, eyes elsewhere"),
-        ("A phone buzzes face-down. Nobody reaches for it.", "measured",
-         "Whoever that is, they can wait until morning.",
-         "The buzzing gives up. The room settles.",
-         "Insert on the phone vibrating against wood, both figures blurred beyond",
-         "Slow drift back from the table as the sound stops"),
-        ("SECOND checks the clock over the pass.", "urgent, hushed",
-         "Nineteen minutes. Then the shift changes.",
-         "LEAD stands and rolls a shoulder loose.",
-         "Low angle up at the clock, second hand crossing twelve",
-         "Full-body single rising out of frame, chair scraping back"),
-        ("Rain starts against the glass, soft then certain.", "quiet",
-         "Weather like this hides a multitude of sins.",
-         "SECOND pulls a coat from the booth.",
-         "Macro on the first drops hitting the window, neon smearing through",
-         "Medium two-shot, one figure shrugging into a coat, the other watching the rain"),
-        ("LEAD sets the keys on the table between them.", "even, final",
-         "Last chance to walk away from this one.",
-         "SECOND slides the keys straight back.",
-         "Top-down insert: keys landing between two pairs of hands",
-         "Matching insert: the keys sliding back, fingertips releasing at frame edge"),
+        (
+            "LEAD stops moving. A decision lands.",
+            "low, deciding",
+            "We finish this tonight. Then we are gone.",
+            "SECOND holds the look, then nods once.",
+            "Medium close-up, slow push-in as the stillness sets, face half in shadow",
+            "Reverse single at eye level, holding on the nod, background falling soft",
+        ),
+        (
+            "SECOND spreads the map across the table.",
+            "quick, certain",
+            "Two ways in. Only one way back out.",
+            "LEAD traces the route without touching it.",
+            "Overhead top-shot of the map unrolling, hands entering from both sides",
+            "Tight insert on a finger hovering over the route, lamplight raking the paper",
+        ),
+        (
+            "Headlights sweep the window and pass.",
+            "barely above the hum",
+            "They are already looking for us.",
+            "Neither of them moves until the light dies.",
+            "Wide from the back wall, the beam wiping across both figures",
+            "Two-shot in profile, frozen, the last of the light sliding off their faces",
+        ),
+        (
+            "LEAD counts what is left. It is not much.",
+            "flat, honest",
+            "After this, we start clean. All of it.",
+            "SECOND laughs once, without any joy in it.",
+            "Close on hands counting worn bills, shallow focus, tabletop grain sharp",
+            "Medium single, a laugh that dies early, eyes elsewhere",
+        ),
+        (
+            "A phone buzzes face-down. Nobody reaches for it.",
+            "measured",
+            "Whoever that is, they can wait until morning.",
+            "The buzzing gives up. The room settles.",
+            "Insert on the phone vibrating against wood, both figures blurred beyond",
+            "Slow drift back from the table as the sound stops",
+        ),
+        (
+            "SECOND checks the clock over the pass.",
+            "urgent, hushed",
+            "Nineteen minutes. Then the shift changes.",
+            "LEAD stands and rolls a shoulder loose.",
+            "Low angle up at the clock, second hand crossing twelve",
+            "Full-body single rising out of frame, chair scraping back",
+        ),
+        (
+            "Rain starts against the glass, soft then certain.",
+            "quiet",
+            "Weather like this hides a multitude of sins.",
+            "SECOND pulls a coat from the booth.",
+            "Macro on the first drops hitting the window, neon smearing through",
+            "Medium two-shot, one figure shrugging into a coat, the other watching the rain",
+        ),
+        (
+            "LEAD sets the keys on the table between them.",
+            "even, final",
+            "Last chance to walk away from this one.",
+            "SECOND slides the keys straight back.",
+            "Top-down insert: keys landing between two pairs of hands",
+            "Matching insert: the keys sliding back, fingertips releasing at frame edge",
+        ),
     ]
     per_dev_s = 16
     base_s = 18
@@ -1094,13 +1144,21 @@ def _template(
             before = f"{before} Later still."
         line_ids = [
             _add("heading", heading, scene_id),
-            _add("action", before.replace("LEAD", characters[0].name).replace(
-                "SECOND", speakers[-1].name), scene_id, shot=before_shot),
+            _add(
+                "action",
+                before.replace("LEAD", characters[0].name).replace("SECOND", speakers[-1].name),
+                scene_id,
+                shot=before_shot,
+            ),
             _add("cue", speaker, scene_id, speaker),
             _add("parenthetical", direction, scene_id, speaker),
             _add("dialogue", line, scene_id, speaker),
-            _add("action", after.replace("LEAD", characters[0].name).replace(
-                "SECOND", speakers[-1].name), scene_id, shot=after_shot),
+            _add(
+                "action",
+                after.replace("LEAD", characters[0].name).replace("SECOND", speakers[-1].name),
+                scene_id,
+                shot=after_shot,
+            ),
         ]
         scenes.append(
             Scene(
@@ -1120,12 +1178,17 @@ def _template(
         close_lines = [
             _add("heading", heading_close, close_id),
             _add(
-                "action", "Headlights carve the dark. The town shrinks behind.", close_id,
+                "action",
+                "Headlights carve the dark. The town shrinks behind.",
+                close_id,
                 shot="Long lens from the roadside as the car passes; taillights pull away "
                 "into black, town glow dying on the horizon",
             ),
             _add(
-                "vo", "Some towns you leave. Some you escape.", close_id, characters[0].name,
+                "vo",
+                "Some towns you leave. Some you escape.",
+                close_id,
+                characters[0].name,
                 shot="Slow aerial drift above the road, one car on it, high beams the only light",
             ),
         ]
@@ -1223,8 +1286,12 @@ def _template_authored(
         nonlocal counter
         counter += 1
         line = ScriptLine(
-            line_id=f"ln-{counter}", kind=kind_, text=text, speaker=speaker,
-            scene_id=scene_id, shot=shot,
+            line_id=f"ln-{counter}",
+            kind=kind_,
+            text=text,
+            speaker=speaker,
+            scene_id=scene_id,
+            shot=shot,
         )
         lines.append(line)
         return line.line_id
@@ -1283,8 +1350,10 @@ def _template_authored(
         id=f"scr-{uuid.uuid4().hex[:8]}",
         logline=_snip(idea, 160),
         runtime_target_s=runtime_target_s,
-        beats=[{"beat": b["title"] or f"Scene {i}", "story_time": f"Scene {i}"}
-               for i, b in enumerate(blocks, start=1)],
+        beats=[
+            {"beat": b["title"] or f"Scene {i}", "story_time": f"Scene {i}"}
+            for i, b in enumerate(blocks, start=1)
+        ],
         scenes=scenes,
         lines=lines,
     )
@@ -1332,7 +1401,7 @@ def write_script(
         for _attempt in range(BRAIN_ATTEMPTS):
             try:
                 return _from_brain(idea, runtime_target_s, reference_images, master, take_units)
-            except Exception as err:  # noqa: BLE001 — retried, then raised as a named state
+            except Exception as err:
                 last_error = err
         raise BrainUnavailable(
             f"{brain_model()} could not deliver after {BRAIN_ATTEMPTS} attempts: {last_error}"

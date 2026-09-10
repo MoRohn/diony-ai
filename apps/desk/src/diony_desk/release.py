@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import argparse
+import hashlib
 import json
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
 
 PAYLOAD_SCHEMA_VERSION = 1
 DOWNLOAD_SCHEMA_VERSION = 1
@@ -23,46 +22,11 @@ ROOT_FILES = (
     "README.md",
     "START HERE.txt",
 )
-PRODUCT_TREES = ("apps", "packages", "infra", "blueprints", "scripts/benchmark")
-FEATURE_FILE_SETS = {
-    "voice_performance": (
-        Path("apps/desk/src/diony_desk/boot.py"),
-        Path("apps/producer/src/diony_producer/app.py"),
-        Path("apps/producer/src/diony_producer/farm.py"),
-        Path("apps/producer/src/diony_producer/gpu.py"),
-        Path("apps/producer/src/diony_producer/mix.py"),
-        Path("apps/producer/src/diony_producer/voice.py"),
-        Path("packages/contracts/src/diony_contracts/__init__.py"),
-        Path("packages/contracts/src/diony_contracts/enums.py"),
-        Path("packages/contracts/src/diony_contracts/export_schema.py"),
-        Path("packages/contracts/src/diony_contracts/models.py"),
-        Path("packages/contracts/src/diony_contracts/voice.py"),
-        Path("packages/contracts/jsonschema/bible.schema.json"),
-        Path("packages/contracts/jsonschema/speech_clip_package.schema.json"),
-        Path("packages/contracts/jsonschema/speech_qc_receipt.schema.json"),
-        Path("packages/contracts/jsonschema/project.schema.json"),
-        Path("packages/contracts/jsonschema/qc_report.schema.json"),
-        Path("packages/contracts/jsonschema/shot.schema.json"),
-        Path("packages/contracts/jsonschema/take.schema.json"),
-        Path("packages/contracts/jsonschema/voice_casting.schema.json"),
-        Path("packages/contracts/jsonschema/wan_speech_request.schema.json"),
-        Path("blueprints/22-voice-performance-system.md"),
-    ),
-    "optimal_clip_flow": (
-        Path("apps/producer/src/diony_producer/farm.py"),
-        Path("apps/producer/src/diony_producer/gpu.py"),
-        Path("apps/producer/src/diony_producer/run.py"),
-        Path("apps/producer/src/diony_producer/static/app.js"),
-        Path("apps/producer/src/diony_producer/static/index.html"),
-        Path("apps/wan/src/diony_wan/attention_qualification.py"),
-        Path("apps/wan/src/diony_wan/runner.py"),
-        Path("packages/contracts/src/diony_contracts/models.py"),
-        Path("packages/contracts/src/diony_contracts/studio.py"),
-        Path("packages/contracts/jsonschema/generation_execution_receipt.schema.json"),
-        Path("scripts/benchmark/measure_wan_attention.py"),
-        Path("blueprints/23-optimal-clip-production-flow.md"),
-    ),
-}
+PRODUCT_TREES = ("apps", "packages", "blueprints")
+# Reviewed feature file sets get a byte-exact receipt in desktop-release.json.
+# Empty since the legacy local lane left the tree; add a set when a shipped
+# feature must be proven byte for byte.
+FEATURE_FILE_SETS: dict[str, tuple[Path, ...]] = {}
 EXCLUDED_PARTS = {
     ".benchmarks",
     ".claude",  # agent session scratch — nondeterministic, randomized every payload sha
@@ -133,7 +97,9 @@ def _feature_receipts(source: Path) -> dict[str, dict[str, Any]]:
     receipts: dict[str, dict[str, Any]] = {}
     for feature, relatives in FEATURE_FILE_SETS.items():
         paths = [source / relative for relative in relatives]
-        missing = [relative.as_posix() for relative, path in zip(relatives, paths) if not path.is_file()]
+        missing = [
+            relative.as_posix() for relative, path in zip(relatives, paths) if not path.is_file()
+        ]
         if missing:
             raise ValueError(
                 f"desktop feature {feature} is incomplete; missing " + ", ".join(missing)
@@ -212,8 +178,7 @@ def build_development_report(
         "channel": "development",
         "version": version,
         "architecture": architecture,
-        "built_at": built_at
-        or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "built_at": built_at or datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "publishable": False,
         "trust": "ad-hoc-local-only",
         "build_recipe": LOCAL_BUILD_RECIPE,
@@ -269,7 +234,7 @@ def build_download_manifest(
             raise ValueError(
                 "stable downloads require verified release proof for " + ", ".join(incomplete)
             )
-    timestamp = published_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    timestamp = published_at or datetime.now(UTC).isoformat().replace("+00:00", "Z")
     platform_meta = {
         "mac": {
             "label": "Download for Mac",

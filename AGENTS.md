@@ -1,128 +1,123 @@
 # AGENTS.md — Diony AI
 
-This file is the operating system for humans and coding agents working in this repository. Read it before changing product behavior, cluster profiles, serving recipes, or quality gates.
+This file is the operating system for humans and coding agents working in this repository. Read it before changing product behavior, provider adapters, pricing, or quality gates. The numbered Blueprints are the constitution; code implements them and does not quietly contradict them.
 
 ## Project overview
 
-Diony AI is a proprietary packaged product: software + Infrastructure-as-Product cluster profiles + crate-to-cluster Studio + Producer. The SKU is a **4× NVIDIA DGX Spark** local cluster that produces **1-hour 1080p TV/movie-ready audiovisual** programs. Humans review, give notes, and distribute. Everything else is autonomous.
+Diony AI is a proprietary desktop film studio that shoots on cloud video models. The **Director** (chat-first, `apps/director`) turns one line into a priced, reviewed, narrated 1080p film on **Grok Imagine** (xAI) and **Google Flow** (Veo 3.1 and Omni Flash through useapi.net). Studio chooses the engine, Producer holds the Gallery. Cost is visible at every step: estimate before anything rolls, live while it rolls, receipt after. Everything generated is downloaded into a local vault the moment it exists.
 
-North Star: 1920×1080, 23.976 or 24.000 fps, Rec.709 legal, dialogue + score + SFX, stereo or 5.1 stems, broadcast (−24 LUFS) or streaming (−16 LUFS) loudness, true peak −1 dBTP.
+The product pivoted to this on 2026-08-31 (Blueprint 25). The earlier local lane (Wan2.2 on DGX Spark and leased B200/B300 GPUs, a DeepSeek brain, the `diony_sr_v1` finish) was deleted from the tree on 2026-09-10; the changelog records what left. There is no automatic route: Studio requires the user to pick one camera, and that camera shoots the whole film.
+
+North Star deliverable: a finished program, 1920×1080 (1080×1920 portrait), Rec.709, one narrator or on-camera dialogue by style, loudness-locked at −16 LUFS (streaming) or −24 LUFS (broadcast), delivered with `film.srt`, `film.vtt`, `edl.json`, `assembly-map.json`, `qc-packet.json`, and a receipt whose estimate reconciles to its actual.
 
 ## Repository structure
 
 | Path | Role |
 |---|---|
-| `blueprints/` | Numbered constitution. Operational: checklists, commands, failure modes. |
-| `infra/profiles/` | Versioned desired state (`spark-4x-v1`, `spark-2x-v1`, `lease-gpu-v1`, `b300-v1`, `b200-v1`). |
-| `infra/compose/` | Brain / Wan / Finish service stubs. |
-| `infra/switch/` | MikroTik 200G snippets, lease interconnect policy, leased-B300 / B200 on-package notes. |
-| `infra/models/` | Weight pull manifests (sizes, checksums when known). |
-| `apps/desk` | Installed-app and source-checkout startup authority. Customer Mac/Windows builds are self-contained; source launchers install the venv once. Both open Studio and Producer through the Desk. |
-| `apps/wizard` | Crate-to-system Studio. Site first: Local Quad-Spark Cluster, Leased Dual-Spark Cluster, Leased B300, or Leased B200. Local: Unbox through Producer. Leases: Connect → App → Ready → Producer. App Continue starts the pinned DeepSeek + Wan + `diony_sr_v1` pack pull and opens Ready. Ready is Test GPU (`nvidia-smi` over the Connect SSH line). Brain is auto. Sign writes `{vault}/.cluster/site.json`. Sign is the last line only. **Refresh** on Site (and **Start over** in the mast) returns to Site and reloads the page; a browser refresh does not. |
-| `apps/producer` | Idea-to-Studio. Customer playbooks, bays, gates. Idea → Production (the run) → Gallery. Production runs 1080 finish and mix. Reads the site lock. Signed Dual-Spark / B300 / B200: desk UI; GPU farms Wan and `diony_sr_v1`. |
-| `apps/finish` | `diony-finish` 720→1080 (`diony_sr_v1`, Rec.709 legalizer, program master). |
-| `apps/conductor` | DeepSeek tool loop. |
-| `packages/contracts` | Machine API including Brief, Asset, Take versions, ClipEdit, `expand_idea`, `apply_clip_edit`, `assemble_program`. |
-| `packaging/` | Self-contained PyInstaller payload plus Mac/Windows installer definitions. |
-| `scripts/release/` | Platform signing, notarization, installer verification, and two-download manifest finalization. |
+| `apps/director` | The Director service (`diony-director`, `:8790`, `director.diony.local`) and its console. Sessions, screenwriter, master prompt, splitter, compiler (three dialects), `providers/{grok,flow}`, capabilities matrix, review, revisions, assembly, narration, deliverables, ledger, rate cards, cast lock, likeness guard. `diony-director-check` is the readiness CLI. |
+| `apps/wizard` | Studio (`diony-wizard`, `:8787`, `studio.diony.local`): the opening page (camera choice, key chips) and `gateway.py`, the `:80` name router that lays all three product names. |
+| `apps/producer` | Producer (`diony-producer`, `:8788`, `producer.diony.local`): the Gallery of Director films, the launch control plane API (Blueprint 16), and the services the Director imports: `control_plane`, `costs` (the ledger), `face_identity`, `quality`, `speech_transcript`, `semantic_qc`, `media_tools`. |
+| `apps/desk` | First open: the lobby, service supervision, stale-build detection by UI stamp, the packaged-app payload (`release.py`). |
+| `packages/contracts` | Pydantic v2 contracts and JSON Schema. Cloud core: `director.py` (DirectorOp, CostEstimate, EngineMode), `production.py` (Script, ClipUnit, AudioPacket, ContinuityLock, ClipReview, ProductionPackage), `launch.py` (control plane, cost ledger), `cluster.py` (engine choice, vault root). |
+| `blueprints/` | The constitution. 25–33 are the cloud era; 00, 10, 15–18, and 24 are the foundations that still apply. Retired numbers are not reused. |
+| `packaging/`, `scripts/release/` | PyInstaller payload, Mac/Windows installers, signed release builders. |
+| `pyproject.toml` (root) | Repo-wide ruff and pytest configuration only. Each app and package has its own manifest. |
 
 ## Tech stack
 
-- Cluster OS: NVIDIA DGX OS on GB10 (aarch64). Developer shells may run on a laptop.
-- Brain: DeepSeek-V4-Flash-0731 via vLLM + DSpark speculative decoding. Encoding uses upstream `encoding_dsv4`, not a Jinja chat template.
-- Camera: Wan2.2 official `generate.py` / Diffusers paths, LightX2V later for speed. Native output is **720p**.
-- Finish: Diony 720→1080 super-res + legalizer + grade + conform (proprietary).
-- Apps: Python 3.11+, FastAPI, static HTML/CSS/JS (no SPA framework on Day 1).
-- Contracts: Pydantic v2 + JSON Schema.
-- Infra: YAML profiles, compose/quadlet stubs, health probes. Not Terraform-for-cloud.
+- Python 3.11+, FastAPI, uvicorn, httpx, Pydantic v2. Static HTML/CSS/JS consoles, no SPA framework.
+- Providers over REST: xAI (`https://api.x.ai`), useapi.net Google Flow (`https://api.useapi.net/v1/google-flow`). Module-level `httpx` in each adapter is the seam tests monkeypatch.
+- The brain is any OpenAI-compatible chat endpoint; default `grok-4.6` on the xAI key.
+- Host tools: ffmpeg/ffprobe (required); OpenCV Zoo YuNet + SFace (optional, staged by `diony-director-check --stage-face-models`); faster-whisper (optional, `DIONY_WHISPER_MODEL`).
+- Ledger and control plane: SQLite under `{vault}/.control/`.
 
 ## Build and run
 
-Customer first open: install the signed Mac DMG or signed Windows Setup artifact and open Diony AI. The application bundles its runtime and never asks for Python or `pip`. Until those artifacts are published, open **START HERE.txt**, then use the source launcher (`Open Diony AI.command`, `open-diony.sh`, or `Open Diony AI.bat`). START HERE names hardware: Local Quad-Spark crate, or a lease from Runpod first (`https://www.runpod.io/`) then Enverge (`https://enverge.ai/`) for Dual-Spark / B300 / B200. Both paths open the Desk lobby, then Continue is Studio at `http://studio.diony.local`.
-
-Mac packaged-process check: double-click **Build Diony AI.command**. It builds or reuses `dist/desktop/{version}/development/Diony.app` and opens that exact build as a new instance; the Desk replaces an older local build and its services automatically. This is an ad-hoc local development artifact, not a publishable or notarized DMG.
-
-Engineers:
+Customer first open: `START HERE.txt`. Keys live in `~/.diony/keys.env` (`XAI_API_KEY`, `USEAPI_TOKEN`, `DIONY_FLOW_EMAIL`, `DIONY_FLOW_PLAN`); explicit environment wins; nothing in the app writes keys.
 
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -e packages/contracts -e apps/wizard -e apps/wan -e apps/finish -e apps/producer -e apps/conductor -e apps/desk
-diony-desk        # lobby progress; Studio http://studio.diony.local (binds :8787)
-diony-wizard      # http://studio.diony.local (binds :8787)
-diony-wan         # :8010  (cluster FARM; needs /opt/wan22 + /models/wan)
-diony-finish      # :8020  (cluster FINISH; needs /models/diony/diony_sr_v1)
-diony-producer    # http://producer.diony.local (binds :8788)
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -e packages/contracts -e apps/wizard -e apps/producer -e apps/director -e apps/desk
+pip install ruff pytest
+
+diony-desk               # lobby → Studio → Director → Producer; lays the names
+diony-director           # :8790 alone
+diony-director-check     # readiness; --live probes; --roll-one grok|flow --yes spends once
 ```
 
-Tests (when present): `python -m pytest packages/contracts apps/wizard apps/wan apps/finish apps/producer apps/director apps/desk` (`apps/conductor` was deleted in the Director pivot). The root `conftest.py` blocks every non-loopback socket for the whole session (`DIONY_ALLOW_NETWORK=1` only for an explicitly live run).
+Mac packaged process: double-click **Build Diony AI.command** (`scripts/release/build-local-macos.sh`). Repo edits reach the app only after a rebuild; the desk replaces an older local build automatically. Ad-hoc, local-only, never publishable; signed releases come from `scripts/release/build-macos.sh` and `build-windows.ps1`. The release scripts pip-install a hard-coded package list; a package missing there is silently absent from the app even when `diony.spec` lists it (a regression test pins the list).
 
-Laptop pytest does **not** download weights or mutate RoCE fabric. On a signed Dual-Spark, Studio App pulls the pack. Produce farms Wan2.2 720p negatives. Picture lock writes the 1080 program master.
+## Tests and lint
 
-## Fleet modes
+```bash
+pytest                                   # whole repo, offline, ~4 minutes
+pytest apps/director                     # one package
+ruff check . && ruff format --check .    # the pinned rule set in pyproject.toml
+```
 
-Never treat the cluster as a static TP=4 box.
-
-| Mode | Nodes | Use |
-|---|---|---|
-| `BRAIN` | 4× DeepSeek TP=4 | Bible, hour script, continuity (256K–1M context) |
-| `SPLIT` | 2× DeepSeek TP=2 + 2× Wan | Default production |
-| `FARM` | 4× Wan | Generation sprint after rundown lock |
-| `FINISH` | SR / NVENC / audio | 1080 masters |
-
-Transitions: **drain → unload → load → healthgate**. Studio and Conductor use the same profile API (`infra/profiles/spark-4x-v1.yaml` locally, `spark-2x-v1.yaml` on a signed dual Spark lease, `lease-gpu-v1.yaml` on a signed four-node lease, `b300-v1.yaml` on a signed leased B300, `b200-v1.yaml` on a signed leased B200). On Dual-Spark, B300, and B200, SPLIT is sequential (one engine at a time), not 2+2 Sparks. Dual-Spark brain is TP=2. B300 brain is TP=1. B200 brain is TP=1 with `max_model_len` 16384.
+- The root `conftest.py` blocks every non-loopback socket for the session; every package conftest registers the same idempotent guard. `DIONY_ALLOW_NETWORK=1` only for a deliberate live run.
+- Never run two pytest invocations at once: the desk's instance-lock tests deadlock across processes.
+- Tests that cut real media skip without ffmpeg.
+- Package conftests' autouse fixtures bleed across packages in a multi-directory run; never set a shared-scope `DIONY_CONTROL_PLANE_DB`, and keep test basenames unique across packages.
+- UI stamps are pinned: Producer `?v=p7` by tests, the Director `?v=p53` by presence only. Bump the Director stamp on every UI change; update the pins when you bump the others. The desk reads the stamp at runtime to detect a stale build.
+- A test that pins a literal (a stamp, a boot copy line, a rate) is documentation; update it in the same change and say why.
 
 ## Human gates (do not automate away)
 
-1. **Bible lock** — story, characters, visual grammar.
-2. **Distribution** — who gets the master, and how.
+1. **Script lock and cast approval.** Nothing prices before the lock; no character clip rolls before its face is approved.
+2. **Distribution.** Who gets the master, and how.
 
-Picture and mix run inside Production after Wan 720p (1080 finish, then mix). They are not clicks. Retakes reopen them; the run does them again.
-
-Human notes attach to Shot/Take IDs in contracts, never only to chat logs.
+Retakes reopen the cut; the run does it again.
 
 ## Quality bar (non-negotiable)
 
-Full text: `blueprints/10-quality-mandate.md`. Summary:
+Blueprint 10 stands. Cloud additions, Blueprints 24–33:
 
-- Every generation is **1080p finish-intent**. Wan is 720p native; Diony finish is mandatory for deliverables. Previz may stay 720p and must be labeled `previz`.
-- Cinematic grammar on every Shot: focal length, stop, lighting ratio, camera move, duration, seed, references.
-- Continuity-locked characters and wardrobe. Identity drift is a QC fail, not a note.
-- Reject-and-retake on QC fail. Do not ship morphing faces, flicker, illegal broadcast levels, or desynced lips.
-- Every rundown is reviewed for variety before GPU time, every print carries sampled-frame evidence, every automatic choice lands in the decision log, and every master passes a final review before the mix locks (`blueprints/24-montage-intelligence.md`).
-- Never cloud-by-default. No Dashscope, no hosted Qwen extend. DeepSeek on the signed site does prompt expansion. Leased Dual-Spark (`spark-2x-v1`), Leased B300 (`b300-v1`), and Leased B200 (`b200-v1`) are signed Studio Site exceptions, not hosted LLMs and not failovers. `lease-gpu-v1` is not a Studio Site.
+- Every completed clip is reviewed before it may enter a cut. Unmeasured is honest and never `pass`; on a character clip it caps the verdict at `warn`.
+- Identity is scored against the approved sheet (SFace ≥ 0.363), never against the previous shot.
+- A provider-invented voice never reaches the mix twice: measured with whisper, or muted with a named receipt.
+- A real person is described, never named, in every prompt (the likeness guard).
+- Prompts fit the provider limit (4096) before any request leaves; dialogue, camera, and the identity card are untouchable.
+- The film ends when the last line ends; words are never trimmed or sped up.
+- A stale rate card is reported on every estimate and never fatal.
 
 ## Key patterns
 
-- **Contracts first.** If a field is not on a Shot/Take/QC object, it does not exist for production.
-- **Blueprints are source of truth** for BOM, cabling, serving flags, and SLA math. Code implements Blueprints; it does not quietly contradict them.
-- **NVIDIA Sync owns fabric.** Diony overlay owns storage, models, fleet modes, Producer. Do not reimplement Cluster Assistant.
-- **Pin Spark recipes separately from GB300.** DeepSeek’s model card 4×GB300 command is not the Spark command.
-- **aarch64 on box, any arch for Day 1 shells.** GB10 containers must be ARM64 when serving is implemented.
+- **Contracts first.** If a field is not on a `DirectorOp` / `ClipUnit` / `ClipReview`, it does not exist for production.
+- **No priced op without an estimate**, and lines reconcile to the total. Pricing lives in JSON rate cards, never in code.
+- **Nothing slow rides a request.** Brain calls, submits, waves, and finishes run in worker threads and are polled; the name router's forward timeout is not a budget.
+- **Every per-op error is named.** `failure`, `held`, `stalled` on the op; nothing swallowed.
+- **Late-bind locks.** Plates and bridge frames do not exist at split time; recompute references at dispatch and read the live setting.
+- **Flow is paced.** One process-wide gate, requests never overlap, a quiet gap between them. Never bypass it.
+- **Provider URLs are ephemeral.** Download and hash immediately; refer to the local file forever after.
+- **A room holds one film.** A new script retires the earlier chain.
+- **Two-step armed confirm** in every UI; never `window.confirm` or `prompt`.
+- **Patch by test, not by regex.** Never patch across function boundaries with a regex; pin the body with a test that exercises it.
 
-## Adding a new feature
+## Adding a feature
 
-1. Update the relevant Blueprint (or add a numbered Blueprint if the domain is new).
-2. Update `packages/contracts` if the machine API changes.
-3. Update `infra/profiles` if desired state changes.
-4. Update Studio steps if crate-to-cluster changes; Producer if showrunner UX changes.
-5. Update `NOTICE` if a new upstream license is introduced.
-6. Keep the quality mandate intact.
+1. Update the relevant Blueprint, or add the next number and link it from `blueprints/README.md`.
+2. Update `packages/contracts` if the machine API changes; regenerate schemas (`diony-export-schemas`).
+3. Update the rate card if a priced unit changes, with its source and fetch date.
+4. Update the console and bump the Director stamp; update `START HERE.txt` and `README.md` if the user's path changes.
+5. Update `NOTICE` if a new upstream license or third-party service appears.
+6. Add a `CHANGELOG.md` entry under Unreleased.
 
 ## Common pitfalls
 
-- Treating 720p Wan output as the deliverable.
-- Running DeepSeek TP=4 during FARM (starves generation).
-- Autoneg on the MikroTik (lands at 50G). Force 200G.
-- Storing dailies on node NVMe until it fills. Vault is `/diony/vault` on NAS.
-- Using Dashscope for prompt extend (cloud leak).
-- Treating leased Dual-Spark, Leased B300, or Leased B200 as Dashscope, a default, or a failover when the local cluster is down.
-- Treating Dual-Spark as Quad-Spark TP=4, or two isolated Sparks with no CX-7.
-- Pasting Spark vLLM flags onto H100/B200/B300 (or GB300 4-way flags onto Spark, Spark TP=4 onto Dual-Spark, Spark TP=4 onto one B300, or B300 `1048576` onto B200).
-- Assuming 1 hour is real-time. SLA is 2–5 days on `spark-4x-v1` only.
-- Mixing DGX OS / firmware across nodes (NVIDIA clustering assumes matched nodes).
-- Sending jobs to the internet “just this once.”
+- Pricing an image op as video seconds (a `RateCardMissing` that used to leave stills "generating" forever).
+- Sending a bare string where xAI wants `{"url": ...}`; more than 3 Grok references; frames and references together on any model.
+- A name beside a picture on Flow (`PROMINENT_PERSON` fires on invented names too).
+- Growing a prompt after the fit (describe before fit; the submit gate refits).
+- Reading the split-time snapshot of a setting instead of the live one.
+- A synchronous call over 55 s through the router.
+- Hard-coded credentials of any kind; a hardcoded HF token was removed from `apps/wizard/src/diony_wizard/enterprise.py` on 2026-09-10 and must be rotated.
+- Guessing a camera. `session.engine_policy()` raises `EngineNotChosen` (a 409) when Studio has not chosen; nothing defaults to Grok.
 
-## CI / CD
+## History
 
-Day 1: local pytest on contracts and dry-run APIs. Cluster CI is later (health probes against live Spark). Do not add cloud GPU runners as a substitute for the SKU.
+The local GPU lane (Wan2.2 on DGX Spark and leased B200/B300, the DeepSeek brain, the `diony_sr_v1` finish, cluster profiles, the Studio hardware rail, the Producer's Idea → Production floor, the S2V voice lane) was removed on 2026-09-10 after a reachability audit showed the Director imported eight Producer modules and nothing else from it. Blueprints 01–09, 11–14, and 19–23 went with it; their numbers are retired. `git log` before that date holds the lane if it is ever wanted again.
+
+## CI
+
+`.github/workflows/ci.yml` runs ruff and the offline suite on a plain CPU runner with ffmpeg. No GPU runners; no live provider calls in CI.

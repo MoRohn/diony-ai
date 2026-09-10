@@ -1,7 +1,7 @@
 """Key loading from a local file and the live provider readiness check."""
 
 from diony_director import config, live_check
-from diony_director.providers import flow, grok
+from diony_director.providers import grok
 
 
 def test_keys_file_populates_missing_env(tmp_path, monkeypatch) -> None:

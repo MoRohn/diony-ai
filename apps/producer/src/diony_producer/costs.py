@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -20,7 +20,6 @@ from diony_contracts.launch import (
     UsageEvent,
 )
 from diony_producer.control_plane import ControlPlane, DocumentNotFound
-
 
 MICROUNITS_PER_UNIT = 1_000_000
 BASIS_POINTS = 10_000
@@ -44,7 +43,7 @@ class UsageSample(BaseModel):
     actual_cost_usd_micros: int | None = Field(default=None, ge=0)
     actual_cost_breakdown: CostBreakdown | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-    occurred_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class RecordedCost(BaseModel):
@@ -161,9 +160,7 @@ class CostAnalyticsService:
             measurement = "actual"
         elif rate is not None:
             breakdown = CostBreakdown(
-                compute_usd_micros=_scale(
-                    sample.quantity_microunits, rate.cost_usd_micros_per_unit
-                )
+                compute_usd_micros=_scale(sample.quantity_microunits, rate.cost_usd_micros_per_unit)
             )
             measurement = "rate_card"
         else:
@@ -172,9 +169,7 @@ class CostAnalyticsService:
         if sample.actual_internal_credits is not None:
             internal_credits = sample.actual_internal_credits
         elif rate is not None:
-            internal_credits = _scale(
-                sample.quantity_microunits, rate.internal_credits_per_unit
-            )
+            internal_credits = _scale(sample.quantity_microunits, rate.internal_credits_per_unit)
         else:
             internal_credits = 0
         usage = UsageEvent(
@@ -232,9 +227,7 @@ class CostAnalyticsService:
         ]
 
     @staticmethod
-    def _distribution(
-        rollup: list[dict[str, Any]], total_cost: int
-    ) -> list[dict[str, Any]]:
+    def _distribution(rollup: list[dict[str, Any]], total_cost: int) -> list[dict[str, Any]]:
         """Allocate exactly 10,000 basis points with deterministic largest remainders."""
         if total_cost <= 0:
             return [{**row, "share_basis_points": 0} for row in rollup]
@@ -245,9 +238,9 @@ class CostAnalyticsService:
             shares[row["id"]] = numerator // total_cost
             ranked.append((numerator % total_cost, str(row["id"]), int(row["cost_usd_micros"])))
         unassigned = BASIS_POINTS - sum(shares.values())
-        for _, identifier, _ in sorted(
-            ranked, key=lambda item: (-item[0], -item[2], item[1])
-        )[:unassigned]:
+        for _, identifier, _ in sorted(ranked, key=lambda item: (-item[0], -item[2], item[1]))[
+            :unassigned
+        ]:
             shares[identifier] += 1
         return [{**row, "share_basis_points": shares[row["id"]]} for row in rollup]
 
@@ -268,12 +261,10 @@ class CostAnalyticsService:
                 continue
             if not organization_wide:
                 team_match = bool(
-                    allowed_team_ids is not None
-                    and allocation.team_id in allowed_team_ids
+                    allowed_team_ids is not None and allocation.team_id in allowed_team_ids
                 )
                 department_match = bool(
-                    department_ids is not None
-                    and allocation.department_id in department_ids
+                    department_ids is not None and allocation.department_id in department_ids
                 )
                 if not team_match and not department_match:
                     continue
@@ -298,8 +289,7 @@ class CostAnalyticsService:
             "other_usd_micros",
         )
         cost_breakdown = {
-            key: sum(int(row["cost_breakdown"][key]) for row in rows)
-            for key in component_keys
+            key: sum(int(row["cost_breakdown"][key]) for row in rows) for key in component_keys
         }
         cost_breakdown["total_usd_micros"] = sum(cost_breakdown.values())
         rollups = {

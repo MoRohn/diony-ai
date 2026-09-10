@@ -1,7 +1,8 @@
 """The Director service end-to-end: propose → run → poll → persisted clip → reconciled ledger."""
 
-import re
 import importlib
+import re
+from datetime import UTC
 
 from fastapi.testclient import TestClient
 
@@ -27,7 +28,9 @@ def test_status_reports_cloud_engine_and_configured_providers() -> None:
     assert body["flow_plan"] == "pro"
 
 
-def test_full_guided_loop_persists_the_clip_and_reconciles_the_ledger(monkeypatch, tmp_path) -> None:
+def test_full_guided_loop_persists_the_clip_and_reconciles_the_ledger(
+    monkeypatch, tmp_path
+) -> None:
     client = _client()
     sid = client.post("/api/director/sessions").json()["session_id"]
     proposal = client.post(
@@ -55,7 +58,9 @@ def test_full_guided_loop_persists_the_clip_and_reconciles_the_ledger(monkeypatc
         dest.write_bytes(payload)
         import hashlib
 
-        return base.FetchedClip(path=dest, sha256=hashlib.sha256(payload).hexdigest(), bytes=len(payload), media_url=url)
+        return base.FetchedClip(
+            path=dest, sha256=hashlib.sha256(payload).hexdigest(), bytes=len(payload), media_url=url
+        )
 
     monkeypatch.setattr(base, "download", fake_download)
 
@@ -79,12 +84,11 @@ def test_full_guided_loop_persists_the_clip_and_reconciles_the_ledger(monkeypatc
 
 
 def test_daily_spend_counts_only_todays_usage() -> None:
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from diony_contracts.launch import CostBreakdown, ProviderCapability
-    from diony_producer.costs import CostAnalyticsService, UsageSample
-
     from diony_director import ledger
+    from diony_producer.costs import CostAnalyticsService, UsageSample
 
     client = _client()
     client.get("/api/director/status")
@@ -109,7 +113,7 @@ def test_daily_spend_counts_only_todays_usage() -> None:
         )
 
     service = CostAnalyticsService(plane)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     service.record(sample("usage-today", 300_000, now))
     # two days back is before local midnight in every timezone — never flaky
     service.record(sample("usage-past", 500_000, now - timedelta(days=2)))
@@ -158,7 +162,9 @@ def test_transient_network_error_keeps_the_op_runnable(monkeypatch) -> None:
     op_id = proposal["op"]["id"]
 
     def boom(_op):
-        raise base.CloudAdapterTransientError("xAI video submit failed after 3 attempts — ReadError")
+        raise base.CloudAdapterTransientError(
+            "xAI video submit failed after 3 attempts — ReadError"
+        )
 
     monkeypatch.setattr(grok, "submit", boom)
     run = client.post(f"/api/director/ops/{op_id}/run")
@@ -204,7 +210,9 @@ def test_provider_quota_429_pauses_the_wave_and_resumes_after_the_window(monkeyp
     assert entry["kind"] == "quota" and entry["provider"] in {"grok", "google-flow"}
     assert entry["detail"] == "PUBLIC_ERROR_USER_QUOTA_REACHED", "the card gets the bare reason"
     assert entry["resume_at"] > __import__("time").time()
-    assert re.search(r"\b(1[0-2]|[1-9]):[0-5]\d [AP]M [A-Z]{2,5}\b", entry["reason"]), entry["reason"]
+    assert re.search(r"\b(1[0-2]|[1-9]):[0-5]\d [AP]M [A-Z]{2,5}\b", entry["reason"]), entry[
+        "reason"
+    ]
     assert "{" not in entry["reason"]
     assert session_mod.runtime(op_id)["quota_hold_until"] > time_mod.time() + 600
     assert op_id in session_mod.batch_targets(sid)  # still queued for the run
@@ -318,7 +326,8 @@ def test_drafting_is_async_when_the_brain_is_configured(monkeypatch) -> None:
     import threading
     import time
 
-    from diony_director import screenwriter, session as session_mod
+    from diony_director import screenwriter
+    from diony_director import session as session_mod
 
     client = _client()
     sid = client.post("/api/director/sessions").json()["session_id"]
@@ -422,3 +431,76 @@ def test_the_speech_guard_mutes_dirty_and_unverifiable_spoken_clips(monkeypatch)
     assert "mute" not in specs[3], "an unverifiable picture-only clip is left alone"
     muted = {entry["clip"] for entry in report["muted"]}
     assert muted == {"cl-1", "cl-3"}
+
+
+def test_the_ledger_reads_each_provider_in_its_own_currency() -> None:
+    """Grok is metered in dollars, Google Flow spends plan credits; the header
+    meter needs both, lifetime and today, per provider."""
+    from datetime import datetime, timedelta
+
+    from diony_contracts.launch import CostBreakdown, ProviderCapability
+    from diony_director import ledger
+    from diony_producer.costs import CostAnalyticsService, UsageSample
+
+    client = _client()
+    client.get("/api/director/status")
+    plane, ctx = app_module._boot()
+    run = ledger.ensure_run(plane, ctx.workspace.id, ctx.user.id, "s-currency")
+
+    def sample(sample_id: str, provider: str, credits: int, cost: int, occurred_at: datetime):
+        return UsageSample(
+            id=sample_id,
+            workspace_id=ctx.workspace.id,
+            project_id=ledger.DIRECTOR_PROJECT_ID,
+            run_id=run.id,
+            job_id=f"job-{sample_id}",
+            capability=ProviderCapability.VIDEO,
+            provider_id=provider,
+            model="omni-flash" if provider == "google-flow" else "grok-imagine-video-1.5",
+            quantity_microunits=1_000_000,
+            unit="clip",
+            actual_internal_credits=credits,
+            actual_cost_breakdown=CostBreakdown(compute_usd_micros=cost),
+            occurred_at=occurred_at,
+        )
+
+    service = CostAnalyticsService(plane)
+    now = datetime.now(UTC)
+    service.record(sample("usage-grok-today", "grok", 0, 840_000, now))
+    service.record(sample("usage-flow-today", "google-flow", 15, 299_850, now))
+    service.record(sample("usage-flow-past", "google-flow", 12, 239_880, now - timedelta(days=2)))
+
+    body = client.get("/api/director/ledger").json()
+    grok = body["by_provider"]["grok"]
+    flow = body["by_provider"]["google-flow"]
+    assert grok["usd_micros"] == 840_000 and grok["credits"] == 0
+    assert grok["today_usd_micros"] == 840_000
+    assert flow["credits"] == 27 and flow["today_credits"] == 15
+    assert flow["usd_micros"] == 299_850 + 239_880 and flow["today_usd_micros"] == 299_850
+    assert body["today_usd_micros"] == 840_000 + 299_850
+    assert body["flow_plan"] == "pro"
+
+
+def test_the_header_meter_reads_in_the_routes_currency() -> None:
+    """The console shows credits under Google Flow, dollars under Grok, and
+    both under Director's choice — and re-renders when the route changes."""
+    from pathlib import Path
+
+    static = Path(app_module.__file__).resolve().parent / "static"
+    js = (static / "app.js").read_text()
+    html = (static / "index.html").read_text()
+    assert "by_provider" in js and "function renderMeter" in js
+    assert "credits(flow.credits)" in js and "usd(grok.usd_micros" in js
+    assert 'route === "google-flow"' in js and 'route === "grok"' in js
+    assert "Director's choice" not in js and 'value="auto"' not in html
+    assert "renderMeter(); // the meter reads in the route's currency" in js
+    assert "plan credits for Google Flow" in html
+
+
+def test_the_console_and_its_api_are_never_browser_cached() -> None:
+    """A console index cached across a desktop rebuild showed the previous UI."""
+    client = _client()
+    for path in ("/", "/api/director/status", "/static/app.js?v=p53"):
+        res = client.get(path)
+        assert res.status_code == 200, path
+        assert res.headers["cache-control"] == "no-store, max-age=0", path

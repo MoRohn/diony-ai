@@ -1,14 +1,12 @@
-"""Bounded, measured temporal evidence for Wan camera negatives."""
+"""Bounded, measured temporal evidence for generated clips."""
 
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
-
 
 # v2: 320x180 @ 12 fps analysis proxy (v1 was 160x90 @ 8 fps). Stats scale with
 # the proxy, so calibration receipts and stored QC evidence bind to this version.
@@ -109,7 +107,9 @@ def measure_temporal_frames(
         rgb = array[:, :, :3].astype(np.float32) / 255.0
         lumas.append(0.2126 * rgb[:, :, 0] + 0.7152 * rgb[:, :, 1] + 0.0722 * rgb[:, :, 2])
     if len(lumas) < 3:
-        return TemporalQualityReceipt(False, frame_count=len(lumas), error="fewer than three QC frames")
+        return TemporalQualityReceipt(
+            False, frame_count=len(lumas), error="fewer than three QC frames"
+        )
     deltas: list[float] = []
     residuals: list[float] = []
     flicker: list[float] = []
@@ -144,7 +144,7 @@ def measure_negative_quality(
     """Decode a small analysis stream; never retain full-resolution video."""
     import numpy as np
 
-    from diony_producer.gallery_join import resolve_media_tool
+    from diony_producer.media_tools import resolve_media_tool
 
     ffmpeg = resolve_media_tool("ffmpeg")
     if not ffmpeg:
@@ -177,7 +177,9 @@ def measure_negative_quality(
     if process.returncode != 0:
         return TemporalQualityReceipt(
             False,
-            error=(process.stderr.decode("utf-8", errors="replace")[-300:] or "FFmpeg QC decode failed"),
+            error=(
+                process.stderr.decode("utf-8", errors="replace")[-300:] or "FFmpeg QC decode failed"
+            ),
         )
     frame_bytes = width * height * 3
     frames = [
@@ -255,7 +257,9 @@ def sample_frame_indices(frame_count: int, samples: int = 5) -> list[int]:
     total = max(1, int(frame_count))
     last = total - 1
     count = max(2, int(samples)) if total > 1 else 1
-    picks = [round(last * position / (count - 1)) for position in range(count)] if count > 1 else [0]
+    picks = (
+        [round(last * position / (count - 1)) for position in range(count)] if count > 1 else [0]
+    )
     return list(dict.fromkeys(max(0, min(last, index)) for index in picks))
 
 
@@ -284,7 +288,7 @@ def decode_sampled_frames(
     wanted = sorted(dict.fromkeys(int(index) for index in indices))
     if not wanted:
         return []
-    from diony_producer.gallery_join import resolve_media_tool
+    from diony_producer.media_tools import resolve_media_tool
 
     ffmpeg = resolve_media_tool("ffmpeg")
     if not ffmpeg:
@@ -320,9 +324,14 @@ def decode_sampled_frames(
             )
             if process.returncode != 0 or len(process.stdout) < frame_bytes:
                 raise RuntimeError(
-                    process.stderr.decode("utf-8", errors="replace")[-300:] or f"frame {index} seek decode failed"
+                    process.stderr.decode("utf-8", errors="replace")[-300:]
+                    or f"frame {index} seek decode failed"
                 )
-            frames.append(np.frombuffer(process.stdout[:frame_bytes], dtype=np.uint8).reshape(height, width, 3))
+            frames.append(
+                np.frombuffer(process.stdout[:frame_bytes], dtype=np.uint8).reshape(
+                    height, width, 3
+                )
+            )
         return frames
     select = "+".join(f"eq(n\\,{index})" for index in wanted)
     process = subprocess.run(
@@ -349,9 +358,13 @@ def decode_sampled_frames(
         check=False,
     )
     if process.returncode != 0:
-        raise RuntimeError(process.stderr.decode("utf-8", errors="replace")[-300:] or "frame decode failed")
+        raise RuntimeError(
+            process.stderr.decode("utf-8", errors="replace")[-300:] or "frame decode failed"
+        )
     return [
-        np.frombuffer(process.stdout[index : index + frame_bytes], dtype=np.uint8).reshape(height, width, 3)
+        np.frombuffer(process.stdout[index : index + frame_bytes], dtype=np.uint8).reshape(
+            height, width, 3
+        )
         for index in range(0, len(process.stdout) - frame_bytes + 1, frame_bytes)
     ]
 
@@ -386,7 +399,9 @@ def measure_frame_quality_frames(
         contrast.append(std)
         if mean < BLACK_FRAME_MEAN_MAX and std < BLACK_FRAME_STD_MAX:
             black += 1
-            black_at.append(indices[position] if indices is not None and position < len(indices) else position)
+            black_at.append(
+                indices[position] if indices is not None and position < len(indices) else position
+            )
     if not sharpness:
         return FrameQualityReceipt(False, error="no QC frames decoded")
     sharpness_min = _frame_threshold("DIONY_SHARPNESS_MIN", DEFAULT_SHARPNESS_MIN)
@@ -403,9 +418,13 @@ def measure_frame_quality_frames(
         contrast_min=round(min(contrast), 4),
         black_frames=black,
         sharpness_ok=(min(lit) if lit else 0.0) >= sharpness_min,
-        exposure_ok=black == 0 and min(brightness) >= brightness_min and max(brightness) <= brightness_max,
+        exposure_ok=black == 0
+        and min(brightness) >= brightness_min
+        and max(brightness) <= brightness_max,
         contrast_ok=black == 0 and min(contrast) >= contrast_min,
-        sample_indices=tuple(int(value) for value in indices) if indices is not None else tuple(range(len(sharpness))),
+        sample_indices=tuple(int(value) for value in indices)
+        if indices is not None
+        else tuple(range(len(sharpness))),
         black_indices=tuple(black_at),
     )
 
@@ -441,11 +460,13 @@ def channel_stats(frame: object) -> tuple[list[float], list[float]]:
     )
 
 
-def frame_channel_stats(path: Path, *, last: bool = False) -> tuple[list[float], list[float]] | None:
+def frame_channel_stats(
+    path: Path, *, last: bool = False
+) -> tuple[list[float], list[float]] | None:
     """Channel stats of a media file's first (or last) frame on the analysis proxy."""
     import numpy as np
 
-    from diony_producer.gallery_join import resolve_media_tool
+    from diony_producer.media_tools import resolve_media_tool
 
     ffmpeg = resolve_media_tool("ffmpeg")
     if not ffmpeg or not Path(path).is_file():
@@ -476,7 +497,9 @@ def frame_channel_stats(path: Path, *, last: bool = False) -> tuple[list[float],
     if process.returncode != 0 or len(process.stdout) < frame_bytes:
         return None
     usable = len(process.stdout) - len(process.stdout) % frame_bytes
-    frame = np.frombuffer(process.stdout[usable - frame_bytes : usable], dtype=np.uint8).reshape(height, width, 3)
+    frame = np.frombuffer(process.stdout[usable - frame_bytes : usable], dtype=np.uint8).reshape(
+        height, width, 3
+    )
     return channel_stats(frame)
 
 

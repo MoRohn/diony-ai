@@ -11,10 +11,15 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from test_production_flow import _drive as drive
+from test_production_flow import _fake_adapters as fake_adapters
+from test_production_flow import _start as start
 
 from diony_contracts.director import ProductionStyle
 from diony_director import (
     app as app_module,
+)
+from diony_director import (
     assembly,
     compiler,
     narration,
@@ -25,13 +30,12 @@ from diony_director import (
     session,
     styles,
 )
-from test_production_flow import _drive as drive, _fake_adapters as fake_adapters, _start as start
 
 HAVE_FFMPEG = shutil.which("ffmpeg") is not None
 IDEA = "a getaway driver decides to leave town from a neon diner"
 
 
-def _package(style: str = "narrated", policy: str = "auto"):
+def _package(style: str = "narrated", policy: str = "grok"):
     draft = screenwriter.write_script(IDEA, runtime_target_s=60)
     return packagebuilder.build_package(
         "s-style", "a getaway", draft, provider_policy=policy, production_style=style
@@ -76,7 +80,11 @@ def test_the_split_lands_the_voicing_on_every_spoken_clip() -> None:
     assert dialogue.production_style is ProductionStyle.DIALOGUE
     assert {c.audio_packet.voicing for c in _spoken(dialogue)} == {"generated"}
     # picture clips carry no line — their voicing is the untouched default
-    assert all(c.audio_packet.voicing == "post" for c in dialogue.clips if not c.audio_packet.script_excerpt)
+    assert all(
+        c.audio_packet.voicing == "post"
+        for c in dialogue.clips
+        if not c.audio_packet.script_excerpt
+    )
 
     mix = _package("mix")
     on_camera = [c for c in _spoken(mix) if c.clip_class == "sync-dialogue"]
@@ -89,7 +97,7 @@ def test_the_split_lands_the_voicing_on_every_spoken_clip() -> None:
 # --- the compiler ---------------------------------------------------------------
 
 
-@pytest.mark.parametrize("policy", ["auto", "grok", "google-flow"])
+@pytest.mark.parametrize("policy", ["grok", "google-flow"])
 def test_dialogue_prompts_carry_the_line_and_the_instruction_to_voice_it(policy) -> None:
     package = _package("dialogue", policy)
     for clip in _spoken(package):
@@ -153,14 +161,19 @@ def test_a_spoken_clip_gets_the_line_fix_never_the_mute_track_fix() -> None:
     narrated = _package("narrated")
     post = _spoken(narrated)[0]
     post.add_prompt(compiler.compile_clip_prompt(post, narrated))
-    assert compiler.REVISION_DIRECTIVES["fix-audio"] in compiler.revise_prompt(post, narrated, note="fix-audio").prompt
+    assert (
+        compiler.REVISION_DIRECTIVES["fix-audio"]
+        in compiler.revise_prompt(post, narrated, note="fix-audio").prompt
+    )
 
 
 def test_a_failed_line_family_plans_the_line_fix() -> None:
     from diony_contracts.production import ClipReview
 
     failed = ClipReview(
-        id="r-line", clip_id="cl-2-2", verdict="fail",
+        id="r-line",
+        clip_id="cl-2-2",
+        verdict="fail",
         families={"line": "fail", "speech": "pass", "identity": "fail"},
         issues=["the spoken words are not the scripted line"],
     )
@@ -209,7 +222,9 @@ def test_a_spoken_clip_that_says_other_words_fails_its_line(tmp_path, monkeypatc
     package = _package("dialogue")
     clip = _spoken(package)[0]
     monkeypatch.setattr(
-        review, "location_speech", lambda p: _Speech("the weather is lovely in the mountains today", 8, 3.0)
+        review,
+        "location_speech",
+        lambda p: _Speech("the weather is lovely in the mountains today", 8, 3.0),
     )
     result = review.review_clip(_stub(tmp_path), clip)
     assert result.families["line"] == "fail"
@@ -229,7 +244,9 @@ def test_a_spoken_clip_is_honestly_unmeasured_without_a_detector(tmp_path, monke
 def test_a_narrated_clip_never_grows_a_line_family(tmp_path, monkeypatch) -> None:
     package = _package("narrated")
     clip = _spoken(package)[0]
-    monkeypatch.setattr(review, "location_speech", lambda p: _Speech("we finish this tonight", 4, 2.0))
+    monkeypatch.setattr(
+        review, "location_speech", lambda p: _Speech("we finish this tonight", 4, 2.0)
+    )
     result = review.review_clip(_stub(tmp_path), clip)
     assert "line" not in result.families
     assert result.families["speech"] == "fail", "Blueprint 28 still holds on the Narrated style"
@@ -237,7 +254,9 @@ def test_a_narrated_clip_never_grows_a_line_family(tmp_path, monkeypatch) -> Non
 
 def test_a_chain_link_voicing_its_narration_is_measured_for_it(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(review, "location_speech", lambda p: _Speech("the city sleeps", 3, 1.6))
-    spoken = review.review_chain_link(_stub(tmp_path), op_id="op-a", duration_s=8, spoken_line="The city sleeps.")
+    spoken = review.review_chain_link(
+        _stub(tmp_path), op_id="op-a", duration_s=8, spoken_line="The city sleeps."
+    )
     assert spoken.families["line"] == "pass" and spoken.families["speech"] == "pass"
     speechless = review.review_chain_link(_stub(tmp_path), op_id="op-b", duration_s=8)
     assert "line" not in speechless.families
@@ -258,12 +277,28 @@ def _op(op_id: str, *, narr: str = "", voicing: str = "post"):
     )
 
     return DirectorOp(
-        id=op_id, session_id="s-n", op=DirectorOpType.GENERATE, provider=CloudProvider.GROK,
-        model="grok-imagine-video", mode=CloudGenerationMode.T2V, prompt="x", narration=narr,
-        voicing=voicing, duration_s=6,
+        id=op_id,
+        session_id="s-n",
+        op=DirectorOpType.GENERATE,
+        provider=CloudProvider.GROK,
+        model="grok-imagine-video",
+        mode=CloudGenerationMode.T2V,
+        prompt="x",
+        narration=narr,
+        voicing=voicing,
+        duration_s=6,
         estimate=CostEstimate(
-            id="est-n", workspace_id="ws",
-            lines=[CostEstimateLine(label="gen", provider_id="grok", model="grok-imagine-video", unit="clip", usd_micros=1000)],
+            id="est-n",
+            workspace_id="ws",
+            lines=[
+                CostEstimateLine(
+                    label="gen",
+                    provider_id="grok",
+                    model="grok-imagine-video",
+                    unit="clip",
+                    usd_micros=1000,
+                )
+            ],
         ),
     )
 
@@ -275,7 +310,11 @@ def test_the_cue_sheet_skips_clips_that_voice_their_own_line_unless_rescued() ->
     entries = [
         {"op": _op("op-1"), "clip": on_camera, "window": (0.0, 6.0)},
         {"op": _op("op-2"), "clip": voice_over, "window": (0.0, 6.0)},
-        {"op": _op("op-3", narr="It will not wake.", voicing="generated"), "clip": None, "window": (0.0, 4.0)},
+        {
+            "op": _op("op-3", narr="It will not wake.", voicing="generated"),
+            "clip": None,
+            "window": (0.0, 4.0),
+        },
     ]
     cues = narration.cue_sheet(entries)
     assert [c.clip_id for c in cues] == [voice_over.clip_id]
@@ -294,16 +333,27 @@ def test_the_cue_sheet_skips_clips_that_voice_their_own_line_unless_rescued() ->
 def test_assembly_balances_a_spoken_clip_to_the_narrator_level() -> None:
     probes = [{"duration_s": 6.0, "has_audio": True}, {"duration_s": 6.0, "has_audio": True}]
     specs = [{"loudness": narration.NARRATION_LOUDNESS}, {}]
-    graph = ";".join(assembly.build_filter(probes, {}, look=True, loudness_target="streaming", specs=specs))
-    assert f"[0:a]atrim=start=0.000:end=6.000,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,loudnorm=I={narration.NARRATION_LOUDNESS}" in graph
-    assert f"[1:a]atrim=start=0.000:end=6.000,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,loudnorm=I={assembly.PER_CLIP_LOUDNESS}" in graph
+    graph = ";".join(
+        assembly.build_filter(probes, {}, look=True, loudness_target="streaming", specs=specs)
+    )
+    assert (
+        f"[0:a]atrim=start=0.000:end=6.000,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,loudnorm=I={narration.NARRATION_LOUDNESS}"
+        in graph
+    )
+    assert (
+        f"[1:a]atrim=start=0.000:end=6.000,asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,loudnorm=I={assembly.PER_CLIP_LOUDNESS}"
+        in graph
+    )
 
 
 def test_the_speech_guard_keeps_rescues_and_balances_spoken_tracks(monkeypatch, tmp_path) -> None:
     from diony_director import review as review_mod
 
     importlib.reload(app_module)
-    paths = [tmp_path / f"{n}.mp4" for n in ("spoken-heard", "spoken-mute", "spoken-blind", "post-dirty", "post-blind")]
+    paths = [
+        tmp_path / f"{n}.mp4"
+        for n in ("spoken-heard", "spoken-mute", "spoken-blind", "post-dirty", "post-blind")
+    ]
     for p in paths:
         p.write_bytes(b"x")
     detections = {
@@ -341,7 +391,9 @@ def test_no_narrator_rail_means_no_balance(monkeypatch, tmp_path) -> None:
     path.write_bytes(b"x")
     monkeypatch.setattr(review_mod, "location_speech", lambda p: None)
     specs = [{}]
-    report = app_module._speech_guard([path], ["spoken"], [True], specs, ["generated"], has_post_lines=False)
+    report = app_module._speech_guard(
+        [path], ["spoken"], [True], specs, ["generated"], has_post_lines=False
+    )
     assert report["kept"] and report["balanced"] == [] and "loudness" not in specs[0]
 
 
@@ -373,7 +425,10 @@ def test_the_console_chooses_a_style_and_the_lock_freezes_it() -> None:
     sid = client.post("/api/director/sessions").json()["session_id"]
     assert client.get(f"/api/director/sessions/{sid}/settings").json()["style"] == "narrated"
 
-    assert client.post(f"/api/director/sessions/{sid}/style", json={"style": "karaoke"}).status_code == 422
+    assert (
+        client.post(f"/api/director/sessions/{sid}/style", json={"style": "karaoke"}).status_code
+        == 422
+    )
     chosen = client.post(f"/api/director/sessions/{sid}/style", json={"style": "dialogue"})
     assert chosen.status_code == 200 and chosen.json()["style"] == "dialogue"
     assert client.get(f"/api/director/sessions/{sid}/settings").json()["style"] == "dialogue"
@@ -396,7 +451,9 @@ def test_the_console_chooses_a_style_and_the_lock_freezes_it() -> None:
     assert "production style cannot change mid-production" in refused.text
     assert session.style_for(sid) == "mix"
     # the same style again is a no-op, not a refusal
-    assert client.post(f"/api/director/sessions/{sid}/style", json={"style": "mix"}).status_code == 200
+    assert (
+        client.post(f"/api/director/sessions/{sid}/style", json={"style": "mix"}).status_code == 200
+    )
 
 
 AUTHORED_IDEA = (
@@ -493,8 +550,12 @@ def test_a_dialogue_film_cuts_without_a_narrator(monkeypatch, tmp_path) -> None:
     # the subtitles still carry every line, timed to the clip windows
     assert "film.srt" in film["deliverables"] and film["cue_count"] == 4
     edl = json.loads((root / "edl.json").read_text())
-    assert {e["voicing"] for e in edl["events"] if e["clip_class"] in {"sync-dialogue", "vo-over"}} == {"generated"}
-    assert {e["voicing"] for e in edl["events"] if e["clip_class"] not in {"sync-dialogue", "vo-over"}} == {"post"}
+    assert {
+        e["voicing"] for e in edl["events"] if e["clip_class"] in {"sync-dialogue", "vo-over"}
+    } == {"generated"}
+    assert {
+        e["voicing"] for e in edl["events"] if e["clip_class"] not in {"sync-dialogue", "vo-over"}
+    } == {"post"}
 
 
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")
@@ -508,12 +569,16 @@ def test_a_mix_film_narrates_voice_over_balances_dialogue_and_rescues_a_mute_tak
     fake_adapters(monkeypatch, tmp_path)
     sid = start(client)
     client.post(f"/api/director/sessions/{sid}/produce", json={"idea": IDEA, "style": "mix"})
-    locked = client.post(f"/api/director/sessions/{sid}/lock_script").json()
+    client.post(f"/api/director/sessions/{sid}/lock_script").json()
     client.post(f"/api/director/sessions/{sid}/run_batch", json={})
     drive(client, sid)
     package = session.package_for(sid)
     spoken_ids = [c.clip_id for c in package.clips if c.audio_packet.voicing == "generated"]
-    vo_ids = [c.clip_id for c in package.clips if c.audio_packet.script_excerpt and c.audio_packet.voicing == "post"]
+    vo_ids = [
+        c.clip_id
+        for c in package.clips
+        if c.audio_packet.script_excerpt and c.audio_packet.voicing == "post"
+    ]
     assert len(spoken_ids) == 3 and len(vo_ids) == 1
 
     # the cut can hear: two spoken takes voiced their lines, one stayed mute

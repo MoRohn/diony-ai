@@ -3,7 +3,7 @@
 Diony is never cloud-by-default and its test suite must prove it. The wall
 sits at the socket layer because every client — httpx, requests, urllib,
 vendor SDKs — bottoms out in ``socket.connect``. Loopback and AF_UNIX stay
-open: the Producer test client, local Wan/Finish workers, and Desk port probes
+open: the service test clients and the Desk port probes
 need them. ``DIONY_ALLOW_NETWORK=1`` lifts the guard for an explicitly live run.
 
 Each package's ``tests/conftest.py`` registers ``network_guard_fixture`` so the

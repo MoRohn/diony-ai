@@ -24,13 +24,9 @@ def _configure(tmp_path: Path, monkeypatch) -> Path:
         base64.urlsafe_b64encode(b"k" * 32).decode(),
     )
     monkeypatch.setenv("DIONY_EMAIL_TRANSPORT", "capture")
-    monkeypatch.setenv(
-        "DIONY_EMAIL_FROM", "Northlight via Diony AI <invites@northlight.test>"
-    )
+    monkeypatch.setenv("DIONY_EMAIL_FROM", "Northlight via Diony AI <invites@northlight.test>")
     monkeypatch.setenv("DIONY_EMAIL_REPLY_TO", "studio@northlight.test")
-    monkeypatch.setenv(
-        "DIONY_PRODUCER_PUBLIC_URL", "https://producer.northlight.test"
-    )
+    monkeypatch.setenv("DIONY_PRODUCER_PUBLIC_URL", "https://producer.northlight.test")
     return vault
 
 
@@ -100,15 +96,11 @@ def test_email_invitation_acceptance_creates_one_membership_and_cost_center(
     assert any("You're now part of Local Studio" in path.read_text() for path in all_mail)
 
 
-def test_admin_email_invite_api_and_public_accept_flow(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_admin_email_invite_api_and_public_accept_flow(tmp_path: Path, monkeypatch) -> None:
     vault = _configure(tmp_path, monkeypatch)
     plane = ControlPlane()
     context = plane.bootstrap_local()
-    owner_token = issue_token(
-        context.user.id, context.workspace.id, MembershipRole.OWNER
-    )
+    owner_token = issue_token(context.user.id, context.workspace.id, MembershipRole.OWNER)
     client = TestClient(app)
     headers = {"Authorization": f"Bearer {owner_token}"}
 
@@ -126,13 +118,9 @@ def test_admin_email_invite_api_and_public_accept_flow(
     assert invitation.status_code == 201, invitation.text
     invite_body = invitation.json()
     assert invite_body["delivery"]["status"] == "sent"
-    assert invite_body["accept_url"].startswith(
-        "https://producer.northlight.test/#invite="
-    )
+    assert invite_body["accept_url"].startswith("https://producer.northlight.test/#invite=")
 
-    discovered = client.post(
-        "/api/studio-entry/discover", json={"token": invite_body["token"]}
-    )
+    discovered = client.post("/api/studio-entry/discover", json={"token": invite_body["token"]})
     assert discovered.status_code == 200, discovered.text
     assert discovered.json()["studio_name"] == "Local Studio"
 
@@ -258,9 +246,7 @@ def test_approval_required_join_creates_no_cost_center_until_admin_approves(
     workspace = context.workspace.model_copy(
         update={"admission_policy": AdmissionPolicy.ADMIN_APPROVAL}
     )
-    plane.put_document(
-        "workspace", workspace.id, workspace.id, workspace.model_dump(mode="json")
-    )
+    plane.put_document("workspace", workspace.id, workspace.id, workspace.model_dump(mode="json"))
     service = StudioInvitationService(plane)
     created = service.create_invitation(
         workspace_id=workspace.id,
@@ -273,9 +259,7 @@ def test_approval_required_join_creates_no_cost_center_until_admin_approves(
         correlation_id="corr-pending",
     )
     service.request_email_verification(created.token)
-    capture = sorted(
-        (tmp_path / "vault" / ".control" / "mail-capture").glob("*.eml")
-    )[-1]
+    capture = sorted((tmp_path / "vault" / ".control" / "mail-capture").glob("*.eml"))[-1]
     code = service.extract_capture_code(capture)
     verified = service.confirm_email_verification(created.token, code)
     pending = service.accept_invitation(
@@ -287,9 +271,7 @@ def test_approval_required_join_creates_no_cost_center_until_admin_approves(
     assert pending.status == "pending"
     assert pending.request is not None
     assert pending.membership is None
-    pending_mail = list(
-        (tmp_path / "vault" / ".control" / "mail-capture").glob("*.eml")
-    )
+    pending_mail = list((tmp_path / "vault" / ".control" / "mail-capture").glob("*.eml"))
     assert any("YOUR REQUEST IS WITH THE STUDIO" in path.read_text() for path in pending_mail)
     assert not any(
         row.get("user_id") == pending.request.user_id
@@ -305,9 +287,7 @@ def test_approval_required_join_creates_no_cost_center_until_admin_approves(
     assert approved.status == "accepted"
     assert approved.membership is not None
     assert approved.cost_center is not None
-    request_row = plane.get_document(
-        "studio_join_request", pending.request.id, workspace.id
-    )
+    request_row = plane.get_document("studio_join_request", pending.request.id, workspace.id)
     assert request_row["status"] == "approved"
 
 
@@ -329,9 +309,7 @@ def test_removing_member_revokes_access_and_closes_personal_cost_center(
         correlation_id="corr-remove-invite",
     )
     service.request_email_verification(created.token)
-    capture = sorted(
-        (tmp_path / "vault" / ".control" / "mail-capture").glob("*.eml")
-    )[-1]
+    capture = sorted((tmp_path / "vault" / ".control" / "mail-capture").glob("*.eml"))[-1]
     verified = service.confirm_email_verification(
         created.token, service.extract_capture_code(capture)
     )
@@ -349,13 +327,9 @@ def test_removing_member_revokes_access_and_closes_personal_cost_center(
         correlation_id="corr-removed",
     )
     assert removed.status.value == "removed"
-    center = plane.get_document(
-        "cost_center", joined.cost_center.id, context.workspace.id
-    )
+    center = plane.get_document("cost_center", joined.cost_center.id, context.workspace.id)
     assert center["active"] is False
-    removal_mail = list(
-        (tmp_path / "vault" / ".control" / "mail-capture").glob("*.eml")
-    )
+    removal_mail = list((tmp_path / "vault" / ".control" / "mail-capture").glob("*.eml"))
     assert any("YOUR STUDIO ACCESS HAS CLOSED" in path.read_text() for path in removal_mail)
     try:
         plane.authorize(

@@ -20,9 +20,9 @@ from urllib.parse import quote
 import httpx
 
 from diony_contracts.director import DirectorOp
-from diony_director.providers import base
 from diony_director import ratecards
 from diony_director.estimate import OMNI_MODELS
+from diony_director.providers import base
 
 PROVIDER_ID = "google-flow"
 CALL_TIMEOUT_S = 120.0
@@ -126,15 +126,11 @@ def paced(send, *, what: str = "request"):
 
 
 def _post(url: str, *, what: str = "request", **kwargs) -> httpx.Response:
-    return paced(
-        lambda: base.post_with_retries(url, what=f"Flow {what}", **kwargs), what=what
-    )
+    return paced(lambda: base.post_with_retries(url, what=f"Flow {what}", **kwargs), what=what)
 
 
 def _get(url: str, *, what: str = "request", **kwargs) -> httpx.Response:
-    return paced(
-        lambda: base.get_with_retries(url, what=f"Flow {what}", **kwargs), what=what
-    )
+    return paced(lambda: base.get_with_retries(url, what=f"Flow {what}", **kwargs), what=what)
 
 
 def submit_handle(
@@ -208,7 +204,9 @@ def upload_asset(path: Path) -> str:
         url += f"/{quote(account_email(), safe='')}"
     headers = _headers()
     headers["Content-Type"] = content_type
-    response = _post(url, what="asset upload", content=payload, headers=headers, timeout=UPLOAD_TIMEOUT_S)
+    response = _post(
+        url, what="asset upload", content=payload, headers=headers, timeout=UPLOAD_TIMEOUT_S
+    )
     _guard(response, "asset upload")
     body = response.json()
     media_id = body.get("mediaGenerationId")
@@ -276,7 +274,11 @@ def submit(op: DirectorOp) -> base.CloudJobHandle:
     payload["prompt"] = _with_markers(op)
 
     response = _post(
-        f"{api_base()}/videos", what="video submit", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
+        f"{api_base()}/videos",
+        what="video submit",
+        json=payload,
+        headers=_headers(),
+        timeout=CALL_TIMEOUT_S,
     )
     _guard(response)
     body = response.json()
@@ -317,7 +319,11 @@ def submit_image(
     for index, ref in enumerate(references or [], start=1):
         payload[f"reference_{index}"] = _media_ref(ref, what=f"reference_{index}")
     response = _post(
-        f"{api_base()}/images", what="image submit", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
+        f"{api_base()}/images",
+        what="image submit",
+        json=payload,
+        headers=_headers(),
+        timeout=CALL_TIMEOUT_S,
     )
     _guard(response)
     body = response.json()
@@ -338,7 +344,7 @@ def submit_image(
     nested = body.get("response") if isinstance(body.get("response"), dict) else {}
     media = body.get("media") or nested.get("media") or []
     if media and isinstance(media[0], dict):
-        generated = ((media[0].get("image") or {}).get("generatedImage") or {})
+        generated = (media[0].get("image") or {}).get("generatedImage") or {}
         sync_url = str(generated.get("fifeUrl") or "")
         media_generation_id = str(generated.get("mediaGenerationId") or "")
         if sync_url:
@@ -391,11 +397,17 @@ def register_character(
     for index, ref in enumerate(image_media_ids[:MAX_CHARACTER_IMAGES], start=1):
         payload[f"imageReference_{index}"] = _media_ref(ref, what=f"imageReference_{index}")
     response = _post(
-        f"{api_base()}/characters", what="character register", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
+        f"{api_base()}/characters",
+        what="character register",
+        json=payload,
+        headers=_headers(),
+        timeout=CALL_TIMEOUT_S,
     )
     _guard(response)
     body = response.json()
-    ref = str(body.get("entityId") or body.get("character") or body.get("ref") or body.get("id") or "")
+    ref = str(
+        body.get("entityId") or body.get("character") or body.get("ref") or body.get("id") or ""
+    )
     if not ref:
         raise base.CloudAdapterError(f"Flow returned no character ref: {body}")
     return ref
@@ -406,7 +418,11 @@ def register_voice(name: str, audio_media_id: str) -> str:
     if account_email():
         payload["email"] = account_email()
     response = _post(
-        f"{api_base()}/voices", what="voice register", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
+        f"{api_base()}/voices",
+        what="voice register",
+        json=payload,
+        headers=_headers(),
+        timeout=CALL_TIMEOUT_S,
     )
     _guard(response)
     body = response.json()
@@ -438,7 +454,11 @@ def submit_extend(
     if account_email():
         payload["email"] = account_email()
     response = _post(
-        f"{api_base()}/videos/extend", what="extend submit", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
+        f"{api_base()}/videos/extend",
+        what="extend submit",
+        json=payload,
+        headers=_headers(),
+        timeout=CALL_TIMEOUT_S,
     )
     _guard(response)
     body = response.json()
@@ -476,7 +496,9 @@ def submit_upscale(media_generation_id: str, *, resolution: str = "1080p") -> ba
         )
     source = str(media_generation_id or "")
     if not source:
-        raise base.CloudAdapterError("Flow upscale needs the mediaGenerationId of a Flow-generated video")
+        raise base.CloudAdapterError(
+            "Flow upscale needs the mediaGenerationId of a Flow-generated video"
+        )
     if Path(source).is_file() or source.startswith(("http://", "https://", "data:")):
         raise base.CloudAdapterError(
             "Flow upscale needs the mediaGenerationId of a Flow-generated video — a "
@@ -490,7 +512,11 @@ def submit_upscale(media_generation_id: str, *, resolution: str = "1080p") -> ba
         "async": True,
     }
     response = _post(
-        f"{api_base()}/videos/upscale", what="upscale submit", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
+        f"{api_base()}/videos/upscale",
+        what="upscale submit",
+        json=payload,
+        headers=_headers(),
+        timeout=CALL_TIMEOUT_S,
     )
     _guard(response, "upscale")
     body = response.json()
@@ -643,7 +669,10 @@ def poll(handle: base.CloudJobHandle) -> base.CloudJobStatus:
             metadata["credits_after"] = handle.metadata["credits_after"]
         return base.CloudJobStatus(state="done", result_url=str(sync_url), metadata=metadata)
     response = _get(
-        f"{api_base()}/jobs/{handle.external_id}", what="job poll", headers=_headers(), timeout=CALL_TIMEOUT_S
+        f"{api_base()}/jobs/{handle.external_id}",
+        what="job poll",
+        headers=_headers(),
+        timeout=CALL_TIMEOUT_S,
     )
     _guard(response)
     body = response.json()
@@ -658,9 +687,7 @@ def poll(handle: base.CloudJobHandle) -> base.CloudJobStatus:
     if media and isinstance(media, list):
         first = media[0] if isinstance(media[0], dict) else {}
         url = str(first.get("videoUrl") or first.get("imageUrl") or first.get("url") or "")
-        media_generation_id = str(
-            first.get("mediaGenerationId") or first.get("name") or ""
-        )
+        media_generation_id = str(first.get("mediaGenerationId") or first.get("name") or "")
         if media_generation_id:
             metadata["media_generation_id"] = media_generation_id
     remaining = nested.get("remainingCredits", body.get("remainingCredits"))
@@ -674,14 +701,14 @@ def poll(handle: base.CloudJobHandle) -> base.CloudJobStatus:
         words, filtered = failure_detail(body)
         if filtered:
             return base.CloudJobStatus(state="moderated", detail=words, metadata=metadata)
-        return base.CloudJobStatus(state="failed", detail=words or "generation failed", metadata=metadata)
+        return base.CloudJobStatus(
+            state="failed", detail=words or "generation failed", metadata=metadata
+        )
     # Terminal states outside the happy vocabulary must land terminal — an
     # unmapped "moderated"/"cancelled" would poll as "running" forever and
     # wedge the whole batch behind a job that already died.
     if raw_state in {"moderated", "blocked", "rejected", "content_violation"}:
-        return base.CloudJobStatus(
-            state="moderated", detail=detail or raw_state, metadata=metadata
-        )
+        return base.CloudJobStatus(state="moderated", detail=detail or raw_state, metadata=metadata)
     if raw_state in {"cancelled", "canceled", "aborted", "timeout", "timed_out"}:
         return base.CloudJobStatus(state="failed", detail=detail or raw_state, metadata=metadata)
     if raw_state == "expired":

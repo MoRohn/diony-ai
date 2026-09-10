@@ -191,7 +191,7 @@ def _custom_lexicon() -> dict[str, dict[str, dict[str, str]]]:
         return _CUSTOM_CACHE["value"]
     try:
         raw = json.loads(path.read_text())
-    except Exception:  # noqa: BLE001 - missing/corrupt file → no overlay
+    except Exception:
         raw = {}
     out: dict[str, dict[str, dict[str, str]]] = {"cameras": {}, "atmospheres": {}}
     other_family = {"cameras": ATMOSPHERES, "atmospheres": CAMERAS}
@@ -311,7 +311,9 @@ _ATMO_CONFLICTS: dict[str, re.Pattern[str]] = {
     "dust": re.compile(r"\b(?:rain|rainy|raining|downpour|storm|stormy|snow|snowy)\b", re.I),
     "rain": re.compile(r"\b(?:clear|sunny|cloudless|dry|snow|snowy|snowing)\b", re.I),
     "fog": re.compile(r"\b(?:clear|sunny|cloudless)\b", re.I),
-    "heat": re.compile(r"\b(?:rain|rainy|raining|snow|snowy|storm|stormy|cold|freezing|winter)\b", re.I),
+    "heat": re.compile(
+        r"\b(?:rain|rainy|raining|snow|snowy|storm|stormy|cold|freezing|winter)\b", re.I
+    ),
     "smoke": re.compile(r"\b(?:downpour|storm|stormy)\b", re.I),
 }
 
@@ -367,7 +369,7 @@ def expand(text: str) -> tuple[str, bool, bool]:
         # Two adjacent tokens must not fuse into one run-on ("camera not
         # moving dust particles swirl…"): a comma lands between their
         # clauses. A prose continuation stays seamless — no comma.
-        following = re.match(r"\s+/([A-Za-z][A-Za-z0-9_-]*)", match.string[match.end():])
+        following = re.match(r"\s+/([A-Za-z][A-Za-z0-9_-]*)", match.string[match.end() :])
         if following and following.group(1).lower() in known:
             return clause + ","
         return clause

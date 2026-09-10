@@ -12,7 +12,6 @@ from diony_producer.observability import log_event
 from diony_producer.providers import ProviderRegistry
 from diony_producer.workflow import DurableWorkflowEngine
 
-
 ACTIVE = {
     JobStatus.QUEUED,
     JobStatus.RUNNING,

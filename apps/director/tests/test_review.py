@@ -37,11 +37,27 @@ def test_real_clip_measures_duration_and_audio(tmp_path) -> None:
     path = tmp_path / "clip.mp4"
     subprocess.run(
         [
-            "ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc2=size=320x180:duration={dialogue.duration_s}",
-            "-f", "lavfi", "-i", f"sine=frequency=440:duration={dialogue.duration_s}",
-            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", str(path),
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc2=size=320x180:duration={dialogue.duration_s}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=440:duration={dialogue.duration_s}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-c:a",
+            "aac",
+            "-shortest",
+            str(path),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     result = review.review_clip(path, dialogue)
     assert result.families["delivery"] == "pass"
@@ -58,10 +74,20 @@ def test_silent_clip_fails_audio_when_speech_is_scripted(tmp_path) -> None:
     path = tmp_path / "silent.mp4"
     subprocess.run(
         [
-            "ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc2=size=320x180:duration={dialogue.duration_s}",
-            "-c:v", "libx264", "-preset", "ultrafast", str(path),
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc2=size=320x180:duration={dialogue.duration_s}",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            str(path),
         ],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     result = review.review_clip(path, dialogue)
     assert result.families["audio"] == "fail"
@@ -113,7 +139,9 @@ def test_speech_is_honestly_unmeasured_without_a_detector(tmp_path, monkeypatch)
 
 
 def test_a_chain_link_with_a_talking_voice_fails_its_review(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(review, "location_speech", lambda p: _Speech("hello there my friend", 4, 1.8))
+    monkeypatch.setattr(
+        review, "location_speech", lambda p: _Speech("hello there my friend", 4, 1.8)
+    )
     result = review.review_chain_link(_stub_clip(tmp_path), op_id="op-1", duration_s=8)
     assert result.families["speech"] == "fail"
     assert result.verdict == "fail"

@@ -6,7 +6,7 @@ alwaysApply: false
 
 # Contracts
 
-`packages/contracts` is the Producer API.
+`packages/contracts` is the machine API for the Director and the Producer. Cloud core: `director.py`, `production.py`, `launch.py`, `cluster.py`.
 
 - Pydantic v2 models are canonical. Export JSON Schema with `diony-export-schemas` after field changes.
 - Notes must attach to `shot_id` or `take_id`.
@@ -15,4 +15,5 @@ alwaysApply: false
 - Masters (`prores_hq`, `dnxhr_hq`) require `finish=deliverable`.
 - QC `pass` cannot coexist with a hard fail (identity, morph, flicker, duration, legal).
 - Bible canvas is 1920×1080, fps 23.976 or 24.000.
-- Fixture `demo_project()` must stay valid; Producer and Conductor shells load it.
+- Fixture `demo_project()` must stay valid; the Producer shell loads it.
+- `DirectorOp` refuses a priced op without provider, model, and a `CostEstimate` whose lines reconcile to its total.

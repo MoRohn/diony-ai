@@ -3,7 +3,7 @@
 import pytest
 
 from diony_contracts.director import CloudProvider
-from diony_director import compiler, packagebuilder, screenwriter, splitter
+from diony_director import compiler, packagebuilder, screenwriter
 
 
 def _package():

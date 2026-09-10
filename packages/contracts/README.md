@@ -1,11 +1,18 @@
 # diony-contracts
 
-Machine API for Diony AI Producer. If a field is not on these objects, it does not exist for production. Human notes attach to Shot and Take IDs. Clip feedback is a `ClipEdit` that mints a child Take; artifacts are immutable per version. New Idea Shots carry a typed `WanPromptPlan`: Subject → Motion → Camera → Aesthetic/Lighting → Environment Dynamics, dual-expert intent, engine/audio strategy, qualified adapters, continuity risks, dispatch diagnostics, negative terms, and a complete prompt receipt (Blueprint 20). Spoken Shots add immutable `VoiceCasting`, `DialogueTurn`, content-addressed `WanSpeechRequest`, threshold-enforced `SpeechQCReceipt`, and Take-bound `SpeechClipPackage` contracts (Blueprint 22). Every new Wan negative adds a Take-bound `GenerationExecutionReceipt` naming the actual lane, pinned quality fields, fallback reason, timing, and addressed output (Blueprint 23). A `ProductionStopReceipt` durably records the Keep/Delete choice, completed Take ids, and either the incomplete 720p result receipt or deleted generated-file count.
+The Diony AI machine API. If a field is not on one of these objects, it does not exist for production.
+
+| Module | Holds |
+|---|---|
+| `director.py` | `DirectorOp` (a priced operation never exists without a reconciling `CostEstimate`), `CloudProvider`, `CloudGenerationMode`, `EngineMode`, `ProductionStyle` |
+| `production.py` | `Script`, `Scene`, `ScriptLine`, `CharacterProfile`, `IdentityCard`, `SettingProfile`, `VoiceProfile`, `ClipUnit`, `AudioPacket`, `ContinuityLock`, `PromptVersion`, `ClipReview`, `LookBible`, `MasterPrompt`, `AssemblyMap`, `ProductionPackage` (Blueprints 26–33) |
+| `launch.py` | The launch control plane (Blueprint 16): workspaces, memberships, invitations, Cost Centers, workflows, generation jobs, usage and cost allocation, audit |
+| `cluster.py` | The engine choice Studio writes and the vault root every surface shares |
+| `montage.py` | The program look (`LookProfile`, `look_filter`) and subtitle sidecars (`SubtitleCue`, `render_srt`, `render_vtt`) |
+| `testing/` | The offline network guard every test session installs |
 
 ```bash
 pip install -e packages/contracts
-diony-export-schemas   # jsonschema/ + examples/pilot.json
+diony-export-schemas          # regenerates jsonschema/ — the sync test refuses a stale export
 python -m pytest packages/contracts
 ```
-
-See Blueprints `05-producer-pipeline.md`, `20-wan22-prompt-intelligence.md`, and `22-voice-performance-system.md`.

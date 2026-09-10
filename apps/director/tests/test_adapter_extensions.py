@@ -34,7 +34,9 @@ def test_flow_image_submit_targets_the_images_endpoint(monkeypatch) -> None:
 def test_flow_poll_surfaces_media_generation_id_and_image_urls(monkeypatch) -> None:
     body = {
         "status": "completed",
-        "media": [{"mediaGenerationId": "user:img9", "imageUrl": "https://flow-content.google/p.png"}],
+        "media": [
+            {"mediaGenerationId": "user:img9", "imageUrl": "https://flow-content.google/p.png"}
+        ],
     }
     monkeypatch.setattr(flow.httpx, "get", lambda url, **kw: _Response(body))
     handle = flow.submit_handle("j-img-1", model="nano-banana-2", duration_s=0)
@@ -86,12 +88,15 @@ def test_grok_edit_and_extension_endpoints(monkeypatch) -> None:
 
     monkeypatch.setattr(grok.httpx, "post", fake_post)
     edit = grok.submit_edit(
-        "https://vault/clip.mp4", prompt="remove the earrings, keep everything else",
+        "https://vault/clip.mp4",
+        prompt="remove the earrings, keep everything else",
         model="grok-imagine-video",
     )
     ext = grok.submit_extension(
-        "https://vault/clip.mp4", prompt="continue the push-in and the wind",
-        model="grok-imagine-video", duration_s=6,
+        "https://vault/clip.mp4",
+        prompt="continue the push-in and the wind",
+        model="grok-imagine-video",
+        duration_s=6,
     )
     assert edit.external_id == "req-1" and ext.external_id == "req-2"
     assert seen[0][0].endswith("/v1/videos/edits")
@@ -217,6 +222,12 @@ def test_flow_upscale_credits_follow_the_documented_resolution_prices() -> None:
     metered = flow.submit_handle(
         "j", model=flow.UPSCALE_MODEL, duration_s=0, resolution="1080p", credits_before=100
     )
-    assert flow.credits_used(metered, base.CloudJobStatus(
-        state="done", result_url="https://x/y.mp4", metadata={"credits_after": 97}
-    )) == 3
+    assert (
+        flow.credits_used(
+            metered,
+            base.CloudJobStatus(
+                state="done", result_url="https://x/y.mp4", metadata={"credits_after": 97}
+            ),
+        )
+        == 3
+    )

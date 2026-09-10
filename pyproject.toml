@@ -1,0 +1,68 @@
+# Repository-wide tool configuration. This file is not a package: the seven
+# installable distributions live under apps/* and packages/* and carry their
+# own pyproject.toml. Keep tool settings here so ruff and pytest behave the
+# same on every machine and in CI.
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+    ".venv",
+    "dist",
+    "build",
+    "apps/*/data",
+    "__pycache__",
+]
+
+[tool.ruff.lint]
+# A deliberately pinned set. The rules are the ones the codebase already
+# honours; new rule families are a decision, not a ruff upgrade side effect.
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "RUF100",  # unused noqa
+]
+ignore = [
+    "E501",   # line length is the formatter's job; long literals stay readable
+    "B008",   # FastAPI dependency defaults are function calls by design
+    "B023",   # closures over loop variables are used deliberately in the UI glue
+    "B904",   # `raise ... from err` is chosen per site
+    "B905",   # zip() strictness is decided per call site
+    "E741",   # single-letter names in short comprehensions read fine
+]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "diony_contracts",
+    "diony_desk",
+    "diony_director",
+    "diony_finish",
+    "diony_producer",
+    "diony_wan",
+    "diony_wizard",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = false
+
+[tool.pytest.ini_options]
+# `pytest` from the repository root runs every package. The root conftest.py
+# installs the offline network guard for the whole session.
+testpaths = [
+    "packages/contracts",
+    "apps/wizard",
+    "apps/wan",
+    "apps/finish",
+    "apps/producer",
+    "apps/director",
+    "apps/desk",
+]
+addopts = "-p no:cacheprovider"
+filterwarnings = [
+    "ignore::DeprecationWarning:starlette.testclient",
+]

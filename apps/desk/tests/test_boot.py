@@ -14,29 +14,26 @@ from diony_desk.boot import (
     desk_already_installed,
     desk_is_current,
     desk_state_ok,
+    diagnostic_snapshot,
     ensure_product_names,
     ensure_running,
     find_python,
     finish_open,
-    diagnostic_snapshot,
     listener_is_desk,
-    listener_is_diony,
+    producer_html_ok,
+    producer_state_ok,
+    producer_ui_stamp,
+    product_names_live,
     public_state,
     python_help_url,
     repo_root,
-    set_state,
-    service_command,
     serve,
+    service_command,
+    set_state,
     should_open_lobby,
     should_open_studio_after_work,
     user_data_dir,
-    producer_state_ok,
-    producer_html_ok,
-    producer_ui_stamp,
-    product_names_live,
-    wizard_html_ok,
     wizard_state_ok,
-    wizard_ui_stamp,
     work,
 )
 
@@ -57,7 +54,7 @@ def test_editables_cover_the_desk() -> None:
     assert EDITABLES[0] == "packages/contracts"
     assert "apps/wizard" in EDITABLES
     assert "apps/producer" in EDITABLES
-    assert "apps/finish" in EDITABLES
+    assert "apps/finish" not in EDITABLES and "apps/wan" not in EDITABLES
     assert "apps/desk" in EDITABLES
     for rel in EDITABLES:
         assert (root / rel / "pyproject.toml").is_file()
@@ -83,9 +80,7 @@ def test_missing_venv_is_not_installed(tmp_path) -> None:
 
 
 def test_installed_app_uses_normal_platform_data_directories(tmp_path) -> None:
-    mac = user_data_dir(
-        platform_name="darwin", environ={}, home=tmp_path / "maker"
-    )
+    mac = user_data_dir(platform_name="darwin", environ={}, home=tmp_path / "maker")
     windows = user_data_dir(
         platform_name="win32",
         environ={"LOCALAPPDATA": str(tmp_path / "LocalAppData")},
@@ -136,23 +131,6 @@ def test_duplicate_launch_lands_on_the_studio_opening(monkeypatch) -> None:
     assert opened == [STUDIO_URL]
 
 
-def test_duplicate_launch_on_a_signed_site_lands_on_producer(monkeypatch) -> None:
-    """Legacy engine: reopening during Production must not send the user to Setup."""
-    opened: list[str] = []
-    monkeypatch.setenv("DIONY_ENGINE", "local_legacy")
-    monkeypatch.setattr("diony_desk.boot.claim_desk_port", lambda root=None: True)
-    monkeypatch.setattr("diony_desk.boot.desk_already_installed", lambda root=None: True)
-    monkeypatch.setattr("diony_desk.boot.product_names_live", lambda: True)
-    monkeypatch.setattr("diony_desk.boot.wizard_signed", lambda host="127.0.0.1", port=None: True)
-    monkeypatch.setattr("diony_desk.boot.port_open", lambda port: True)
-    monkeypatch.setattr("diony_desk.boot.open_browser", opened.append)
-
-    from diony_desk.boot import PRODUCER_URL, main
-
-    assert main([]) == 0
-    assert opened == [PRODUCER_URL]
-
-
 def test_duplicate_launch_does_not_repeat_startup_work(monkeypatch) -> None:
     opened: list[str] = []
     monkeypatch.setattr("diony_desk.boot.claim_desk_port", lambda root=None: True)
@@ -170,9 +148,7 @@ def test_duplicate_launch_does_not_repeat_startup_work(monkeypatch) -> None:
     assert opened == ["http://127.0.0.1:8765/"]
 
 
-def test_launch_in_progress_exits_before_starting_another_desk(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_launch_in_progress_exits_before_starting_another_desk(monkeypatch, tmp_path: Path) -> None:
     handoffs: list[bool] = []
     monkeypatch.setattr("diony_desk.boot.configure_runtime_environment", lambda root=None: tmp_path)
     monkeypatch.setattr("diony_desk.boot.claim_desk_port", lambda root=None: False)
@@ -231,9 +207,7 @@ def test_diagnostics_use_safe_metadata_and_persistent_log_paths(
 ) -> None:
     root = tmp_path / "product"
     root.mkdir()
-    (root / "desktop-release.json").write_text(
-        '{"version":"1.2.3","payload_sha256":"abc123"}\n'
-    )
+    (root / "desktop-release.json").write_text('{"version":"1.2.3","payload_sha256":"abc123"}\n')
     state = tmp_path / "state"
     monkeypatch.setenv("DIONY_DESK_DATA", str(state))
     snapshot = diagnostic_snapshot(root)
@@ -284,11 +258,7 @@ def test_renamed_diony_app_is_recognized_as_the_existing_desk(monkeypatch) -> No
     monkeypatch.setattr("diony_desk.boot.listener_pids", lambda port: [4242])
     monkeypatch.setattr(
         "diony_desk.boot.process_command",
-        lambda pid: (
-            "/Applications/Diony.app/Contents/MacOS/Diony AI"
-            if pid == 4242
-            else ""
-        ),
+        lambda pid: "/Applications/Diony.app/Contents/MacOS/Diony AI" if pid == 4242 else "",
     )
 
     assert listener_is_desk() is True
@@ -300,9 +270,7 @@ def test_claim_desk_port_replaces_a_stale_diony_desk(monkeypatch, tmp_path: Path
     monkeypatch.setattr("diony_desk.boot.desk_is_current", lambda root=None: False)
     monkeypatch.setattr("diony_desk.boot.listener_is_desk", lambda port=8765: True)
     monkeypatch.setattr("diony_desk.boot.stop_listener", lambda port: stopped.append(port))
-    monkeypatch.setattr(
-        "diony_desk.boot.port_open", lambda port, host="127.0.0.1": False
-    )
+    monkeypatch.setattr("diony_desk.boot.port_open", lambda port, host="127.0.0.1": False)
 
     assert claim_desk_port(tmp_path) is False
     assert stopped == [8765]
@@ -339,9 +307,7 @@ def test_claim_current_desk_stops_legacy_duplicate_desk_listeners(
         lambda host="127.0.0.1", port=8765: port in {8765, 8766, 8768},
     )
     monkeypatch.setattr("diony_desk.boot.desk_is_current", lambda root=None: True)
-    monkeypatch.setattr(
-        "diony_desk.boot.listener_is_desk", lambda port=8765: port in {8765, 8766}
-    )
+    monkeypatch.setattr("diony_desk.boot.listener_is_desk", lambda port=8765: port in {8765, 8766})
     monkeypatch.setattr(
         "diony_desk.boot.port_open",
         lambda port, host="127.0.0.1": port in {8765, 8766, 8768},
@@ -396,7 +362,7 @@ def test_lobby_is_startup_only_and_hands_off_in_the_same_page() -> None:
     assert 'class="diony-mark"' in html
     assert '<span class="diony-word">Diony</span>' in html
     assert "diony-ai-optical-mark" not in html
-    assert '<i>/</i><span>Diony</span><strong>AI</strong>' not in html
+    assert "<i>/</i><span>Diony</span><strong>AI</strong>" not in html
     assert 'src="/dionysus-sketch.png?v=desk15"' in html
     sketch = (STATIC_DIR / "dionysus-sketch.png").read_bytes()
     assert sketch.startswith(b"\x89PNG\r\n\x1a\n")
@@ -419,8 +385,8 @@ def test_lobby_is_startup_only_and_hands_off_in_the_same_page() -> None:
     word_start = css.index(".diony-word {")
     word_rule = css[word_start : css.index("}", word_start)]
     assert "var(--display)" in word_rule
-    assert '<span>OWN YOUR STUDIO</span>' not in html
-    assert '<strong>PRODUCE AT COST</strong>' not in html
+    assert "<span>OWN YOUR STUDIO</span>" not in html
+    assert "<strong>PRODUCE AT COST</strong>" not in html
     assert 'class="motto-rule"' not in html
     assert ".header-motto strong" in css
     assert ".motto-rule" not in css
@@ -429,17 +395,14 @@ def test_lobby_is_startup_only_and_hands_off_in_the_same_page() -> None:
     assert ".sheet::before" not in css
     assert "left: 45%" not in css
     motto_action_start = css.index(".header-motto strong {")
-    motto_action_rule = css[
-        motto_action_start : css.index(".bays .on", motto_action_start)
-    ]
+    motto_action_rule = css[motto_action_start : css.index(".bays .on", motto_action_start)]
     assert "linear-gradient" in motto_action_rule
     assert "var(--signal)" in motto_action_rule
     assert "var(--ember)" in motto_action_rule
     assert "translateY" not in motto_action_rule
     boot = (Path(__file__).resolve().parents[1] / "src/diony_desk/boot.py").read_text()
     assert (
-        "Preparing the Diony AI Studio & Producer. "
-        "This computer may ask for a password once."
+        "Preparing the Diony AI Studio & Producer. This computer may ask for a password once."
     ) in boot
     assert "Laying http://studio.diony.local" not in boot
     assert "Enter to Start New or Join Studio" not in boot
@@ -474,7 +437,10 @@ def test_lobby_is_startup_only_and_hands_off_in_the_same_page() -> None:
     assert "need_names" in js
     assert 'body[data-phase="need_names"] h1' in css
     assert "Connect Studio" not in boot
-    assert "Password for the product names" not in (Path(__file__).resolve().parents[1] / "src/diony_desk/boot.py").read_text()
+    assert (
+        "Password for the product names"
+        not in (Path(__file__).resolve().parents[1] / "src/diony_desk/boot.py").read_text()
+    )
     assert "window.location.href = state.wizard" not in js
     assert "http://studio.diony.local" in js
     assert "wizard" + ".diony.local" not in js
@@ -482,33 +448,27 @@ def test_lobby_is_startup_only_and_hands_off_in_the_same_page() -> None:
     assert "127.0.0.1:8788" not in js
     assert "python3.11" in sh.read_text()
     assert "Double-click" in sh.read_text() or "Finder" in sh.read_text()
-    assert "Open Diony AI.command" in start.read_text()
-    assert "python.org" in start.read_text()
-    assert "https://www.runpod.io/" in start.read_text()
-    assert "https://enverge.ai/" in start.read_text()
-    assert start.read_text().find("https://www.runpod.io/") < start.read_text().find("https://enverge.ai/")
-    assert "Local Quad-Spark Cluster" in start.read_text()
-    assert "2× DGX Spark GB10" in start.read_text() or "2x DGX Spark GB10" in start.read_text()
-    assert "NVIDIA B300" in start.read_text()
-    assert "Leased Dual-Spark Cluster" in start.read_text()
-    assert "Leased B300" in start.read_text()
-    assert "Leased B200" in start.read_text()
-    assert "NVIDIA B200" in start.read_text()
-    assert "Blueprint 14" in start.read_text()
-    assert "Container disk" in start.read_text()
-    assert "Volume disk" in start.read_text()
-    assert "Network volume" in start.read_text() or "Network Volume" in start.read_text()
-    assert "Deploy Pod" in start.read_text()
-    assert "800 GB" in start.read_text()
-    assert "10 GB" in start.read_text()
-    assert "1000 GB" in start.read_text()
-    assert "recommended" in start.read_text().lower()
-    assert "/workspace" in start.read_text()
-    assert "SSH over exposed TCP" in start.read_text()
-    assert "SSH port" in start.read_text()
-    assert "28231" in start.read_text()
-    assert "Jupyter" in start.read_text()
-    assert "ssh.runpod.io" in start.read_text()
+    text = start.read_text()
+    # The first-open guide is the cloud product: keys, ffmpeg, the three
+    # surfaces, and the Director flow. The hardware rail is a footnote.
+    assert "Open Diony AI.command" in text
+    assert "Open Diony AI.bat" in text
+    assert "open-diony.sh" in text
+    assert "python.org" in text
+    assert "keys.env" in text
+    assert "XAI_API_KEY" in text
+    assert "USEAPI_TOKEN" in text
+    assert "DIONY_FLOW_PLAN" in text
+    assert "https://console.x.ai/" in text
+    assert "https://useapi.net/" in text
+    assert "ffmpeg" in text
+    assert "http://studio.diony.local" in text
+    assert "Continue to the Director" in text
+    assert "Run & Assemble All" in text
+    assert "diony-director-check" in text
+    assert "/classic" not in text
+    assert "Runpod" not in text and "Enverge" not in text
+    assert "Quad-Spark" not in text
 
 
 def test_product_urls_are_named() -> None:
@@ -522,7 +482,11 @@ def test_product_urls_are_named() -> None:
     assert '"ensure"' in text
     assert "127.0.0.1:8787" not in text
     assert "127.0.0.1:8788" not in text
-    assert "webbrowser.open(STUDIO_URL)" in text or 'webbrowser.open(url)' in text or "open_browser(" in text
+    assert (
+        "webbrowser.open(STUDIO_URL)" in text
+        or "webbrowser.open(url)" in text
+        or "open_browser(" in text
+    )
 
 
 def test_lobby_uses_the_diony_brand_design_system() -> None:
@@ -549,7 +513,7 @@ def test_ensure_product_names_runs_gateway(monkeypatch, tmp_path) -> None:
     class Proc:
         returncode = 0
 
-    def fake_run(cmd, **kwargs):  # noqa: ANN001
+    def fake_run(cmd, **kwargs):
         calls.append(list(cmd))
         return Proc()
 
@@ -618,9 +582,15 @@ def test_failed_names_stay_on_lobby(monkeypatch) -> None:
     monkeypatch.setattr("diony_desk.boot.ensure_product_names", lambda root=None: False)
     monkeypatch.setattr("diony_desk.boot.product_names_live", lambda: False)
     monkeypatch.setattr("diony_desk.boot.wizard_state_ok", lambda host="127.0.0.1", port=None: True)
-    monkeypatch.setattr("diony_desk.boot.wizard_html_ok", lambda root=None, host="127.0.0.1", port=None: True)
-    monkeypatch.setattr("diony_desk.boot.producer_state_ok", lambda host="127.0.0.1", port=None: True)
-    monkeypatch.setattr("diony_desk.boot.producer_html_ok", lambda root=None, host="127.0.0.1", port=None: True)
+    monkeypatch.setattr(
+        "diony_desk.boot.wizard_html_ok", lambda root=None, host="127.0.0.1", port=None: True
+    )
+    monkeypatch.setattr(
+        "diony_desk.boot.producer_state_ok", lambda host="127.0.0.1", port=None: True
+    )
+    monkeypatch.setattr(
+        "diony_desk.boot.producer_html_ok", lambda root=None, host="127.0.0.1", port=None: True
+    )
     set_state(phase="looking", detail="", error="", log=[])
     work()
     state = public_state()
@@ -649,14 +619,9 @@ def test_wizard_state_ok_rejects_500(monkeypatch) -> None:
     assert wizard_state_ok() is False
 
 
-@pytest.mark.parametrize(
-    ("check", "stamp"),
-    ((wizard_html_ok, "brand11"), (producer_html_ok, "brand7")),
-)
-def test_ui_health_check_reads_version_marker_after_20kb(
-    monkeypatch, check, stamp: str
-) -> None:
-    payload = b"x" * 30000 + f'app.js?v={stamp}'.encode()
+@pytest.mark.parametrize(("check", "stamp"), ((producer_html_ok, "brand7"),))
+def test_ui_health_check_reads_version_marker_after_20kb(monkeypatch, check, stamp: str) -> None:
+    payload = b"x" * 30000 + f"app.js?v={stamp}".encode()
 
     class Resp:
         status = 200
@@ -675,22 +640,17 @@ def test_ui_health_check_reads_version_marker_after_20kb(
             return None
 
     monkeypatch.setattr("diony_desk.boot.http.client.HTTPConnection", lambda *_a, **_k: Conn())
-    monkeypatch.setattr(
-        "diony_desk.boot.wizard_ui_stamp"
-        if check is wizard_html_ok
-        else "diony_desk.boot.producer_ui_stamp",
-        lambda root=None: stamp,
-    )
+    monkeypatch.setattr("diony_desk.boot.producer_ui_stamp", lambda root=None: stamp)
 
     assert check() is True
 
 
-def test_producer_state_ok_requires_a_real_project_payload(monkeypatch) -> None:
+def test_producer_state_ok_requires_the_engine_payload(monkeypatch) -> None:
     class Resp:
         status = 200
 
         def read(self, _n: int = 0) -> bytes:
-            return b'{"id":"project-one"}'
+            return b'{"cloud":true,"engine_choice":"grok"}'
 
     class Conn:
         requested = ""
@@ -708,8 +668,8 @@ def test_producer_state_ok_requires_a_real_project_payload(monkeypatch) -> None:
     assert producer_state_ok() is True
 
 
-def test_producer_state_ok_accepts_a_large_project_payload(monkeypatch) -> None:
-    payload = ('{"id":"project-large","brief":"' + ("x" * 20000) + '"}').encode()
+def test_producer_state_ok_accepts_a_large_payload(monkeypatch) -> None:
+    payload = ('{"cloud":true,"note":"' + ("x" * 20000) + '"}').encode()
 
     class Resp:
         status = 200
@@ -733,16 +693,8 @@ def test_producer_state_ok_accepts_a_large_project_payload(monkeypatch) -> None:
 
 def test_producer_ui_stamp_matches_html() -> None:
     stamp = producer_ui_stamp()
-    assert stamp == "p5"
+    assert stamp == "p7"
     html = repo_root() / "apps" / "producer" / "src" / "diony_producer" / "static" / "index.html"
-    assert f"app.js?v={stamp}" in html.read_text(encoding="utf-8")
-    assert f"app.css?v={stamp}" in html.read_text(encoding="utf-8")
-
-
-def test_wizard_ui_stamp_matches_html() -> None:
-    stamp = wizard_ui_stamp()
-    assert stamp == "brand17"
-    html = repo_root() / "apps" / "wizard" / "src" / "diony_wizard" / "static" / "index.html"
     assert f"app.js?v={stamp}" in html.read_text(encoding="utf-8")
     assert f"app.css?v={stamp}" in html.read_text(encoding="utf-8")
 
@@ -767,12 +719,16 @@ def test_ensure_running_restarts_unhealthy_wizard(monkeypatch, tmp_path) -> None
     wizard.write_text("ok\n")
     producer.write_text("ok\n")
 
-    def fake_script(name: str, root=None):  # noqa: ANN001
+    def fake_script(name: str, root=None):
         return wizard if "wizard" in name else producer
 
     monkeypatch.setattr("diony_desk.boot.venv_script", fake_script)
-    monkeypatch.setattr("diony_desk.boot.port_open", lambda port, host="127.0.0.1": bool(listening.get(port)))
-    monkeypatch.setattr("diony_desk.boot.wizard_state_ok", lambda host="127.0.0.1", port=None: health["ok"])
+    monkeypatch.setattr(
+        "diony_desk.boot.port_open", lambda port, host="127.0.0.1": bool(listening.get(port))
+    )
+    monkeypatch.setattr(
+        "diony_desk.boot.wizard_state_ok", lambda host="127.0.0.1", port=None: health["ok"]
+    )
     monkeypatch.setattr("diony_desk.boot.wait_port", lambda port, timeout=40.0: True)
     monkeypatch.setattr("diony_desk.boot.ensure_product_names", lambda root=None: True)
     monkeypatch.setattr("diony_desk.boot.finish_open", lambda names_ok=False: None)
@@ -784,7 +740,7 @@ def test_ensure_running_restarts_unhealthy_wizard(monkeypatch, tmp_path) -> None
         listening[port] = False
         health["ok"] = False
 
-    def fake_start(script, log_name, root) -> None:  # noqa: ANN001
+    def fake_start(script, log_name, root) -> None:
         started.append(log_name)
         if log_name == "wizard.log":
             listening[8787] = True
@@ -812,11 +768,13 @@ def test_ensure_running_restarts_stale_ui(monkeypatch, tmp_path) -> None:
     wizard.write_text("ok\n")
     producer.write_text("ok\n")
 
-    def fake_script(name: str, root=None):  # noqa: ANN001
+    def fake_script(name: str, root=None):
         return wizard if "wizard" in name else producer
 
     monkeypatch.setattr("diony_desk.boot.venv_script", fake_script)
-    monkeypatch.setattr("diony_desk.boot.port_open", lambda port, host="127.0.0.1": bool(listening.get(port)))
+    monkeypatch.setattr(
+        "diony_desk.boot.port_open", lambda port, host="127.0.0.1": bool(listening.get(port))
+    )
     monkeypatch.setattr("diony_desk.boot.wizard_state_ok", lambda host="127.0.0.1", port=None: True)
     monkeypatch.setattr(
         "diony_desk.boot.wizard_html_ok",
@@ -832,7 +790,7 @@ def test_ensure_running_restarts_stale_ui(monkeypatch, tmp_path) -> None:
         stopped.append(port)
         listening[port] = False
 
-    def fake_start(script, log_name, root) -> None:  # noqa: ANN001
+    def fake_start(script, log_name, root) -> None:
         started.append(log_name)
         if log_name == "wizard.log":
             listening[8787] = True
@@ -857,9 +815,7 @@ def test_ensure_running_restarts_stale_producer(monkeypatch, tmp_path) -> None:
     for name in ("diony-wizard", "diony-producer"):
         (tmp_path / name).write_text("ok\n")
 
-    monkeypatch.setattr(
-        "diony_desk.boot.venv_script", lambda name, root=None: tmp_path / name
-    )
+    monkeypatch.setattr("diony_desk.boot.venv_script", lambda name, root=None: tmp_path / name)
     monkeypatch.setattr(
         "diony_desk.boot.port_open",
         lambda port, host="127.0.0.1": bool(listening.get(port)),
@@ -893,12 +849,8 @@ def test_ensure_running_restarts_stale_producer(monkeypatch, tmp_path) -> None:
 def test_unknown_process_on_product_port_is_never_killed(monkeypatch, tmp_path) -> None:
     for name in ("diony-wizard", "diony-producer"):
         (tmp_path / name).write_text("ok\n")
-    monkeypatch.setattr(
-        "diony_desk.boot.venv_script", lambda name, root=None: tmp_path / name
-    )
-    monkeypatch.setattr(
-        "diony_desk.boot.port_open", lambda port, host="127.0.0.1": port == 8787
-    )
+    monkeypatch.setattr("diony_desk.boot.venv_script", lambda name, root=None: tmp_path / name)
+    monkeypatch.setattr("diony_desk.boot.port_open", lambda port, host="127.0.0.1": port == 8787)
     monkeypatch.setattr("diony_desk.boot.wizard_is_current", lambda root=None: False)
     monkeypatch.setattr("diony_desk.boot.listener_is_diony", lambda port: False)
     stopped: list[int] = []
@@ -917,7 +869,9 @@ def test_work_restarts_when_state_is_dead(monkeypatch) -> None:
         "diony_desk.boot.port_open",
         lambda port, host="127.0.0.1": port in {8787, 8788},
     )
-    monkeypatch.setattr("diony_desk.boot.wizard_state_ok", lambda host="127.0.0.1", port=None: False)
+    monkeypatch.setattr(
+        "diony_desk.boot.wizard_state_ok", lambda host="127.0.0.1", port=None: False
+    )
     monkeypatch.setattr(
         "diony_desk.boot.ensure_running",
         lambda root: called.append(root) or finish_open(names_ok=True),
@@ -955,130 +909,6 @@ def test_work_checks_each_runtime_once_and_repairs_stale_producer(monkeypatch) -
     assert len(find_calls) == 1
     assert repaired
     assert public_state()["phase"] == "ready"
-
-
-def test_wizard_signed_reads_the_whole_state_payload(monkeypatch) -> None:
-    """A signed site's state is larger than any fixed read cap."""
-    import json as _json
-
-    from diony_desk import boot
-
-    big = {"complete": True, "active_step": None, "steps": [{"log": ["x" * 500] * 40}]}
-    body = _json.dumps(big).encode()
-    assert len(body) > 12000
-
-    class Resp:
-        status = 200
-
-        def read(self, size=None):
-            return body if size is None else body[:size]
-
-    class Conn:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def request(self, *args, **kwargs):
-            pass
-
-        def getresponse(self):
-            return Resp()
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(boot.http.client, "HTTPConnection", Conn)
-    assert boot.wizard_signed() is True
-    assert boot.wizard_state_ok() is True
-
-
-def _studio_conn(payload: dict):
-    import json as _json
-
-    body = _json.dumps(payload).encode()
-
-    class Resp:
-        status = 200
-
-        def read(self, size=None):
-            return body if size is None else body[:size]
-
-    class Conn:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def request(self, *args, **kwargs):
-            pass
-
-        def getresponse(self):
-            return Resp()
-
-        def close(self):
-            pass
-
-    return Conn
-
-
-def test_a_restored_lock_is_not_signed_until_studio_identifies_its_gpu(monkeypatch) -> None:
-    """The desk must not send a launch to Producer for a lease that was recycled."""
-    from diony_desk import boot
-
-    base = {"complete": True, "active_step": None, "steps": []}
-    for status in ("unverified", "identifying"):
-        monkeypatch.setattr(
-            boot.http.client, "HTTPConnection", _studio_conn({**base, "signed_gpu": {"status": status}})
-        )
-        assert boot.studio_signed_state() == "identifying"
-        assert boot.wizard_signed() is False
-        assert boot.studio_identifying() is True
-    monkeypatch.setattr(
-        boot.http.client, "HTTPConnection", _studio_conn({**base, "signed_gpu": {"status": "missing"}})
-    )
-    assert boot.studio_signed_state() == "unsigned"
-    assert boot.wizard_signed() is False
-    for status in ("identified", "recorded", ""):
-        monkeypatch.setattr(
-            boot.http.client, "HTTPConnection", _studio_conn({**base, "signed_gpu": {"status": status}})
-        )
-        assert boot.wizard_signed() is True
-    # A Studio without the field (older payload) still reads as signed.
-    monkeypatch.setattr(boot.http.client, "HTTPConnection", _studio_conn(base))
-    assert boot.wizard_signed() is True
-    assert boot.studio_identifying() is False
-
-
-def test_landing_waits_through_identification_then_lands_on_the_answer(monkeypatch) -> None:
-    from diony_desk import boot
-
-    # This is the legacy local engine's landing; the cloud engine lands on the
-    # Director and never consults the signed-GPU line (test_director_registration).
-    monkeypatch.setenv("DIONY_ENGINE", "local_legacy")
-    monkeypatch.setattr(boot.time, "sleep", lambda _s: None)
-    monkeypatch.setattr(boot, "port_open", lambda port: True)
-
-    def script(states: list[str]) -> None:
-        idx = {"n": -1}
-
-        def signed(host="127.0.0.1", port=None):
-            idx["n"] = min(idx["n"] + 1, len(states) - 1)
-            return states[idx["n"]] == "signed"
-
-        def identifying(host="127.0.0.1", port=None):
-            return states[max(idx["n"], 0)] == "identifying"
-
-        monkeypatch.setattr(boot, "wizard_signed", signed)
-        monkeypatch.setattr(boot, "studio_identifying", identifying)
-
-    # Identified after a few polls: Producer.
-    script(["identifying"] * 3 + ["signed"])
-    assert boot.landing_url(wait=0.0, identify_wait=5.0) == boot.PRODUCER_URL
-
-    # Missing after identification: Studio (Connect), even though the lock said complete.
-    script(["identifying"] * 3 + ["unsigned"])
-    assert boot.landing_url(wait=0.0, identify_wait=5.0) == boot.STUDIO_URL
-
-    # Identification that never resolves falls back to Studio once identify_wait expires.
-    script(["identifying"])
-    assert boot.landing_url(wait=0.0, identify_wait=0.0) == boot.STUDIO_URL
 
 
 def test_agent_scratch_never_ships_in_a_release_payload() -> None:

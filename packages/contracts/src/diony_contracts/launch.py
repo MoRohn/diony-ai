@@ -1,13 +1,13 @@
 """Launch control-plane contracts.
 
-These models make Diony's local/leased production system durable, portable, and
-multi-workspace ready without changing the DeepSeek + Wan + diony_sr_v1 engine
-contract.  They are intentionally provider-neutral and JSON serializable.
+These models make Diony's production system durable, portable, and
+multi-workspace ready without changing the Director's contracts. They are
+intentionally provider-neutral and JSON serializable.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class MembershipRole(StrEnum):
@@ -183,8 +183,7 @@ class Membership(BaseModel):
     @property
     def can_manage(self) -> bool:
         return (
-            self.status == MembershipStatus.ACTIVE
-            and self.role.rank >= MembershipRole.ADMIN.rank
+            self.status == MembershipStatus.ACTIVE and self.role.rank >= MembershipRole.ADMIN.rank
         )
 
 

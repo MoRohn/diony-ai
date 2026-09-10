@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="/static/app.css?v=p51">
+<link rel="stylesheet" href="/static/app.css?v=p53">
 </head>
 <body>
 
@@ -58,7 +58,7 @@
     <span class="chip" id="grok-chip">grok —</span>
     <span class="chip" id="flow-chip">flow —</span>
     <span class="chip" id="brain-chip">brain —</span>
-    <span class="chip cost spendstack" id="spent-chip" title="Total spent across all sessions; daily is today's spend">
+    <span class="chip cost spendstack" id="spent-chip" title="Spend across all sessions in the route's currency: USD for Grok Imagine, plan credits for Google Flow; today is today's spend">
       <span class="spendrow"><span class="spendlbl">total</span><span class="spendval" id="spent-total">$0.00</span></span>
       <span class="spendrow"><span class="spendlbl">today</span><span class="spendval" id="spent-today">$0.00</span></span>
     </span>
@@ -92,8 +92,7 @@
           <label class="pill" title="Which engine rolls the pictures">
             <span class="plabel">Provider</span>
             <select id="provider">
-              <option value="auto" selected>Auto</option>
-              <option value="grok">Grok Imagine</option>
+              <option value="grok" selected>Grok Imagine</option>
               <option value="google-flow">Google Flow</option>
             </select>
           </label>
@@ -179,6 +178,6 @@
     </footer>
   </div>
 </div>
-<script src="/static/app.js?v=p51"></script>
+<script src="/static/app.js?v=p53"></script>
 </body>
 </html>

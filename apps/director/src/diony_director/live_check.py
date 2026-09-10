@@ -66,7 +66,7 @@ def live_probe() -> dict:
                 "ok": True,
                 "detail": f"auth OK; models visible: {', '.join(video) or f'{len(models)} total'}",
             }
-        except Exception as err:  # noqa: BLE001 - a probe reports, it never raises
+        except Exception as err:
             out["grok"] = {"ok": False, "detail": f"auth failed: {err}"}
 
     if not flow.configured():
@@ -112,7 +112,7 @@ def live_probe() -> dict:
                 "detail": detail,
                 "accounts": len(accounts),
             }
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:
             out["google-flow"] = {"ok": False, "detail": f"auth failed: {err}"}
 
     return out
@@ -126,21 +126,29 @@ def roll_one(provider: str) -> dict:
     from diony_contracts.director import (
         CloudGenerationMode,
         CloudProvider,
-        DirectorOpType,
         DirectorOp,
+        DirectorOpType,
     )
     from diony_director import estimate as estimate_mod
 
     config.load_keys_env()
     if provider == "grok":
-        chosen, model, duration, resolution = CloudProvider.GROK, "grok-imagine-video-1.5", 1, "480p"
+        chosen, model, duration, resolution = (
+            CloudProvider.GROK,
+            "grok-imagine-video-1.5",
+            1,
+            "480p",
+        )
     else:
         # 8s: the live account grid is 8s-only on every veo tier (4/6s never
         # appear in GET /accounts/{email} model lists, whatever the plan)
         chosen, model, duration, resolution = CloudProvider.GOOGLE_FLOW, "veo-3.1-lite", 8, "720p"
     est = estimate_mod.estimate_op(
-        provider=chosen, model=model, mode=CloudGenerationMode.T2V,
-        duration_s=duration, resolution=resolution,
+        provider=chosen,
+        model=model,
+        mode=CloudGenerationMode.T2V,
+        duration_s=duration,
+        resolution=resolution,
     )
     op = DirectorOp(
         id=f"op-check-{uuid.uuid4().hex[:8]}",
@@ -155,7 +163,9 @@ def roll_one(provider: str) -> dict:
         estimate=est,
     )
     adapter = grok if provider == "grok" else flow
-    print(f"submitting: {model} {duration}s {resolution} — estimated ${est.total_usd_micros / 1e6:.2f}")
+    print(
+        f"submitting: {model} {duration}s {resolution} — estimated ${est.total_usd_micros / 1e6:.2f}"
+    )
     handle = adapter.submit(op)
     print(f"submitted: {handle.external_id}; polling…")
     deadline = time.monotonic() + 600
@@ -182,8 +192,12 @@ def roll_one(provider: str) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="diony-director-check")
-    parser.add_argument("--live", action="store_true", help="run $0 auth probes against both providers")
-    parser.add_argument("--roll-one", choices=["grok", "flow"], help="submit ONE minimal paid generation")
+    parser.add_argument(
+        "--live", action="store_true", help="run $0 auth probes against both providers"
+    )
+    parser.add_argument(
+        "--roll-one", choices=["grok", "flow"], help="submit ONE minimal paid generation"
+    )
     parser.add_argument("--yes", action="store_true", help="confirm the paid --roll-one")
     parser.add_argument(
         "--reconnect",
@@ -205,7 +219,12 @@ def main(argv: list[str] | None = None) -> int:
         from diony_director import cast as cast_mod
 
         detector, recognizer = cast_mod.stage_face_models()
-        print(json.dumps({"face_models": {"detector": str(detector), "recognizer": str(recognizer)}}, indent=2))
+        print(
+            json.dumps(
+                {"face_models": {"detector": str(detector), "recognizer": str(recognizer)}},
+                indent=2,
+            )
+        )
         return 0
 
     report = readiness_report()

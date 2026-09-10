@@ -1,73 +1,254 @@
-"""Gallery is the inventory of finished full clips — one card per produced show.
+"""The Finished Clips inventory: every clip and film the Director printed.
 
-Coverage takes stay inside Production lineage. Gallery never lists SH-010…SH-060.
+Items come from the Director's own records — each session's ``state.json``
+beside its media under ``{vault}/director/{session}/``. A clip is a completed
+generation op whose media landed (``{job_id}.mp4``); a film is the session's
+assembled ``film.mp4``. Thumbnails are first frames cached beside the media.
+Nothing here renders anything but a frame; the cut and the stitch are ffmpeg
+concat jobs the Producer runs on request.
 """
 
 from __future__ import annotations
 
 import hashlib
-import os
+import json
 import re
+import shutil
 import subprocess
-import threading
-from datetime import datetime, timezone
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
-from diony_contracts.enums import (
-    ArtifactKind,
-    GalleryCompositionStatus,
-    ProductionStopDisposition,
-)
-from diony_contracts.models import Asset, Project
-from diony_contracts.stitch import program_master_rel, stitch_events
-from diony_contracts.wan_prompt import prompt_receipt_sha256
-from diony_finish.pipeline import finished_media_has_picture
-from diony_producer.gallery_join import probe_media, resolve_media_tool
-from diony_producer.vault import abs_path, list_vault_projects, persist_project
+from diony_contracts.cluster import cluster_root
+from diony_producer.media_tools import resolve_media_tool
+
+_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
+_VIDEO_OPS = {"generate", "extend", "edit", "upscale"}
 
 
-_SAFE_CLIP_ID = re.compile(r"[^A-Za-z0-9._-]+")
-_PREVIEW_LOCK = threading.Lock()
-_HASH_LOCK = threading.Lock()
-_HASH_CACHE: dict[tuple[str, int, int], str] = {}
+class GalleryError(LookupError):
+    pass
 
 
-def _visual_qc_required() -> bool:
-    disabled = {"1", "true", "yes", "on"}
-    return not (
-        os.environ.get("DIONY_DRY_RUN", "").strip().lower() in disabled
-        or os.environ.get("DIONY_FINISH_FAKE", "").strip().lower() in disabled
-    )
+def director_root() -> Path:
+    return cluster_root() / "director"
 
 
-def _project_inventory(current: Project) -> tuple[Project, ...]:
-    projects: list[Project] = []
+def _safe(value: str) -> str:
+    return _SAFE.sub("-", str(value or "")).strip(".-")[:80]
+
+
+def _load_state(session_dir: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads((session_dir / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _iso(stat) -> str:
+    return datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat()
+
+
+def _item_id(session: str, name: str) -> str:
+    return f"{session}:{name}"
+
+
+def _urls(item_id: str, cache_key: str) -> dict[str, str]:
+    encoded = quote(item_id, safe="")
+    return {
+        "file_url": f"/api/gallery/items/{encoded}/file?v={cache_key}",
+        "download_url": f"/api/gallery/items/{encoded}/file?download=true&v={cache_key}",
+        "thumbnail_url": f"/api/gallery/items/{encoded}/thumbnail?v={cache_key}",
+        "details_url": f"/api/gallery/items/{encoded}/details",
+        "remove_url": f"/api/gallery/items/{encoded}",
+    }
+
+
+def _cache_key(path: Path) -> str:
+    stat = path.stat()
+    return hashlib.sha256(f"{path}|{stat.st_size}|{stat.st_mtime_ns}".encode()).hexdigest()[:12]
+
+
+def _film_item(session: str, session_dir: Path, state: dict[str, Any] | None) -> dict | None:
+    film = session_dir / "film.mp4"
+    if not film.is_file():
+        return None
+    stat = film.stat()
+    logline = ""
+    if state:
+        package = state.get("package") or {}
+        logline = str(package.get("idea") or package.get("logline") or "")
+    item_id = _item_id(session, "film")
+    return {
+        "id": item_id,
+        "kind": "film",
+        "session": session,
+        "title": f"Film · {session}",
+        "plate": "assembled film",
+        "prompt": logline,
+        "provider": "",
+        "model": "",
+        "duration_s": None,
+        "resolution": "",
+        "bytes": stat.st_size,
+        "created_at": _iso(stat),
+        "playable": True,
+        "deliverables": sorted(
+            name
+            for name in ("film.srt", "film.vtt", "edl.json", "assembly-map.json", "qc-packet.json")
+            if (session_dir / name).is_file()
+        ),
+        **_urls(item_id, _cache_key(film)),
+    }
+
+
+def _clip_items(session: str, session_dir: Path, state: dict[str, Any] | None) -> list[dict]:
+    rows: list[dict] = []
+    ops = (state or {}).get("ops") or []
     seen: set[str] = set()
-    for project in (current, *list_vault_projects()):
-        if project.id in seen or project.deleted_at is not None:
+    for index, op in enumerate(ops, start=1):
+        if not isinstance(op, dict):
             continue
-        seen.add(project.id)
-        projects.append(project)
-    return tuple(projects)
+        job_id = str(op.get("job_id") or "")
+        if not job_id or op.get("status") != "completed" or op.get("op") not in _VIDEO_OPS:
+            continue
+        media = session_dir / f"{job_id}.mp4"
+        if not media.is_file():
+            continue
+        seen.add(media.name)
+        stat = media.stat()
+        item_id = _item_id(session, media.stem)
+        rows.append(
+            {
+                "id": item_id,
+                "kind": "clip",
+                "session": session,
+                "op_id": str(op.get("id") or ""),
+                "title": f"Clip {index} · {session}",
+                "plate": f"{op.get('provider', '')} · {op.get('model', '')}".strip(" ·"),
+                "prompt": str(op.get("prompt") or ""),
+                "rationale": str(op.get("rationale") or ""),
+                "provider": str(op.get("provider") or ""),
+                "model": str(op.get("model") or ""),
+                "mode": str(op.get("mode") or ""),
+                "duration_s": _float(op.get("duration_s")),
+                "resolution": str(op.get("resolution") or ""),
+                "estimate_usd_micros": _estimate_micros(op),
+                "bytes": stat.st_size,
+                "created_at": str(op.get("created_at") or _iso(stat)),
+                "playable": True,
+                **_urls(item_id, _cache_key(media)),
+            }
+        )
+    # media the record does not name (an older state format) still lists,
+    # honestly labelled as unrecorded
+    for media in sorted(session_dir.glob("job-*.mp4")):
+        if media.name in seen:
+            continue
+        stat = media.stat()
+        item_id = _item_id(session, media.stem)
+        rows.append(
+            {
+                "id": item_id,
+                "kind": "clip",
+                "session": session,
+                "op_id": "",
+                "title": f"Clip · {media.stem}",
+                "plate": "unrecorded clip",
+                "prompt": "",
+                "rationale": "",
+                "provider": "",
+                "model": "",
+                "mode": "",
+                "duration_s": None,
+                "resolution": "",
+                "estimate_usd_micros": 0,
+                "bytes": stat.st_size,
+                "created_at": _iso(stat),
+                "playable": True,
+                **_urls(item_id, _cache_key(media)),
+            }
+        )
+    return rows
 
 
-def _thumbnail_rel(clip_id: str, source: Path) -> str:
-    stat = source.stat()
-    fingerprint = hashlib.sha256(
-        f"{clip_id}|{source}|{stat.st_size}|{stat.st_mtime_ns}".encode()
-    ).hexdigest()[:12]
-    safe = _SAFE_CLIP_ID.sub("-", clip_id).strip(".-") or "clip"
-    return f"gallery/thumbnails/{safe[:80]}-{fingerprint}.jpg"
+def _float(value) -> float | None:
+    try:
+        return float(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
 
 
-def _browser_preview_rel(clip_id: str, source: Path) -> str:
-    stat = source.stat()
-    fingerprint = hashlib.sha256(
-        f"{clip_id}|{source}|{stat.st_size}|{stat.st_mtime_ns}".encode()
-    ).hexdigest()[:12]
-    safe = _SAFE_CLIP_ID.sub("-", clip_id).strip(".-") or "clip"
-    return f"gallery/previews/{safe[:80]}-{fingerprint}.mp4"
+def _estimate_micros(op: dict[str, Any]) -> int:
+    estimate = op.get("estimate")
+    if isinstance(estimate, dict):
+        try:
+            return int(estimate.get("total_usd_micros") or 0)
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
+
+def gallery_items() -> list[dict]:
+    """Every finished film and clip on this desk, newest session first."""
+    root = director_root()
+    if not root.is_dir():
+        return []
+    sessions = []
+    for session_dir in root.iterdir():
+        if not session_dir.is_dir() or session_dir.name.startswith("."):
+            continue
+        try:
+            sessions.append((session_dir.stat().st_mtime, session_dir))
+        except OSError:
+            continue
+    items: list[dict] = []
+    for _, session_dir in sorted(sessions, key=lambda row: row[0], reverse=True):
+        state = _load_state(session_dir)
+        film = _film_item(session_dir.name, session_dir, state)
+        if film:
+            items.append(film)
+        items.extend(_clip_items(session_dir.name, session_dir, state))
+    return items
+
+
+def gallery_payload() -> dict:
+    items = gallery_items()
+    return {
+        "items": items,
+        "count": len(items),
+        "films": sum(1 for item in items if item["kind"] == "film"),
+        "clips": sum(1 for item in items if item["kind"] == "clip"),
+        "join_minimum": 2,
+    }
+
+
+def _resolve(item_id: str) -> tuple[Path, Path]:
+    """(session dir, media file) for an item id, refusing anything outside the vault."""
+    session, _, name = str(item_id).partition(":")
+    if not session or not name or _safe(session) != session or _safe(name) != name:
+        raise GalleryError("Gallery clip is not available")
+    root = director_root().resolve()
+    session_dir = (root / session).resolve()
+    if not session_dir.is_relative_to(root) or not session_dir.is_dir():
+        raise GalleryError("Gallery clip is not available")
+    media = session_dir / ("film.mp4" if name == "film" else f"{name}.mp4")
+    if not media.is_file():
+        raise GalleryError("Gallery clip is not available")
+    return session_dir, media
+
+
+def gallery_media_path(item_id: str) -> Path:
+    return _resolve(item_id)[1]
+
+
+def gallery_thumbnail_path(item_id: str) -> Path:
+    session_dir, media = _resolve(item_id)
+    destination = session_dir / "thumbs" / f"{media.stem}-{_cache_key(media)}.jpg"
+    return ensure_first_frame(media, destination)
 
 
 def ensure_first_frame(source: Path, destination: Path) -> Path:
@@ -76,7 +257,7 @@ def ensure_first_frame(source: Path, destination: Path) -> Path:
         return destination
     ffmpeg = resolve_media_tool("ffmpeg")
     if not ffmpeg:
-        raise RuntimeError("First-frame previews require the bundled FFmpeg tool")
+        raise RuntimeError("First-frame previews require ffmpeg")
     destination.parent.mkdir(parents=True, exist_ok=True)
     pending = destination.with_name(f".{destination.stem}.part{destination.suffix}")
     pending.unlink(missing_ok=True)
@@ -102,7 +283,7 @@ def ensure_first_frame(source: Path, destination: Path) -> Path:
     try:
         subprocess.run(command, check=True, capture_output=True, timeout=45)
         if not pending.is_file() or pending.stat().st_size <= 4:
-            raise RuntimeError("FFmpeg did not produce a first-frame preview")
+            raise RuntimeError("ffmpeg did not produce a first-frame preview")
         pending.replace(destination)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         pending.unlink(missing_ok=True)
@@ -110,556 +291,187 @@ def ensure_first_frame(source: Path, destination: Path) -> Path:
     return destination
 
 
-def ensure_browser_preview(source: Path, destination: Path) -> Path:
-    """Cache an HTML-video-safe H.264 4:2:0 + AAC version of a broadcast master."""
-    with _PREVIEW_LOCK:
-        if destination.is_file() and destination.stat().st_size > 32:
-            return destination
-        ffmpeg = resolve_media_tool("ffmpeg")
-        if not ffmpeg:
-            raise RuntimeError("Gallery playback requires the bundled FFmpeg tool")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        pending = destination.with_name(f".{destination.stem}.part{destination.suffix}")
-        pending.unlink(missing_ok=True)
-        command = [
-            ffmpeg,
-            "-nostdin",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-i",
-            str(source),
+def gallery_item_details(item_id: str) -> dict[str, Any]:
+    """The record behind one card: the prompt that rolled, the model, the
+    estimate, the reference stills the session carried, the deliverables."""
+    session_dir, media = _resolve(item_id)
+    state = _load_state(session_dir) or {}
+    session = session_dir.name
+    ops = state.get("ops") or []
+    op = next(
+        (o for o in ops if isinstance(o, dict) and str(o.get("job_id") or "") == media.stem), None
+    )
+    package = state.get("package") or {}
+    uploads = []
+    for upload in state.get("uploads") or []:
+        if not isinstance(upload, dict):
+            continue
+        path = Path(str(upload.get("path") or ""))
+        uploads.append(
+            {
+                "name": str(upload.get("name") or path.name),
+                "role": str(upload.get("role") or "reference"),
+                "bytes": path.stat().st_size if path.is_file() else 0,
+            }
+        )
+    details: dict[str, Any] = {
+        "clip_id": item_id,
+        "session": session,
+        "kind": "film" if media.name == "film.mp4" else "clip",
+        "idea": str(package.get("idea") or package.get("logline") or ""),
+        "prompt": str(op.get("prompt") or "") if op else "",
+        "prompt_version": str(op.get("prompt_version") or "") if op else "",
+        "rationale": str(op.get("rationale") or "") if op else "",
+        "provider": str(op.get("provider") or "") if op else "",
+        "model": str(op.get("model") or "") if op else "",
+        "mode": str(op.get("mode") or "") if op else "",
+        "duration_s": _float(op.get("duration_s")) if op else None,
+        "resolution": str(op.get("resolution") or "") if op else "",
+        "estimate_usd_micros": _estimate_micros(op) if op else 0,
+        "narration": str(op.get("narration") or "") if op else "",
+        "references": uploads,
+        "deliverables": sorted(
+            p.name
+            for p in session_dir.iterdir()
+            if p.is_file() and p.suffix in {".srt", ".vtt", ".json"} and p.name != "state.json"
+        ),
+        "bytes": media.stat().st_size,
+    }
+    return details
+
+
+def remove_gallery_item(item_id: str) -> dict[str, str]:
+    """Media only: the ledger and the session record keep every receipt."""
+    _, media = _resolve(item_id)
+    media.unlink()
+    thumbs = media.parent / "thumbs"
+    if thumbs.is_dir():
+        for stale in thumbs.glob(f"{media.stem}-*.jpg"):
+            stale.unlink(missing_ok=True)
+    return {
+        "removed": item_id,
+        "detail": f"{media.name} was removed; its receipt stays on the ledger.",
+    }
+
+
+def stitch_items(item_ids: list[str], *, title: str = "") -> dict:
+    """Join selected clips and films, in the given order, into one new film
+    session (``join-*``) that lists and serves like any other."""
+    if len(item_ids) < 2:
+        raise ValueError("select at least two clips to stitch")
+    ffmpeg = resolve_media_tool("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError(
+            "ffmpeg was not found — install it (brew install ffmpeg) or set DIONY_FFMPEG"
+        )
+    sources = [_resolve(item_id)[1] for item_id in item_ids]
+    join_id = f"join-{uuid.uuid4().hex[:8]}"
+    dest_dir = director_root() / join_id
+    dest = dest_dir / "film.mp4"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    listing = dest_dir / "inputs.txt"
+    listing.write_text(
+        "".join("file '" + str(src).replace("'", "'\\''") + "'\n" for src in sources),
+        encoding="utf-8",
+    )
+    (dest_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "session_id": join_id,
+                "joined_from": item_ids,
+                "title": title,
+                "package": {"idea": title or f"Stitched from {len(sources)} clips"},
+                "ops": [],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def _cleanup_partial() -> None:
+        dest.unlink(missing_ok=True)
+        listing.unlink(missing_ok=True)
+
+    try:
+        copy = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(listing),
+                "-c",
+                "copy",
+                str(dest),
+            ],
+            capture_output=True,
+            timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        _cleanup_partial()
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise RuntimeError("stitch timed out on the copy pass")
+    if copy.returncode != 0 or not dest.is_file() or dest.stat().st_size < 1024:
+        chains, concat_inputs = [], []
+        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+        for src in sources:
+            cmd += ["-i", str(src)]
+        for index in range(len(sources)):
+            chains.append(
+                f"[{index}:v]scale=1280:720:force_original_aspect_ratio=decrease,"
+                f"pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24,format=yuv420p[v{index}]"
+            )
+            chains.append(
+                f"[{index}:a]aresample=48000,aformat=channel_layouts=stereo,"
+                f"loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,afade=t=in:st=0:d=0.04[a{index}]"
+            )
+            concat_inputs.append(f"[v{index}][a{index}]")
+        chains.append(f"{''.join(concat_inputs)}concat=n={len(sources)}:v=1:a=1[vc][ac]")
+        chains.append("[ac]loudnorm=I=-16:TP=-1.0:LRA=11,aresample=48000[aout]")
+        cmd += [
+            "-filter_complex",
+            ";".join(chains),
             "-map",
-            "0:v:0",
+            "[vc]",
             "-map",
-            "0:a:0?",
+            "[aout]",
             "-c:v",
             "libx264",
             "-preset",
             "veryfast",
             "-crf",
-            "19",
-            "-pix_fmt",
-            "yuv420p",
-            "-color_primaries",
-            "bt709",
-            "-color_trc",
-            "bt709",
-            "-colorspace",
-            "bt709",
+            "20",
             "-c:a",
             "aac",
             "-b:a",
             "192k",
-            "-ar",
-            "48000",
-            "-ac",
-            "2",
-            "-movflags",
-            "+faststart",
-            str(pending),
+            str(dest),
         ]
         try:
-            subprocess.run(command, check=True, capture_output=True, timeout=7200)
-            if not pending.is_file() or pending.stat().st_size <= 32:
-                raise RuntimeError("FFmpeg did not produce a browser preview")
-            pending.replace(destination)
-        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
-            pending.unlink(missing_ok=True)
-            raise RuntimeError("The browser preview could not be encoded") from exc
-        return destination
-
-
-def _action_urls(
-    item_id: str,
-    file_url: str,
-    *,
-    download_url: str | None = None,
-    cache_key: str = "",
-) -> dict[str, str]:
-    encoded = quote(item_id, safe="")
-    separator = "&" if "?" in file_url else "?"
-    version = f"?v={quote(cache_key, safe='')}" if cache_key else ""
+            encode = subprocess.run(cmd, capture_output=True, timeout=1800)
+        except subprocess.TimeoutExpired:
+            _cleanup_partial()
+            shutil.rmtree(dest_dir, ignore_errors=True)
+            raise RuntimeError("stitch timed out on the re-encode pass")
+        if encode.returncode != 0 or not dest.is_file():
+            _cleanup_partial()
+            shutil.rmtree(dest_dir, ignore_errors=True)
+            raise RuntimeError(f"stitch failed: {encode.stderr.decode(errors='replace')[-300:]}")
+    listing.unlink(missing_ok=True)
+    stat = dest.stat()
     return {
-        "thumbnail_url": f"/api/gallery/items/{encoded}/thumbnail{version}",
-        "details_url": f"/api/gallery/items/{encoded}/details",
-        "download_url": download_url or f"{file_url}{separator}download=true",
-        "remove_url": f"/api/gallery/items/{encoded}",
-    }
-
-
-def _preview_rel(project: Project) -> str:
-    if project.timeline and project.timeline.preview_path:
-        return project.timeline.preview_path
-    return program_master_rel(project) if project.timeline else ""
-
-
-def _media_ok(rel: str) -> bool:
-    if not rel:
-        return False
-    suffix = Path(rel).suffix.lower()
-    if suffix not in {".mp4", ".mov", ".webm", ".mkv"}:
-        return False
-    try:
-        dest = abs_path(rel)
-    except ValueError:
-        return False
-    return dest.is_file() and dest.stat().st_size > 32
-
-
-def _sha256_file(path: Path) -> str:
-    stat = path.stat()
-    key = (str(path), stat.st_size, stat.st_mtime_ns)
-    with _HASH_LOCK:
-        cached = _HASH_CACHE.get(key)
-    if cached:
-        return cached
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    value = digest.hexdigest()
-    with _HASH_LOCK:
-        if len(_HASH_CACHE) >= 256:
-            _HASH_CACHE.clear()
-        _HASH_CACHE[key] = value
-    return value
-
-
-def _reference_sha256(project: Project, asset_ids: list[str]) -> str:
-    rows: list[str] = []
-    for asset_id in asset_ids:
-        try:
-            asset = project.asset(asset_id)
-        except KeyError:
-            rows.append(f"{asset_id}:missing")
-            continue
-        rows.append(f"{asset.id}:{asset.sha256}")
-    return hashlib.sha256("|".join(rows).encode("utf-8")).hexdigest() if rows else ""
-
-
-def _selected_finish_hashes(project: Project) -> list[str] | None:
-    timeline = project.timeline
-    if timeline is None or len(timeline.events) != len(project.shots):
-        return None
-    receipts: list[str] = []
-    for event in timeline.events:
-        if not event.take_id:
-            return None
-        try:
-            shot = project.shot(event.shot_id)
-            take = project.take(event.take_id)
-        except KeyError:
-            return None
-        prompt_sha = prompt_receipt_sha256(shot)
-        reference_ids = list(shot.keyframe_asset_ids)
-        reference_sha = _reference_sha256(project, reference_ids)
-        negative_path = f"projects/{project.id}/takes/{take.id}/negative_720.mp4"
-        negative = next(
-            (
-                art
-                for art in take.artifacts
-                if art.kind == ArtifactKind.NEGATIVE_720
-                and art.path == negative_path
-                and art.project_id == project.id
-                and art.shot_id == shot.id
-                and art.sha256
-                and art.prompt_sha256 == prompt_sha
-                and art.reference_asset_ids == reference_ids
-                and art.reference_sha256 == reference_sha
-            ),
-            None,
-        )
-        if negative is None:
-            return None
-        finish_path = f"projects/{project.id}/takes/{take.id}/finish_1080.mov"
-        finish = next(
-            (
-                art
-                for art in take.artifacts
-                if art.kind == ArtifactKind.FINISH_1080
-                and art.path == finish_path
-                and art.project_id == project.id
-                and art.shot_id == shot.id
-                and art.sha256
-                and art.source_sha256 == negative.sha256
-                and art.prompt_sha256 == prompt_sha
-                and art.reference_asset_ids == reference_ids
-                and art.reference_sha256 == reference_sha
-                and art.generation_task == "diony_sr_v1"
-            ),
-            None,
-        )
-        if finish is None:
-            return None
-        receipts.append(finish.sha256)
-    return receipts
-
-
-def _program_lineage_ok(project: Project) -> bool:
-    timeline = project.timeline
-    if timeline is None:
-        return False
-    if timeline.preview_path != program_master_rel(project):
-        return False
-    receipts = _selected_finish_hashes(project)
-    if receipts is None or receipts != timeline.source_artifact_sha256s:
-        return False
-    if not timeline.picture_sha256 or not timeline.program_sha256:
-        return False
-    try:
-        master = abs_path(timeline.preview_path)
-        return (
-            master.is_file()
-            and master.stat().st_size > 32
-            and _sha256_file(master) == timeline.program_sha256
-            and (not _visual_qc_required() or finished_media_has_picture(master))
-        )
-    except (OSError, ValueError):
-        return False
-
-
-def _retained_stop_lineage_ok(project: Project) -> bool:
-    """A Keep result is Gallery-safe as clearly labeled incomplete 720p media."""
-    receipt = project.production_stop
-    timeline = project.timeline
-    if (
-        receipt is None
-        or receipt.disposition != ProductionStopDisposition.KEEP
-        or not receipt.completed_take_ids
-        or not receipt.result_path
-        or receipt.result_error
-        or receipt.result_width != 1280
-        or receipt.result_height != 720
-        or timeline is None
-        or timeline.gallery_removed_at is not None
-        or timeline.preview_path != receipt.result_path
-    ):
-        return False
-    try:
-        result = abs_path(receipt.result_path)
-        return (
-            result.is_file()
-            and result.stat().st_size > 32
-            and _sha256_file(result) == receipt.result_sha256
-        )
-    except (OSError, ValueError):
-        return False
-
-
-def _program_card(project: Project, *, current: bool) -> dict | None:
-    """Only a real program file. Stub title cards are not clips."""
-    if project.timeline and project.timeline.gallery_removed_at is not None:
-        return None
-    final_lineage = _program_lineage_ok(project)
-    retained_stop = _retained_stop_lineage_ok(project)
-    if not final_lineage and not retained_stop:
-        return None
-    rel = _preview_rel(project)
-    playable = _media_ok(rel)
-    if not playable:
-        return None
-    finished = final_lineage and "master_1080" in (rel or "")
-    if finished and playable:
-        plate = "1080 program"
-    elif playable:
-        plate = "720 program"
-    else:
-        plate = "full clip"
-    _, fallback_total = stitch_events(project)
-    media = probe_media(
-        abs_path(rel),
-        fallback_fps=project.bible.fps,
-        fallback_frames=fallback_total,
-    )
-    source_fps = float(media["fps"] or project.bible.fps)
-    total = max(2, round(int(media["frames"] or fallback_total) * project.bible.fps / source_fps))
-    minutes = project.brief.target_minutes if project.brief else 0
-    production_kind = project.brief.production_kind.value if project.brief else "program"
-    sample_seconds = project.brief.sample_seconds if project.brief else None
-    item_id = f"program-{project.id}"
-    cache_key = (
-        project.timeline.program_sha256[:16]
-        if final_lineage
-        else project.production_stop.result_sha256[:16]
-    )
-    master_url = f"/api/projects/{project.id}/program/file"
-    file_url = f"/api/projects/{project.id}/program/preview?v={cache_key}"
-    return {
-        "id": item_id,
-        "kind": "program",
-        "current": current,
-        "project_id": project.id,
-        "title": project.bible.title,
-        "slug": project.bible.title,
-        "prompt": project.brief.idea if project.brief else project.bible.title,
-        "duration_frames": total,
-        "fps": project.bible.fps,
-        "target_minutes": minutes,
-        "production_kind": production_kind,
-        "sample_seconds": sample_seconds,
-        "file_url": file_url,
-        "playable": playable,
-        "finished": finished,
-        "plate": (
-            "720 incomplete · not final"
-            if retained_stop
-            else "1080 sample" if production_kind == "sample" else plate
-        ),
-        "program": True,
-        "width": int(media["width"]),
-        "height": int(media["height"]),
-        "codec": str(media["codec"]),
-        "source_fps": source_fps,
-        "source_count": 1,
-        **_action_urls(
-            item_id,
-            file_url,
-            download_url=f"{master_url}?download=true&v={cache_key}",
-            cache_key=cache_key,
-        ),
-    }
-
-
-def _composition_cards(project: Project, *, current: bool) -> list[dict]:
-    rows: list[dict] = []
-    for composition in project.compositions:
-        if composition.status != GalleryCompositionStatus.COMPLETE:
-            continue
-        asset = next((row for row in project.assets if row.id == composition.asset_id), None)
-        if asset is not None and asset.deleted_at is not None:
-            continue
-        rel = composition.proxy_path or composition.output_path
-        if not _media_ok(rel):
-            continue
-        file_url = f"/api/gallery/joins/{composition.id}/file?proxy=true"
-        rows.append(
-            {
-                "id": composition.asset_id,
-                "kind": "composition",
-                "composition_id": composition.id,
-                "current": current,
-                "project_id": project.id,
-                "title": f"{project.bible.title} · joined v{composition.version}",
-                "slug": f"Joined version {composition.version}",
-                "prompt": project.brief.idea if project.brief else project.bible.title,
-                "duration_frames": composition.total_frames,
-                "fps": composition.fps,
-                "target_minutes": round(composition.total_frames / composition.fps / 60, 3),
-                "file_url": file_url,
-                "playable": True,
-                "finished": True,
-                "plate": "1080 joined version",
-                "program": False,
-                "width": composition.width,
-                "height": composition.height,
-                "codec": "ProRes HQ",
-                "source_count": len(composition.sources),
-                "version": composition.version,
-                "profile_name": composition.profile_name,
-                "cost_center_ids": composition.cost_center_ids,
-                **_action_urls(composition.asset_id, file_url),
-            }
-        )
-    return rows
-
-
-def gallery_media_source(current: Project, clip_id: str) -> tuple[Project, str]:
-    for project in _project_inventory(current):
-        if clip_id == f"program-{project.id}":
-            if (
-                project.timeline
-                and project.timeline.gallery_removed_at is None
-                and (_program_lineage_ok(project) or _retained_stop_lineage_ok(project))
-            ):
-                rel = _preview_rel(project)
-                if _media_ok(rel):
-                    return project, rel
-        for composition in project.compositions:
-            if composition.asset_id != clip_id or composition.status != GalleryCompositionStatus.COMPLETE:
-                continue
-            asset = next((row for row in project.assets if row.id == clip_id), None)
-            if asset is not None and asset.deleted_at is not None:
-                continue
-            rel = composition.proxy_path or composition.output_path
-            if _media_ok(rel):
-                return project, rel
-    raise KeyError(clip_id)
-
-
-def _source_projects(current: Project, clip_id: str) -> tuple[Project, ...]:
-    """Resolve a Gallery card to its original Project sources in screen order."""
-    projects = _project_inventory(current)
-    project_by_id = {project.id: project for project in projects}
-    composition_by_asset = {
-        composition.asset_id: composition
-        for project in projects
-        for composition in project.compositions
-        if composition.status == GalleryCompositionStatus.COMPLETE
-    }
-    resolved: list[Project] = []
-    seen_projects: set[str] = set()
-    visited_clips: set[str] = set()
-
-    def append_project(project_id: str) -> None:
-        project = project_by_id.get(project_id)
-        if project is None or project.id in seen_projects:
-            return
-        seen_projects.add(project.id)
-        resolved.append(project)
-
-    def walk(source_clip_id: str, fallback_project_id: str = "") -> None:
-        if source_clip_id in visited_clips:
-            return
-        visited_clips.add(source_clip_id)
-        if source_clip_id.startswith("program-"):
-            append_project(source_clip_id.removeprefix("program-"))
-            return
-        composition = composition_by_asset.get(source_clip_id)
-        if composition is None:
-            append_project(fallback_project_id)
-            return
-        for source in composition.sources:
-            walk(source.clip_id, source.project_id)
-
-    walk(clip_id)
-    if not resolved:
-        project, _ = gallery_media_source(current, clip_id)
-        append_project(project.id)
-    return tuple(resolved)
-
-
-def _reference_payload(clip_id: str, asset: Asset) -> dict[str, object]:
-    encoded_clip = quote(clip_id, safe="")
-    encoded_asset = quote(asset.id, safe="")
-    return {
-        "id": asset.id,
-        "filename": asset.filename,
-        "kind": asset.kind.value,
-        "mime": asset.mime,
-        "bytes": asset.bytes,
-        "download_url": (
-            f"/api/gallery/items/{encoded_clip}/references/{encoded_asset}/file"
-        ),
-    }
-
-
-def gallery_item_details(current: Project, clip_id: str) -> dict[str, object]:
-    """Return the original Idea and downloadable Brief references for one card."""
-    gallery_media_source(current, clip_id)
-    sources: list[dict[str, object]] = []
-    for project in _source_projects(current, clip_id):
-        attachment_ids = project.brief.attachment_ids if project.brief else []
-        references: list[dict[str, object]] = []
-        for asset_id in attachment_ids:
-            try:
-                asset = project.asset(asset_id)
-            except KeyError:
-                continue
-            if asset.deleted_at is None:
-                references.append(_reference_payload(clip_id, asset))
-        sources.append(
-            {
-                "project_id": project.id,
-                "title": project.bible.title,
-                "idea_prompt": project.brief.idea if project.brief else "",
-                "references": references,
-            }
-        )
-    return {"clip_id": clip_id, "sources": sources}
-
-
-def gallery_reference_file(
-    current: Project,
-    clip_id: str,
-    asset_id: str,
-) -> tuple[Path, Asset]:
-    """Authorize a reference against the card's source lineage before serving it."""
-    gallery_media_source(current, clip_id)
-    for project in _source_projects(current, clip_id):
-        if project.brief is None or asset_id not in project.brief.attachment_ids:
-            continue
-        try:
-            asset = project.asset(asset_id)
-        except KeyError:
-            continue
-        if asset.deleted_at is not None:
-            continue
-        path = abs_path(asset.path)
-        if not path.is_file():
-            raise FileNotFoundError(asset.path)
-        return path, asset
-    raise KeyError(asset_id)
-
-
-def gallery_thumbnail_path(current: Project, clip_id: str) -> Path:
-    _, rel = gallery_media_source(current, clip_id)
-    source = abs_path(rel)
-    destination = abs_path(_thumbnail_rel(clip_id, source))
-    return ensure_first_frame(source, destination)
-
-
-def gallery_program_preview_path(current: Project, project_id: str) -> Path:
-    for project in _project_inventory(current):
-        if project.id != project_id:
-            continue
-        if project.timeline and project.timeline.gallery_removed_at is not None:
-            break
-        if not (_program_lineage_ok(project) or _retained_stop_lineage_ok(project)):
-            break
-        rel = _preview_rel(project)
-        if not _media_ok(rel):
-            break
-        source = abs_path(rel)
-        destination = abs_path(_browser_preview_rel(f"program-{project.id}", source))
-        return ensure_browser_preview(source, destination)
-    raise KeyError(project_id)
-
-
-def remove_gallery_item(current: Project, clip_id: str) -> dict[str, str]:
-    """Remove a card recoverably while preserving its media and lineage."""
-    removed_at = datetime.now(timezone.utc)
-    for project in _project_inventory(current):
-        if clip_id == f"program-{project.id}" and project.timeline and _media_ok(_preview_rel(project)):
-            project.timeline.gallery_removed_at = removed_at
-            project.updated_at = removed_at
-            persist_project(project, set_current=False)
-            return {
-                "status": "removed",
-                "detail": "Removed from Gallery. The program master remains in the vault.",
-            }
-        for composition in project.compositions:
-            if composition.asset_id != clip_id or composition.status != GalleryCompositionStatus.COMPLETE:
-                continue
-            composition.status = GalleryCompositionStatus.SUPERSEDED
-            composition.updated_at = removed_at
-            for asset in project.assets:
-                if asset.id == clip_id:
-                    asset.deleted_at = removed_at
-            project.updated_at = removed_at
-            persist_project(project, set_current=False)
-            return {
-                "status": "removed",
-                "detail": "Removed from Gallery. Source clips and version lineage remain in the vault.",
-            }
-    raise KeyError(clip_id)
-
-
-def gallery_payload(project: Project) -> dict:
-    """One inventory row per produced show: the full program, never shot dailies."""
-    items: list[dict] = []
-    for prod in _project_inventory(project):
-        card = _program_card(prod, current=prod.id == project.id)
-        if card:
-            items.append(card)
-        items.extend(_composition_cards(prod, current=prod.id == project.id))
-    return {
-        "project_id": project.id,
-        "title": project.bible.title,
-        "items": items,
-        "count": len(items),
-        "negative": "720p Wan",
-        "master": "1080 Diony finish",
-        "join_minimum": 2,
+        "session": join_id,
+        "id": _item_id(join_id, "film"),
+        "bytes": stat.st_size,
+        "modified": _iso(stat),
+        "url": f"/api/director-films/{join_id}",
+        "joined_from": item_ids,
     }

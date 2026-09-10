@@ -1,9 +1,8 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
 
-from diony_contracts.enums import CustomerKind
 from diony_contracts.launch import (
     AdmissionPolicy,
     AuditEvent,
@@ -28,31 +27,11 @@ from diony_contracts.launch import (
     StudioInvitation,
     StudioJoinRequest,
     UsageEvent,
-    User,
     WorkflowRun,
     WorkflowStage,
     WorkflowStageState,
     Workspace,
 )
-from diony_contracts.studio import blank_studio
-
-
-def test_workspace_membership_and_project_ownership_are_explicit() -> None:
-    user = User(id="usr-rohn", email="rohn@example.com", display_name="Rohn")
-    workspace = Workspace(id="ws-studio", name="Night Shift Studio", slug="night-shift")
-    member = Membership(
-        id="mem-rohn",
-        user_id=user.id,
-        workspace_id=workspace.id,
-        role=MembershipRole.OWNER,
-    )
-    project = blank_studio()
-    project.workspace_id = workspace.id
-    project.owner_user_id = user.id
-    assert member.can_manage is True
-    assert project.workspace_id == "ws-studio"
-    assert project.schema_version >= 1
-    assert project.deleted_at is None
 
 
 def test_studio_invitation_membership_and_email_contracts_are_explicit() -> None:
@@ -73,7 +52,7 @@ def test_studio_invitation_membership_and_email_contracts_are_explicit() -> None
         role=MembershipRole.CREATOR,
         proposed_profile_name="Maya Chen",
         created_by="owner-one",
-        expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        expires_at=datetime(2030, 1, 1, tzinfo=UTC),
     )
     delivery = InvitationEmailDelivery(
         id="delivery-one",
@@ -175,7 +154,7 @@ def test_progress_percentage_is_bounded_and_errors_are_actionable() -> None:
 
 
 def test_usage_cost_allocation_audit_and_render_models_are_immutable_records() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     usage = UsageEvent(
         id="use-1",
         workspace_id="ws-studio",
@@ -272,15 +251,3 @@ def test_cost_governance_models_use_fixed_point_budgets_and_explicit_admin_scope
     assert governance.admin_team_id == "team-finops"
     assert center.monitoring_mode == "monitor_only"
     assert rate.cost_usd_micros_per_unit == 80_000
-
-
-def test_project_version_fields_round_trip_without_changing_existing_objectives() -> None:
-    project = blank_studio()
-    project.customer_kind = CustomerKind.FEATURE
-    project.workspace_id = "ws-studio"
-    project.owner_user_id = "usr-rohn"
-    again = type(project).model_validate_json(project.model_dump_json())
-    assert again.customer_kind == CustomerKind.FEATURE
-    assert again.workspace_id == "ws-studio"
-    assert again.bible.width == 1920
-    assert again.bible.height == 1080

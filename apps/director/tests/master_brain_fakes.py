@@ -32,11 +32,19 @@ def master_brain_body(**overrides) -> dict:
         "micro_expressions": "narrowed eyes",
         "physics": "peacoat and rain driven by the wind through the open door",
         "body_mechanics": "weight shifts forward before each step",
-        "lighting": {"source": "the turning lamp", "quality": "hard, sweeping", "shadows": "long rotating shadows"},
+        "lighting": {
+            "source": "the turning lamp",
+            "quality": "hard, sweeping",
+            "shadows": "long rotating shadows",
+        },
         "mood": "tense",
         "continuity_anchors": ["same peacoat", "same lamp room", "door on the right"],
         "ending": "the keeper in the open doorway, rain blowing past him",
-        "constraints": ["do not introduce additional people", "do not change the wardrobe", "avoid distorted anatomy"],
+        "constraints": [
+            "do not introduce additional people",
+            "do not change the wardrobe",
+            "avoid distorted anatomy",
+        ],
         "estimated_duration_s": 8,
         "prompt": (
             "Create a cinematic realism video of a lighthouse keeper in a salt-stained "
@@ -59,7 +67,9 @@ def master_brain_body(**overrides) -> dict:
 def is_master_call(json_payload: dict | None) -> bool:
     """Whether a chat-completions payload is the master-prompt stage."""
     try:
-        return str(json_payload["messages"][0]["content"]).startswith("MASTER AI VIDEO PROMPT TEMPLATE")
+        return str(json_payload["messages"][0]["content"]).startswith(
+            "MASTER AI VIDEO PROMPT TEMPLATE"
+        )
     except (KeyError, IndexError, TypeError):
         return False
 

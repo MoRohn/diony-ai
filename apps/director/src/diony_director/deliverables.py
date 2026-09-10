@@ -35,10 +35,8 @@ def _final_master_check(film: Path, duration_s: float) -> dict[str, Any]:
             check["black_frames"] = receipt.black_frames
             if receipt.black_frames:
                 check["verdict"] = "warn"
-                check["issues"].append(
-                    f"{receipt.black_frames} sampled master frame(s) are black"
-                )
-    except Exception:  # noqa: BLE001 - optional evidence never blocks delivery
+                check["issues"].append(f"{receipt.black_frames} sampled master frame(s) are black")
+    except Exception:
         pass
     return check
 

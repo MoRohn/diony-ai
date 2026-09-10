@@ -1,4 +1,4 @@
-"""The engine flag: cloud is primary; the local Wan lane is legacy and labeled."""
+"""The engine flag: cloud is the engine; `local_legacy` only makes paid runs refuse."""
 
 from __future__ import annotations
 

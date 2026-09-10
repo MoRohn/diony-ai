@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 from diony_producer.control_plane import ControlPlane, DocumentNotFound
 from diony_producer.studio_invites import StudioInvitationService
 
-
 router = APIRouter(prefix="/api/studio-entry", tags=["studio-entry"])
 
 _entry_hits: dict[str, deque[float]] = defaultdict(deque)

@@ -26,24 +26,32 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from master_brain_fakes import master_brain_body
 
 from diony_contracts.director import CloudProvider
 from diony_contracts.production import LookBible, look_is_photoreal
 from diony_director import (
     app as app_module,
+)
+from diony_director import (
     artifacts,
     compiler,
-    look as look_mod,
     master_prompt,
     packagebuilder,
-    review as review_mod,
     screenwriter,
     session,
 )
+from diony_director import (
+    look as look_mod,
+)
+from diony_director import (
+    review as review_mod,
+)
 from diony_director.providers import base, flow
-from master_brain_fakes import master_brain_body
 
-ANIMATED = "a 2.5D animated explainer about a young man in a sedan at night who watches a city consolidate"
+ANIMATED = (
+    "a 2.5D animated explainer about a young man in a sedan at night who watches a city consolidate"
+)
 PHOTOREAL = "a getaway driver decides to leave town from a neon diner"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 24
 
@@ -161,9 +169,24 @@ def test_the_clip_split_carries_scene_changes_and_openings(monkeypatch) -> None:
     monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_URL", "http://127.0.0.1:9999")
     body = master_brain_body(
         clips=[
-            {"prompt": "clip one", "duration_s": 8, "scene_change": True, "opening": "a sedan at a red light"},
-            {"prompt": "clip two", "duration_s": 8, "scene_change": "true", "opening": "a skyline of towers"},
-            {"prompt": "clip three", "duration_s": 8, "scene_change": False, "opening": "the same skyline"},
+            {
+                "prompt": "clip one",
+                "duration_s": 8,
+                "scene_change": True,
+                "opening": "a sedan at a red light",
+            },
+            {
+                "prompt": "clip two",
+                "duration_s": 8,
+                "scene_change": "true",
+                "opening": "a skyline of towers",
+            },
+            {
+                "prompt": "clip three",
+                "duration_s": 8,
+                "scene_change": False,
+                "opening": "the same skyline",
+            },
         ]
     )
     captured: dict = {}
@@ -188,7 +211,9 @@ def test_the_clip_split_carries_scene_changes_and_openings(monkeypatch) -> None:
     assert master.clips[1]["opening"] == "a skyline of towers"
     # the template split never cuts: one continuous action
     monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_URL", "")
-    template = master_prompt.derive("a keeper crosses the room", target_duration_s=24, clip_plan=[8, 8, 8])
+    template = master_prompt.derive(
+        "a keeper crosses the room", target_duration_s=24, clip_plan=[8, 8, 8]
+    )
     assert all(c["scene_change"] is False for c in template.clips)
     assert all("opening" in c for c in template.clips)
 
@@ -204,7 +229,7 @@ def _package(idea: str, policy: str):
     return package
 
 
-@pytest.mark.parametrize("policy", ["grok", "google-flow", "auto"])
+@pytest.mark.parametrize("policy", ["grok", "google-flow"])
 def test_every_clip_of_an_animated_film_carries_the_same_look_block(policy: str) -> None:
     package = _package(ANIMATED, policy)
     block = package.master_prompt.look.block()
@@ -214,7 +239,9 @@ def test_every_clip_of_an_animated_film_carries_the_same_look_block(policy: str)
     for prompt in prompts:
         assert block in prompt, "the look rides verbatim on every clip"
         assert compiler.REALISM not in prompt, "photoreal ground truth is a contradiction here"
-        assert "Shot on a cinema camera" not in prompt, "the baseline cinema clause yields to the look"
+        assert "Shot on a cinema camera" not in prompt, (
+            "the baseline cinema clause yields to the look"
+        )
 
 
 @pytest.mark.parametrize("policy", ["grok", "google-flow"])
@@ -237,9 +264,7 @@ def test_a_chosen_flow_world_still_rides_beside_a_stylized_look() -> None:
     package = _package(ANIMATED, "google-flow")
     flow_lexicon.set_template(package.session_id, world="minimal")
     # the Veo dialect stays a tested capability behind an explicit model choice
-    clip = next(
-        c for c in package.clips if c.clip_class not in {"sync-dialogue", "vo-over"}
-    )
+    clip = next(c for c in package.clips if c.clip_class not in {"sync-dialogue", "vo-over"})
     clip.model = "veo-3.1-fast"
     clip.duration_s = 8
     prompt = compiler.compile_clip_prompt(clip, package).prompt
@@ -374,15 +399,21 @@ def _fake_lanes(monkeypatch, tmp_path):
         counter["n"] += 1
         sent["videos"].append({"op_id": op.id, "refs": dict(op.artifact_refs)})
         return base.CloudJobHandle(
-            provider_id="google-flow", external_id=f"vid-{counter['n']}", model=op.model,
-            duration_s=int(op.duration_s), mode="t2v",
+            provider_id="google-flow",
+            external_id=f"vid-{counter['n']}",
+            model=op.model,
+            duration_s=int(op.duration_s),
+            mode="t2v",
         )
 
     def fake_submit_image(prompt, *, model, references=None, aspect_ratio="landscape"):
         counter["n"] += 1
         sent["images"].append({"prompt": prompt, "references": list(references or [])})
         return base.CloudJobHandle(
-            provider_id="google-flow", external_id=f"img-{counter['n']}", model=model, duration_s=0,
+            provider_id="google-flow",
+            external_id=f"img-{counter['n']}",
+            model=model,
+            duration_s=0,
         )
 
     def fake_poll(handle):
@@ -397,7 +428,9 @@ def _fake_lanes(monkeypatch, tmp_path):
         payload = (b"png" if handle.duration_s == 0 else b"mp4") * 2048
         dest.write_bytes(payload)
         return base.FetchedClip(
-            path=dest, sha256=hashlib.sha256(payload).hexdigest(), bytes=len(payload),
+            path=dest,
+            sha256=hashlib.sha256(payload).hexdigest(),
+            bytes=len(payload),
             media_url=status.result_url,
         )
 
@@ -422,12 +455,24 @@ def _chain_brain(monkeypatch):
             "negatives": ["no photoreal footage", "no 3D gloss"],
         },
         clips=[
-            {"prompt": "a man sits in a sedan at a red light", "duration_s": 8, "scene_change": False,
-             "opening": "a man in a sedan at a red light"},
-            {"prompt": "a night skyline of glass towers", "duration_s": 8, "scene_change": True,
-             "opening": "A night skyline of glass towers seen through glass."},
-            {"prompt": "graphics rise above the same skyline", "duration_s": 8, "scene_change": False,
-             "opening": "the same skyline"},
+            {
+                "prompt": "a man sits in a sedan at a red light",
+                "duration_s": 8,
+                "scene_change": False,
+                "opening": "a man in a sedan at a red light",
+            },
+            {
+                "prompt": "a night skyline of glass towers",
+                "duration_s": 8,
+                "scene_change": True,
+                "opening": "A night skyline of glass towers seen through glass.",
+            },
+            {
+                "prompt": "graphics rise above the same skyline",
+                "duration_s": 8,
+                "scene_change": False,
+                "opening": "the same skyline",
+            },
         ],
     )
 
@@ -447,7 +492,9 @@ def _wait_proposed(ops, timeout_s: float = 10.0) -> None:
     assert all(op.status == "proposed" for op in ops), [op.status for op in ops]
 
 
-def test_a_cut_opens_from_its_style_frame_not_the_previous_last_frame(monkeypatch, tmp_path) -> None:
+def test_a_cut_opens_from_its_style_frame_not_the_previous_last_frame(
+    monkeypatch, tmp_path
+) -> None:
     """End to end through the API: the brain flags clip 2 as a cut; its style
     frame is priced when the split lands, prints on the image lane the moment
     clip 2 rolls (referencing the user's stills), and clip 2 opens FROM that
@@ -456,10 +503,15 @@ def test_a_cut_opens_from_its_style_frame_not_the_previous_last_frame(monkeypatc
     _chain_brain(monkeypatch)
     sent = _fake_lanes(monkeypatch, tmp_path)
     monkeypatch.setattr(
-        review_mod, "review_chain_link",
+        review_mod,
+        "review_chain_link",
         lambda path, **kw: review_mod.ClipReview(
-            id="rev-ok", clip_id=kw["op_id"], op_id=kw["op_id"], verdict="pass",
-            families={"delivery": "pass"}, recommended_op="accept",
+            id="rev-ok",
+            clip_id=kw["op_id"],
+            op_id=kw["op_id"],
+            verdict="pass",
+            families={"delivery": "pass"},
+            recommended_op="accept",
         ),
     )
     client = TestClient(app_module.app)
@@ -497,7 +549,9 @@ def test_a_cut_opens_from_its_style_frame_not_the_previous_last_frame(monkeypatc
     assert client.post(f"/api/director/ops/{second.id}/run").status_code == 200
     assert frame_op.status == "completed"
     assert len(sent["images"]) == 1
-    assert still["path"] in sent["images"][0]["references"], "the look's anchors reference the frame"
+    assert still["path"] in sent["images"][0]["references"], (
+        "the look's anchors reference the frame"
+    )
     assert "a night skyline of glass towers seen through glass." in sent["images"][0]["prompt"]
     assert block in sent["images"][0]["prompt"]
     frame_path = session.runtime(second.id)["style_frame"]
@@ -548,7 +602,10 @@ def test_a_failed_look_review_holds_the_chain_until_retake_or_accept(monkeypatch
     session.register_review(
         first.id,
         ClipReview(
-            id="rev-bad", clip_id=first.id, op_id=first.id, verdict="fail",
+            id="rev-bad",
+            clip_id=first.id,
+            op_id=first.id,
+            verdict="fail",
             families={"continuity": "fail"},
             issues=["the clip ignored its opening frame (drift 0.120)"],
         ),
@@ -588,7 +645,7 @@ def test_a_failed_look_review_holds_the_chain_until_retake_or_accept(monkeypatch
 
 HAVE_FFMPEG = True
 try:
-    from diony_producer.gallery_join import resolve_media_tool
+    from diony_producer.media_tools import resolve_media_tool
 
     HAVE_FFMPEG = bool(resolve_media_tool("ffmpeg") and resolve_media_tool("ffprobe"))
 except ImportError:
@@ -603,14 +660,36 @@ def test_the_chain_review_fails_a_clip_that_ignored_its_opening_frame(tmp_path) 
     opener = tmp_path / "style.jpg"
     clip_path = tmp_path / "clip.mp4"
     subprocess.run(
-        [ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi",
-         "-i", "color=c=navy:s=320x180:d=1", "-frames:v", "1", str(opener)],
-        check=True, capture_output=True,
+        [
+            ffmpeg,
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=navy:s=320x180:d=1",
+            "-frames:v",
+            "1",
+            str(opener),
+        ],
+        check=True,
+        capture_output=True,
     )
     subprocess.run(
-        [ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi",
-         "-i", "color=c=orange:s=320x180:d=2:r=24", str(clip_path)],
-        check=True, capture_output=True,
+        [
+            ffmpeg,
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=orange:s=320x180:d=2:r=24",
+            str(clip_path),
+        ],
+        check=True,
+        capture_output=True,
     )
     review = review_mod.review_chain_link(
         clip_path, op_id="op-x", duration_s=2, start_image=opener, scene_change=True
@@ -624,12 +703,28 @@ def test_the_chain_review_fails_a_clip_that_ignored_its_opening_frame(tmp_path) 
     # the same clip opening from its own colour passes
     same = tmp_path / "same.jpg"
     subprocess.run(
-        [ffmpeg, "-y", "-loglevel", "error", "-f", "lavfi",
-         "-i", "color=c=orange:s=320x180:d=1", "-frames:v", "1", str(same)],
-        check=True, capture_output=True,
+        [
+            ffmpeg,
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=orange:s=320x180:d=1",
+            "-frames:v",
+            "1",
+            str(same),
+        ],
+        check=True,
+        capture_output=True,
     )
     good = review_mod.review_chain_link(
-        clip_path, op_id="op-y", duration_s=2, start_image=same, prev_clip_path=clip_path,
+        clip_path,
+        op_id="op-y",
+        duration_s=2,
+        start_image=same,
+        prev_clip_path=clip_path,
         scene_change=False,
     )
     assert good.verdict == "pass"

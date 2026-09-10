@@ -8,11 +8,11 @@ content-hashed, and everything downstream refers to the local file.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
+from datetime import UTC
 from pathlib import Path
 from typing import Any, Literal
-
-import re
 
 import httpx
 
@@ -121,7 +121,7 @@ def quota_retry_at(response: httpx.Response) -> float | None:
     the JSON body (useapi's Flow shape, top-level or nested under `response`)
     or a seconds-valued Retry-After header."""
     import time as time_mod
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     try:
         body = response.json()
@@ -137,7 +137,7 @@ def quota_retry_at(response: httpx.Response) -> float | None:
         try:
             stamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
             if stamp.tzinfo is None:
-                stamp = stamp.replace(tzinfo=timezone.utc)
+                stamp = stamp.replace(tzinfo=UTC)
             return stamp.timestamp()
         except ValueError:
             pass
@@ -217,7 +217,9 @@ def download(url: str, dest: Path) -> FetchedClip:
         url, what="media download", timeout=DOWNLOAD_TIMEOUT_S, follow_redirects=True
     )
     if response.status_code >= 400:
-        raise CloudAdapterError(f"media download rejected ({response.status_code}) from {url[:120]}")
+        raise CloudAdapterError(
+            f"media download rejected ({response.status_code}) from {url[:120]}"
+        )
     payload = response.content
     if not payload:
         raise CloudAdapterError(f"empty media body from {url}")

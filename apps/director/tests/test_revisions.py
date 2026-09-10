@@ -21,6 +21,10 @@ def _review(clip_id: str, families: dict, issues: list[str]) -> ClipReview:
 
 
 def test_audio_failure_on_a_flow_clip_plans_an_edit_in_place() -> None:
+    # this production rolls on Google Flow (the voice-capable Omni lane, the 10 s grid)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     package = _package()
     clip = next(c for c in package.clips if c.clip_class == "sync-dialogue")
     rev = _review(clip.clip_id, {"audio": "fail"}, ["no audio stream"])
@@ -125,7 +129,12 @@ def test_the_revision_budget_is_a_hard_stop() -> None:
     clip = package.clips[0]
     rev = _review(clip.clip_id, {"delivery": "fail"}, ["empty media"])
     op, narration = revisions.plan_revision(
-        rev, clip, package, session_id="s-x", revision_count=3, failure_memory=set(),
+        rev,
+        clip,
+        package,
+        session_id="s-x",
+        revision_count=3,
+        failure_memory=set(),
         max_revisions_per_clip=3,
     )
     assert op is None

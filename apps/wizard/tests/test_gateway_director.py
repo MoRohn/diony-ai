@@ -62,7 +62,6 @@ def test_a_pre_director_router_is_healthy_but_not_current(monkeypatch) -> None:
             self._label = "wizard"
 
         def request(self, method, path, headers=None):
-            host = (headers or {}).get("Host", "")
             # a stale router labels every host with its legacy single label
             self._label = "wizard"
 

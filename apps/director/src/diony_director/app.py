@@ -10,23 +10,33 @@ speaks from.
 from __future__ import annotations
 
 import os
+import threading
 import time
+from collections.abc import Callable
+from datetime import UTC
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from diony_contracts.cluster import bind_host, cluster_root
 from diony_contracts.director import CloudGenerationMode, DirectorOp, DirectorOpType, EngineMode
-from diony_producer.control_plane import ControlPlane, control_plane_path
-
-import threading
-
-from diony_director import assembly, capabilities, engine, ledger, ratecards, review as review_mod, session
+from diony_director import (
+    assembly,
+    capabilities,
+    engine,
+    ledger,
+    ratecards,
+    session,
+)
+from diony_director import (
+    review as review_mod,
+)
 from diony_director.providers import base as provider_base
 from diony_director.providers import flow, grok
+from diony_producer.control_plane import ControlPlane, control_plane_path
 
 # One gate over the status check-and-set: two concurrent runs of the same op
 # must never both cross into a provider submit (double-spend).
@@ -45,19 +55,19 @@ def _reap_orphaned_jobs(plane: ControlPlane, ctx) -> int:
     With persistence, a rehydrated op resumes its own polling — the reaper only
     touches RUNNING rows whose op is gone (deleted session, corrupt state) or
     already terminal. Producer's Gallery stops showing dead batches as active."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from diony_contracts.launch import JobStatus
 
     reaped = 0
     try:
         runs = plane.runs(ctx.workspace.id, project_id=ledger.DIRECTOR_PROJECT_ID)
-    except Exception:  # noqa: BLE001 - a reaper failure must never block boot
+    except Exception:
         return 0
     for run in runs:
         try:
             jobs = plane.jobs(ctx.workspace.id, run.id)
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
         for job in jobs:
             if job.status is not JobStatus.RUNNING:
@@ -73,11 +83,11 @@ def _reap_orphaned_jobs(plane: ControlPlane, ctx) -> int:
                 job.error_message = (
                     "reaped: orphaned by a restart — no live session state left to poll it"
                 )
-            job.completed_at = datetime.now(timezone.utc)
+            job.completed_at = datetime.now(UTC)
             try:
                 plane.save_job(job)
                 reaped += 1
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
     return reaped
 
@@ -108,9 +118,26 @@ if STATIC.is_dir():
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+@app.middleware("http")
+async def no_store_pages(request: Request, call_next):
+    """The console and its API are never served from a browser's heuristic
+    cache: an index cached across a desktop rebuild showed the previous UI."""
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static/") or path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC / "index.html")
+
+
+@app.exception_handler(session.EngineNotChosen)
+async def _engine_not_chosen(_request, err: session.EngineNotChosen):
+    return JSONResponse(status_code=409, content={"detail": str(err)})
 
 
 @app.get("/api/director/status")
@@ -127,8 +154,12 @@ def status() -> dict:
         "providers": {"grok": grok.configured(), "google-flow": flow.configured()},
         "flow_plan": ratecards.flow_plan(),
         "brain": {
-            "configured": bool(__import__("diony_director.screenwriter", fromlist=["brain_url"]).brain_url()),
-            "model": __import__("diony_director.screenwriter", fromlist=["brain_model"]).brain_model(),
+            "configured": bool(
+                __import__("diony_director.screenwriter", fromlist=["brain_url"]).brain_url()
+            ),
+            "model": __import__(
+                "diony_director.screenwriter", fromlist=["brain_model"]
+            ).brain_model(),
         },
         "workspace": ctx.workspace.id,
         "studio_url": "http://studio.diony.local",
@@ -163,7 +194,7 @@ def dismiss(sid: str) -> dict:
 
 class MessageIn(BaseModel):
     text: str
-    provider: str = "auto"
+    provider: str = ""  # "" = the camera Studio chose
     model: str = ""
     duration_s: float = Field(default=6.0, gt=0)
     resolution: str = "720p"
@@ -197,7 +228,6 @@ class MessageIn(BaseModel):
 # one is refused must not leave an earlier one silently persisted. A planner
 # returns a zero-arg committer, or None when nothing changes; it raises the
 # HTTPException here, before any sibling has touched state.
-from typing import Callable
 
 
 def _plan_aspect(sid: str, aspect: str | None) -> Callable[[], None] | None:
@@ -227,7 +257,9 @@ def _plan_flow_template(
 
     current = session.flow_template_for(sid)
     requested_world = (
-        current["world"] if world is None else (world.strip().lower() or flow_lexicon.BASELINE_WORLD)
+        current["world"]
+        if world is None
+        else (world.strip().lower() or flow_lexicon.BASELINE_WORLD)
     )
     requested_camera = current["camera"] if camera is None else camera.strip().lower()
     if requested_world == current["world"] and requested_camera == current["camera"]:
@@ -271,7 +303,9 @@ def _plan_grok_template(
     if requested_camera and requested_camera not in grok_lexicon.cameras():
         raise HTTPException(status_code=422, detail=f"unknown Grok camera {requested_camera!r}")
     if requested_atmosphere and requested_atmosphere not in grok_lexicon.atmospheres():
-        raise HTTPException(status_code=422, detail=f"unknown Grok atmosphere {requested_atmosphere!r}")
+        raise HTTPException(
+            status_code=422, detail=f"unknown Grok atmosphere {requested_atmosphere!r}"
+        )
     return lambda: session.set_grok_template(
         sid, camera=requested_camera, atmosphere=requested_atmosphere
     )
@@ -349,7 +383,7 @@ def _plan_cast(sid: str, cast: str | None) -> Callable[[], None] | None:
     return lambda: session.set_cast_mode(sid, resolved)
 
 
-def _apply_program_settings(sid: str, body: "MessageIn | ProduceIn") -> None:
+def _apply_program_settings(sid: str, body: MessageIn | ProduceIn) -> None:
     """Validate every program-setting change, then commit them together — so
     a request the caller sees rejected never half-mutates the session."""
     committers = [
@@ -551,8 +585,10 @@ def add_upload(sid: str, body: UploadIn) -> dict:
 
     try:
         data = base64.b64decode(body.data_base64, validate=True)
-    except Exception as err:  # noqa: BLE001 - malformed payload is a client error
-        raise HTTPException(status_code=422, detail="the image payload is not valid base64") from err
+    except Exception as err:
+        raise HTTPException(
+            status_code=422, detail="the image payload is not valid base64"
+        ) from err
     try:
         record = session.add_upload(sid, name=body.name, data=data, role=body.role)
     except ValueError as err:
@@ -606,10 +642,7 @@ def _op_or_404(op_id: str):
 # a session setting: 16:9 by default, 9:16 for vertical productions.
 def _conform_vf(sid: str) -> str:
     width, height = session.program_raster(sid)
-    return (
-        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-        f"crop={width}:{height}"
-    )
+    return f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
 
 
 def _scene_master_frame(op: DirectorOp) -> str:
@@ -636,7 +669,11 @@ def _scene_master_frame(op: DirectorOp) -> str:
                 continue
             return _last_frame(
                 Path(stored.path),
-                cluster_root() / "director" / op.session_id / "frames" / f"master-{candidate.id}.jpg",
+                cluster_root()
+                / "director"
+                / op.session_id
+                / "frames"
+                / f"master-{candidate.id}.jpg",
                 at_s=0.05,
                 sid=op.session_id,
             )
@@ -649,7 +686,7 @@ def _cut_point_s(op: DirectorOp, clip_path: Path) -> float | None:
     needed_s trim throws away."""
     try:
         probe = assembly._probe(clip_path)
-    except Exception:  # noqa: BLE001 - a failed probe falls back to the raw tail
+    except Exception:
         return None
     if float(probe.get("duration_s") or 0) <= 0:
         return None
@@ -657,14 +694,12 @@ def _cut_point_s(op: DirectorOp, clip_path: Path) -> float | None:
     return max(0.0, head + effective - 0.1)
 
 
-def _last_frame(
-    clip_path: Path, dest: Path, *, at_s: float | None = None, sid: str = ""
-) -> str:
+def _last_frame(clip_path: Path, dest: Path, *, at_s: float | None = None, sid: str = "") -> str:
     """Extract the join frame of an accepted clip as the next clip's opening,
     conformed to the program raster."""
     import subprocess
 
-    from diony_producer.gallery_join import resolve_media_tool
+    from diony_producer.media_tools import resolve_media_tool
 
     ffmpeg = resolve_media_tool("ffmpeg")
     if not ffmpeg or not clip_path.is_file():
@@ -672,10 +707,25 @@ def _last_frame(
     dest.parent.mkdir(parents=True, exist_ok=True)
     seek = ["-ss", f"{at_s:.3f}"] if at_s and at_s > 0 else ["-sseof", "-0.2"]
     result = subprocess.run(
-        [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-         *seek, "-i", str(clip_path), "-frames:v", "1",
-         "-vf", _conform_vf(sid), "-q:v", "2", str(dest)],
-        capture_output=True, timeout=120,
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            *seek,
+            "-i",
+            str(clip_path),
+            "-frames:v",
+            "1",
+            "-vf",
+            _conform_vf(sid),
+            "-q:v",
+            "2",
+            str(dest),
+        ],
+        capture_output=True,
+        timeout=120,
     )
     return str(dest) if result.returncode == 0 and dest.is_file() else ""
 
@@ -685,7 +735,7 @@ def _conform_still(src: str, dest: Path, *, sid: str = "") -> str:
     program raster so an off-shape input never re-shapes the generated clip."""
     import subprocess
 
-    from diony_producer.gallery_join import resolve_media_tool
+    from diony_producer.media_tools import resolve_media_tool
 
     ffmpeg = resolve_media_tool("ffmpeg")
     source = Path(src)
@@ -693,9 +743,24 @@ def _conform_still(src: str, dest: Path, *, sid: str = "") -> str:
         return ""
     dest.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
-        [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-         "-i", str(source), "-frames:v", "1", "-vf", _conform_vf(sid), "-q:v", "2", str(dest)],
-        capture_output=True, timeout=120,
+        [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source),
+            "-frames:v",
+            "1",
+            "-vf",
+            _conform_vf(sid),
+            "-q:v",
+            "2",
+            str(dest),
+        ],
+        capture_output=True,
+        timeout=120,
     )
     return str(dest) if result.returncode == 0 and dest.is_file() else ""
 
@@ -710,9 +775,7 @@ def _pin_aspect(op: DirectorOp) -> None:
     if op.provider.value == "grok":
         op.artifact_refs.setdefault("aspect_ratio", aspect)
     else:
-        op.artifact_refs.setdefault(
-            "aspect_ratio", "portrait" if aspect == "9:16" else "landscape"
-        )
+        op.artifact_refs.setdefault("aspect_ratio", "portrait" if aspect == "9:16" else "landscape")
 
 
 def _late_bind_locks(op: DirectorOp) -> None:
@@ -749,14 +812,11 @@ def _late_bind_locks(op: DirectorOp) -> None:
                 sid=op.session_id,
             )
     frame_conflicts_with_lock = op.provider is not None and (
-        op.provider.value == "google-flow"
-        and bool(refs.get("voices") or refs.get("characters"))
+        op.provider.value == "google-flow" and bool(refs.get("voices") or refs.get("characters"))
     )
     if frame and not frame_conflicts_with_lock:
         caps = (
-            capabilities.caps_for(op.provider.value, op.model)
-            if op.provider is not None
-            else None
+            capabilities.caps_for(op.provider.value, op.model) if op.provider is not None else None
         )
         if re_anchor and caps is not None and caps.max_reference_images == 0:
             # No reference lane on this model (veo-3.1-quality): re-anchor by
@@ -852,9 +912,7 @@ def _guard_chain_order(op: DirectorOp) -> None:
         return
     if session.previous_completed_clip_op(op.session_id, op) is None:
         seq = session.sequence_for(op.session_id) or {}
-        chain = next(
-            (c for c in (seq.get("scenes") or {}).values() if op.id in c), []
-        )
+        chain = next((c for c in (seq.get("scenes") or {}).values() if op.id in c), [])
         pred = session._OPS.get(chain[position - 1]) if len(chain) > position - 1 >= 0 else None
         if pred is not None and pred.status == "completed" and not session.usable_take(pred):
             review = session.review_for(pred.id)
@@ -1009,7 +1067,9 @@ def _hold_for_quota(op: DirectorOp, detail: str, wait_s: int, held: list[dict]) 
     resume_at = time.time() + wait_s
     session.runtime(op.id)["quota_hold_until"] = resume_at
     provider = op.provider.value if op.provider else ""
-    label = {"google-flow": "Google Flow", "grok": "Grok Imagine"}.get(provider, provider or "the provider")
+    label = {"google-flow": "Google Flow", "grok": "Grok Imagine"}.get(
+        provider, provider or "the provider"
+    )
     # the card shows the reason alone; the adapter's "<lane> held by quota
     # (429):" prefix and the bracketed token stay in the logged line
     import re as _re
@@ -1105,7 +1165,7 @@ def _submit_ready(sid: str) -> tuple[list[str], list[dict]]:
             # a 429 that surfaced raw (e.g. while polling a style frame
             # mid-roll): the same time-gated pause, never a failed op
             _hold_for_quota(op, str(err), _quota_wait_s(err.retry_at), held)
-        except Exception as err:  # noqa: BLE001 - one bad op never blocks the wave
+        except Exception as err:
             held.append({"op_id": op.id, "reason": f"{type(err).__name__}: {err}"})
             op.status = "failed"
             session.runtime(op.id)["submit_error"] = f"{type(err).__name__}: {err}"
@@ -1128,12 +1188,16 @@ def _dispatch_submit(op: DirectorOp) -> provider_base.CloudJobHandle:
         # a chained one-shot link past position 0: no clip, no bibles — just
         # the previous link's join frame, resolved at submit time
         _late_bind_chain_bridge(op)
-    if op.mode in {
-        CloudGenerationMode.T2V,
-        CloudGenerationMode.I2V,
-        CloudGenerationMode.R2V,
-        CloudGenerationMode.FIRST_LAST,
-    } and op.op is DirectorOpType.GENERATE:
+    if (
+        op.mode
+        in {
+            CloudGenerationMode.T2V,
+            CloudGenerationMode.I2V,
+            CloudGenerationMode.R2V,
+            CloudGenerationMode.FIRST_LAST,
+        }
+        and op.op is DirectorOpType.GENERATE
+    ):
         # single shots and scripted clips alike carry the session's aspect;
         # edits, extensions, and upscales inherit their source's shape.
         # After late binding: the locks rebuild artifact_refs from scratch.
@@ -1181,7 +1245,7 @@ def _dispatch_submit(op: DirectorOp) -> provider_base.CloudJobHandle:
             if references and (keyframe or bible_slot == "board"):
                 return grok.submit_image_edit(
                     op.prompt,
-                    references[:grok.MAX_EDIT_IMAGES],
+                    references[: grok.MAX_EDIT_IMAGES],
                     model=op.model,
                     aspect_ratio="1:1" if bible_slot == "board" else aspect,
                     resolution=op.resolution if op.resolution in {"1k", "2k"} else "",
@@ -1245,7 +1309,11 @@ def _chain_look_frame(link: DirectorOp) -> str:
                 continue
             return _last_frame(
                 Path(stored.path),
-                cluster_root() / "director" / link.session_id / "frames" / f"look-{candidate.id}.jpg",
+                cluster_root()
+                / "director"
+                / link.session_id
+                / "frames"
+                / f"look-{candidate.id}.jpg",
                 at_s=0.05,
                 sid=link.session_id,
             )
@@ -1272,7 +1340,8 @@ def _style_frame_references(op: DirectorOp) -> list[str]:
         # (identity), the setting plate (the room), and — when the clip
         # continues its scene — the previous clip's last frame (the pose and
         # light to continue from). Identity first: it is what the frame is for.
-        from diony_director import cast as cast_mod, compiler
+        from diony_director import cast as cast_mod
+        from diony_director import compiler
 
         clip = session.clip_for_op(link)
         package = session.package_for(link.session_id)
@@ -1312,11 +1381,13 @@ def _style_frame_references(op: DirectorOp) -> list[str]:
         _add(_chain_look_frame(link))
     master = session.master_for_op(link.id)
     if frames_from_film:
-        for asset in (master.look.anchor_assets if master is not None and master.look else []):
+        for asset in master.look.anchor_assets if master is not None and master.look else []:
             _add(asset)
     for path in session.all_upload_paths(link.session_id):
         _add(path)
-    prev = session.previous_completed_clip_op(link.session_id, link) if previous_last_frame else None
+    prev = (
+        session.previous_completed_clip_op(link.session_id, link) if previous_last_frame else None
+    )
     if prev is not None:
         stored = session.runtime(prev.id).get("clip")
         if stored is not None:
@@ -1368,9 +1439,7 @@ def _run_approved(op: DirectorOp) -> dict:
             )
         adapter = _ADAPTERS.get(op.provider.value if op.provider else "")
         if adapter is None or not adapter.configured():
-            raise HTTPException(
-                status_code=409, detail=f"provider {op.provider} is not configured"
-            )
+            raise HTTPException(status_code=409, detail=f"provider {op.provider} is not configured")
         plane, ctx = _boot()
         try:
             handle = _dispatch_submit(op)
@@ -1410,7 +1479,7 @@ def _run_approved(op: DirectorOp) -> dict:
     try:
         job = ledger.commit_job(plane, ctx.workspace.id, ctx.user.id, op, handle.external_id)
         op.job_id = job.id
-    except Exception as err:  # noqa: BLE001 - the plane write retries on the next tick
+    except Exception as err:
         rt["ledger_error"] = f"{type(err).__name__}: {err}"
         session.persist(op.session_id)
         return {"job_id": "", "external_id": handle.external_id, "op": op.model_dump(mode="json")}
@@ -1489,7 +1558,7 @@ def _failure_detail(op: DirectorOp) -> str:
             job = plane.job(ctx.workspace.id, op.job_id)
             if job is not None and job.error_message:
                 return str(job.error_message)
-        except Exception:  # noqa: BLE001 - best-effort; the ladder still works without it
+        except Exception:
             pass
     return str(session.runtime(op.id).get("submit_error") or "")
 
@@ -1543,11 +1612,7 @@ def retry_op(op_id: str, body: RetryIn | None = None) -> dict:
     the plan's waiting ops are targeted again, and the plan (assemble, finish)
     comes back so the room resumes it without another press."""
     op = _op_or_404(op_id)
-    if (
-        op.status == "completed"
-        and _is_chain_link(op)
-        and not session.usable_take(op)
-    ):
+    if op.status == "completed" and _is_chain_link(op) and not session.usable_take(op):
         # printed, failed its look review, unaccepted: a RETAKE — the
         # rejected take stays on the ledger, the link rolls again
         session.retake_chain_link(op)
@@ -1578,9 +1643,17 @@ def retry_op(op_id: str, body: RetryIn | None = None) -> dict:
     op.status = "proposed"
     op.job_id = ""
     for stale in (
-        "handle", "ledger_error", "transient_holds", "quota_hold_until", "submit_error",
-        "poll_not_before", "last_poll_state", "last_progress_ts", "advance_error",
-        "advance_failures", "next_op",
+        "handle",
+        "ledger_error",
+        "transient_holds",
+        "quota_hold_until",
+        "submit_error",
+        "poll_not_before",
+        "last_poll_state",
+        "last_progress_ts",
+        "advance_error",
+        "advance_failures",
+        "next_op",
     ):
         rt.pop(stale, None)
     rt["retries"] = int(rt.get("retries") or 0) + 1
@@ -1646,7 +1719,9 @@ def retry_op(op_id: str, body: RetryIn | None = None) -> dict:
         "op": op.model_dump(mode="json"),
         "redraw": redraw_note,
         "set_aside": (
-            {"pictures": rt["pictures_set_aside"]["paths"], "note": aside_why} if set_aside else None
+            {"pictures": rt["pictures_set_aside"]["paths"], "note": aside_why}
+            if set_aside
+            else None
         ),
         "retargeted": retargeted,
         "run_plan": session.run_plan(op.session_id),
@@ -1657,11 +1732,7 @@ def _failed_for_retry(sid: str) -> list[DirectorOp]:
     """The room's failed clips in shot order — the ones a Retry on the card
     would take, minus the links of a script the room moved past."""
     retired = session.retired_op_ids(sid)
-    return [
-        op
-        for op in session.ops_for(sid)
-        if op.status == "failed" and op.id not in retired
-    ]
+    return [op for op in session.ops_for(sid) if op.status == "failed" and op.id not in retired]
 
 
 @app.get("/api/director/sessions/{sid}/failed")
@@ -1752,9 +1823,7 @@ def skip_op(op_id: str) -> dict:
     and cuts the film from every other shot. A printed link that failed its
     look review may be skipped the same way instead of accepted or retaken."""
     op = _op_or_404(op_id)
-    review_failed = (
-        op.status == "completed" and _is_chain_link(op) and not session.usable_take(op)
-    )
+    review_failed = op.status == "completed" and _is_chain_link(op) and not session.usable_take(op)
     if op.status != "failed" and not review_failed:
         raise HTTPException(
             status_code=409,
@@ -1762,7 +1831,9 @@ def skip_op(op_id: str) -> dict:
         )
     if review_failed:
         review = session.review_for(op.id)
-        reason = "look review failed: " + ("; ".join((review.issues if review else [])[:2]) or "see its review")
+        reason = "look review failed: " + (
+            "; ".join((review.issues if review else [])[:2]) or "see its review"
+        )
     else:
         reason = _failure_detail(op)
     session.skip_op(op, reason)
@@ -1811,7 +1882,7 @@ def _advance_op(op: DirectorOp, *, allow_spend: bool = False) -> dict:
             op.job_id = job.id
             rt.pop("ledger_error", None)
             session.persist(op.session_id)
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:
             rt["ledger_error"] = f"{type(err).__name__}: {err}"
     job = plane.job(ctx.workspace.id, op.job_id) if op.job_id else None
 
@@ -1851,7 +1922,7 @@ def _advance_op(op: DirectorOp, *, allow_spend: bool = False) -> dict:
             rt["result_url"] = clip.media_url
             try:
                 _review_and_maybe_revise(op, rt, allow_spend=allow_spend)
-            except Exception as err:  # noqa: BLE001 - a crashed reviewer never wedges a paid take
+            except Exception as err:
                 rt["advance_error"] = f"review: {type(err).__name__}: {err}"
                 if op.clip_id and session.review_for(op.id) is None:
                     # the take never enters the film evidence-free: the crash
@@ -2043,7 +2114,7 @@ def advance_session(sid: str) -> dict:
                 rt = session.runtime(op.id)
                 rt.pop("advance_error", None)
                 rt.pop("advance_failures", None)
-            except Exception as err:  # noqa: BLE001 - retried next tick, but NAMED
+            except Exception as err:
                 detail = f"{type(err).__name__}: {err}"
                 rt = session.runtime(op.id)
                 rt["advance_error"] = detail
@@ -2058,16 +2129,21 @@ def advance_session(sid: str) -> dict:
                     # fail it, close its plane row, and let the ladder re-shoot
                     # the clip instead of wedging the whole batch forever.
                     op.status = "failed"
-                    session.record_failure(op, "lost", f"gave up after 5 poll failures: {detail[:160]}")
+                    session.record_failure(
+                        op, "lost", f"gave up after 5 poll failures: {detail[:160]}"
+                    )
                     try:
                         plane, ctx = _boot()
                         if op.job_id:
                             job = plane.job(ctx.workspace.id, op.job_id)
                             ledger.record_failure(
-                                plane, ctx.workspace.id, job, op,
+                                plane,
+                                ctx.workspace.id,
+                                job,
+                                op,
                                 f"gave up after 5 poll failures: {detail[:160]}",
                             )
-                    except Exception:  # noqa: BLE001 - closing the row is best-effort
+                    except Exception:
                         pass
                     _revise_after_job_failure(
                         op, f"gave up after 5 poll failures: {detail[:160]}", allow_spend=True
@@ -2116,8 +2192,7 @@ def advance_session(sid: str) -> dict:
     # per-op status so the room can show LIVE progress for a targeted set
     # (the retake watch) instead of a silent wait on aggregate counts
     counts["ops"] = [
-        {"op_id": op.id, "clip_id": op.clip_id, "status": op.status}
-        for op in session.ops_for(sid)
+        {"op_id": op.id, "clip_id": op.clip_id, "status": op.status} for op in session.ops_for(sid)
     ]
     return counts
 
@@ -2241,7 +2316,8 @@ def _after_sheet_still(op: DirectorOp, package, char, slot: str) -> str:
     coheres (or cannot be measured) — register the Flow character object
     from the anchor and the board so the clips can carry it. Every outcome
     is a sentence on the op's narration; nothing here can fail the still."""
-    from diony_director import artifacts, cast as cast_mod
+    from diony_director import artifacts
+    from diony_director import cast as cast_mod
 
     notes: list[str] = []
     if slot == "front":
@@ -2258,7 +2334,8 @@ def _after_sheet_still(op: DirectorOp, package, char, slot: str) -> str:
             char.flow_media_ids.pop(slot, None)
             char.sheet_retries[slot] = tries + 1
             redraws = [
-                o for o in artifacts.plan_sheet_ops(op.session_id, package)
+                o
+                for o in artifacts.plan_sheet_ops(op.session_id, package)
                 if (o.artifact_refs.get("bible") or {}).get("char_id") == char.char_id
                 and (o.artifact_refs.get("bible") or {}).get("slot") == slot
             ]
@@ -2293,7 +2370,9 @@ def _after_sheet_still(op: DirectorOp, package, char, slot: str) -> str:
                     "from the anchor and the board — the clips carry it as @character."
                 )
             except provider_base.CloudAdapterError as err:
-                notes.append(f" Flow character registration failed ({err}) — the stills ride as references instead.")
+                notes.append(
+                    f" Flow character registration failed ({err}) — the stills ride as references instead."
+                )
     return "".join(notes)
 
 
@@ -2467,7 +2546,9 @@ def _revise_after_job_failure(op: DirectorOp, detail: str, *, allow_spend: bool 
 
 class ProduceIn(BaseModel):
     idea: str
-    runtime_s: int = Field(default=60, gt=0)  # no length guard: cost is the governor, and it is visible
+    runtime_s: int = Field(
+        default=60, gt=0
+    )  # no length guard: cost is the governor, and it is visible
     autopilot: bool = False
     max_usd: float = Field(default=0, ge=0)
     max_revisions_per_clip: int = Field(default=3, ge=0, le=10)
@@ -2679,8 +2760,12 @@ def board(sid: str) -> dict:
                 "flow_registered": bool(char.flow_character_ref),
                 # Blueprint 32: the identity card as it will ride the prompts,
                 # and the sheet's measured coherence (honest when unmeasured)
-                "identity": char.identity.model_dump(mode="json") if char.identity is not None else None,
-                "identity_block": cast_mod.identity_block(char) if char.identity is not None else "",
+                "identity": char.identity.model_dump(mode="json")
+                if char.identity is not None
+                else None,
+                "identity_block": cast_mod.identity_block(char)
+                if char.identity is not None
+                else "",
                 "sheet": cast_mod.sheet_summary(char) if char.hero_stills else "",
                 "sheet_receipt": dict(char.sheet_receipt or {}),
             }
@@ -2899,11 +2984,11 @@ def _cut_gaps(sid: str) -> tuple[list[str], list[DirectorOp], list[str]]:
         if stored is not None and Path(stored.path).is_file():
             have.add(op.clip_id)
     skipped = session.skipped_clip_ids(sid)  # a Skip is a decision, never a gap
-    missing = [c.clip_id for c in package.clips if c.clip_id not in have and c.clip_id not in skipped]
-    gaps = set(missing)
-    drafts = [
-        o for o in session.ops_for(sid) if o.clip_id in gaps and o.status == "proposed"
+    missing = [
+        c.clip_id for c in package.clips if c.clip_id not in have and c.clip_id not in skipped
     ]
+    gaps = set(missing)
+    drafts = [o for o in session.ops_for(sid) if o.clip_id in gaps and o.status == "proposed"]
     rolling = sorted(
         {
             o.clip_id
@@ -3072,10 +3157,7 @@ def _speech_guard(
                 )
             continue
         checked += 1
-        if (
-            detection.word_count >= SPEECH_WORDS_FAIL
-            or detection.speech_s >= SPEECH_SECONDS_FAIL
-        ):
+        if detection.word_count >= SPEECH_WORDS_FAIL or detection.speech_s >= SPEECH_SECONDS_FAIL:
             specs[index]["mute"] = True
             muted.append(
                 {
@@ -3242,9 +3324,16 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
                 ),
             )
     post_lines = any(_post_line(op) for op in used_ops)
-    spoken = [op.clip_id or op.id for op in used_ops if _carries_line(op) and _voicing(op) == "generated"]
+    spoken = [
+        op.clip_id or op.id for op in used_ops if _carries_line(op) and _voicing(op) == "generated"
+    ]
     speech_report: dict = {
-        "muted": [], "measured": 0, "clips": len(paths), "kept": [], "rescued": [], "balanced": [],
+        "muted": [],
+        "measured": 0,
+        "clips": len(paths),
+        "kept": [],
+        "rescued": [],
+        "balanced": [],
     }
     if body.speech_guard:
         speech_report = _speech_guard(
@@ -3321,9 +3410,7 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
                 tone_bits.append(master.look.medium)
         package = session.package_for(sid)
         notes = (
-            {c.name: c.age_body_notes for c in package.characters}
-            if package is not None
-            else {}
+            {c.name: c.age_body_notes for c in package.characters} if package is not None else {}
         )
         commit_voice = _plan_voice(sid, body.voice)
         if commit_voice is not None:
@@ -3372,7 +3459,7 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
             loudness_target=result.loudness_target,
             narration=narration_report,
         )
-    except Exception as err:  # noqa: BLE001 - sidecars never block the film
+    except Exception as err:
         delivered = {"names": [], "error": f"{type(err).__name__}: {err}"}
     return {
         "film": str(result.path),
@@ -3588,7 +3675,8 @@ def redraw_sheet_slot(sid: str, char_id: str, slot: str) -> dict:
     if slot == "front":
         others_landed = [s for s in char.hero_stills if s != "front"]
         others_pending = [
-            o for o in session.ops_for(sid)
+            o
+            for o in session.ops_for(sid)
             if (o.artifact_refs.get("bible") or {}).get("char_id") == char_id
             and (o.artifact_refs.get("bible") or {}).get("slot") not in {"", "front"}
             and o.status not in {"completed", "failed", "discarded"}
@@ -3608,7 +3696,8 @@ def redraw_sheet_slot(sid: str, char_id: str, slot: str) -> dict:
     char.face_approved = False
     char.sheet_retries[slot] = int(char.sheet_retries.get(slot, 0)) + 1
     planned = [
-        o for o in artifacts.plan_sheet_ops(sid, package)
+        o
+        for o in artifacts.plan_sheet_ops(sid, package)
         if (o.artifact_refs.get("bible") or {}).get("char_id") == char_id
         and (o.artifact_refs.get("bible") or {}).get("slot") == slot
     ]
@@ -3617,7 +3706,9 @@ def redraw_sheet_slot(sid: str, char_id: str, slot: str) -> dict:
     session.persist(sid)
     return {
         "ops": [op.model_dump(mode="json") for op in planned],
-        "reply": f"Redrawing {char.name}'s {slot} from the anchor." if planned else "Nothing to redraw.",
+        "reply": f"Redrawing {char.name}'s {slot} from the anchor."
+        if planned
+        else "Nothing to redraw.",
     }
 
 
@@ -3630,9 +3721,13 @@ def _upscale_source(op: DirectorOp) -> str:
     """The Flow-hosted media id a server-side upscale needs, or the reason
     this take cannot have one."""
     if op.op is DirectorOpType.UPSCALE:
-        raise HTTPException(status_code=409, detail="this op is already a finish — upscale its take")
+        raise HTTPException(
+            status_code=409, detail="this op is already a finish — upscale its take"
+        )
     if op.status != "completed":
-        raise HTTPException(status_code=409, detail=f"op is {op.status}; upscale needs a completed clip")
+        raise HTTPException(
+            status_code=409, detail=f"op is {op.status}; upscale needs a completed clip"
+        )
     if op.provider is None or op.provider.value != "google-flow":
         raise HTTPException(
             status_code=409,
@@ -3716,7 +3811,9 @@ def upscale_rate(resolution: str = session.FINISH_RESOLUTION) -> dict:
     from diony_director import estimate as estimate_mod
 
     if resolution not in flow.UPSCALE_RESOLUTIONS:
-        raise HTTPException(status_code=422, detail=f"resolution must be one of {flow.UPSCALE_RESOLUTIONS}")
+        raise HTTPException(
+            status_code=422, detail=f"resolution must be one of {flow.UPSCALE_RESOLUTIONS}"
+        )
     try:
         est = estimate_mod.estimate_op(
             provider=CloudProvider.GOOGLE_FLOW,

@@ -1,7 +1,7 @@
-"""Provider-neutral generation adapters with local Diony defaults.
+"""Provider-neutral generation adapters for the launch control plane.
 
-No hosted provider is registered automatically. Explicit BYOK adapters may be
-added at runtime, but the signed site remains the first and default provider.
+The cloud engines the Director shoots on are registered by default; explicit
+BYOK adapters may be added at runtime.
 """
 
 from __future__ import annotations
@@ -28,6 +28,9 @@ class ProviderSpec(BaseModel):
     label: str
     capabilities: list[ProviderCapability]
     models: list[str] = Field(default_factory=list)
+    # A Diony default engine (the Director's cloud providers and its own
+    # assembly) as opposed to a BYOK adapter added at runtime; workflows run
+    # on defaults unless a run's config lifts `require_local`.
     local: bool = True
     async_provider: bool = False
     enabled: bool = True
@@ -54,11 +57,10 @@ class ProviderAdapter(Protocol):
 
 
 class LocalCheckpointProvider:
-    """Records control-plane stages whose heavy work is owned by existing engines.
+    """Records control-plane stages whose heavy work is owned by the engines.
 
-    The adapter never invents media. Wan/Finish output asset IDs are attached by
-    the existing farm and finish workers; this adapter only checkpoints the
-    orchestration stages around them.
+    The adapter never invents media. Output asset IDs are attached by the
+    Director; this adapter only checkpoints the orchestration stages.
     """
 
     def __init__(self, spec: ProviderSpec) -> None:
@@ -107,7 +109,14 @@ class ProviderRegistry:
         rows = [provider for provider in self._providers.values() if provider.spec.enabled]
         if capability is not None:
             rows = [provider for provider in rows if capability in provider.spec.capabilities]
-        return sorted(rows, key=lambda provider: (not provider.spec.local, provider.spec.priority, provider.spec.id))
+        return sorted(
+            rows,
+            key=lambda provider: (
+                not provider.spec.local,
+                provider.spec.priority,
+                provider.spec.id,
+            ),
+        )
 
     def get(self, provider_id: str) -> ProviderAdapter:
         try:
@@ -151,24 +160,41 @@ class ProviderRegistry:
 
     @classmethod
     def with_diony_defaults(cls) -> ProviderRegistry:
+        """The engines the Director shoots on, as control-plane providers.
+
+        These adapters checkpoint orchestration stages; the Director's own
+        provider clients (`diony_director.providers`) make the API calls and
+        attach the media. Nothing here renders a frame."""
         registry = cls()
         defaults = [
             ProviderSpec(
-                id="diony.deepseek",
-                label="DeepSeek on the signed site",
-                capabilities=[ProviderCapability.LLM, ProviderCapability.SAFETY],
-                models=["deepseek-ai/DeepSeek-V4-Flash-0731"],
-                priority=10,
-                transparency="Prompts stay on the signed site. Encoding uses encoding_dsv4.",
-            ),
-            ProviderSpec(
-                id="diony.wan22",
-                label="Wan2.2 on the signed site",
-                capabilities=[ProviderCapability.VIDEO],
-                models=["Wan2.2-T2V-A14B", "Wan2.2-I2V-A14B", "VACE-Fun-A14B"],
+                id="grok",
+                label="Grok Imagine (xAI)",
+                capabilities=[ProviderCapability.VIDEO, ProviderCapability.LLM],
+                models=[
+                    "grok-imagine-video-1.5",
+                    "grok-imagine-video",
+                    "grok-imagine-image-2.0",
+                    "grok-4.6",
+                ],
                 async_provider=True,
                 priority=10,
-                transparency="Native 720p negatives, seeds, prompts, references, and QC remain visible.",
+                transparency="Metered per second by xAI; prompts, references, and receipts stay in the vault.",
+            ),
+            ProviderSpec(
+                id="google-flow",
+                label="Google Flow via useapi.net",
+                capabilities=[ProviderCapability.VIDEO],
+                models=[
+                    "omni-flash",
+                    "veo-3.1-lite",
+                    "veo-3.1-fast",
+                    "veo-3.1-quality",
+                    "nano-banana-2",
+                ],
+                async_provider=True,
+                priority=20,
+                transparency="Charged in the Google AI plan's credits; dollars are modeled from the declared plan.",
             ),
             ProviderSpec(
                 id="diony.assembly",
@@ -176,23 +202,7 @@ class ProviderRegistry:
                 capabilities=[ProviderCapability.ASSEMBLY],
                 models=["ffmpeg-conform-v1"],
                 priority=10,
-            ),
-            ProviderSpec(
-                id="diony.finish",
-                label="Diony 1080 finish",
-                capabilities=[ProviderCapability.FINISH],
-                models=["diony_sr_v1"],
-                async_provider=True,
-                priority=10,
-                transparency="Every deliverable records its 720 negative and 1080 finish lineage.",
-            ),
-            ProviderSpec(
-                id="diony.package",
-                label="Diony portable package",
-                capabilities=[ProviderCapability.PACKAGE],
-                models=["diony-package-v1"],
-                priority=10,
-                transparency="Project, lineage, checksums, and creator-owned media export together.",
+                transparency="The cut, the loudness lock, and the narration mix run on this desk with ffmpeg.",
             ),
         ]
         for spec in defaults:

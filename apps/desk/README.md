@@ -1,8 +1,8 @@
 # Desk
 
-The customer Desk is a self-contained Mac or Windows application. It does not install Python or packages at first launch. It opens the startup lobby immediately, uses OS-owned application-data and log directories, semantically verifies Studio and Producer, refuses to kill unknown port owners, and exposes a secret-free diagnostics download when startup fails. Blueprint `17` is the distribution and acceptance contract.
+The customer Desk is a self-contained Mac or Windows application. It does not install Python or packages at first launch. It opens the startup lobby immediately, uses OS-owned application-data and log directories, semantically verifies Studio, Director, and Producer, refuses to kill unknown port owners, and exposes a secret-free diagnostics download when startup fails. Blueprint `17` is the distribution and acceptance contract.
 
-The source-checkout fallback remains for engineers: open **START HERE.txt**, then double-click **Open Diony AI** in the repo folder. START HERE names the crate, or a lease from Runpod first (`https://www.runpod.io/`) then Enverge (`https://enverge.ai/`). The page installs the desk once, then Continue is Studio at `http://studio.diony.local`. Producer is `http://producer.diony.local` after Sign. The first open may ask for this computer’s password once so those names resolve. Approve it. If you cancel, the lobby Continue retries — it does not open a dead name.
+The source-checkout fallback remains for engineers: open **START HERE.txt**, then double-click **Open Diony AI** in the repo folder. The page installs the desk once, then Continue is Studio at `http://studio.diony.local`, which hands the user to the Director at `http://director.diony.local`; finished films land in Producer at `http://producer.diony.local`. The desk starts all three and refuses to replace a Director with paid jobs in flight. The first open may ask for this computer’s password once so those names resolve. Approve it. If you cancel, the lobby Continue retries — it does not open a dead name.
 
 ## Local Mac application
 

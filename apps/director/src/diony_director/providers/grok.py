@@ -56,7 +56,9 @@ def _headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {key}"}
 
 
-def submit_handle(external_id: str, *, model: str, duration_s: int, **metadata) -> base.CloudJobHandle:
+def submit_handle(
+    external_id: str, *, model: str, duration_s: int, **metadata
+) -> base.CloudJobHandle:
     return base.CloudJobHandle(
         provider_id=PROVIDER_ID,
         external_id=external_id,
@@ -135,9 +137,7 @@ def submit(op: DirectorOp) -> base.CloudJobHandle:
         payload["prompt"] = _with_legend(op.prompt, op, len(payload["reference_images"]))
     voices = op.artifact_refs.get("grok_voices") or []
     if voices:
-        payload["reference_audios"] = [
-            {"voice_id": v} for v in voices[:MAX_REFERENCE_AUDIOS]
-        ]
+        payload["reference_audios"] = [{"voice_id": v} for v in voices[:MAX_REFERENCE_AUDIOS]]
     response = base.post_with_retries(
         f"{api_base()}/v1/videos/generations",
         what="xAI video submit",
@@ -165,10 +165,16 @@ def submit(op: DirectorOp) -> base.CloudJobHandle:
     return handle
 
 
-def _submit_operation(path: str, payload: dict, *, model: str, duration_s: int, kind: str) -> base.CloudJobHandle:
+def _submit_operation(
+    path: str, payload: dict, *, model: str, duration_s: int, kind: str
+) -> base.CloudJobHandle:
     base.ensure_prompt_fits(str(payload.get("prompt", "")), PROVIDER_ID, what=f"{kind} prompt")
     response = base.post_with_retries(
-        f"{api_base()}{path}", what=f"xAI {kind} submit", json=payload, headers=_headers(), timeout=CALL_TIMEOUT_S
+        f"{api_base()}{path}",
+        what=f"xAI {kind} submit",
+        json=payload,
+        headers=_headers(),
+        timeout=CALL_TIMEOUT_S,
     )
     _guard(response)
     body = response.json()
@@ -325,7 +331,9 @@ def submit_edit(video: str, *, prompt: str, model: str = EDIT_MODEL) -> base.Clo
     )
 
 
-def submit_extension(video: str, *, prompt: str, model: str, duration_s: int) -> base.CloudJobHandle:
+def submit_extension(
+    video: str, *, prompt: str, model: str, duration_s: int
+) -> base.CloudJobHandle:
     """Continue motion and sound; duration is the extended portion only. Chain ≤ 2 deep.
 
     Extension is documented on grok-imagine-video only — the model is
@@ -333,7 +341,12 @@ def submit_extension(video: str, *, prompt: str, model: str, duration_s: int) ->
 
     return _submit_operation(
         "/v1/videos/extensions",
-        {"model": EDIT_MODEL, "prompt": prompt, "video": _video_input(video), "duration": int(duration_s)},
+        {
+            "model": EDIT_MODEL,
+            "prompt": prompt,
+            "video": _video_input(video),
+            "duration": int(duration_s),
+        },
         model=EDIT_MODEL,
         duration_s=int(duration_s),
         kind="extension",

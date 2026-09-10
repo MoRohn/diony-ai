@@ -3,7 +3,6 @@ feature matrix, review-gated assembly, sequenced bibles, per-session budgets."""
 
 import base64
 import importlib
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -96,9 +95,7 @@ def test_flow_submit_uploads_local_media_as_assets(tmp_path, monkeypatch) -> Non
         return _Response({"jobId": "j-1"})
 
     monkeypatch.setattr(flow.httpx, "post", fake_post)
-    op = _flow_op(
-        artifact_refs={"start_image": str(plate), "references": [str(face), "user:img7"]}
-    )
+    op = _flow_op(artifact_refs={"start_image": str(plate), "references": [str(face), "user:img7"]})
     flow.submit(op)
 
     video_call = next(c for c in calls if c["url"].endswith("/videos"))
@@ -189,6 +186,10 @@ def test_extend_revision_carries_its_source_through_dispatch(monkeypatch, tmp_pa
 
 
 def test_flow_extend_revision_without_media_id_regenerates_honestly(tmp_path) -> None:
+    # this production rolls on Google Flow (the 10 s Omni grid, the Flow finish lane)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     client = _client()
     sid, locked = _locked(client)
     flow_op_id = next(o["id"] for o in locked["ops"] if o["provider"] == "google-flow")
@@ -224,10 +225,10 @@ def test_capabilities_block_illegal_ops() -> None:
     )
     assert any("cannot be extended" in p for p in capabilities.violations(omni_extend))
 
-    chars_on_quality = _flow_op(
-        model="veo-3.1-quality", artifact_refs={"characters": ["char-1"]}
+    chars_on_quality = _flow_op(model="veo-3.1-quality", artifact_refs={"characters": ["char-1"]})
+    assert any(
+        "does not support characters" in p for p in capabilities.violations(chars_on_quality)
     )
-    assert any("does not support characters" in p for p in capabilities.violations(chars_on_quality))
 
     chars_off_grid = _flow_op(duration_s=4, artifact_refs={"characters": ["char-1"]})
     assert any("require a duration" in p for p in capabilities.violations(chars_off_grid))
@@ -240,6 +241,10 @@ def test_capabilities_block_illegal_ops() -> None:
 
 
 def test_omni_duration_fail_plans_a_v2v_edit_not_an_extension() -> None:
+    # this production rolls on Google Flow (the 10 s Omni grid, the Flow finish lane)
+    from diony_contracts.cluster import write_engine_choice
+
+    write_engine_choice("google-flow")
     from diony_director import packagebuilder, screenwriter
     from diony_director.compiler import compile_clip_prompt
 
@@ -248,8 +253,11 @@ def test_omni_duration_fail_plans_a_v2v_edit_not_an_extension() -> None:
     clip = next(c for c in package.clips if c.model == "omni-flash")
     clip.add_prompt(compile_clip_prompt(clip, package))
     review = ClipReview(
-        id="r-om", clip_id=clip.clip_id, verdict="fail",
-        families={"duration": "fail"}, issues=["measured 4.0s vs booked 6s"],
+        id="r-om",
+        clip_id=clip.clip_id,
+        verdict="fail",
+        families={"duration": "fail"},
+        issues=["measured 4.0s vs booked 6s"],
     )
     op, _ = revisions.plan_revision(
         review, clip, package, session_id="s-om", revision_count=0, failure_memory=set()
@@ -270,8 +278,12 @@ def test_failed_review_takes_never_assemble_until_accepted() -> None:
     session.register_review(
         op.id,
         ClipReview(
-            id="r-f", clip_id=op.clip_id, op_id=op.id, verdict="fail",
-            families={"delivery": "fail"}, issues=["garbage frames"],
+            id="r-f",
+            clip_id=op.clip_id,
+            op_id=op.id,
+            verdict="fail",
+            families={"delivery": "fail"},
+            issues=["garbage frames"],
         ),
     )
     assert session.completed_clip_ops(sid) == []
@@ -400,9 +412,7 @@ def test_frames_are_exclusive_with_identity_refs() -> None:
     problems = capabilities.violations(framed)
     assert any("exclusive" in p for p in problems)
 
-    frame_only = _flow_op(
-        mode=CloudGenerationMode.I2V, artifact_refs={"start_image": "user:still"}
-    )
+    frame_only = _flow_op(mode=CloudGenerationMode.I2V, artifact_refs={"start_image": "user:still"})
     assert capabilities.violations(frame_only) == []
 
 

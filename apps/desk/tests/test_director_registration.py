@@ -15,7 +15,9 @@ def test_service_command_accepts_director_source_checkout() -> None:
 
 
 def test_service_command_accepts_director_frozen() -> None:
-    command = boot.service_command("director", frozen=True, executable=Path("/Applications/Diony.app/x"))
+    command = boot.service_command(
+        "director", frozen=True, executable=Path("/Applications/Diony.app/x")
+    )
     assert command[-2:] == ["--service", "director"]
 
 
@@ -31,7 +33,9 @@ def test_listener_signatures_recognize_the_director(monkeypatch) -> None:
     monkeypatch.setattr(boot, "listener_pids", lambda port: [4242])
     monkeypatch.setattr(boot, "process_command", lambda pid: "/venv/bin/diony-director")
     assert boot.listener_is_diony(boot.DIRECTOR_PORT) is True
-    monkeypatch.setattr(boot, "process_command", lambda pid: "/Applications/Diony.app/x --service director")
+    monkeypatch.setattr(
+        boot, "process_command", lambda pid: "/Applications/Diony.app/x --service director"
+    )
     assert boot.listener_is_diony(boot.DIRECTOR_PORT) is True
     monkeypatch.setattr(boot, "process_command", lambda pid: "some-other-app")
     assert boot.listener_is_diony(boot.DIRECTOR_PORT) is False
@@ -49,8 +53,11 @@ def test_director_startup_is_best_effort_never_raises(monkeypatch, tmp_path) -> 
     monkeypatch.setattr(boot, "is_frozen", lambda: False)
     monkeypatch.setattr(boot, "venv_script", lambda name, root=None: tmp_path / "missing")
     monkeypatch.setattr(
-        boot, "subprocess",
-        type("S", (), {"run": staticmethod(lambda *a, **k: (_ for _ in ()).throw(OSError("no pip")))}),
+        boot,
+        "subprocess",
+        type(
+            "S", (), {"run": staticmethod(lambda *a, **k: (_ for _ in ()).throw(OSError("no pip")))}
+        ),
     )
     boot.ensure_director_running(tmp_path)  # must not raise
 
@@ -70,7 +77,9 @@ def test_release_build_scripts_install_the_director() -> None:
     repo = _P(boot.__file__).resolve().parents[3].parent
     for script in ("build-local-macos.sh", "build-macos.sh"):
         text = (repo / "scripts" / "release" / script).read_text()
-        assert "apps/director" in text, f"{script} must pip-install apps/director into the build venv"
+        assert "apps/director" in text, (
+            f"{script} must pip-install apps/director into the build venv"
+        )
     windows = (repo / "scripts" / "release" / "build-windows.ps1").read_text()
     assert "apps\\director" in windows
 
@@ -79,26 +88,6 @@ def test_cloud_engine_lands_on_the_studio_opening(monkeypatch) -> None:
     """Flow: Studio (configure + choose engine) -> Director -> Producer."""
     monkeypatch.delenv("DIONY_ENGINE", raising=False)
     assert boot.landing_url(wait=0.0) == boot.STUDIO_URL
-
-
-def test_cloud_landing_never_consults_the_signed_gpu_state(monkeypatch) -> None:
-    monkeypatch.delenv("DIONY_ENGINE", raising=False)
-
-    def boom(*a, **k):
-        raise AssertionError("cloud landing must not wait on the legacy signed-GPU probe")
-
-    monkeypatch.setattr(boot, "wizard_signed", boom)
-    monkeypatch.setattr(boot, "studio_identifying", boom)
-    monkeypatch.setattr(boot, "port_open", boom)
-    assert boot.landing_url(wait=0.0) == boot.STUDIO_URL
-
-
-def test_legacy_engine_keeps_the_signed_gpu_landing(monkeypatch) -> None:
-    monkeypatch.setenv("DIONY_ENGINE", "local_legacy")
-    monkeypatch.setattr(boot.time, "sleep", lambda _s: None)
-    monkeypatch.setattr(boot, "port_open", lambda port: True)
-    monkeypatch.setattr(boot, "wizard_signed", lambda *a, **k: True)
-    assert boot.landing_url(wait=0.0) == boot.PRODUCER_URL
 
 
 def test_product_names_need_the_director_route_and_generation(monkeypatch) -> None:
@@ -111,9 +100,7 @@ def test_product_names_need_the_director_route_and_generation(monkeypatch) -> No
         return labels.get(urlparse(url).hostname or "", ""), gen["value"]
 
     monkeypatch.setattr(boot, "_name_route_probe", fake_probe)
-    monkeypatch.setattr(
-        boot, "_name_route_label", lambda url, path="/": fake_probe(url, path)[0]
-    )
+    monkeypatch.setattr(boot, "_name_route_label", lambda url, path="/": fake_probe(url, path)[0])
     assert boot.product_names_live() is False  # stale pre-Director router
 
     labels["director.diony.local"] = "director"
@@ -150,22 +137,14 @@ def _serving(body: bytes):
     return lambda *a, **k: Conn()
 
 
-def test_wizard_html_ok_accepts_the_studio_opening(monkeypatch) -> None:
-    monkeypatch.setattr(boot, "wizard_ui_stamp", lambda root=None: "brand17")
+def test_wizard_html_ok_accepts_only_the_studio_opening(monkeypatch) -> None:
     monkeypatch.setattr(
         boot.http.client, "HTTPConnection", _serving(b'<html data-diony="studio-opening">')
     )
     assert boot.wizard_html_ok() is True
-
-
-def test_wizard_html_ok_still_validates_the_classic_stamp(monkeypatch) -> None:
-    monkeypatch.setattr(boot, "wizard_ui_stamp", lambda root=None: "brand17")
+    # a stale classic rail (or any other page) is not this desk's Studio
     monkeypatch.setattr(
         boot.http.client, "HTTPConnection", _serving(b'<script src="app.js?v=brand17">')
-    )
-    assert boot.wizard_html_ok() is True
-    monkeypatch.setattr(
-        boot.http.client, "HTTPConnection", _serving(b'<script src="app.js?v=old1">')
     )
     assert boot.wizard_html_ok() is False
 
@@ -222,7 +201,9 @@ def test_engine_is_cloud_works_without_the_venv() -> None:
     )
     result = subprocess.run(
         [sys.executable, "-c", code],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True,
+        text=True,
+        timeout=60,
         env={"PATH": "/usr/bin:/bin", "PYTHONPATH": ""},
     )
     assert result.returncode == 0, result.stderr

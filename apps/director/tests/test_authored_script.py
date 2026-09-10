@@ -169,7 +169,9 @@ def test_paraphrased_and_dropped_narration_is_restored_deterministically(monkeyp
     )
     assert "But abundance is not the same thing as access." in spoken
     # the dropped line lands AFTER the line it follows in the authored order
-    carried = spoken.index("And on the surface, it makes sense. A company gets faster. Leaner. Smarter.")
+    carried = spoken.index(
+        "And on the surface, it makes sense. A company gets faster. Leaner. Smarter."
+    )
     assert spoken.index("But abundance is not the same thing as access.") == carried + 1
     assert any("restored" in w for w in draft.warnings)
     assert any("inserted" in w for w in draft.warnings)
@@ -221,13 +223,38 @@ def test_the_restore_pass_never_speaks_a_line_twice(monkeypatch) -> None:
                 "lines": [
                     {"kind": "action", "text": "The light holds red.", "shot": "Wide"},
                     # authored line 1 split across two consecutive vo lines
-                    {"kind": "vo", "text": "You were told AI would create more opportunity.", "speaker": "NARRATOR", "shot": "Wide"},
-                    {"kind": "vo", "text": "More products. More growth. More jobs.", "speaker": "NARRATOR", "shot": "Close"},
+                    {
+                        "kind": "vo",
+                        "text": "You were told AI would create more opportunity.",
+                        "speaker": "NARRATOR",
+                        "shot": "Wide",
+                    },
+                    {
+                        "kind": "vo",
+                        "text": "More products. More growth. More jobs.",
+                        "speaker": "NARRATOR",
+                        "shot": "Close",
+                    },
                     # authored line 2 paraphrased, then a fragment of it
-                    {"kind": "vo", "text": "On the surface it makes sense.", "speaker": "NARRATOR", "shot": "Wide"},
-                    {"kind": "vo", "text": "A company gets faster. Leaner. Smarter.", "speaker": "NARRATOR", "shot": "Medium"},
+                    {
+                        "kind": "vo",
+                        "text": "On the surface it makes sense.",
+                        "speaker": "NARRATOR",
+                        "shot": "Wide",
+                    },
+                    {
+                        "kind": "vo",
+                        "text": "A company gets faster. Leaner. Smarter.",
+                        "speaker": "NARRATOR",
+                        "shot": "Medium",
+                    },
                     # a character's line that echoes the narration is the writer's — untouched
-                    {"kind": "dialogue", "text": "Abundance is not access.", "speaker": "DRIVER", "shot": "Close"},
+                    {
+                        "kind": "dialogue",
+                        "text": "Abundance is not access.",
+                        "speaker": "DRIVER",
+                        "shot": "Close",
+                    },
                     # authored line 3 dropped entirely
                 ],
             }

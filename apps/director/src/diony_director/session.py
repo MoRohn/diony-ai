@@ -20,8 +20,13 @@ from diony_contracts.director import (
     DirectorOp,
     DirectorOpType,
 )
-from diony_contracts.production import ClipReview, ClipUnit, ProductionPackage
-from diony_contracts.production import LookBible, MasterPrompt
+from diony_contracts.production import (
+    ClipReview,
+    ClipUnit,
+    LookBible,
+    MasterPrompt,
+    ProductionPackage,
+)
 from diony_director import compiler, packagebuilder, revisions, screenwriter
 from diony_director import estimate as estimate_mod
 from diony_director import master_prompt as master_mod
@@ -209,11 +214,7 @@ def resumable_sessions() -> list[dict[str, Any]]:
                 counts["proposed"] += 1
         if counts["failed"] or counts["in_flight"]:
             rows.append({"session_id": sid, "stage": "running", **counts})
-        elif (
-            _PACKAGES.get(sid) is not None
-            and counts["proposed"]
-            and not counts["completed"]
-        ):
+        elif _PACKAGES.get(sid) is not None and counts["proposed"] and not counts["completed"]:
             # Blueprint 33 §5: a script locked and priced but never rolled —
             # the room comes back with its draft, its priced cards, and the
             # batch bar, instead of a fresh room over a package on disk
@@ -318,9 +319,7 @@ def _sniff_image(data: bytes) -> str:
     return ""
 
 
-def add_upload(
-    sid: str, *, name: str, data: bytes, role: str = "reference"
-) -> dict[str, Any]:
+def add_upload(sid: str, *, name: str, data: bytes, role: str = "reference") -> dict[str, Any]:
     """Persist a user-supplied still. Every upload is a look-and-identity
     reference; exactly one may be marked the OPENER (the first frame of a
     one-shot). Draft Script: uploads anchor plates and clip one."""
@@ -404,9 +403,7 @@ def all_upload_paths(sid: str) -> list[str]:
     return [u["path"] for u in (_UPLOADS.get(sid) or [])]
 
 
-def apply_uploads_to_refs(
-    sid: str, clip: ClipUnit, package: ProductionPackage, refs: dict
-) -> dict:
+def apply_uploads_to_refs(sid: str, clip: ClipUnit, package: ProductionPackage, refs: dict) -> dict:
     """User-supplied stills anchor the film's first clip for character and
     scene consistency: they ride as reference images, never as a forced first
     frame. Grok drops references whenever a start_image is present, so a plate
@@ -430,24 +427,37 @@ def _idea_with_uploads(sid: str, idea: str) -> str:
         return idea
     names = ", ".join(u["name"] for u in ups)
     return (
-        idea
-        + f"\n\n[Production note: the user supplied {_n(len(ups), 'reference image')} "
+        idea + f"\n\n[Production note: the user supplied {_n(len(ups), 'reference image')} "
         f"({names}) showing the intended characters and setting. Keep the people, "
         "wardrobe, place, and light consistent with those images throughout — the "
         "film does not have to open on that exact frame.]"
     )
 
 
-def resolve_provider(requested: str) -> CloudProvider:
-    normalized = requested.strip().lower()
-    if normalized in {"", "auto", "director"}:
-        from diony_contracts.cluster import read_engine_choice
+class EngineNotChosen(ValueError):
+    """No camera was chosen in Studio; nothing in the Director guesses one."""
 
-        choice = read_engine_choice()
-        if choice == "google-flow":
-            return CloudProvider.GOOGLE_FLOW
-        return CloudProvider.GROK
-    return CloudProvider(normalized)
+
+def engine_policy() -> str:
+    """The camera Studio chose — "grok" or "google-flow" — and nothing else."""
+    from diony_contracts.cluster import read_engine_choice
+
+    choice = read_engine_choice()
+    if choice not in {"grok", "google-flow"}:
+        raise EngineNotChosen(
+            "no camera is chosen — open Studio and pick Grok Imagine or Google Flow first"
+        )
+    return choice
+
+
+def resolve_provider(requested: str = "") -> CloudProvider:
+    """A message may name a route; otherwise the Studio choice is the route."""
+    normalized = requested.strip().lower()
+    if normalized in {"grok", "google-flow"}:
+        return CloudProvider(normalized)
+    if normalized:
+        raise ValueError(f"unknown provider {requested!r}; choose grok or google-flow")
+    return CloudProvider(engine_policy())
 
 
 def authored_elements(sid: str, idea: str, provider: CloudProvider) -> tuple[str, dict[str, str]]:
@@ -777,7 +787,7 @@ def propose(
     sid: str,
     text: str,
     *,
-    provider: str = "auto",
+    provider: str = "",
     model: str = "",
     duration_s: float = 6.0,
     resolution: str = "720p",
@@ -866,7 +876,9 @@ def propose(
     if master is not None:
         _MASTERS[op.id] = master
         op.rationale += " · " + master_mod.duration_note(
-            master, int(duration), cap_s=estimate_mod.GROK_MAX_S if chosen_provider is CloudProvider.GROK else 0
+            master,
+            int(duration),
+            cap_s=estimate_mod.GROK_MAX_S if chosen_provider is CloudProvider.GROK else 0,
         )
     _OPS[op.id] = op
     _SESSIONS.setdefault(sid, SessionState(id=sid)).op_ids.append(op.id)
@@ -907,7 +919,9 @@ def propose(
     if stills_note:
         notes.append(stills_note.strip())
     if est.rate_cards_stale:
-        notes.append("Heads up: the rate card is stale — re-verify provider pricing before running.")
+        notes.append(
+            "Heads up: the rate card is stale — re-verify provider pricing before running."
+        )
     notes.extend(_route_note_list(chosen_provider, text))
     reply = " ".join(
         [
@@ -1083,7 +1097,9 @@ def _propose_chain(
     if stills_note:
         notes.append(stills_note.strip())
     if stale:
-        notes.append("Heads up: the rate card is stale — re-verify provider pricing before running.")
+        notes.append(
+            "Heads up: the rate card is stale — re-verify provider pricing before running."
+        )
     notes.extend(_route_note_list(provider, text))
     reply = " ".join(
         [
@@ -1121,7 +1137,8 @@ def _plan_style_frames(sid: str, ops: list[DirectorOp], master: MasterPrompt) ->
     morph away from. Priced image ops, one per scene change, registered in
     the session and tied to their link; they roll at the link's submit.
     Idempotent: a link that already has its frame op keeps it."""
-    from diony_director import artifacts, look as look_mod
+    from diony_director import artifacts
+    from diony_director import look as look_mod
 
     look = master.look
     if look is None or not look.block():
@@ -1168,12 +1185,16 @@ def _plan_style_frames(sid: str, ops: list[DirectorOp], master: MasterPrompt) ->
         state.op_ids.append(frame_op.id)
         rt["style_frame_op"] = frame_op.id
         if "opens from a style frame" not in op.rationale:
-            op.rationale += " · opens from a style frame (scene change), not the previous clip's last frame"
+            op.rationale += (
+                " · opens from a style frame (scene change), not the previous clip's last frame"
+            )
         created.append(frame_op)
     return created
 
 
-def _plan_cast_keyframes(sid: str, ops: list[DirectorOp], package: ProductionPackage) -> list[DirectorOp]:
+def _plan_cast_keyframes(
+    sid: str, ops: list[DirectorOp], package: ProductionPackage
+) -> list[DirectorOp]:
     """Blueprint 32: every scripted clip that shows a packed character opens
     from a CAST KEYFRAME — a still the image lane composes from the
     character's board, the setting plate, and (when the clip continues the
@@ -1181,7 +1202,8 @@ def _plan_cast_keyframes(sid: str, ops: list[DirectorOp], package: ProductionPac
     clip through the same runtime key a chain link's style frame uses, so
     they roll inside the clip's submit and become its opening frame.
     Idempotent: a clip that already has its frame op keeps it."""
-    from diony_director import artifacts, cast as cast_mod
+    from diony_director import artifacts
+    from diony_director import cast as cast_mod
 
     lane_provider, lane_model = artifacts.sheet_lane()
     resolution = "2k" if lane_provider is CloudProvider.GROK else "image"
@@ -1256,7 +1278,8 @@ def keyframe_ops_for(sid: str) -> list[DirectorOp]:
     if state is None:
         return []
     return [
-        op for op_id in state.op_ids
+        op
+        for op_id in state.op_ids
         if (op := _OPS.get(op_id)) is not None
         and bool((op.artifact_refs.get("style_frame") or {}).get("keyframe"))
     ]
@@ -1334,9 +1357,20 @@ def retake_chain_link(op: DirectorOp) -> None:
     op.job_id = ""
     rt = runtime(op.id)
     for stale in (
-        "handle", "clip", "media_generation_id", "result_url", "last_poll_state",
-        "last_progress_ts", "submit_error", "ledger_error", "transient_holds",
-        "quota_hold_until", "narration", "next_op", "advance_error", "advance_failures",
+        "handle",
+        "clip",
+        "media_generation_id",
+        "result_url",
+        "last_poll_state",
+        "last_progress_ts",
+        "submit_error",
+        "ledger_error",
+        "transient_holds",
+        "quota_hold_until",
+        "narration",
+        "next_op",
+        "advance_error",
+        "advance_failures",
     ):
         rt.pop(stale, None)
     _REVIEWS.pop(op.id, None)
@@ -1357,8 +1391,17 @@ FRAME_REDRAW_LIMIT = 3
 # that the network hiccuped. Flow's own filter lines land as state "moderated";
 # the markers catch the same refusal when only the detail survived.
 _REFUSAL_MARKERS = (
-    "refused", "filter", "moderat", "prominent", "celebrity", "likeness",
-    "policy", "blocked", "safety", "rejected", "content_violation",
+    "refused",
+    "filter",
+    "moderat",
+    "prominent",
+    "celebrity",
+    "likeness",
+    "policy",
+    "blocked",
+    "safety",
+    "rejected",
+    "content_violation",
 )
 
 
@@ -1386,8 +1429,15 @@ def skip_op(op: DirectorOp, reason: str = "") -> None:
     op.rationale += " · skipped by the director" + (f": {reason[:160]}" if reason else "")
     rt = runtime(op.id)
     for stale in (
-        "handle", "transient_holds", "quota_hold_until", "poll_not_before",
-        "last_poll_state", "last_progress_ts", "advance_error", "advance_failures", "next_op",
+        "handle",
+        "transient_holds",
+        "quota_hold_until",
+        "poll_not_before",
+        "last_poll_state",
+        "last_progress_ts",
+        "advance_error",
+        "advance_failures",
+        "next_op",
     ):
         rt.pop(stale, None)
     rt["skipped"] = {"at": time.time(), "reason": str(reason or "")[:200]}
@@ -1425,16 +1475,13 @@ def redraw_opening_frame(op: DirectorOp, *, reason: str, safe: bool) -> Director
     2026-09-06, which retried into the same refusal four times because the
     same still rode every retry. Works for a continuing link too (no scene
     change): the still is composed from the previous link's last frame."""
-    from diony_director import artifacts, look as look_mod
+    from diony_director import artifacts
+    from diony_director import look as look_mod
 
     sid = op.session_id
     master = _MASTERS.get(op.id)
     position = chain_position(sid, op.id) or 0
-    clip = (
-        master.clips[position]
-        if master is not None and position < len(master.clips)
-        else {}
-    )
+    clip = master.clips[position] if master is not None and position < len(master.clips) else {}
     look = master.look if master is not None else None
     rt = runtime(op.id)
     redraws = int(rt.get("frame_redraws") or 0) + 1
@@ -1594,7 +1641,7 @@ def _kick_chain_derivation(
                 + master_mod.duration_note(master, sum(plan))
                 + _style_frames_note(frames)
             )
-        except Exception as err:  # noqa: BLE001 — a failed derivation is a named state
+        except Exception as err:
             for op in ops:
                 op.rationale = (
                     op.rationale.split(" · ")[0]
@@ -1653,7 +1700,7 @@ def audit_master_characters(op: DirectorOp, master: MasterPrompt) -> None:
                     )
                 ]
         master.characters_audited = True
-    except Exception as err:  # noqa: BLE001 — the audit is a net, not a gate
+    except Exception as err:
         mark = "names beside a picture: audit unavailable"
         if mark not in op.rationale:
             op.rationale += f" · {mark} ({type(err).__name__}); the prompt ships as written"
@@ -1742,7 +1789,9 @@ def fit_op_prompt(op: DirectorOp, people: list[dict[str, Any]]) -> bool:
     if rebuilt is None or len(rebuilt) > limit:
         rebuilt = compiler.refit_text(rebuilt or op.prompt or "", limit)
     op.prompt = rebuilt
-    provider = {"google-flow": "Google Flow", "grok": "Grok"}.get(op.provider.value, op.provider.value)
+    provider = {"google-flow": "Google Flow", "grok": "Grok"}.get(
+        op.provider.value, op.provider.value
+    )
     if PROMPT_REFIT_MARK not in op.rationale:
         op.rationale += (
             f" · {PROMPT_REFIT_MARK} {provider} prompt limit: {before} chars became "
@@ -2000,7 +2049,7 @@ def _kick_master_derivation(
                     cap_s=estimate_mod.GROK_MAX_S if provider is CloudProvider.GROK else 0,
                 )
             )
-        except Exception as err:  # noqa: BLE001 — a failed derivation is a named state
+        except Exception as err:
             op.rationale = (
                 op.rationale.split(" · ")[0]
                 + f" · master derivation failed ({type(err).__name__}: {str(err)[:220]}) — "
@@ -2114,9 +2163,7 @@ def upscale_parallelism() -> int:
 
 def set_aspect(sid: str, aspect: str) -> None:
     if aspect not in PROGRAM_ASPECTS:
-        raise ValueError(
-            f"unknown aspect {aspect!r} — expected one of {sorted(PROGRAM_ASPECTS)}"
-        )
+        raise ValueError(f"unknown aspect {aspect!r} — expected one of {sorted(PROGRAM_ASPECTS)}")
     _ASPECTS[sid] = aspect
     if sid in _SESSIONS:
         persist(sid)
@@ -2172,7 +2219,9 @@ def set_grok_template(sid: str, *, camera: str = "", atmosphere: str = "") -> di
     return template
 
 
-def set_budget(sid: str, *, max_usd_micros: int, max_revisions_per_clip: int, autopilot: bool) -> None:
+def set_budget(
+    sid: str, *, max_usd_micros: int, max_revisions_per_clip: int, autopilot: bool
+) -> None:
     _BUDGETS[sid] = {
         "max_usd_micros": max_usd_micros,
         "max_revisions_per_clip": max_revisions_per_clip,
@@ -2232,7 +2281,7 @@ def _derive_master_for_draft(sid: str, idea: str, runtime_s: int) -> MasterPromp
     derived from the idea, the stills, and the runtime target, in the dialect
     of the engine the session will roll on."""
     refs = [u["path"] for u in (_UPLOADS.get(sid) or [])]
-    expanded, authored = authored_elements(sid, idea, resolve_provider("auto"))
+    expanded, authored = authored_elements(sid, idea, resolve_provider())
     return master_mod.derive(
         expanded, target_duration_s=runtime_s, reference_images=refs, authored=authored
     )
@@ -2241,11 +2290,9 @@ def _derive_master_for_draft(sid: str, idea: str, runtime_s: int) -> MasterPromp
 def draft_take_units() -> dict[str, int]:
     """Blueprint 33: the take length the session's engine choice packs
     toward — read at draft time from the same choice the lock reads."""
-    from diony_contracts.cluster import read_engine_choice
     from diony_director import splitter
 
-    choice = read_engine_choice()
-    return splitter.take_units(choice if choice in {"grok", "google-flow"} else "auto")
+    return splitter.take_units(engine_policy())
 
 
 def start_production(sid: str, idea: str, runtime_s: int) -> tuple[ScreenplayDraft, str]:
@@ -2260,7 +2307,11 @@ def start_production(sid: str, idea: str, runtime_s: int) -> tuple[ScreenplayDra
     )
     reply = _draft_reply(draft, runtime_s)
     _DRAFTS[sid] = {
-        "status": "ready", "stage": "ready", "draft": draft, "reply": reply, "error": "",
+        "status": "ready",
+        "stage": "ready",
+        "draft": draft,
+        "reply": reply,
+        "error": "",
         "master": master,
     }
     _SESSIONS.setdefault(sid, SessionState(id=sid))
@@ -2281,7 +2332,11 @@ def begin_draft(sid: str, idea: str, runtime_s: int) -> dict[str, Any]:
     import threading
 
     _DRAFTS[sid] = {
-        "status": "drafting", "stage": "deriving", "draft": None, "reply": "", "error": "",
+        "status": "drafting",
+        "stage": "deriving",
+        "draft": None,
+        "reply": "",
+        "error": "",
         "master": None,
     }
 
@@ -2310,7 +2365,7 @@ def begin_draft(sid: str, idea: str, runtime_s: int) -> dict[str, Any]:
                 "master": master,
             }
             persist(sid)
-        except Exception as err:  # noqa: BLE001 - a failed draft is a named state
+        except Exception as err:
             _DRAFTS[sid] = {
                 "status": "failed",
                 "stage": "failed",
@@ -2334,8 +2389,17 @@ def begin_draft(sid: str, idea: str, runtime_s: int) -> dict[str, Any]:
 def draft_state(sid: str) -> dict[str, Any]:
     record = _DRAFTS.get(sid)
     if not isinstance(record, dict):
-        return {"status": "none", "stage": "none", "reply": "", "error": "", "script": None,
-                "characters": [], "settings": [], "warnings": [], "master": None}
+        return {
+            "status": "none",
+            "stage": "none",
+            "reply": "",
+            "error": "",
+            "script": None,
+            "characters": [],
+            "settings": [],
+            "warnings": [],
+            "master": None,
+        }
     draft = record.get("draft")
     master = record.get("master") or (getattr(draft, "master", None) if draft else None)
     return {
@@ -2483,7 +2547,9 @@ def edit_draft_line(
         line.text = cleaned
     if shot is not None:
         if line.kind not in SHOT_LINE_KINDS:
-            raise ValueError(f"a {line.kind} line carries no shot — direct an action or spoken beat")
+            raise ValueError(
+                f"a {line.kind} line carries no shot — direct an action or spoken beat"
+            )
         line.shot = " ".join(shot.split())[:300]
     persist(sid)
     return draft_state(sid)
@@ -2518,10 +2584,7 @@ def lock_script(
             "a new session to re-plan"
         )
     _validate_draft(draft)
-    from diony_contracts.cluster import read_engine_choice
-
-    choice = read_engine_choice()
-    policy = choice if choice in {"grok", "google-flow"} else "auto"
+    policy = engine_policy()
     state = _SESSIONS.setdefault(sid, SessionState(id=sid))
     ops_before = len(state.op_ids)
     try:
@@ -2700,7 +2763,9 @@ def review_for(op_id: str) -> ClipReview | None:
     return _REVIEWS.get(op_id)
 
 
-def next_revision(sid: str, failed_op: DirectorOp, review: ClipReview) -> tuple[DirectorOp | None, str]:
+def next_revision(
+    sid: str, failed_op: DirectorOp, review: ClipReview
+) -> tuple[DirectorOp | None, str]:
     """Record the failure, then plan the cheapest lock-preserving fix."""
 
     package = _PACKAGES.get(sid)
@@ -2808,9 +2873,7 @@ def completed_clip_ops(sid: str) -> list[DirectorOp]:
 
     package = _PACKAGES.get(sid)
     if package is None:
-        return [
-            op for chain in oneshot_chain_ops(sid) for op in chain if usable_take(op)
-        ]
+        return [op for chain in oneshot_chain_ops(sid) for op in chain if usable_take(op)]
     latest: dict[str, DirectorOp] = {}
     for op in ops_for(sid):
         # a finish (upscale) is never a take of its own: it rides beside the
@@ -3022,7 +3085,8 @@ def set_batch_targets(sid: str, op_ids: set[str]) -> set[str]:
     no hero pixel rolls before its plates and sheets exist."""
     seq = _SEQUENCES.get(sid) or {"bible": [], "scenes": {}}
     targets = {
-        op_id for op_id in op_ids
+        op_id
+        for op_id in op_ids
         if not ((op := _OPS.get(op_id)) is not None and op.artifact_refs.get("style_frame"))
     }
     retired = retired_op_ids(sid) & targets
@@ -3031,14 +3095,16 @@ def set_batch_targets(sid: str, op_ids: set[str]) -> set[str]:
         targets -= retired
         log_held(
             sid,
-            [{
-                "op_id": sorted(retired)[0],
-                "reason": (
-                    f"{_n(len(retired), 'clip')} belong to an earlier script this room "
-                    "has moved past — retired, not rolled; start a new session to keep "
-                    "rolling that film"
-                ),
-            }],
+            [
+                {
+                    "op_id": sorted(retired)[0],
+                    "reason": (
+                        f"{_n(len(retired), 'clip')} belong to an earlier script this room "
+                        "has moved past — retired, not rolled; start a new session to keep "
+                        "rolling that film"
+                    ),
+                }
+            ],
         )
     for bible_id in seq["bible"]:
         op = _OPS.get(bible_id)
@@ -3171,13 +3237,15 @@ def _plate_failed(sid: str, seq: dict[str, Any], scene_id: str, chain: list[str]
         held.add(scene_id)
         log_held(
             sid,
-            [{
-                "op_id": chain[0] if chain else scene_id,
-                "reason": (
-                    f"scene {scene_id} held: its setting plate failed — "
-                    "the scene will not roll unlocked; rerun the plate first"
-                ),
-            }],
+            [
+                {
+                    "op_id": chain[0] if chain else scene_id,
+                    "reason": (
+                        f"scene {scene_id} held: its setting plate failed — "
+                        "the scene will not roll unlocked; rerun the plate first"
+                    ),
+                }
+            ],
         )
     for op_id in chain:
         targets.discard(op_id)
@@ -3433,7 +3501,7 @@ def persist(sid: str) -> None:
             tmp = path.with_name("state.json.tmp")
             tmp.write_text(_json.dumps(doc))
             tmp.replace(path)
-    except Exception:  # noqa: BLE001
+    except Exception:
         # A snapshot must never kill the path that called it — not on a disk
         # hiccup (OSError), and not on a collection mutated mid-dump by another
         # thread (RuntimeError): losing one write is fine, losing a submitted
@@ -3443,11 +3511,11 @@ def persist(sid: str) -> None:
 
 
 def _load_state(sid: str, doc: dict) -> None:
-    from diony_director.providers import base as provider_base
     from pathlib import Path as _Path
 
-    from diony_director.screenwriter import ScreenplayDraft
     from diony_contracts.production import CharacterProfile, Script, SettingProfile
+    from diony_director.providers import base as provider_base
+    from diony_director.screenwriter import ScreenplayDraft
 
     _SESSIONS[sid] = SessionState(
         id=sid,
@@ -3570,7 +3638,7 @@ def rehydrate_from_vault() -> int:
         try:
             _load_state(sid, _json.loads(state_file.read_text()))
             count += 1
-        except Exception:  # noqa: BLE001 - one corrupt file must not kill boot
+        except Exception:
             continue
     return count
 

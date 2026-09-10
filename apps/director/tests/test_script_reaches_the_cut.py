@@ -15,17 +15,17 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from master_brain_fakes import master_brain_body
 
 from diony_director import master_prompt, screenwriter, session
-from master_brain_fakes import master_brain_body
 
 SCRIPT = (
     "Scene 1 — Quiet Success\n"
     "Visual: a founder at a desk at dawn.\n"
-    "Narration: \"Nobody remembers the first sale.\"\n"
+    'Narration: "Nobody remembers the first sale."\n'
     "Scene 2 — The Turn\n"
     "Visual: the same desk, buried in orders.\n"
-    "Narration: \"But everyone remembers the day the phones would not stop.\"\n"
+    'Narration: "But everyone remembers the day the phones would not stop."\n'
 )
 
 
@@ -205,17 +205,31 @@ def _print(op, tmp_path, real: bool = False) -> None:
     if real:
         subprocess.run(
             [
-                shutil.which("ffmpeg"), "-y",
-                "-f", "lavfi", "-i", "testsrc2=size=320x180:duration=2",
-                "-f", "lavfi", "-i", "sine=frequency=110:duration=2",
-                "-c:v", "libx264", "-c:a", "aac", "-shortest", str(clip),
+                shutil.which("ffmpeg"),
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=320x180:duration=2",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=110:duration=2",
+                "-c:v",
+                "libx264",
+                "-c:a",
+                "aac",
+                "-shortest",
+                str(clip),
             ],
             check=True,
             capture_output=True,
         )
     else:
         clip.write_bytes(b"clip" * 64)
-    session.runtime(op.id)["clip"] = base.FetchedClip(path=clip, sha256="x", bytes=clip.stat().st_size)
+    session.runtime(op.id)["clip"] = base.FetchedClip(
+        path=clip, sha256="x", bytes=clip.stat().st_size
+    )
 
 
 def test_a_cut_with_a_cast_narrator_but_no_lines_refuses_before_ffmpeg(tmp_path) -> None:
