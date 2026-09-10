@@ -1,0 +1,19 @@
+{
+  "apple_notarized": false,
+  "architecture": "arm64",
+  "build_recipe": "macos-development-v4",
+  "built_at": "2026-09-10T20:35:40Z",
+  "bundle_bytes": 195005957,
+  "bundle_files": 325,
+  "bundle_sha256": "f561269cb5fa5a6f9714be29e591ee9bd07219de856b06e0186d7e9db1cb992c",
+  "channel": "development",
+  "features": {},
+  "payload_files": 152,
+  "payload_sha256": "d300eb80b4a09774260c68373bf26c4b97b2c9ad1a6bad2d5f48633701a75b22",
+  "platform": "macos",
+  "product": "Diony AI",
+  "publishable": false,
+  "schema_version": 1,
+  "trust": "ad-hoc-local-only",
+  "version": "0.22.0"
+}
