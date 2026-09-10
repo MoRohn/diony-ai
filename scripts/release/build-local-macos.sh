@@ -134,6 +134,14 @@ fi
 /bin/mkdir -p "$OUTPUT"
 /bin/ln -sfn "builds/$BUILD_ID/Diony.app" "$STABLE_APP"
 /bin/ln -sfn "builds/$BUILD_ID/development-build.json" "$STABLE_REPORT"
+# Git keeps only the current build under dist/desktop/<version>/development/
+# (the root .gitignore opens that folder); this file names the one to keep.
+/bin/cat > "$OUTPUT/.gitignore" <<GITIGNORE
+# Written by the local build script: only the current build is committed.
+builds/*
+!builds/$BUILD_ID/
+.claude/
+GITIGNORE
 if [[ -L "$LEGACY_STABLE_APP" ]]; then
   /bin/unlink "$LEGACY_STABLE_APP"
 fi

@@ -1,0 +1,156 @@
+{
+  "$defs": {
+    "AdmissionPolicy": {
+      "enum": [
+        "invite_admits",
+        "admin_approval",
+        "closed"
+      ],
+      "title": "AdmissionPolicy",
+      "type": "string"
+    },
+    "InvitationStatus": {
+      "enum": [
+        "draft",
+        "active",
+        "partially_used",
+        "used",
+        "expired",
+        "revoked"
+      ],
+      "title": "InvitationStatus",
+      "type": "string"
+    },
+    "MembershipRole": {
+      "enum": [
+        "viewer",
+        "creator",
+        "producer",
+        "admin",
+        "owner"
+      ],
+      "title": "MembershipRole",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "workspace_id": {
+      "title": "Workspace Id",
+      "type": "string"
+    },
+    "token_hash": {
+      "title": "Token Hash",
+      "type": "string"
+    },
+    "email": {
+      "title": "Email",
+      "type": "string"
+    },
+    "email_key": {
+      "title": "Email Key",
+      "type": "string"
+    },
+    "role": {
+      "$ref": "#/$defs/MembershipRole",
+      "default": "creator"
+    },
+    "proposed_profile_name": {
+      "default": "",
+      "title": "Proposed Profile Name",
+      "type": "string"
+    },
+    "note": {
+      "default": "",
+      "title": "Note",
+      "type": "string"
+    },
+    "admission_policy": {
+      "$ref": "#/$defs/AdmissionPolicy",
+      "default": "invite_admits"
+    },
+    "status": {
+      "$ref": "#/$defs/InvitationStatus",
+      "default": "active"
+    },
+    "use_limit": {
+      "default": 1,
+      "maximum": 100,
+      "minimum": 1,
+      "title": "Use Limit",
+      "type": "integer"
+    },
+    "use_count": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Use Count",
+      "type": "integer"
+    },
+    "created_by": {
+      "title": "Created By",
+      "type": "string"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "accepted_user_id": {
+      "default": "",
+      "title": "Accepted User Id",
+      "type": "string"
+    },
+    "accepted_membership_id": {
+      "default": "",
+      "title": "Accepted Membership Id",
+      "type": "string"
+    },
+    "join_request_id": {
+      "default": "",
+      "title": "Join Request Id",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    },
+    "revoked_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Revoked At"
+    }
+  },
+  "required": [
+    "id",
+    "workspace_id",
+    "token_hash",
+    "email",
+    "email_key",
+    "created_by",
+    "expires_at"
+  ],
+  "title": "StudioInvitation",
+  "type": "object"
+}

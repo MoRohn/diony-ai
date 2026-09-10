@@ -132,6 +132,10 @@ try {
     if (Test-Path $StableApp) { [IO.Directory]::Delete($StableApp) }
     New-Item -ItemType Junction -Path $StableApp -Target (Join-Path $FinalDir "Diony AI") | Out-Null
     Copy-Item -LiteralPath (Join-Path $FinalDir "development-build.json") -Destination $StableReport -Force
+    # Git keeps only the current build under dist\desktop\<version>\development\
+    # (the root .gitignore opens that folder); this file names the one to keep.
+    @("# Written by the local build script: only the current build is committed.", "builds/*", "!builds/$BuildId/", ".claude/") |
+        Set-Content (Join-Path $Output ".gitignore") -Encoding ascii
 
     # Prune old local builds, keeping the newest DIONY_KEEP_LOCAL_BUILDS (default 5).
     $Keep = if ($env:DIONY_KEEP_LOCAL_BUILDS) { [int]$env:DIONY_KEEP_LOCAL_BUILDS } else { 5 }

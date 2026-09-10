@@ -1,0 +1,59 @@
+{
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "workspace_id": {
+      "title": "Workspace Id",
+      "type": "string"
+    },
+    "admin_user_id": {
+      "title": "Admin User Id",
+      "type": "string"
+    },
+    "admin_team_id": {
+      "title": "Admin Team Id",
+      "type": "string"
+    },
+    "default_cost_center_id": {
+      "title": "Default Cost Center Id",
+      "type": "string"
+    },
+    "currency": {
+      "const": "USD",
+      "default": "USD",
+      "title": "Currency",
+      "type": "string"
+    },
+    "cost_model_version": {
+      "default": "diony-cost-v1",
+      "title": "Cost Model Version",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "workspace_id",
+    "admin_user_id",
+    "admin_team_id",
+    "default_cost_center_id"
+  ],
+  "title": "CostGovernance",
+  "type": "object"
+}

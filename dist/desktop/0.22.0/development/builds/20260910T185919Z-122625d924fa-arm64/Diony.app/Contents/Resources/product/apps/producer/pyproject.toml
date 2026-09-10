@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "diony-producer"
+version = "0.9.0"
+description = "Diony AI Producer — the Gallery and the shared production services (cost ledger, control plane, face identity, frame and speech QC); the legacy local Wan2.2 lane"
+requires-python = ">=3.11"
+authors = [{ name = "Diony AI" }]
+license = { text = "Proprietary" }
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "python-multipart>=0.0.9",
+  "diony-contracts",
+  "httpx>=0.27",
+  "cryptography>=43,<48",
+  "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff"]
+
+[project.scripts]
+diony-producer = "diony_producer.app:main"
+diony-control-worker = "diony_producer.worker:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+diony_producer = ["static/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

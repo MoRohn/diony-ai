@@ -382,3 +382,15 @@ def test_every_desktop_builder_ships_the_pinned_ffmpeg() -> None:
     assert "windows-amd64" in win_local and "windows-amd64" in win_release
     spec = (root / "packaging" / "desktop" / "diony.spec").read_text()
     assert 'os.environ.get("DIONY_FFMPEG_BUNDLE_DIR"' in spec and "binaries=binaries" in spec
+
+
+def test_git_keeps_the_current_local_app_and_nothing_older() -> None:
+    root = Path(__file__).resolve().parents[3]
+    ignore = (root / ".gitignore").read_text().splitlines()
+    assert "dist/" not in ignore, "a blanket dist/ rule would drop Diony.app from the repository"
+    assert "dist/*" in ignore and "!dist/desktop/" in ignore
+    assert "dist/desktop/*/*" in ignore and "!dist/desktop/*/development/" in ignore
+    mac = (root / "scripts" / "release" / "build-local-macos.sh").read_text()
+    win = (root / "scripts" / "release" / "build-local-windows.ps1").read_text()
+    assert '"$OUTPUT/.gitignore"' in mac and "!builds/$BUILD_ID/" in mac
+    assert '".gitignore"' in win and "!builds/$BuildId/" in win

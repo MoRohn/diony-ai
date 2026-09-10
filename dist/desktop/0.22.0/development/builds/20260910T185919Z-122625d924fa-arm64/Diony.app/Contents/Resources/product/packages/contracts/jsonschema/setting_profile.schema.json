@@ -1,0 +1,71 @@
+{
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "setting_id": {
+      "title": "Setting Id",
+      "type": "string"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "plate_asset_id": {
+      "default": "",
+      "title": "Plate Asset Id",
+      "type": "string"
+    },
+    "plate_version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Plate Version",
+      "type": "integer"
+    },
+    "architecture_notes": {
+      "default": "",
+      "title": "Architecture Notes",
+      "type": "string"
+    },
+    "time_weather": {
+      "default": "",
+      "title": "Time Weather",
+      "type": "string"
+    },
+    "grade_language": {
+      "default": "",
+      "title": "Grade Language",
+      "type": "string"
+    },
+    "camera_kit": {
+      "default": "",
+      "title": "Camera Kit",
+      "type": "string"
+    },
+    "props": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Props",
+      "type": "array"
+    },
+    "geography": {
+      "default": "",
+      "title": "Geography",
+      "type": "string"
+    },
+    "room_tone_id": {
+      "default": "",
+      "title": "Room Tone Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "setting_id",
+    "name"
+  ],
+  "title": "SettingProfile",
+  "type": "object"
+}
