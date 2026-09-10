@@ -40,7 +40,7 @@ The Desk opens all three and lays the `*.diony.local` names on first launch. The
 
 **1. Requirements**
 
-- macOS 13+ or Windows 10/11 (Linux runs the Mac path). Python 3.11+ for a source checkout; the packaged app bundles its own runtime.
+- macOS 13+ or Windows 10/11 (Linux runs the Mac path). The repository ships the built Mac app at `dist/desktop/0.22.0/development/Diony.app` with its own runtime, so opening Diony needs no Python; Python 3.11+ is only for running from source or rebuilding the app.
 - `ffmpeg` and `ffprobe` come with Diony. The desktop build carries a pinned static release beside the app (`apps/desk/src/diony_desk/ffmpeg_lock.json`, SHA-256 verified), and the desk checks it on every open; when a bundle lacks it, the desk installs the same pinned release into the data folder, with no package manager, terminal, or password. Only a source checkout needs its own copy: `brew install ffmpeg`, `winget install Gyan.FFmpeg`, or `DIONY_FFMPEG` / `DIONY_FFPROBE`.
 - For the Grok Imagine camera: an xAI API key. For the Google Flow camera: a useapi.net token with a linked Google account, plus a Gemini API key so the script and the narrator are Google too. Both cameras on one desk is fine.
 
@@ -71,7 +71,15 @@ An explicit environment variable always wins over the file. There is no key form
 
 **3. Open Diony**
 
-One double-click per desk. The launchers sit at the top of the folder and are named the same way on both:
+On a Mac, open the built app that ships in the repository:
+
+```
+dist/desktop/0.22.0/development/Diony.app
+```
+
+Double-click it in Finder (or `open -n dist/desktop/0.22.0/development/Diony.app`). If macOS says the app cannot be opened because it is from an unidentified developer, right-click it, choose Open, then Open; the local build is ad-hoc signed, not notarised. The `Diony.app` there is a link to the current build under `builds/`, and it moves to the new build every time you rebuild, so that path is always the latest app.
+
+The launchers at the top of the folder do the same thing and are named the same way on both desks:
 
 | | Mac | Windows |
 |---|---|---|
@@ -79,7 +87,7 @@ One double-click per desk. The launchers sit at the top of the folder and are na
 | **Build** (once, engineers) | `Build Diony AI.command` | `Build Diony AI.bat` |
 | Installed download | `Diony.app` from the DMG | `DionyAI-Setup-<version>-windows-x64.exe` |
 
-**Open** does the right thing for the folder it is in: when a built app is there it opens that app, which carries its own runtime and ffmpeg, and the window can be closed at once; when there is no built app yet it runs the desk from source with the machine's Python 3.11+ and says so. **Build** makes that app from the folder (`dist/desktop/<version>/development/`) and opens it; rebuilding after a change replaces the older build, and an unchanged folder is not rebuilt. Linux runs from source with `./open-diony.sh`.
+**Open** opens that built app when it is there (its runtime and ffmpeg are inside, and the window can be closed at once); when there is no built app yet, as on Windows until you build one, it runs the desk from source with the machine's Python 3.11+ and says so. **Build** rebuilds the app from the folder into `dist/desktop/<version>/development/` and opens it; rebuilding after a change replaces the older build, and an unchanged folder is not rebuilt. Linux runs from source with `./open-diony.sh`.
 
 Either way the lobby opens Studio and asks once to lay the product names: your password on a Mac, a User Account Control prompt on Windows. Studio's **This computer** toggle (Mac | Windows) is preset to the desk it detected; every path, command, and launcher name Diony shows follows it, and you can flip it to read the instructions for the other desk. Pick a camera and press **Continue to the Director**.
 
