@@ -73,6 +73,41 @@
       host.appendChild(chip);
     });
     $("refhint").style.display = refUploads.length ? "none" : "";
+    paintSetupSummary();
+  }
+
+  // The setup fold: the stills row and the pills tuck behind one chevron so
+  // a room full of stills leaves the thread readable. The choice survives a
+  // reload per browser; the summary keeps naming what the film holds.
+  const SETUP_FOLD_KEY = "diony.director.setup";
+  function setupFolded() {
+    const console_ = document.querySelector(".console");
+    return !!console_ && console_.dataset.setup === "folded";
+  }
+  function setSetupFolded(folded, { remember = true } = {}) {
+    const console_ = document.querySelector(".console");
+    const btn = $("setup-toggle");
+    if (!console_ || !btn) return;
+    if (folded) console_.dataset.setup = "folded";
+    else delete console_.dataset.setup;
+    btn.setAttribute("aria-expanded", folded ? "false" : "true");
+    btn.title = folded
+      ? "Show the stills and settings"
+      : "Fold the stills and settings away to read the thread; the summary keeps what the film holds";
+    if (remember) {
+      try { localStorage.setItem(SETUP_FOLD_KEY, folded ? "folded" : "open"); } catch (_err) { /* private mode */ }
+    }
+  }
+  function paintSetupSummary() {
+    const out = $("setup-summary");
+    if (!out) return;
+    const bits = [];
+    if (refUploads.length) {
+      const opener = refUploads.some((u) => u.role === "opener");
+      bits.push(`${refUploads.length} still${refUploads.length === 1 ? "" : "s"}${opener ? " · opener set" : ""}`);
+    }
+    try { bits.push(...configSummary().slice(0, 4)); } catch (_err) { /* pills not painted yet */ }
+    out.textContent = bits.join(" · ");
   }
 
   function addImageFiles(fileList) {
@@ -1321,8 +1356,9 @@
     if (!pill) return;
     const available = brain.available || {};
     const entries = [];
-    if (available.grok) entries.push({ key: "grok", label: "Grok", hint: "grok-4.6 on the xAI key" });
-    if (available.gemini) entries.push({ key: "gemini", label: "Gemini", hint: "gemini-2.5-pro on the Gemini key" });
+    const models = brain.models || {};
+    if (available.grok) entries.push({ key: "grok", label: "Grok", hint: `${models.grok || "grok-4.6"} on the xAI key` });
+    if (available.gemini) entries.push({ key: "gemini", label: "Gemini", hint: `${models.gemini || "gemini-3.1-pro-preview"} on the Gemini key` });
     pill.replaceChildren();
     const auto = document.createElement("option");
     auto.value = "auto";
@@ -1481,6 +1517,7 @@
     } catch (err) {
       addMsg("director", `The service isn't ready: ${err.message || err}`);
     }
+    paintSetupSummary(); // the pills now mirror Studio and the lexicon
   }
 
   async function resumePricedRoom(resume) {
@@ -4179,6 +4216,25 @@
 
   $("send").addEventListener("click", send);
   $("produce").addEventListener("click", produce);
+  {
+    const toggle = $("setup-toggle");
+    if (toggle) {
+      toggle.addEventListener("click", () => {
+        const stage = document.querySelector(".stage");
+        const atEnd = stage && stage.scrollHeight - stage.scrollTop - stage.clientHeight < 48;
+        setSetupFolded(!setupFolded());
+        if (stage && atEnd) stage.scrollTop = stage.scrollHeight; // the thread stays on its last card
+      });
+      let remembered = "";
+      try { remembered = localStorage.getItem(SETUP_FOLD_KEY) || ""; } catch (_err) { /* private mode */ }
+      if (remembered === "folded") setSetupFolded(true, { remember: false });
+    }
+    const controls = $("controls");
+    if (controls) controls.addEventListener("change", paintSetupSummary);
+    const pairrow = $("pairrow");
+    if (pairrow) pairrow.addEventListener("click", () => setTimeout(paintSetupSummary, 0));
+    paintSetupSummary();
+  }
   $("provider").addEventListener("change", () => {
     updateLexiconPillState();
     lintComposer(); // the known-token set depends on the route

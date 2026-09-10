@@ -529,9 +529,7 @@ def audit_all(
         timeout=screenwriter.brain_timeout_s(),
     )
     if response.status_code >= 400:
-        raise RuntimeError(
-            f"likeness audit rejected ({response.status_code}): {response.text[:200]}"
-        )
+        raise screenwriter.brain_rejection(response, "likeness audit")
     body = screenwriter._json_object(response.json()["choices"][0]["message"]["content"])
     people = normalize_people(body.get("people") or [], has_reference=has_reference)
     # a phrase that CONTAINS a confirmed person is that person too:

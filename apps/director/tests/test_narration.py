@@ -849,7 +849,7 @@ def test_gemini_speech_speaks_the_exact_words_and_lands_as_a_wav(tmp_path, monke
     )
     out = tmp_path / "cue-00.wav"
     narration._synthesize_gemini(cue, out)
-    assert seen["url"].endswith("/v1beta/models/gemini-2.5-flash-preview-tts:generateContent")
+    assert seen["url"].endswith("/v1beta/models/gemini-3.1-flash-tts-preview:generateContent")
     assert seen["headers"]["x-goog-api-key"] == "test-gemini-key"
     body = seen["json"]
     assert body["contents"][0]["parts"][0]["text"] == "We finish this tonight.", "verbatim, no tags"

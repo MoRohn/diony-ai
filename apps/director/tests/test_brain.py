@@ -29,12 +29,15 @@ def test_the_grok_camera_thinks_on_grok_and_the_flow_camera_on_gemini(monkeypatc
 
     write_engine_choice("google-flow")
     target = brain.resolve()
-    assert target.provider == "gemini" and target.model == "gemini-2.5-pro"
+    assert target.provider == "gemini" and target.model == "gemini-3.1-pro-preview"
     assert target.url == "https://generativelanguage.googleapis.com/v1beta/openai"
     assert target.endpoint.endswith("/v1beta/openai/chat/completions"), "no /v1 on Gemini's shape"
     assert screenwriter.chat_completions_url() == target.endpoint
     assert screenwriter._brain_headers() == {"Authorization": "Bearer test-gemini-key"}
-    assert screenwriter.brain_url() == target.url and screenwriter.brain_model() == "gemini-2.5-pro"
+    assert (
+        screenwriter.brain_url() == target.url
+        and screenwriter.brain_model() == "gemini-3.1-pro-preview"
+    )
 
 
 def test_a_missing_house_key_borrows_the_other_and_says_so(monkeypatch) -> None:
@@ -71,7 +74,7 @@ def test_a_named_brain_needs_its_key_and_the_explicit_url_still_wins(monkeypatch
     )
     monkeypatch.setenv("GEMINI_API_KEY", "g")
     target = brain.resolve()
-    assert target.provider == "custom" and target.model == "gemini-2.5-pro"
+    assert target.provider == "custom" and target.model == "gemini-3.1-pro-preview"
     assert target.endpoint.endswith("/openai/chat/completions") and target.key == "g"
     monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_URL", "https://api.x.ai")
     assert brain.resolve().endpoint == "https://api.x.ai/v1/chat/completions"
@@ -109,3 +112,51 @@ def test_the_console_carries_the_brain_pill_and_the_houses() -> None:
     assert '$("brain-pill").hidden = entries.length < 2' in js
     # the Voice pill's Auto option is plain "Auto": no house suffix
     assert "casts)" not in js and 'cat.pinned ? `Auto (site pin: ${cat.pinned})` : "Auto"' in js
+
+
+class _Rejection:
+    def __init__(self, status_code: int, text: str) -> None:
+        self.status_code = status_code
+        self.text = text
+
+
+_GOOGLE_RETIREMENT = (
+    '[{ "error": { "code": 404, "message": "This model models/gemini-2.5-pro is no '
+    "longer available to new users. Please update your code to use "
+    'models/gemini-3.1-pro-preview for the latest features." } }]'
+)
+
+
+def test_a_retirement_rejection_names_the_successor_and_the_brain_follows_it(monkeypatch) -> None:
+    _auto(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    monkeypatch.delenv("DIONY_GEMINI_BRAIN_MODEL", raising=False)
+    write_engine_choice("google-flow")
+    brain.forget_learned_models()
+    try:
+        assert brain.retirement_pointer(_GOOGLE_RETIREMENT) == "gemini-3.1-pro-preview"
+        assert brain.retirement_pointer('{"error": {"code": 404, "message": "not found"}}') == ""
+        # Google's message names the model the desk already runs — nothing to follow
+        assert brain.follow_retirement("gemini", 404, _GOOGLE_RETIREMENT) == ""
+        assert brain.resolve().model == "gemini-3.1-pro-preview"
+
+        newer = _GOOGLE_RETIREMENT.replace("models/gemini-3.1-pro-preview", "models/gemini-4-pro")
+        err = screenwriter.brain_rejection(_Rejection(404, newer))
+        assert "brain rejected (404)" in str(err) and "switched to gemini-4-pro" in str(err)
+        target = brain.resolve()
+        assert target.model == "gemini-4-pro", "the next attempt runs on the named successor"
+        assert "named in its place" in target.reason
+        assert screenwriter.brain_model() == "gemini-4-pro"
+        assert brain.status()["models"]["gemini"] == "gemini-4-pro"
+        # a 5xx or a rejection without a pointer changes nothing
+        screenwriter.brain_rejection(_Rejection(503, "overloaded"))
+        screenwriter.brain_rejection(_Rejection(400, "bad request"))
+        assert brain.resolve().model == "gemini-4-pro"
+        # an explicit model in the environment is never overridden
+        monkeypatch.setenv("DIONY_GEMINI_BRAIN_MODEL", "gemini-pinned")
+        assert brain.resolve().model == "gemini-pinned"
+    finally:
+        brain.forget_learned_models()
+    assert brain.resolve().model == "gemini-pinned"
+    monkeypatch.delenv("DIONY_GEMINI_BRAIN_MODEL", raising=False)
+    assert brain.resolve().model == "gemini-3.1-pro-preview"

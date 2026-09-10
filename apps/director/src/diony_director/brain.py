@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -37,8 +38,64 @@ GEMINI_KEY_ENV = "GEMINI_API_KEY"
 GEMINI_BASE_ENV = "DIONY_GEMINI_BASE"
 GEMINI_BASE_DEFAULT = "https://generativelanguage.googleapis.com"
 GEMINI_BRAIN_MODEL_ENV = "DIONY_GEMINI_BRAIN_MODEL"
-DEFAULT_GEMINI_BRAIN_MODEL = "gemini-2.5-pro"
+# gemini-2.5-pro answers 404 to keys created after Google closed it to new
+# users ("This model models/gemini-2.5-pro is no longer available to new
+# users. Please update your code to use models/gemini-3.1-pro-preview"), so
+# the default is the model Google names — and follow_retirement() below keeps
+# the desk on whatever Google names next without a rebuild.
+DEFAULT_GEMINI_BRAIN_MODEL = "gemini-3.1-pro-preview"
 GEMINI_OPENAI_PATH = "/v1beta/openai"
+
+# Google's retirement rejection names the successor as ``models/<id>``.
+_RETIREMENT_POINTER = re.compile(r"use\s+models/([A-Za-z0-9][A-Za-z0-9._-]*)")
+# provider ("grok" | "gemini" | "custom" | "gemini-tts") -> the model a
+# rejection named; process memory, so the next attempt already uses it
+_learned_models: dict[str, str] = {}
+
+
+def retirement_pointer(text: str) -> str:
+    """The successor model a provider's rejection names ("Please update your
+    code to use models/gemini-3.1-pro-preview"), or "" when the rejection
+    is about something else."""
+    match = _RETIREMENT_POINTER.search(text or "")
+    return match.group(1) if match else ""
+
+
+def follow_retirement(provider: str, status_code: int, text: str, current: str = "") -> str:
+    """When a rejected call says the model was retired and names its
+    successor, remember the successor for `provider` (the rest of this
+    process resolves to it) and return it; "" when there is nothing to
+    follow. An explicit model in the environment is never overridden."""
+    if status_code not in (400, 404) or not provider:
+        return ""
+    successor = retirement_pointer(text)
+    current = current or resolve().model
+    if not successor or successor == current:
+        return ""
+    _learned_models[provider] = successor
+    return successor
+
+
+def learned_model(provider: str) -> str:
+    return _learned_models.get(provider, "")
+
+
+def forget_learned_models() -> None:
+    _learned_models.clear()
+
+
+def _with_learned(provider: str, env_name: str, default: str, reason: str) -> tuple[str, str]:
+    """The model a house resolves to and the reason that names a switch:
+    the environment's choice, else the successor a retirement named, else
+    the default."""
+    explicit = os.environ.get(env_name, "").strip()
+    if explicit:
+        return explicit, reason
+    learned = learned_model(provider)
+    if learned and learned != default:
+        note = f"{default} retired by the provider; {learned} named in its place"
+        return learned, f"{reason}; {note}" if reason else note
+    return default, reason
 
 
 @dataclass(frozen=True)
@@ -108,11 +165,12 @@ def write_brain_choice(choice: str) -> Path:
 
 
 def _grok_target(reason: str) -> BrainTarget:
+    model, reason = _with_learned("grok", GROK_BRAIN_MODEL_ENV, DEFAULT_GROK_BRAIN_MODEL, reason)
     return BrainTarget(
         provider="grok",
         url=XAI_BRAIN_BASE,
         endpoint=f"{XAI_BRAIN_BASE}/v1/chat/completions",
-        model=os.environ.get(GROK_BRAIN_MODEL_ENV, "").strip() or DEFAULT_GROK_BRAIN_MODEL,
+        model=model,
         key=grok_key(),
         reason=reason,
     )
@@ -120,11 +178,14 @@ def _grok_target(reason: str) -> BrainTarget:
 
 def _gemini_target(reason: str) -> BrainTarget:
     base = gemini_base() + GEMINI_OPENAI_PATH
+    model, reason = _with_learned(
+        "gemini", GEMINI_BRAIN_MODEL_ENV, DEFAULT_GEMINI_BRAIN_MODEL, reason
+    )
     return BrainTarget(
         provider="gemini",
         url=base,
         endpoint=f"{base}/chat/completions",
-        model=os.environ.get(GEMINI_BRAIN_MODEL_ENV, "").strip() or DEFAULT_GEMINI_BRAIN_MODEL,
+        model=model,
         key=gemini_key(),
         reason=reason,
     )
@@ -136,9 +197,10 @@ def _custom_target(base: str) -> BrainTarget:
         key = grok_key()
     if not key and "googleapis.com" in base:
         key = gemini_key()
-    model = os.environ.get(GROK_BRAIN_MODEL_ENV, "").strip()
-    if not model:
-        model = DEFAULT_GEMINI_BRAIN_MODEL if "googleapis.com" in base else DEFAULT_GROK_BRAIN_MODEL
+    default = DEFAULT_GEMINI_BRAIN_MODEL if "googleapis.com" in base else DEFAULT_GROK_BRAIN_MODEL
+    model, reason = _with_learned(
+        "custom", GROK_BRAIN_MODEL_ENV, default, "DIONY_DIRECTOR_BRAIN_URL"
+    )
     # an OpenAI-compatible base that already ends in /openai (Gemini's shape)
     # speaks at /chat/completions; every other base keeps the /v1 contract
     endpoint = (
@@ -150,7 +212,7 @@ def _custom_target(base: str) -> BrainTarget:
         endpoint=endpoint,
         model=model,
         key=key,
-        reason="DIONY_DIRECTOR_BRAIN_URL",
+        reason=reason,
     )
 
 
@@ -202,4 +264,6 @@ def status() -> dict:
         "choice": read_brain_choice(),
         "available": available(),
         "reason": target.reason,
+        # what each house would run — the desk's Brain pill names them
+        "models": {"grok": _grok_target("").model, "gemini": _gemini_target("").model},
     }

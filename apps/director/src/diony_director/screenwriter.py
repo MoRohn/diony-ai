@@ -91,6 +91,18 @@ def _brain_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {key}"} if key else {}
 
 
+def brain_rejection(response, what: str = "brain") -> RuntimeError:
+    """The error a rejected brain call raises. When the provider says the
+    model was retired and names its successor (Google's 404 for
+    gemini-2.5-pro names gemini-3.1-pro-preview), the successor is
+    remembered first, so the caller's next attempt already runs on it."""
+    switched = brain_mod.follow_retirement(
+        brain_mod.resolve().provider, response.status_code, response.text
+    )
+    note = f" — switched to {switched} for the next attempt" if switched else ""
+    return RuntimeError(f"{what} rejected ({response.status_code}): {response.text[:200]}{note}")
+
+
 def _voice(char_id: str, index: int) -> VoiceProfile:
     return VoiceProfile(
         voice_id=f"vox-{char_id}",
@@ -671,7 +683,7 @@ def _from_brain(
         timeout=brain_timeout_s(),
     )
     if response.status_code >= 400:
-        raise RuntimeError(f"brain rejected ({response.status_code}): {response.text[:200]}")
+        raise brain_rejection(response)
     payload = response.json()
     body = _json_object(payload["choices"][0]["message"]["content"])
     usage = dict(payload.get("usage") or {})
@@ -718,7 +730,7 @@ def _from_brain(
                 timeout=brain_timeout_s(),
             )
             if refine_response.status_code >= 400:
-                raise RuntimeError(f"refine rejected ({refine_response.status_code})")
+                raise brain_rejection(refine_response, "refine")
             refine_payload = refine_response.json()
             revised = _json_object(refine_payload["choices"][0]["message"]["content"])
             if revised.get("scenes"):

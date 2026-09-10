@@ -200,7 +200,7 @@ Everything is an environment variable; the keys file is loaded first with set-de
 | `DIONY_FLOW_EMAIL` / `DIONY_FLOW_PLAN` | Flow picks / `pro` | Pin one Flow account; price its credits |
 | `DIONY_KEYS_FILE` | `~/.diony/keys.env` | Where the keys live |
 | `GEMINI_API_KEY` | unset | Google AI Studio key: the Gemini brain and Gemini speech narrator, the Google Flow camera's own house |
-| `DIONY_GEMINI_BRAIN_MODEL` / `DIONY_GEMINI_TTS_MODEL` | `gemini-2.5-pro` / `gemini-2.5-flash-preview-tts` | The Gemini writer and speech models |
+| `DIONY_GEMINI_BRAIN_MODEL` / `DIONY_GEMINI_TTS_MODEL` | `gemini-3.1-pro-preview` / `gemini-3.1-flash-tts-preview` | The Gemini writer and speech models | (a retirement rejection that names a successor is followed for the rest of the process; these variables pin a model regardless)
 | `DIONY_GEMINI_VOICE` / `DIONY_GEMINI_VOICE_ROSTER` | cast per film | Pin a Gemini narrator voice (`gemini:Kore`); override the roster as JSON |
 | `DIONY_DIRECTOR_BRAIN_URL` / `_MODEL` / `_KEY` | resolved by camera | Force any OpenAI-compatible chat endpoint to write the script. Set the URL empty to run the deterministic template writer. Otherwise the brain is the camera's house, or the desk's Brain pill choice (`{vault}/.cluster/brain.json`). |
 | `DIONY_DIRECTOR_BRAIN_TIMEOUT` | `600` | Seconds per brain call; the draft is asynchronous |
@@ -260,7 +260,7 @@ Every estimate says so, and the run still proceeds. Cards carry a fetch date and
 To write `studio.diony.local`, `director.diony.local`, and `producer.diony.local` into the hosts file and bind the name router on port 80. It happens once. Cancel it and the lobby's Continue retries; the services still run on `:8787`, `:8790`, and `:8788` meanwhile.
 
 **Does the Google Flow camera use Grok for anything?**
-Not when a Gemini key is on the desk: the script, the master prompt, the likeness audit and the narrator all run on Google, and the header's brain chip says `brain Gemini · gemini-2.5-pro`. Without a Gemini key the Director borrows the xAI key for the script and the narrator when it exists, and the chip says so; with neither, the deterministic template writer drafts and the cut needs the Dialogue style or a narrator command.
+Not when a Gemini key is on the desk: the script, the master prompt, the likeness audit and the narrator all run on Google, and the header's brain chip says `brain Gemini · gemini-3.1-pro-preview`. Without a Gemini key the Director borrows the xAI key for the script and the narrator when it exists, and the chip says so; with neither, the deterministic template writer drafts and the cut needs the Dialogue style or a narrator command.
 
 **Does it run the same on Windows as on a Mac?**
 Yes. The runtime already speaks each desk's language: the product names go into the hosts file behind one password prompt on a Mac or one User Account Control prompt on Windows, the data directory is `~/Library/Application Support/Diony AI` or `%LOCALAPPDATA%\Diony AI`, ffmpeg ships inside the app for both (a pinned static build per architecture, installed into the data folder on open if a bundle lacks it), Python is found in each desk's usual homes, and the launchers pair up: `Open Diony AI.command` and `Build Diony AI.command` on a Mac, `Open Diony AI.bat` and `Build Diony AI.bat` on Windows. Studio's **This computer** toggle only changes what the product tells you: the keys path, the two setup lines, the launcher name, and the wording of a missing-ffmpeg message. It defaults to the detected desk.

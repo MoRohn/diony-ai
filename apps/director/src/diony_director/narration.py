@@ -60,7 +60,10 @@ GROK_CALL_TIMEOUT_S = 120.0
 GEMINI_VOICE_ENV = "DIONY_GEMINI_VOICE"
 GEMINI_VOICE_ROSTER_ENV = "DIONY_GEMINI_VOICE_ROSTER"
 GEMINI_TTS_MODEL_ENV = "DIONY_GEMINI_TTS_MODEL"
-GEMINI_TTS_MODEL_DEFAULT = "gemini-2.5-flash-preview-tts"
+# Google names gemini-3.1-flash-tts-preview as the successor of
+# gemini-2.5-flash-preview-tts; a retirement rejection is followed the same
+# way the brain follows one (brain.follow_retirement)
+GEMINI_TTS_MODEL_DEFAULT = "gemini-3.1-flash-tts-preview"
 GEMINI_VOICE_PREFIX = "gemini:"
 GEMINI_CALL_TIMEOUT_S = 120.0
 
@@ -755,7 +758,11 @@ def _synthesize_gemini(cue: NarrationCue, output: Path) -> None:
 
     if not brain_mod.gemini_configured():
         raise NarrationUnavailable(UNCONFIGURED)
-    model = os.environ.get(GEMINI_TTS_MODEL_ENV, "").strip() or GEMINI_TTS_MODEL_DEFAULT
+    model = (
+        os.environ.get(GEMINI_TTS_MODEL_ENV, "").strip()
+        or brain_mod.learned_model("gemini-tts")
+        or GEMINI_TTS_MODEL_DEFAULT
+    )
     voice_ref = cue.voice_ref or os.environ.get(GEMINI_VOICE_ENV, "").strip() or "gemini:Kore"
     voice = (
         voice_ref[len(GEMINI_VOICE_PREFIX) :] if voice_backend(voice_ref) == "gemini" else voice_ref
@@ -768,14 +775,23 @@ def _synthesize_gemini(cue: NarrationCue, output: Path) -> None:
             "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}},
         },
     }
-    response = provider_base.post_with_retries(
-        f"{brain_mod.gemini_base()}/v1beta/models/{model}:generateContent",
-        what="Gemini speech synthesis",
-        json=payload,
-        headers={"x-goog-api-key": brain_mod.gemini_key(), "Content-Type": "application/json"},
-        timeout=GEMINI_CALL_TIMEOUT_S,
-    )
-    if response.status_code >= 400:
+    for _attempt in range(2):
+        response = provider_base.post_with_retries(
+            f"{brain_mod.gemini_base()}/v1beta/models/{model}:generateContent",
+            what="Gemini speech synthesis",
+            json=payload,
+            headers={"x-goog-api-key": brain_mod.gemini_key(), "Content-Type": "application/json"},
+            timeout=GEMINI_CALL_TIMEOUT_S,
+        )
+        if response.status_code < 400:
+            break
+        # a retired speech model names its successor; take it once, and keep it
+        successor = brain_mod.follow_retirement(
+            "gemini-tts", response.status_code, response.text, current=model
+        )
+        if successor and not os.environ.get(GEMINI_TTS_MODEL_ENV, "").strip():
+            model = successor
+            continue
         raise NarrationFailed(
             f"Gemini speech rejected {cue.clip_id} ({response.status_code}): {response.text[:300]}"
         )

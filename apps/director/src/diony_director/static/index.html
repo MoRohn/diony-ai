@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="/static/app.css?v=p57">
+<link rel="stylesheet" href="/static/app.css?v=p59">
 </head>
 <body>
 
@@ -82,13 +82,16 @@
             <button id="produce" type="button"><svg class="icon"><use href="#i-clapper"/></svg><span>Draft script</span></button>
           </div>
         </div>
-        <div class="refbar">
+        <div class="setupbar">
+          <button id="setup-toggle" type="button" class="setupbtn" aria-expanded="true" aria-controls="refbar controls pairrow" title="Fold the stills and settings away to read the thread; the summary keeps what the film holds"><svg class="icon"><use href="#i-chev"/></svg><span class="setuplbl">Setup</span><span class="setupsum" id="setup-summary"></span></button>
+        </div>
+        <div class="refbar" id="refbar">
           <button id="add-img" type="button" class="addimg" title="Attach reference stills — they anchor the film's look, characters, and scene; mark one as the opener to open the frame on it"><svg class="icon"><use href="#i-image-add"/></svg><span>Add stills</span></button>
           <input id="img-file" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
           <div class="refchips" id="refchips"></div>
           <span class="refhint" id="refhint">drop or paste stills — they anchor the film's look · click a still's role to make it the opening frame</span>
         </div>
-        <div class="controls">
+        <div class="controls" id="controls">
           <label class="pill" title="Which engine rolls the pictures">
             <span class="plabel">Provider</span>
             <select id="provider">
@@ -180,6 +183,6 @@
     </footer>
   </div>
 </div>
-<script src="/static/app.js?v=p57"></script>
+<script src="/static/app.js?v=p59"></script>
 </body>
 </html>

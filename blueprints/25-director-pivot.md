@@ -53,7 +53,7 @@ beside the other two by the same router.
 | Pricing basis | metered, USD per second and per still | credits per generation from Google's published table, converted to USD from the declared plan (`DIONY_FLOW_PLAN`); never presented as Google's meter |
 | Video models | `grok-imagine-video-1.5` (shoots; t2v, i2v, up to 3 refs, native audio, 1–15 s, 480p/720p/1080p), `grok-imagine-video` (extension and edit lanes) | `omni-flash` (default; audio-native, voices, characters, first+last frame, v2v edit, 4/6/8/10 s at 360p/720p), `veo-3.1-lite` / `-fast` / `-quality` (8 s; 4 and 6 s on Ultra; extension lane) |
 | Stills | `grok-imagine-image-2.0` | `nano-banana-2` (included in the plan) |
-| Brain | Grok 4.6 on the xAI key (`diony_director.brain`) | Gemini 2.5 Pro on `GEMINI_API_KEY` through Gemini's OpenAI-compatible endpoint; borrows Grok when the Gemini key is missing and says so |
+| Brain | Grok 4.6 on the xAI key (`diony_director.brain`) | Gemini 3.1 Pro (preview, `gemini-3.1-pro-preview`) on `GEMINI_API_KEY` through Gemini's OpenAI-compatible endpoint; borrows Grok when the Gemini key is missing and says so |
 | Voice | the Grok voice API (`/v1/tts`) | Gemini speech (`generateContent` with `responseModalities: AUDIO`, prebuilt voices `gemini:Kore` and company) on the same Gemini key; Omni's native voices under the Dialogue and Mix styles |
 | Finish | conformed up at the cut | `POST /videos/upscale`, free at 1080p, 50 credits at 4K (Ultra) |
 | Prompt limit | 4096 characters (live 400 otherwise) | 4096 characters, conservative |

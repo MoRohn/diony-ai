@@ -611,7 +611,7 @@ def _from_brain(
         timeout=screenwriter.brain_timeout_s(),
     )
     if response.status_code >= 400:
-        raise RuntimeError(f"brain rejected ({response.status_code}): {response.text[:200]}")
+        raise screenwriter.brain_rejection(response)
     payload = response.json()
     choice = payload["choices"][0]
     if str(choice.get("finish_reason", "")).lower() == "length":
