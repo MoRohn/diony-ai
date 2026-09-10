@@ -102,7 +102,7 @@ Optional staging, both free: `--stage-face-models` downloads OpenCV Zoo's YuNet 
 | Pill | Choices | What it does |
 |---|---|---|
 | **Provider** | Grok Imagine · Google Flow | The camera the film rolls on. It opens on the Studio choice; one camera shoots the whole film. |
-| **Duration** | m:ss, up to 180 minutes | Runtime. Long one-shots chain; scripted films scale their scene count. |
+| **Duration** | m:ss, up to 180 minutes | Runtime, starting at 0m 0s. Nothing rolls until it is set: a run at 0m 0s is refused with a tip. Seconds for one shot (long one-shots chain); minutes for a scripted piece. |
 | **Res** / **Aspect** | 720p · 480p / 16:9 · 9:16 | Render resolution and program shape, held by every shot, plate, and the cut. |
 | **Grok cam** / **Grok atmo** | Authored + the Imagine 1.5 lexicon | Camera moves and atmosphere on the Grok route. Inline shorthand works too (`/pushin`, `/dust`). |
 | **Flow style** / **Flow cam** | Baseline + worlds and camera commands | WORLD and CAMERA templating on the Google route (`/filmic`, `/orbit`). |
@@ -110,7 +110,6 @@ Optional staging, both free: `--stage-face-models` downloads OpenCV Zoo's YuNet 
 | **Cast** | Standard · Locked | Cast Lock: the approved identity card at priority 0 on every prompt. Fixed at the lock. |
 | **Brain** | Auto · Grok · Gemini | Which model writes. Auto follows the camera; a named house needs its key. Shown only when both keys are on the desk. |
 | **Voice** | Auto + every roster the desk holds a key for | One narrator per film, cast from the tone or chosen by name (Grok voices, or `Gemini · Kore` and company). Changeable until the cut. |
-| **Budget $** | number or empty | A session ceiling. Autopilot holds at the ceiling instead of overspending. |
 
 The header meter reads in the camera's own currency: dollars for Grok Imagine as metered by xAI, plan credits for Google Flow. Total is lifetime spend on this desk; today is today's.
 

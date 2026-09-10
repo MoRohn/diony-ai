@@ -118,7 +118,7 @@
   }
 
   function setDuration(total) {
-    const clamped = Math.max(1, Math.min(10800, Math.round(total)));
+    const clamped = Math.max(0, Math.min(10800, Math.round(total)));
     $("dur-min").value = Math.floor(clamped / 60);
     $("dur-sec").value = clamped % 60;
     updateDurationHint();
@@ -141,10 +141,35 @@
     if (total > 15) {
       hint.textContent = `${Math.floor(total / 60)}m ${total % 60}s — a one-shot this long rolls as chained clips`;
       hint.className = "durhint";
+    } else if (total > 0) {
+      hint.textContent = `${total}s — one shot`;
+      hint.className = "durhint";
     } else {
-      hint.textContent = "any length · long one-shots chain into sequential clips";
+      hint.textContent = "set a length — seconds for one shot, minutes for a scripted piece";
       hint.className = "durhint";
     }
+  }
+
+  const DURATION_TIP =
+    "Set a duration before the run: nothing rolls at 0m 0s. " +
+    "Type seconds for one shot (0m 8s is a single clip; longer chains into sequential clips) " +
+    "or minutes for a scripted piece (1m 0s and up).";
+
+  // Every run starts from the Duration pill; a 0m 0s run is refused with the
+  // tip instead of a silently guessed length.
+  function requireDuration() {
+    if (durationSeconds() > 0) return true;
+    const hint = $("durhint");
+    hint.textContent = "set a duration — nothing rolls at 0m 0s";
+    hint.className = "durhint warn";
+    const box = $("durbox");
+    box.classList.remove("nudge");
+    void box.offsetWidth; // restart the animation
+    box.classList.add("nudge");
+    addMsg("director", DURATION_TIP);
+    $("dur-sec").focus();
+    $("dur-sec").select();
+    return false;
   }
 
   async function api(path, options) {
@@ -1218,8 +1243,6 @@
       const atmo = sel("grok-atmosphere");
       if (atmo && atmo !== "None") bits.push(`atmo ${atmo}`);
     }
-    const budget = Number($("budget").value) || 0;
-    bits.push(budget ? `ceiling $${budget}` : "no ceiling");
     return bits.filter(Boolean);
   }
   if (new URLSearchParams(location.search).has("qa")) {
@@ -1403,12 +1426,11 @@
       // pins one Grok voice for the whole film.
       try {
         const cat = await api("/api/director/voices");
-        const house = cat.backend === "gemini" ? "Gemini" : cat.backend === "grok" ? "Grok" : "";
         fillLexSelect(
           $("voice"),
           (cat.voices || []).map((v) => ({ key: v.key, label: v.label, hint: v.hint })),
           "",
-          cat.pinned ? `Auto (site pin: ${cat.pinned})` : house ? `Auto (${house} casts)` : "Auto"
+          cat.pinned ? `Auto (site pin: ${cat.pinned})` : "Auto"
         );
       } catch (err) {
         /* the static Auto option keeps the pill usable */
@@ -1809,11 +1831,12 @@
   async function send() {
     const idea = $("idea").value.trim();
     if (!idea || !sessionId) return;
+    if (!requireDuration()) return;
     addMsg("user", withRefSuffix(idea));
     $("idea").value = "";
     runBegin("derive", {
       phase: "deriving", total: 0, title: "Reading the idea",
-      detail: `${durationSeconds() || 8}s · compiling and pricing the shot`,
+      detail: `${durationSeconds()}s · compiling and pricing the shot`,
     });
     try {
       const body = await api(`/api/director/sessions/${sessionId}/message`, {
@@ -1822,7 +1845,7 @@
         body: JSON.stringify({
           text: idea,
           provider: $("provider").value,
-          duration_s: durationSeconds() || 8,
+          duration_s: durationSeconds(),
           resolution: $("resolution").value,
           aspect: fieldOrKeep("aspect"),
           ...lexiconTemplates(),
@@ -3146,24 +3169,22 @@
   async function produce() {
     const idea = $("idea").value.trim();
     if (!idea || !sessionId) return;
+    if (!requireDuration()) return;
     if (durationSeconds() < 30) setDuration(60); // a scripted piece needs a runtime; the change is visible, never silent
     addMsg("user", withRefSuffix(idea));
     $("idea").value = "";
     $("produce").disabled = true;
     try {
-      const maxUsd = Math.max(0, Number($("budget").value) || 0);
       const body = await api(`/api/director/sessions/${sessionId}/produce`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           idea: idea,
-          runtime_s: durationSeconds() || 60,
-          max_usd: maxUsd,
+          runtime_s: durationSeconds(),
           aspect: fieldOrKeep("aspect"),
           ...lexiconTemplates(),
         }),
       });
-      if (maxUsd > 0) addMsg("director", `Budget ceiling set: $${maxUsd.toFixed(2)} for this session — anything past it holds.`);
       const li = addMsg("director", body.reply);
       if (body.status === "drafting") {
         const started = Date.now();
@@ -3171,7 +3192,7 @@
         status.className = "draft-status";
         li.appendChild(status);
         let stage = "deriving";
-        const runtime = durationSeconds() || 60;
+        const runtime = durationSeconds();
         runBegin("draft", {
           phase: "deriving", total: 0,
           detail: `${Math.floor(runtime / 60)}m ${runtime % 60}s of screen time from the brief`,
@@ -4104,7 +4125,7 @@
       paintCastDock(null); // the dock belongs to the room we just left
       $("idea").value = "";
       clearRefUploads();
-      setDuration(8);
+      setDuration(0);
       runReset();
       refreshMeter();
       addMsg(

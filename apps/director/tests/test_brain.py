@@ -107,4 +107,5 @@ def test_the_console_carries_the_brain_pill_and_the_houses() -> None:
     assert "function paintBrain" in js and "function pushBrain" in js
     assert '"/api/director/brain"' in js
     assert '$("brain-pill").hidden = entries.length < 2' in js
-    assert "Auto (${house} casts)" in js
+    # the Voice pill's Auto option is plain "Auto": no house suffix
+    assert "casts)" not in js and 'cat.pinned ? `Auto (site pin: ${cat.pinned})` : "Auto"' in js

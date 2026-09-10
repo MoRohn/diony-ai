@@ -68,6 +68,11 @@
   .keys code{font:500 .8em/1 "IBM Plex Mono",monospace;color:var(--ink);background:var(--bg2);border:1px solid var(--line);border-radius:6px;padding:.15em .4em}
   .keys pre{margin:.6rem 0 0;padding:.8rem 1rem;background:var(--bg2);border:1px solid var(--line);border-radius:10px;font:500 .78rem/1.6 "IBM Plex Mono",monospace;color:var(--ink);overflow-x:auto}
   .keys .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:1.2rem}
+  .keys .houses{margin-top:.4rem}
+  .keys .house{padding:1rem 1.1rem 1.1rem;background:rgba(255,255,255,.02);border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column}
+  .keys .house h4{margin:0 0 .55rem;font-family:Archivo,Inter,sans-serif;font-weight:700;font-stretch:108%;font-size:.98rem;line-height:1.2;color:var(--ink)}
+  .keys .house p{max-width:none}
+  .keys .house pre{margin-top:.2rem}
   .go .hint.warn{color:var(--bad)}
   .platform{display:flex;align-items:center;gap:.8rem;margin:0 0 1.4rem;flex-wrap:wrap}
   .platform .plabel{font:700 .7rem/1 "IBM Plex Mono",monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--mut)}
@@ -168,20 +173,25 @@ brew install ffmpeg</pre>
 notepad $env:USERPROFILE\.diony\keys.env
 winget install Gyan.FFmpeg</pre>
       </div>
-      <div class="cols">
-        <div>
-          <p><strong>Grok Imagine</strong> — an xAI API key from <a href="https://console.x.ai/" target="_blank" rel="noopener">console.x.ai</a>. Metered per second of video; the same key powers the narrator voice and the screenwriter.</p>
-        </div>
-        <div>
-          <p><strong>Google Flow</strong> — a <a href="https://useapi.net/" target="_blank" rel="noopener">useapi.net</a> token. useapi.net is a relay that gives API access to Google Flow: you link a Google account that has a Google AI plan (Plus, Pro, or Ultra), and Flow charges that plan's monthly credits per generation while useapi.net bills a flat subscription. See the <a href="https://useapi.net/docs/api-google-flow-v1" target="_blank" rel="noopener">Google Flow API docs</a>.</p>
-          <p><strong>Gemini</strong> — a Gemini API key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>. On the Google Flow camera it writes the script (Gemini 2.5 Pro) and narrates the film (Gemini speech), so the whole path is Google. It is separate from the useapi.net token and bills on its own.</p>
-        </div>
+      <div class="cols houses">
+        <section class="house" data-house="grok">
+          <h4>Grok Imagine</h4>
+          <p>One key: an xAI API key from <a href="https://console.x.ai/" target="_blank" rel="noopener">console.x.ai</a>. Metered per second of video, and the same key powers the screenwriter and the narrator voice, so the whole path is xAI.</p>
+<pre>XAI_API_KEY=xai-...</pre>
+        </section>
+        <section class="house" data-house="google-flow">
+          <h4>Google Flow</h4>
+          <p>Two keys. A <a href="https://useapi.net/" target="_blank" rel="noopener">useapi.net</a> token runs the camera: useapi.net is a relay that gives API access to Google Flow. You link a Google account that has a Google AI plan (Plus, Pro, or Ultra); Flow spends that plan's monthly credits per generation while useapi.net bills a flat subscription. See the <a href="https://useapi.net/docs/api-google-flow-v1" target="_blank" rel="noopener">Google Flow API docs</a>.</p>
+          <p>A Gemini API key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> writes the script (Gemini 2.5 Pro) and narrates the film (Gemini speech), so the whole path is Google. It is separate from the useapi.net token and bills on its own. Without it, an xAI key writes and narrates for this camera.</p>
+<pre>USEAPI_TOKEN=user:...
+# the Google account linked on useapi.net
+DIONY_FLOW_EMAIL=you@gmail.com
+# plus | pro | ultra-99 | ultra-199
+DIONY_FLOW_PLAN=pro
+# the Google brain and narrator
+GEMINI_API_KEY=AIza...</pre>
+        </section>
       </div>
-<pre>XAI_API_KEY=xai-...
-USEAPI_TOKEN=user:...
-DIONY_FLOW_EMAIL=you@gmail.com   # the linked Google account
-DIONY_FLOW_PLAN=pro              # plus | pro | ultra-99 | ultra-199
-GEMINI_API_KEY=AIza...           # the Google brain and narrator</pre>
     </details>
   </div>
 </main>

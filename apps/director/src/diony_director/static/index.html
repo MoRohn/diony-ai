@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="/static/app.css?v=p55">
+<link rel="stylesheet" href="/static/app.css?v=p57">
 </head>
 <body>
 
@@ -171,11 +171,7 @@
               <option value="auto" selected>Auto</option>
             </select>
           </label>
-          <label class="pill" title="Ceiling for this session's scripted production — holds anything that would breach it. Empty = no ceiling.">
-            <span class="plabel">Budget $</span>
-            <input id="budget" type="number" min="0" step="1" inputmode="numeric" placeholder="∞">
-          </label>
-          <span class="durhint" id="durhint">any length · long one-shots chain into sequential clips</span>
+          <span class="durhint" id="durhint">set a length — seconds for one shot, minutes for a scripted piece</span>
           <span class="lexchip" id="lexchip" hidden title="The session's active look — it rides every prompt it can legally reach"></span>
           <span class="lexhint" id="lexhint" hidden></span>
         </div>
@@ -184,6 +180,6 @@
     </footer>
   </div>
 </div>
-<script src="/static/app.js?v=p55"></script>
+<script src="/static/app.js?v=p57"></script>
 </body>
 </html>

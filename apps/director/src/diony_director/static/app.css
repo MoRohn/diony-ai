@@ -557,8 +557,6 @@ button.armed { outline: 2px solid var(--accent) !important; outline-offset: 2px;
   padding: .1em; margin: 0;
 }
 .pill input:focus { outline: none; }
-.pill input#budget { width: 3.6em; }
-.pill input#budget::placeholder { color: var(--mut); }
 
 .durwrap { gap: .55em; }
 .durlabel { }
@@ -572,6 +570,8 @@ button.armed { outline: 2px solid var(--accent) !important; outline-offset: 2px;
 
 .durhint { font: 500 .62rem/1.5 var(--mono); color: var(--mut); letter-spacing: .02em; margin-left: auto; }
 .durhint.warn { color: var(--warn); }
+.durbox.nudge { animation: durnudge .5s ease; }
+@keyframes durnudge { 0%,100% { transform: none; } 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
 
 /* ------------------------------------------- production sheets, in the flow */
 /* The former side board — script, bibles, shots, cut — now lives in the

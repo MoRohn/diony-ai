@@ -89,6 +89,12 @@ def test_the_opening_explains_the_keys_and_names_useapi() -> None:
     for line in ("XAI_API_KEY=", "USEAPI_TOKEN=", "DIONY_FLOW_EMAIL=", "DIONY_FLOW_PLAN="):
         assert line in html, line
     assert "Google AI plan" in html and "monthly credits" in html
+    # the keys read by camera: each house explains its own keys and carries its own lines
+    grok = html.index('data-house="grok"')
+    flow = html.index('data-house="google-flow"')
+    assert grok < html.index("XAI_API_KEY=") < flow
+    assert flow < html.index("USEAPI_TOKEN=") < html.index("GEMINI_API_KEY=")
+    assert html.count("<h4>Grok Imagine</h4>") == 1 and html.count("<h4>Google Flow</h4>") == 1
     # a camera without its key cannot be chosen
     assert "ready[engine] === true" in html
     assert "Add USEAPI_TOKEN to ${keysPath()}" in html

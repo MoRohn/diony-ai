@@ -510,3 +510,24 @@ def test_the_console_and_its_api_are_never_browser_cached() -> None:
         res = client.get(path)
         assert res.status_code == 200, path
         assert res.headers["cache-control"] == "no-store, max-age=0", path
+
+
+def test_the_console_starts_at_zero_duration_and_refuses_a_run_without_one() -> None:
+    from pathlib import Path
+
+    static = Path(app_module.__file__).resolve().parent / "static"
+    html = (static / "index.html").read_text()
+    js = (static / "app.js").read_text()
+    css = (static / "app.css").read_text()
+    # the Budget pill is gone from the console, its CSS and its request bodies
+    assert 'id="budget"' not in html and "Budget $" not in html
+    assert "#budget" not in css and "max_usd" not in js and '$("budget")' not in js
+    # duration starts at 0m 0s, on first paint and on a fresh session
+    assert 'id="dur-min" type="number" min="0" max="180" step="1" value="0"' in html
+    assert 'id="dur-sec" type="number" min="0" max="59" step="1" value="0"' in html
+    assert "setDuration(0);\n      runReset();" in js and "setDuration(8)" not in js
+    # both run starters ask for a duration first and never guess one
+    assert "function requireDuration" in js
+    assert js.count("if (!requireDuration()) return;") == 2
+    assert "durationSeconds() || 8" not in js and "durationSeconds() || 60" not in js
+    assert "nothing rolls at 0m 0s" in js and "Set a duration before the run" in js
