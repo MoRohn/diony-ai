@@ -15,7 +15,7 @@ Source-checkout launchers remain for engineers. They are not the customer downlo
 
 ## Local developer application
 
-`Build Diony AI.command` is the repository-level bridge to the installed-application process on macOS. It creates a deterministic development payload, builds a native app for the current Mac architecture, writes an explicit non-publishable development proof, and maintains the stable path `dist/desktop/{version}/development/Diony.app`. Re-running it reuses an identical payload build, opens that exact app as a new instance, and lets the current payload replace an older Desk and its bundled services. This path proves bundled startup locally; it never claims Universal 2, Developer ID, notarization, stapling, Gatekeeper distribution acceptance, a DMG, or hosted bytes.
+`Build Diony AI.command` is the repository-level bridge to the installed-application process on macOS. It creates a deterministic development payload, builds a native app for the current Mac architecture, writes an explicit non-publishable development proof, and maintains the stable path `dist/Diony.app`. Re-running it reuses an identical payload build, opens that exact app as a new instance, and lets the current payload replace an older Desk and its bundled services. This path proves bundled startup locally; it never claims Universal 2, Developer ID, notarization, stapling, Gatekeeper distribution acceptance, a DMG, or hosted bytes.
 
 ## Installed application contract
 

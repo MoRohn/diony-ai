@@ -1,4 +1,4 @@
 # Written by the local build script: only the current build is committed.
-builds/*
-!builds/20260910T185919Z-122625d924fa-arm64/
-.claude/
+*
+!.gitignore
+!20260910T185919Z-122625d924fa-arm64/

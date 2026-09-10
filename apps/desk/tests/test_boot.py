@@ -579,9 +579,11 @@ def test_launchers_open_the_built_app_first_and_the_build_launchers_pair_up() ->
     mac = (root / "Open Diony AI.command").read_text()
     win = (root / "Open Diony AI.bat").read_text()
     # the built app wins when it is there; the source path stays as the fallback
-    assert "dist/desktop/$VERSION/development/Diony.app" in mac and 'exec open -n "$APP"' in mac
+    assert 'APP="$ROOT/dist/Diony.app"' in mac and 'exec open -n "$APP"' in mac
     assert mac.index("Diony.app") < mac.index("pick_python()")
-    assert r"dist\desktop\%VERSION%\development\Diony AI\Diony AI.exe" in win
+    assert "development" not in mac  # the app is dist/Diony.app, not a channel folder
+    assert r"dist\builds\%BUILD_ID%\Diony AI\Diony AI.exe" in win
+    assert r'set /p BUILD_ID=<"dist\current-build.txt"' in win
     assert 'start "" "%APP%"' in win and win.index("Diony AI.exe") < win.index("where py")
     assert "packaging/desktop/version.json" in mac and r"packaging\desktop\version.json" in win
     # each desk has a Build launcher that drives its local build script

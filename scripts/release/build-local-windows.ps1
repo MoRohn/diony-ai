@@ -3,7 +3,7 @@
 #
 # The Windows twin of build-local-macos.sh: stages a secret-free payload, bundles a
 # runtime with PyInstaller, lays the pinned ffmpeg + ffprobe beside the app, keeps the
-# stable path dist\desktop\<version>\development\Diony AI\Diony AI.exe, and opens it.
+# stable path dist\Diony AI\Diony AI.exe (a junction into dist\builds\<build-id>\), and opens it.
 # Ad-hoc and local-only: unsigned, never publishable. Signed installers come from
 # build-windows.ps1.
 $ErrorActionPreference = "Stop"
@@ -22,10 +22,10 @@ $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $Version = (Get-Content (Join-Path $Root "packaging\desktop\version.json") -Raw | ConvertFrom-Json).version
 $BuildRecipe = "windows-development-v1"
 $Arch = if ([Environment]::Is64BitOperatingSystem) { "x86_64" } else { throw "Diony AI needs 64-bit Windows." }
-$Output = Join-Path $Root "dist\desktop\$Version\development"
+$Output = Join-Path $Root "dist"
 $Builds = Join-Path $Output "builds"
 $StableApp = Join-Path $Output "Diony AI"
-$StableReport = Join-Path $Output "development-build.json"
+$StableReport = Join-Path $Output "build.json"
 
 # Python 3.11+ : DIONY_LOCAL_PYTHON, the repo .venv, the py launcher, then python.
 $VersionCheck = "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"
@@ -121,7 +121,7 @@ try {
             "--app", (Join-Path $FinalDir "Diony AI"),
             "--payload-metadata", (Join-Path $Payload "desktop-release.json"),
             "--version", $Version, "--architecture", $Arch, "--built-at", $BuiltAt,
-            "--output", (Join-Path $FinalDir "development-build.json")
+            "--output", (Join-Path $FinalDir "build.json")
         )
     }
     finally { $env:PYTHONPATH = $PreviousPythonPath }
@@ -131,11 +131,14 @@ try {
     # delete only the junction itself, never the build it points at
     if (Test-Path $StableApp) { [IO.Directory]::Delete($StableApp) }
     New-Item -ItemType Junction -Path $StableApp -Target (Join-Path $FinalDir "Diony AI") | Out-Null
-    Copy-Item -LiteralPath (Join-Path $FinalDir "development-build.json") -Destination $StableReport -Force
-    # Git keeps only the current build under dist\desktop\<version>\development\
-    # (the root .gitignore opens that folder); this file names the one to keep.
-    @("# Written by the local build script: only the current build is committed.", "builds/*", "!builds/$BuildId/", ".claude/") |
-        Set-Content (Join-Path $Output ".gitignore") -Encoding ascii
+    Copy-Item -LiteralPath (Join-Path $FinalDir "build.json") -Destination $StableReport -Force
+    # Git keeps only the current build under dist\builds\ (the root .gitignore opens
+    # dist\Diony.app, dist\build.json, dist\current-build.txt and dist\builds\);
+    # builds\.gitignore names the one build to keep, current-build.txt names it
+    # for the launchers (the junction itself is not committed).
+    @("# Written by the local build script: only the current build is committed.", "*", "!.gitignore", "!$BuildId/") |
+        Set-Content (Join-Path $Builds ".gitignore") -Encoding ascii
+    Set-Content (Join-Path $Output "current-build.txt") -Value $BuildId -Encoding ascii
 
     # Prune old local builds, keeping the newest DIONY_KEEP_LOCAL_BUILDS (default 5).
     $Keep = if ($env:DIONY_KEEP_LOCAL_BUILDS) { [int]$env:DIONY_KEEP_LOCAL_BUILDS } else { 5 }

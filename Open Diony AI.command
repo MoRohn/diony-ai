@@ -19,8 +19,8 @@ if [ ! -f "$BOOT" ]; then
 fi
 
 VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/packaging/desktop/version.json" | head -1)"
-APP="$ROOT/dist/desktop/$VERSION/development/Diony.app"
-if [ -n "$VERSION" ] && [ -d "$APP" ]; then
+APP="$ROOT/dist/Diony.app"   # a link to the current build under dist/builds/
+if [ -d "$APP" ]; then
   echo "Opening the built Diony.app ($VERSION). ffmpeg and the runtime are inside it."
   echo "You can close this window."
   exec open -n "$APP"

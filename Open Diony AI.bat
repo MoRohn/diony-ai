@@ -18,8 +18,10 @@ if not exist "%BOOT%" (
 
 set VERSION=
 for /f "usebackq delims=" %%v in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-Content 'packaging\desktop\version.json' -Raw | ConvertFrom-Json).version"`) do set VERSION=%%v
-set APP=dist\desktop\%VERSION%\development\Diony AI\Diony AI.exe
-if not "%VERSION%"=="" if exist "%APP%" (
+set BUILD_ID=
+if exist "dist\current-build.txt" set /p BUILD_ID=<"dist\current-build.txt"
+set APP=dist\builds\%BUILD_ID%\Diony AI\Diony AI.exe
+if not "%BUILD_ID%"=="" if exist "%APP%" (
   echo Opening the built Diony AI %VERSION%. ffmpeg and the runtime are inside it.
   echo You can close this window.
   start "" "%APP%"

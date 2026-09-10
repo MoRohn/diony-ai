@@ -314,8 +314,9 @@ def test_local_mac_builder_creates_a_stable_in_repo_app_without_release_claims()
     assert "build-local-macos.sh" in command_text
     assert 'open -n "$APP"' in command_text
     assert 'open -R "$APP"' not in command_text
-    assert "dist/desktop" in builder_text
-    assert "development" in builder_text
+    assert 'OUTPUT="$ROOT/dist"' in builder_text and 'BUILDS="$OUTPUT/builds"' in builder_text
+    assert 'STABLE_REPORT="$OUTPUT/build.json"' in builder_text
+    assert '"$OUTPUT/current-build.txt"' in builder_text
     assert "diony_desk.release" in builder_text
     assert "stage" in builder_text
     assert "development-report" in builder_text
@@ -334,7 +335,7 @@ def test_local_mac_builder_creates_a_stable_in_repo_app_without_release_claims()
     assert 'LEGACY_STABLE_APP="$OUTPUT/Diony AI.app"' in builder_text
     assert '[[ -L "$LEGACY_STABLE_APP" ]]' in builder_text
     assert '/bin/unlink "$LEGACY_STABLE_APP"' in builder_text
-    assert 'APP="$ROOT/dist/desktop/$VERSION/development/Diony.app"' in command_text
+    assert 'APP="$ROOT/dist/Diony.app"' in command_text
     assert "Diony AI.app was not created" not in command_text
 
 
@@ -388,9 +389,20 @@ def test_git_keeps_the_current_local_app_and_nothing_older() -> None:
     root = Path(__file__).resolve().parents[3]
     ignore = (root / ".gitignore").read_text().splitlines()
     assert "dist/" not in ignore, "a blanket dist/ rule would drop Diony.app from the repository"
-    assert "dist/*" in ignore and "!dist/desktop/" in ignore
-    assert "dist/desktop/*/*" in ignore and "!dist/desktop/*/development/" in ignore
+    assert "dist/*" in ignore
+    for kept in ("!dist/Diony.app", "!dist/build.json", "!dist/current-build.txt", "!dist/builds/"):
+        assert kept in ignore, kept
     mac = (root / "scripts" / "release" / "build-local-macos.sh").read_text()
     win = (root / "scripts" / "release" / "build-local-windows.ps1").read_text()
-    assert '"$OUTPUT/.gitignore"' in mac and "!builds/$BUILD_ID/" in mac
-    assert '".gitignore"' in win and "!builds/$BuildId/" in win
+    assert '"$BUILDS/.gitignore"' in mac and "!$BUILD_ID/" in mac
+    assert '".gitignore"' in win and "!$BuildId/" in win and "current-build.txt" in win
+    # the checked-in layout: a link, a report link, the id, and the one build
+    dist = root / "dist"
+    build_id = (dist / "current-build.txt").read_text().strip()
+    assert (dist / "builds" / build_id / "Diony.app").is_dir()
+    assert (dist / "Diony.app").is_symlink() and (dist / "Diony.app").resolve() == (
+        dist / "builds" / build_id / "Diony.app"
+    ).resolve()
+    assert (dist / "build.json").is_symlink()
+    assert f"!{build_id}/" in (dist / "builds" / ".gitignore").read_text()
+    assert not (dist / "desktop" / "0.22.0" / "development").exists()

@@ -96,8 +96,8 @@ from https://www.python.org/downloads/
      built app yet it runs from source with Python 3.11+ and says so.
 
      To build the app once, double-click the Build file for your desk:
-       Mac          Build Diony AI.command   ->  dist/desktop/<v>/development/Diony.app
-       Windows      Build Diony AI.bat       ->  dist\desktop\<v>\development\Diony AI\
+       Mac          Build Diony AI.command   ->  dist/Diony.app
+       Windows      Build Diony AI.bat       ->  dist\Diony AI\Diony AI.exe
      It builds from this folder and opens the app; later opens need
      no Python. Rebuild after a change; an unchanged folder is skipped.
 

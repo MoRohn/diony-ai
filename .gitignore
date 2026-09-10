@@ -13,15 +13,16 @@ venv/
 .ruff_cache/
 build/
 
-# Desktop builds: the CURRENT local app for each version is committed
-# (dist/desktop/<version>/development/Diony.app or "Diony AI\"), so a clone
-# holds a runnable Diony.app. Older builds and release artifacts stay local.
-# The per-version development/.gitignore, written by the local build scripts,
-# names the one build directory that is kept.
+# Desktop builds: the current local app is committed as dist/Diony.app (a link
+# into dist/builds/<build-id>/) with dist/build.json and dist/current-build.txt,
+# so a clone holds a runnable Diony.app. Older builds and the signed release
+# artifacts (dist/desktop/<version>/) stay local. dist/builds/.gitignore, written
+# by the local build scripts, names the one build directory that is kept.
 dist/*
-!dist/desktop/
-dist/desktop/*/*
-!dist/desktop/*/development/
+!dist/Diony.app
+!dist/build.json
+!dist/current-build.txt
+!dist/builds/
 
 # Node (if frontends grow a bundler later)
 node_modules/

@@ -33,11 +33,12 @@ if [[ "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
   exit 2
 fi
 
-OUTPUT="$ROOT/dist/desktop/$VERSION/development"
+OUTPUT="$ROOT/dist"
 BUILDS="$OUTPUT/builds"
 STABLE_APP="$OUTPUT/Diony.app"
 LEGACY_STABLE_APP="$OUTPUT/Diony AI.app"
-STABLE_REPORT="$OUTPUT/development-build.json"
+STABLE_REPORT="$OUTPUT/build.json"
+LEGACY_DEV="$ROOT/dist/desktop/$VERSION/development"  # the pre-2026-09-10 layout
 if [[ -e "$STABLE_APP" && ! -L "$STABLE_APP" ]]; then
   echo "Refusing to replace a non-managed app: $STABLE_APP" >&2
   exit 2
@@ -129,19 +130,25 @@ fi
   --app "$FINAL_DIR/Diony.app" \
   --payload-metadata "$PAYLOAD/desktop-release.json" \
   --version "$VERSION" --architecture "$ARCH" --built-at "$BUILT_AT" \
-  --output "$FINAL_DIR/development-build.json"
+  --output "$FINAL_DIR/build.json"
 
 /bin/mkdir -p "$OUTPUT"
 /bin/ln -sfn "builds/$BUILD_ID/Diony.app" "$STABLE_APP"
-/bin/ln -sfn "builds/$BUILD_ID/development-build.json" "$STABLE_REPORT"
-# Git keeps only the current build under dist/desktop/<version>/development/
-# (the root .gitignore opens that folder); this file names the one to keep.
-/bin/cat > "$OUTPUT/.gitignore" <<GITIGNORE
+/bin/ln -sfn "builds/$BUILD_ID/build.json" "$STABLE_REPORT"
+# Git keeps only the current build under dist/builds/ (the root .gitignore opens
+# dist/Diony.app, dist/build.json, dist/current-build.txt and dist/builds/);
+# builds/.gitignore names the one build to keep, current-build.txt names it for
+# the launchers.
+/bin/cat > "$BUILDS/.gitignore" <<GITIGNORE
 # Written by the local build script: only the current build is committed.
-builds/*
-!builds/$BUILD_ID/
-.claude/
+*
+!.gitignore
+!$BUILD_ID/
 GITIGNORE
+printf '%s\n' "$BUILD_ID" > "$OUTPUT/current-build.txt"
+for legacy in "$LEGACY_DEV/Diony.app" "$LEGACY_DEV/development-build.json"; do
+  if [[ -L "$legacy" ]]; then /bin/unlink "$legacy"; fi
+done
 if [[ -L "$LEGACY_STABLE_APP" ]]; then
   /bin/unlink "$LEGACY_STABLE_APP"
 fi

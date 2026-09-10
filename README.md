@@ -40,7 +40,7 @@ The Desk opens all three and lays the `*.diony.local` names on first launch. The
 
 **1. Requirements**
 
-- macOS 13+ or Windows 10/11 (Linux runs the Mac path). The repository ships the built Mac app at `dist/desktop/0.22.0/development/Diony.app` with its own runtime, so opening Diony needs no Python; Python 3.11+ is only for running from source or rebuilding the app.
+- macOS 13+ or Windows 10/11 (Linux runs from source). The built app carries its own runtime and ffmpeg, so opening Diony needs no Python: the Mac app ships in the repository at `dist/Diony.app`, and the Windows app is built once from the same folder with `Build Diony AI.bat`. Python 3.11+ is only needed for that one Windows build, for rebuilding, or for running from source.
 - `ffmpeg` and `ffprobe` come with Diony. The desktop build carries a pinned static release beside the app (`apps/desk/src/diony_desk/ffmpeg_lock.json`, SHA-256 verified), and the desk checks it on every open; when a bundle lacks it, the desk installs the same pinned release into the data folder, with no package manager, terminal, or password. Only a source checkout needs its own copy: `brew install ffmpeg`, `winget install Gyan.FFmpeg`, or `DIONY_FFMPEG` / `DIONY_FFPROBE`.
 - For the Grok Imagine camera: an xAI API key. For the Google Flow camera: a useapi.net token with a linked Google account, plus a Gemini API key so the script and the narrator are Google too. Both cameras on one desk is fine.
 
@@ -71,23 +71,20 @@ An explicit environment variable always wins over the file. There is no key form
 
 **3. Open Diony**
 
-On a Mac, open the built app that ships in the repository:
-
-```
-dist/desktop/0.22.0/development/Diony.app
-```
-
-Double-click it in Finder (or `open -n dist/desktop/0.22.0/development/Diony.app`). If macOS says the app cannot be opened because it is from an unidentified developer, right-click it, choose Open, then Open; the local build is ad-hoc signed, not notarised. The `Diony.app` there is a link to the current build under `builds/`, and it moves to the new build every time you rebuild, so that path is always the latest app.
-
-The launchers at the top of the folder do the same thing and are named the same way on both desks:
+One folder, one double-click per desk. The launchers sit at the top of the folder and are named the same way on both:
 
 | | Mac | Windows |
 |---|---|---|
+| **The app** | `dist/Diony.app` (ships in the repository) | `dist\Diony AI\Diony AI.exe` (made once by Build) |
 | **Open** | `Open Diony AI.command` | `Open Diony AI.bat` |
-| **Build** (once, engineers) | `Build Diony AI.command` | `Build Diony AI.bat` |
+| **Build** (once on Windows; after a change) | `Build Diony AI.command` | `Build Diony AI.bat` |
 | Installed download | `Diony.app` from the DMG | `DionyAI-Setup-<version>-windows-x64.exe` |
 
-**Open** opens that built app when it is there (its runtime and ffmpeg are inside, and the window can be closed at once); when there is no built app yet, as on Windows until you build one, it runs the desk from source with the machine's Python 3.11+ and says so. **Build** rebuilds the app from the folder into `dist/desktop/<version>/development/` and opens it; rebuilding after a change replaces the older build, and an unchanged folder is not rebuilt. Linux runs from source with `./open-diony.sh`.
+*On a Mac:* double-click `dist/Diony.app` in Finder, or `Open Diony AI.command`, which opens that same app. If macOS says the app cannot be opened because it is from an unidentified developer, right-click it, choose Open, then Open; the local build is ad-hoc signed, not notarised.
+
+*On Windows:* double-click `Build Diony AI.bat` once. It needs Python 3.11+ from python.org that one time, builds `dist\Diony AI\Diony AI.exe` from the folder with the runtime and ffmpeg inside, and opens it. From then on double-click that `.exe` or `Open Diony AI.bat`, which opens the same app; no Python is involved. Windows Defender SmartScreen may ask once about an unsigned app: choose More info, then Run anyway.
+
+**Open** opens the built app when it is there (the window can be closed at once) and otherwise runs the desk from source with the machine's Python 3.11+ and says so. **Build** rebuilds the app from the folder into `dist/` and opens it; `dist/Diony.app` and `dist\Diony AI\` always point at the newest build, older builds are replaced, and an unchanged folder is not rebuilt. Linux runs from source with `./open-diony.sh`.
 
 Either way the lobby opens Studio and asks once to lay the product names: your password on a Mac, a User Account Control prompt on Windows. Studio's **This computer** toggle (Mac | Windows) is preset to the desk it detected; every path, command, and launcher name Diony shows follows it, and you can flip it to read the instructions for the other desk. Pick a camera and press **Continue to the Director**.
 
@@ -292,7 +289,7 @@ ruff check . && ruff format --check .
 
 Tests never open a socket: the root `conftest.py` blocks every non-loopback connection for the session (`DIONY_ALLOW_NETWORK=1` only for a deliberate live run). Never run two pytest invocations at once; the desk's instance-lock tests deadlock across processes. Tests that cut real media skip without ffmpeg.
 
-**Packaged app.** `Build Diony AI.command` (Mac, `scripts/release/build-local-macos.sh`) and `Build Diony AI.bat` (Windows, `scripts/release/build-local-windows.ps1`) stage a secret-free payload, hash it, bundle a runtime with PyInstaller, lay the pinned ffmpeg and ffprobe in the runtime folder, write a non-publishable development report, and open `dist/desktop/{version}/development/Diony.app` or `…/Diony AI/Diony AI.exe`. Rebuild after every change you want to test in the app; an identical payload is not rebuilt. The current build is committed (`dist/desktop/<version>/development/`, about 190 MB with ffmpeg inside), so a fresh clone holds a runnable `Diony.app`; older builds stay local, named out by the `.gitignore` the builder writes beside the app. The version is `packaging/desktop/version.json`. Signed, notarised releases come from `scripts/release/build-macos.sh` (Universal 2, with a lipo-joined ffmpeg) and `build-windows.ps1` (Inno Setup installer), per Blueprint 17.
+**Packaged app.** `Build Diony AI.command` (Mac, `scripts/release/build-local-macos.sh`) and `Build Diony AI.bat` (Windows, `scripts/release/build-local-windows.ps1`) stage a secret-free payload, hash it, bundle a runtime with PyInstaller, lay the pinned ffmpeg and ffprobe in the runtime folder, write a non-publishable development report, and open `dist/Diony.app` or `dist\Diony AI\Diony AI.exe`, links into `dist/builds/<build-id>/`. Rebuild after every change you want to test in the app; an identical payload is not rebuilt. The current build is committed (`dist/Diony.app`, `dist/build.json`, `dist/current-build.txt`, and the one directory under `dist/builds/`, about 190 MB with ffmpeg inside), so a fresh clone holds a runnable `Diony.app`; older builds stay local, named out by the `.gitignore` the builder writes in `dist/builds/`. The version is `packaging/desktop/version.json`. Signed, notarised releases come from `scripts/release/build-macos.sh` (Universal 2, with a lipo-joined ffmpeg) and `build-windows.ps1` (Inno Setup installer), per Blueprint 17.
 
 **UI stamps.** Each surface's static assets carry a `?v=` stamp that the desk uses to detect a stale build. Bump the Director stamp in `apps/director/src/diony_director/static/index.html` when you change its UI; the Producer and Studio stamps are pinned by tests, update the pins with them.
 

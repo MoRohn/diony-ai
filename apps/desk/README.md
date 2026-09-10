@@ -6,7 +6,7 @@ The source-checkout fallback remains for engineers: open **START HERE.txt**, the
 
 ## Local Mac application
 
-On a Mac developer checkout, double-click the repository-root **Build Diony AI.command**. It creates or reuses the current native application, then opens `dist/desktop/{version}/development/Diony.app` as a new instance so the current payload can replace an older Desk and its services. It is deliberately marked `development`, `publishable: false`, and `ad-hoc-local-only`; it is not the notarized customer DMG.
+On a Mac developer checkout, double-click the repository-root **Build Diony AI.command**. It creates or reuses the current native application, then opens `dist/Diony.app` as a new instance so the current payload can replace an older Desk and its services. It is deliberately marked `development`, `publishable: false`, and `ad-hoc-local-only`; it is not the notarized customer DMG.
 
 ```bash
 # After the venv exists, engineers can also:
