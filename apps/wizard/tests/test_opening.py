@@ -70,3 +70,18 @@ def test_there_is_no_automatic_route() -> None:
     assert client.post("/api/opening/engine", json={"engine": "auto"}).status_code == 422
     assert client.post("/api/opening/engine", json={"engine": "director"}).status_code == 422
     assert read_engine_choice() == ""
+
+
+def test_the_opening_explains_the_keys_and_names_useapi() -> None:
+    html = _client().get("/").text
+    assert "A key is required" in html
+    assert "~/.diony/keys.env" in html
+    assert 'href="https://console.x.ai/"' in html
+    assert 'href="https://useapi.net/"' in html
+    assert 'href="https://useapi.net/docs/api-google-flow-v1"' in html
+    for line in ("XAI_API_KEY=", "USEAPI_TOKEN=", "DIONY_FLOW_EMAIL=", "DIONY_FLOW_PLAN="):
+        assert line in html, line
+    assert "Google AI plan" in html and "monthly credits" in html
+    # a camera without its key cannot be chosen
+    assert "ready[engine] === true" in html
+    assert "Add USEAPI_TOKEN to ~/.diony/keys.env" in html

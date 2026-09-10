@@ -51,6 +51,15 @@
   .foot a{color:var(--mut);font:500 .74rem/1 "IBM Plex Mono",monospace;letter-spacing:.05em;text-decoration:none}
   .foot a:hover{color:var(--accent-ink)}
   :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .keys{margin-top:2.2rem;padding-top:1.4rem;border-top:1px solid var(--line);color:var(--ink2);font-size:.9rem}
+  .keys h2{font:700 .72rem/1 "IBM Plex Mono",monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);margin:0 0 .7rem}
+  .keys p{margin:0 0 .6rem;max-width:46rem}
+  .keys a{color:var(--accent-ink);text-decoration:none;border-bottom:1px solid rgba(255,176,102,.35)}
+  .keys a:hover{border-bottom-color:var(--accent-ink)}
+  .keys code{font:500 .8em/1 "IBM Plex Mono",monospace;color:var(--ink);background:var(--bg2);border:1px solid var(--line);border-radius:6px;padding:.15em .4em}
+  .keys pre{margin:.6rem 0 0;padding:.8rem 1rem;background:var(--bg2);border:1px solid var(--line);border-radius:10px;font:500 .78rem/1.6 "IBM Plex Mono",monospace;color:var(--ink);overflow-x:auto}
+  .keys .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:1.2rem}
+  .go .hint.warn{color:var(--bad)}
 </style>
 </head>
 <body>
@@ -115,6 +124,22 @@
       <button id="continue" type="button" disabled>Continue</button>
       <span class="hint" id="hint">Keys load from ~/.diony/keys.env</span>
     </div>
+    <section class="keys" aria-labelledby="keys-title">
+      <h2 id="keys-title">A key is required</h2>
+      <p>Every shot rolls on a cloud camera you pay for directly, so the Studio needs at least one key before the Director can shoot. Diony never asks for a key in the app: put the lines you have in <code>~/.diony/keys.env</code> and reopen this page.</p>
+      <div class="cols">
+        <div>
+          <p><strong>Grok Imagine</strong> — an xAI API key from <a href="https://console.x.ai/" target="_blank" rel="noopener">console.x.ai</a>. Metered per second of video; the same key powers the narrator voice and the screenwriter.</p>
+        </div>
+        <div>
+          <p><strong>Google Flow</strong> — a <a href="https://useapi.net/" target="_blank" rel="noopener">useapi.net</a> token. useapi.net is a relay that gives API access to Google Flow: you link a Google account that has a Google AI plan (Plus, Pro, or Ultra), and Flow charges that plan's monthly credits per generation while useapi.net bills a flat subscription. See the <a href="https://useapi.net/docs/api-google-flow-v1" target="_blank" rel="noopener">Google Flow API docs</a>.</p>
+        </div>
+      </div>
+<pre>XAI_API_KEY=xai-...
+USEAPI_TOKEN=user:...
+DIONY_FLOW_EMAIL=you@gmail.com   # the linked Google account
+DIONY_FLOW_PLAN=pro              # plus | pro | ultra-99 | ultra-199</pre>
+    </section>
   </div>
 </main>
 
@@ -125,11 +150,21 @@
   const hint = document.getElementById("hint");
   let chosen = "";
 
+  let ready = { grok: false, "google-flow": false };
   function select(engine) {
     chosen = engine;
     cards.forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.engine === engine)));
-    go.disabled = !engine;
+    const ok = Boolean(engine) && ready[engine] === true;
+    go.disabled = !ok;
     go.textContent = "Continue to the Director";
+    hint.classList.toggle("warn", Boolean(engine) && !ok);
+    hint.textContent = ok
+      ? "Keys load from ~/.diony/keys.env"
+      : engine === "grok"
+        ? "Add XAI_API_KEY to ~/.diony/keys.env, then reopen this page."
+        : engine === "google-flow"
+          ? "Add USEAPI_TOKEN to ~/.diony/keys.env, then reopen this page."
+          : "Keys load from ~/.diony/keys.env";
   }
 
   cards.forEach((c) => c.addEventListener("click", () => select(c.dataset.engine)));
@@ -142,8 +177,9 @@
         chip.textContent = ready ? on : off;
         chip.className = "chip " + (ready ? "on" : "off");
       };
-      setChip("grok-chip", state.providers.grok, "KEY READY", "NO KEY");
-      setChip("flow-chip", state.providers["google-flow"], "TOKEN READY", "NO TOKEN");
+      ready = { grok: Boolean(state.providers.grok), "google-flow": Boolean(state.providers["google-flow"]) };
+      setChip("grok-chip", ready.grok, "KEY READY", "NO KEY");
+      setChip("flow-chip", ready["google-flow"], "TOKEN READY", "NO TOKEN");
       if (state.director_url) document.getElementById("director-link").href = state.director_url;
       if (state.producer_url) document.getElementById("producer-link").href = state.producer_url;
       if (state.engine) select(state.engine);
