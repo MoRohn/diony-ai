@@ -144,6 +144,7 @@ fi
 *
 !.gitignore
 !$BUILD_ID/
+!$BUILD_ID/**
 GITIGNORE
 printf '%s\n' "$BUILD_ID" > "$OUTPUT/current-build.txt"
 for legacy in "$LEGACY_DEV/Diony.app" "$LEGACY_DEV/development-build.json"; do

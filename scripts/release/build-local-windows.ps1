@@ -136,7 +136,7 @@ try {
     # dist\Diony.app, dist\build.json, dist\current-build.txt and dist\builds\);
     # builds\.gitignore names the one build to keep, current-build.txt names it
     # for the launchers (the junction itself is not committed).
-    @("# Written by the local build script: only the current build is committed.", "*", "!.gitignore", "!$BuildId/") |
+    @("# Written by the local build script: only the current build is committed.", "*", "!.gitignore", "!$BuildId/", "!$BuildId/**") |
         Set-Content (Join-Path $Builds ".gitignore") -Encoding ascii
     Set-Content (Join-Path $Output "current-build.txt") -Value $BuildId -Encoding ascii
 
