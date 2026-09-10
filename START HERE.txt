@@ -4,7 +4,8 @@ Diony makes a film from one line. It writes the script, prices every
 shot, shoots on cloud video models, reviews each clip, cuts the film,
 narrates it, and hands you the master with its receipt.
 
-You need no GPU. You need two things: a provider account and ffmpeg.
+You need no GPU. You need one thing: a provider account. ffmpeg comes
+with Diony.
 
 
 ------------------------------------------------------------------------
@@ -36,12 +37,16 @@ You need no GPU. You need two things: a provider account and ffmpeg.
 
 
 ------------------------------------------------------------------------
-2. Install ffmpeg
+2. ffmpeg comes with Diony
 ------------------------------------------------------------------------
 
+  Nothing to install. The app carries ffmpeg and ffprobe and checks them
+  every time it opens; if a build ever lacks them, the desk installs the
+  pinned release into its data folder on open (one download, verified).
+
+  Only a source checkout brings its own:
   Mac        brew install ffmpeg
-  Windows    https://ffmpeg.org/download.html  (put ffmpeg.exe and
-             ffprobe.exe on your PATH)
+  Windows    winget install Gyan.FFmpeg
   Linux      sudo apt install ffmpeg
 
   Diony cuts, mixes, and reviews every film with it.
@@ -154,7 +159,8 @@ Optional, both free:
                                         resumes itself, nothing was spent
   A clip was refused                    press Retake — the opening frame
                                         is redrawn; Skip shot leaves it out
-  “install ffmpeg”                      step 2
+  “ffmpeg is not on this desk”          reopen the app — it installs
+                                        ffmpeg on open (step 2)
   The page will not open                the lobby’s Continue retries the
                                         name setup; the services also
                                         answer on http://127.0.0.1:8787,

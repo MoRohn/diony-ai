@@ -28,7 +28,7 @@ North Star deliverable: a finished program, 1920×1080 (1080×1920 portrait), Re
 - Python 3.11+, FastAPI, uvicorn, httpx, Pydantic v2. Static HTML/CSS/JS consoles, no SPA framework.
 - Providers over REST: xAI (`https://api.x.ai`), useapi.net Google Flow (`https://api.useapi.net/v1/google-flow`). Module-level `httpx` in each adapter is the seam tests monkeypatch.
 - The brain is any OpenAI-compatible chat endpoint, resolved by `diony_director.brain`: Gemini 2.5 Pro on the Google Flow camera (`GEMINI_API_KEY`), Grok 4.6 on Grok Imagine (`XAI_API_KEY`), the desk's Brain pill or `DIONY_DIRECTOR_BRAIN_URL` overriding. The narrator follows the same house (Gemini speech or the Grok voice API) unless a voice id names the other.
-- Host tools: ffmpeg/ffprobe (required); OpenCV Zoo YuNet + SFace (optional, staged by `diony-director-check --stage-face-models`); faster-whisper (optional, `DIONY_WHISPER_MODEL`).
+- Host tools: ffmpeg/ffprobe (required; the desktop build bundles the release pinned in `apps/desk/src/diony_desk/ffmpeg_lock.json` and `diony_desk.media` installs it on open when a bundle lacks it — source checkouts bring their own); OpenCV Zoo YuNet + SFace (optional, staged by `diony-director-check --stage-face-models`); faster-whisper (optional, `DIONY_WHISPER_MODEL`).
 - Ledger and control plane: SQLite under `{vault}/.control/`.
 
 ## Build and run

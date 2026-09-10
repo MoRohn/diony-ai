@@ -28,6 +28,17 @@ PACKAGES = (
 )
 hiddenimports = []
 datas = [(str(PAYLOAD), "product")]
+# ffmpeg comes with Diony: the build script stages the pinned static release
+# (apps/desk/src/diony_desk/ffmpeg_lock.json) and the tools ride beside the
+# executable, where diony_desk.media and diony_producer.media_tools look first.
+binaries = []
+FFMPEG_DIR = os.environ.get("DIONY_FFMPEG_BUNDLE_DIR", "").strip()
+if FFMPEG_DIR:
+    for tool in sorted(Path(FFMPEG_DIR).iterdir()):
+        if tool.is_file() and tool.name.split(".")[0] in {"ffmpeg", "ffprobe"}:
+            binaries.append((str(tool), "."))
+        elif tool.is_file() and tool.suffix in {".txt", ".json"}:
+            datas.append((str(tool), "."))
 for package in PACKAGES:
     hiddenimports += collect_submodules(package)
     datas += collect_data_files(package)
@@ -35,7 +46,7 @@ for package in PACKAGES:
 a = Analysis(
     [str(ROOT / "packaging" / "desktop" / "entry.py")],
     pathex=[str(path) for path in SOURCE_DIRS],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

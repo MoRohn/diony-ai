@@ -47,6 +47,21 @@ async def no_store_pages(request, call_next):
     return response
 
 
+def _ffmpeg_state() -> dict:
+    """ffmpeg comes with Diony: the desk verifies or installs it on every open
+    and exports the path. Studio only reports what it finds."""
+    path = ""
+    try:
+        from diony_producer.media_tools import resolve_media_tool
+
+        path = resolve_media_tool("ffmpeg")
+    except ImportError:
+        import shutil
+
+        path = shutil.which(os.environ.get("DIONY_FFMPEG", "").strip() or "ffmpeg") or ""
+    return {"ready": bool(path), "path": path, "bundled": bool(os.environ.get("DIONY_FFMPEG"))}
+
+
 def _keys_loaded() -> None:
     """Load ~/.diony/keys.env into the environment when the Director is installed."""
     try:
@@ -85,6 +100,7 @@ def opening_state() -> dict:
             "chosen": read_platform_choice(),
             "hints": platform_hints(),
         },
+        "ffmpeg": _ffmpeg_state(),
     }
 
 

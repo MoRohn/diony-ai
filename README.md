@@ -41,7 +41,7 @@ The Desk opens all three and lays the `*.diony.local` names on first launch. The
 **1. Requirements**
 
 - macOS 13+ or Windows 10/11 (Linux runs the Mac path). Python 3.11+ for a source checkout; the packaged app bundles its own runtime.
-- `ffmpeg` and `ffprobe`: `brew install ffmpeg` on a Mac, `winget install Gyan.FFmpeg` on Windows, or point `DIONY_FFMPEG` / `DIONY_FFPROBE` at them. They cut, mix, and review every film. Diony also looks in the Homebrew, winget, Chocolatey, scoop, and `C:\ffmpeg\bin` homes when the app's PATH is bare.
+- `ffmpeg` and `ffprobe` come with Diony. The desktop build carries a pinned static release beside the app (`apps/desk/src/diony_desk/ffmpeg_lock.json`, SHA-256 verified), and the desk checks it on every open; when a bundle lacks it, the desk installs the same pinned release into the data folder, with no package manager, terminal, or password. Only a source checkout needs its own copy: `brew install ffmpeg`, `winget install Gyan.FFmpeg`, or `DIONY_FFMPEG` / `DIONY_FFPROBE`.
 - For the Grok Imagine camera: an xAI API key. For the Google Flow camera: a useapi.net token with a linked Google account, plus a Gemini API key so the script and the narrator are Google too. Both cameras on one desk is fine.
 
 **2. Put the keys in one file**
@@ -209,7 +209,7 @@ Everything is an environment variable; the keys file is loaded first with set-de
 ## FAQ
 
 **What do I need to make a film?**
-A Mac, Windows, or Linux machine with ffmpeg, and one camera's keys: an xAI API key (Grok Imagine, the Grok narrator voice, and the Grok brain), or a useapi.net token linked to a Google account with a Google AI plan plus a Gemini API key (Google Flow, Gemini speech, and the Gemini brain). No GPU, no model downloads. Each camera is complete on its own keys; with both on the desk the Brain and Voice pills let a Flow film borrow Grok's writer or narrator and the other way round.
+A Mac or Windows machine (ffmpeg comes with the app; a Linux source checkout brings its own), and one camera's keys: an xAI API key (Grok Imagine, the Grok narrator voice, and the Grok brain), or a useapi.net token linked to a Google account with a Google AI plan plus a Gemini API key (Google Flow, Gemini speech, and the Gemini brain). No GPU, no model downloads. Each camera is complete on its own keys; with both on the desk the Brain and Voice pills let a Flow film borrow Grok's writer or narrator and the other way round.
 
 **Which camera should I pick?**
 Studio asks you to choose one, and one camera shoots the whole film so every clip carries one look. Pick Grok Imagine when you want exact per-second pricing, 15 s takes, and the fastest drafts. Pick Google Flow when you want Omni Flash's native voices, registered characters, first-and-last-frame shots, Veo 3.1, and the free 1080p finish. The choice can change any time on the Studio page or the Director's Provider pill; a room already rolling keeps its camera.
@@ -251,7 +251,7 @@ To write `studio.diony.local`, `director.diony.local`, and `producer.diony.local
 Not when a Gemini key is on the desk: the script, the master prompt, the likeness audit and the narrator all run on Google, and the header's brain chip says `brain Gemini · gemini-2.5-pro`. Without a Gemini key the Director borrows the xAI key for the script and the narrator when it exists, and the chip says so; with neither, the deterministic template writer drafts and the cut needs the Dialogue style or a narrator command.
 
 **Does it run the same on Windows as on a Mac?**
-Yes. The runtime already speaks each desk's language: the product names go into the hosts file behind one password prompt on a Mac or one User Account Control prompt on Windows, the data directory is `~/Library/Application Support/Diony AI` or `%LOCALAPPDATA%\Diony AI`, Python and ffmpeg are found in each desk's usual homes (Homebrew and the Python.org frameworks; winget, Chocolatey, scoop, `C:\ffmpeg\bin`), and the launchers are `Open Diony AI.command` and `Open Diony AI.bat`. Studio's **This computer** toggle only changes what the product tells you: the keys path, the setup commands, the ffmpeg install line, the launcher name, and the missing-ffmpeg message inside the Director. It defaults to the detected desk.
+Yes. The runtime already speaks each desk's language: the product names go into the hosts file behind one password prompt on a Mac or one User Account Control prompt on Windows, the data directory is `~/Library/Application Support/Diony AI` or `%LOCALAPPDATA%\Diony AI`, ffmpeg ships inside the app for both (a pinned static build per architecture, installed into the data folder on open if a bundle lacks it), Python is found in each desk's usual homes, and the launchers are `Open Diony AI.command` and `Open Diony AI.bat`. Studio's **This computer** toggle only changes what the product tells you: the keys path, the two setup lines, the launcher name, and the wording of a missing-ffmpeg message. It defaults to the detected desk.
 
 **Can I use a local GPU instead of the cloud engines?**
 No. Diony shot on local DGX Spark clusters and leased GPUs until September 2026; that lane was removed from the product on 2026-09-10. The two cameras are Grok Imagine and Google Flow, and the desk needs no GPU at all. The history is in the [changelog](CHANGELOG.md).

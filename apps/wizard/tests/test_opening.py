@@ -124,7 +124,12 @@ def test_the_opening_carries_the_mac_windows_toggle_and_follows_it(monkeypatch) 
     html = client.get("/").text
     assert 'id="platform-seg"' in html
     assert 'data-platform="mac"' in html and 'data-platform="windows"' in html
-    assert "winget install Gyan.FFmpeg" in html and "brew install ffmpeg" in html
+    # ffmpeg comes with Diony: no install line on either desk, one status line
+    assert "winget install Gyan.FFmpeg" not in html and "brew install ffmpeg" not in html
+    assert "comes with Diony" in html and 'id="ffmpeg-line"' in html
+    assert "it installs ffmpeg on open" in html and "ffmpeg = state.ffmpeg || null" in html
+    tools = client.get("/api/opening").json()["ffmpeg"]
+    assert set(tools) == {"ready", "path", "bundled"} and isinstance(tools["ready"], bool)
     assert "Open Diony AI.bat" in html and "Open Diony AI.command" in html
     assert "User Account Control" in html
     assert 'fetch("/api/opening/platform"' in html

@@ -21,6 +21,26 @@ These libraries do not change Diony's proprietary software license. Their own
 license and notice files remain controlling for the upstream components.
 
 ==============================================================================
+FFmpeg (GNU General Public License v3 or later) — bundled media tools
+==============================================================================
+
+Project: FFmpeg — https://ffmpeg.org/
+License: the bundled builds include GPL components (x264 and others) and are
+distributed under the GNU General Public License, version 3 or later.
+Builds:  macOS (arm64, x86_64): static builds by Martin Riedl,
+         https://ffmpeg.martin-riedl.de/ — release 9.0.1
+         Windows (x64): "essentials" builds by Gyan Doshi,
+         https://www.gyan.dev/ffmpeg/builds/ — release 8.1.2
+Pinned:  apps/desk/src/diony_desk/ffmpeg_lock.json (URL and SHA-256 per file)
+
+Diony ships `ffmpeg` and `ffprobe` as separate, unmodified executables beside
+the application and invokes them as external programs; when a build lacks
+them the desk downloads the same pinned files on first open. The FFmpeg
+source corresponding to each build is available from the build sites above
+and from https://ffmpeg.org/download.html. The GPL covers those executables
+only and does not change Diony's proprietary software license.
+
+==============================================================================
 faster-whisper / CTranslate2 (MIT License) — optional Blueprint 24 lane
 ==============================================================================
 

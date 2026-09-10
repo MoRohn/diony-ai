@@ -26,7 +26,7 @@ if [[ -z "$LOCAL_PYTHON" ]] || ! "$LOCAL_PYTHON" -c 'import sys; raise SystemExi
 fi
 
 VERSION="$("$LOCAL_PYTHON" -c 'import json, pathlib; print(json.loads((pathlib.Path("'"$ROOT"'") / "packaging/desktop/version.json").read_text())["version"])')"
-BUILD_RECIPE="macos-development-v3"
+BUILD_RECIPE="macos-development-v4"
 ARCH="$(uname -m)"
 if [[ "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
   echo "Unsupported local Mac architecture: $ARCH" >&2
@@ -82,6 +82,17 @@ INSTALL_PAYLOAD="$BUILD_ROOT/install-payload"
   "$INSTALL_PAYLOAD/apps/producer" "$INSTALL_PAYLOAD/apps/director" \
   "$INSTALL_PAYLOAD/apps/desk"
 
+# ffmpeg comes with Diony: stage the pinned static release for this
+# architecture (cached under ~/.diony-build/ffmpeg, SHA-256 verified) so the
+# app carries ffmpeg and ffprobe beside its executable.
+FFMPEG_KEY="macos-$([[ "$ARCH" == "arm64" ]] && echo arm64 || echo amd64)"
+FFMPEG_STAGE="$BUILD_ROOT/ffmpeg"
+PYTHONPATH="$ROOT/apps/desk/src" "$LOCAL_PYTHON" -m diony_desk.media fetch "$FFMPEG_KEY" "$FFMPEG_STAGE"
+[[ -x "$FFMPEG_STAGE/ffmpeg" && -x "$FFMPEG_STAGE/ffprobe" ]] || {
+  echo "The pinned ffmpeg release did not stage for $FFMPEG_KEY." >&2
+  exit 1
+}
+export DIONY_FFMPEG_BUNDLE_DIR="$FFMPEG_STAGE"
 export DIONY_DESKTOP_PAYLOAD="$PAYLOAD"
 export DIONY_DESKTOP_VERSION="$VERSION"
 export DIONY_MAC_ARCH="$ARCH"
@@ -93,6 +104,17 @@ BUILT_APP="$BUILD_ROOT/dist/Diony.app"
   echo "PyInstaller did not produce an executable Diony.app." >&2
   exit 1
 }
+# PyInstaller lays binaries in Contents/Frameworks (the runtime folder the
+# desk and Producer look in first); older layouts kept them in Contents/MacOS.
+FFMPEG_HOME=""
+for candidate in "$BUILT_APP/Contents/Frameworks" "$BUILT_APP/Contents/MacOS"; do
+  if [[ -x "$candidate/ffmpeg" && -x "$candidate/ffprobe" ]]; then FFMPEG_HOME="$candidate"; break; fi
+done
+[[ -n "$FFMPEG_HOME" ]] || {
+  echo "Diony.app was built without ffmpeg in its runtime folder." >&2
+  exit 1
+}
+"$FFMPEG_HOME/ffmpeg" -version | head -1
 
 BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 BUILD_ID="$(date -u +%Y%m%dT%H%M%SZ)-${PAYLOAD_SHA:0:12}-$ARCH"

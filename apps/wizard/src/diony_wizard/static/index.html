@@ -81,6 +81,8 @@
   .seg button[aria-pressed="true"]{background:var(--grad);color:#0D0D0D}
   .seg button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   .platform .detected{font:500 .7rem/1 "IBM Plex Mono",monospace;color:var(--mut)}
+  .keys .toolline{font:500 .72rem/1.5 "IBM Plex Mono",monospace;color:var(--mut);letter-spacing:.02em;margin:-.2rem 0 .9rem}
+  .keys .toolline.warn{color:var(--accent-ink)}
   .keys [data-platform]{display:none}
   .keys[data-platform="mac"] [data-platform="mac"],.keys[data-platform="windows"] [data-platform="windows"]{display:block}
 </style>
@@ -159,19 +161,18 @@
     </div>
     <details class="keys" id="keys">
       <summary id="keys-title"><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>A key is required</summary>
-      <p>Every shot rolls on a cloud camera you pay for directly, so the Studio needs at least one key before the Director can shoot. Diony never asks for a key in the app: put the lines you have in <code id="keys-path">~/.diony/keys.env</code> and reopen this page.</p>
+      <p>Every shot rolls on a cloud camera you pay for directly, so the Studio needs at least one key before the Director can shoot. Diony never asks for a key in the app: put the lines you have in <code id="keys-path">~/.diony/keys.env</code> and reopen this page. Everything else — ffmpeg included — comes with Diony and is set up when the app opens.</p>
+      <p class="toolline" id="ffmpeg-line">ffmpeg ready — ships with Diony</p>
       <div data-platform="mac">
-        <p><strong>On a Mac</strong> — in Terminal, make the folder and the file, then paste the lines and keep it private. ffmpeg is required for every cut: <code>brew install ffmpeg</code>. First open: double-click <code>Open Diony AI.command</code> (or the built <code>Diony.app</code>); macOS asks for your password once to lay the <code>.diony.local</code> names.</p>
+        <p><strong>On a Mac</strong> — open Terminal, paste these three lines, and put your keys in the file that opens. First open: double-click <code>Open Diony AI.command</code> (or <code>Diony.app</code>); macOS asks for your password once to lay the <code>.diony.local</code> names.</p>
 <pre>mkdir -p ~/.diony &amp;&amp; chmod 700 ~/.diony
 nano ~/.diony/keys.env
-chmod 600 ~/.diony/keys.env
-brew install ffmpeg</pre>
+chmod 600 ~/.diony/keys.env</pre>
       </div>
       <div data-platform="windows">
-        <p><strong>On Windows</strong> — in PowerShell, make the folder, open the file in Notepad, paste the lines and save. ffmpeg is required for every cut: <code>winget install Gyan.FFmpeg</code>, then reopen the app. First open: double-click <code>Open Diony AI.bat</code> (or the installer build); Windows asks once (User Account Control) to lay the <code>.diony.local</code> names.</p>
+        <p><strong>On Windows</strong> — open PowerShell, paste these two lines, and put your keys in the Notepad file that opens, then save. First open: double-click <code>Open Diony AI.bat</code>; Windows asks once (User Account Control) to lay the <code>.diony.local</code> names.</p>
 <pre>New-Item -ItemType Directory -Force $env:USERPROFILE\.diony | Out-Null
-notepad $env:USERPROFILE\.diony\keys.env
-winget install Gyan.FFmpeg</pre>
+notepad $env:USERPROFILE\.diony\keys.env</pre>
       </div>
       <div class="cols houses">
         <section class="house" data-house="grok">
@@ -206,12 +207,24 @@ GEMINI_API_KEY=AIza...</pre>
   let ready = { grok: false, "google-flow": false };
   let platform = { chosen: "mac", detected: "mac", hints: null };
   const keysPath = () => (platform.hints && platform.hints.keys_path) || "~/.diony/keys.env";
+  let ffmpeg = null; // null until the opening answers; the line stays quiet until then
+  function paintFfmpeg() {
+    const line = document.getElementById("ffmpeg-line");
+    if (!ffmpeg) { line.hidden = true; return; }
+    line.hidden = false;
+    const app = platform.chosen === "windows" ? "Diony AI" : "Diony.app";
+    line.textContent = ffmpeg.ready
+      ? "ffmpeg ready — ships with Diony"
+      : `ffmpeg is not on this desk yet — reopen ${app}; it installs ffmpeg on open`;
+    line.className = ffmpeg.ready ? "toolline" : "toolline warn";
+  }
   function paintPlatform() {
     document.querySelectorAll("#platform-seg button").forEach((b) => {
       b.setAttribute("aria-pressed", String(b.dataset.platform === platform.chosen));
     });
     document.getElementById("keys").dataset.platform = platform.chosen;
     document.getElementById("keys-path").textContent = keysPath();
+    paintFfmpeg();
     const detected = document.getElementById("platform-detected");
     detected.textContent =
       platform.detected === platform.chosen
@@ -278,6 +291,7 @@ GEMINI_API_KEY=AIza...</pre>
         house.textContent = "No GEMINI_API_KEY — add one so Gemini writes and narrates.";
         house.className = "house warn";
       }
+      ffmpeg = state.ffmpeg || null;
       if (state.platform) {
         platform = { chosen: state.platform.chosen, detected: state.platform.detected, hints: state.platform.hints };
         paintPlatform();

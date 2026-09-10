@@ -54,6 +54,7 @@ _state: dict = {
     "error": "",
     "diagnostics": "",
     "runtime_mode": ("installed" if bool(getattr(sys, "frozen", False)) else "source-checkout"),
+    "ffmpeg": {},
     "log": [],
 }
 _lock = threading.Lock()
@@ -296,6 +297,7 @@ def diagnostic_snapshot(root: Path | None = None) -> dict:
         "executable": str(Path(sys.executable)),
         "application_root": str(root),
         "data_dir": str(state_root),
+        "ffmpeg": dict(_state.get("ffmpeg") or {}),
         "logs": log_files,
         "services": {
             "wizard_port_open": port_open(WIZARD_PORT),
@@ -335,6 +337,7 @@ def public_state() -> dict:
             "error": _state["error"],
             "diagnostics": _state["diagnostics"],
             "runtime_mode": _state["runtime_mode"],
+            "ffmpeg": dict(_state["ffmpeg"]),
             "log": list(_state["log"][-12:]),
         }
 
@@ -1115,6 +1118,26 @@ def handoff_to_existing_desk(*, timeout: float = 2.0) -> None:
     )
 
 
+def ensure_media_tools(root: Path) -> dict:
+    """ffmpeg comes with Diony: verify the packaged copy, or install the pinned
+    release into the data folder, before any service that cuts a frame starts.
+    Never blocks the open — a miss is reported, not raised."""
+    from diony_desk import media
+
+    try:
+        result = media.ensure_ffmpeg(data_dir=data_dir(root), say=say)
+    except Exception as exc:
+        result = {
+            "ready": False,
+            "source": "missing",
+            "note": f"ffmpeg check failed: {str(exc)[:200]}",
+        }
+    set_state(ffmpeg=result)
+    if not result.get("ready"):
+        say(str(result.get("note") or "ffmpeg is not on this desk."))
+    return result
+
+
 def ensure_running(root: Path) -> None:
     wizard = service_command("wizard", root)
     producer = service_command("producer", root)
@@ -1235,6 +1258,8 @@ def work() -> None:
             say("Install skipped for tests.", phase="ready", title="Dry desk")
             return
         root = configure_runtime_environment(repo_root())
+        say("Preparing ffmpeg.", phase="starting", title="Opening Studio")
+        ensure_media_tools(root)
         if is_frozen():
             ensure_running(root)
             return
