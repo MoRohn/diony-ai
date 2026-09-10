@@ -3,6 +3,7 @@
 import importlib
 import re
 from datetime import UTC
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -27,6 +28,17 @@ def test_status_reports_cloud_engine_and_configured_providers() -> None:
     assert body["providers"]["google-flow"] is True
     assert body["flow_plan"] == "pro"
     assert body["engine_choice"] == "grok"  # the conftest's Studio choice
+
+
+def test_status_names_the_vault_the_director_reads(monkeypatch, tmp_path) -> None:
+    """The desk adopts a Director already on :8790 only when it reads the
+    desk's own vault — a checkout Director beside the packaged app never saw
+    Studio's engine choice, so the console opened on the wrong camera."""
+    from diony_contracts.cluster import cluster_root
+
+    body = _client().get("/api/director/status").json()
+    assert body["vault"] == str(cluster_root().resolve())
+    assert Path(body["vault"]).is_dir()
 
 
 def test_full_guided_loop_persists_the_clip_and_reconciles_the_ledger(

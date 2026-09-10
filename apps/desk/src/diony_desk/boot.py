@@ -681,7 +681,8 @@ def director_in_flight_jobs(host: str = "127.0.0.1", port: int | None = None) ->
     return -1  # unknown — could not confirm idle
 
 
-def director_state_ok(host: str = "127.0.0.1", port: int | None = None) -> bool:
+def director_status(host: str = "127.0.0.1", port: int | None = None) -> dict | None:
+    """The running Director's status payload, or None when nothing healthy answers."""
     dest = DIRECTOR_PORT if port is None else port
     try:
         conn = http.client.HTTPConnection(host, dest, timeout=1.5)
@@ -691,14 +692,57 @@ def director_state_ok(host: str = "127.0.0.1", port: int | None = None) -> bool:
         raw = resp.read()
         conn.close()
     except OSError:
-        return False
+        return None
     if code != 200:
-        return False
+        return None
     try:
         payload = json.loads(raw.decode())
     except (ValueError, UnicodeDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def director_state_ok(host: str = "127.0.0.1", port: int | None = None) -> bool:
+    payload = director_status(host, port)
+    return payload is not None and bool(payload.get("engine"))
+
+
+def expected_vault(root: Path | None = None) -> Path:
+    """The vault this desk's services share — the same rule as
+    ``diony_contracts.cluster.cluster_root`` (the desk is stdlib-only, so the
+    rule lives here too): ``DIONY_VAULT``, then ``DIONY_PRODUCER_VAULT``,
+    then ``/diony/vault`` when it exists, else the checkout's Producer data."""
+    for key in ("DIONY_VAULT", "DIONY_PRODUCER_VAULT"):
+        raw = os.environ.get(key, "").strip()
+        if raw:
+            return Path(raw)
+    shared = Path("/diony/vault")
+    if shared.is_dir():
+        return shared
+    return (root or repo_root()) / "apps" / "producer" / "data"
+
+
+def director_vault_ok(
+    root: Path | None = None, host: str = "127.0.0.1", port: int | None = None
+) -> bool:
+    """A Director counts as this desk's only when it reads the desk's vault.
+
+    Studio writes the engine choice into the desk's vault; a Director on
+    :8790 that reads another vault (a checkout venv Director left running
+    beside the packaged app) never sees that choice, and the console opens
+    on its default camera with the wrong lexicon pills dimmed. A status
+    without a vault (an older build) is stale for the same reason.
+    """
+    payload = director_status(host, port)
+    if payload is None:
         return False
-    return isinstance(payload, dict) and bool(payload.get("engine"))
+    reported = str(payload.get("vault") or "").strip()
+    if not reported:
+        return False
+    try:
+        return Path(reported).resolve() == expected_vault(root).resolve()
+    except OSError:
+        return False
 
 
 def director_ui_stamp(root: Path | None = None) -> str:
@@ -743,7 +787,7 @@ def director_html_ok(
 
 
 def director_is_current(root: Path | None = None) -> bool:
-    return director_state_ok() and director_html_ok(root)
+    return director_state_ok() and director_vault_ok(root) and director_html_ok(root)
 
 
 def listener_pids(port: int) -> list[int]:

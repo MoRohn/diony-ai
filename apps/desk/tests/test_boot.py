@@ -15,8 +15,12 @@ from diony_desk.boot import (
     desk_is_current,
     desk_state_ok,
     diagnostic_snapshot,
+    director_is_current,
+    director_state_ok,
+    director_vault_ok,
     ensure_product_names,
     ensure_running,
+    expected_vault,
     find_python,
     finish_open,
     listener_is_desk,
@@ -698,6 +702,75 @@ def test_producer_state_ok_requires_the_engine_payload(monkeypatch) -> None:
     assert producer_state_ok() is True
 
 
+def _director_conn(monkeypatch, status_body: bytes, html: bytes = b"<html></html>") -> None:
+    class Resp:
+        def __init__(self, body: bytes) -> None:
+            self.status = 200
+            self._body = body
+
+        def read(self, _n: int = 0) -> bytes:
+            return self._body
+
+    class Conn:
+        def __init__(self) -> None:
+            self.requested = ""
+
+        def request(self, _method: str, path: str) -> None:
+            self.requested = path
+
+        def getresponse(self) -> Resp:
+            return Resp(status_body if self.requested.startswith("/api/") else html)
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("diony_desk.boot.http.client.HTTPConnection", lambda *_a, **_k: Conn())
+
+
+def test_director_on_another_vault_is_stale(monkeypatch, tmp_path: Path) -> None:
+    """A checkout venv Director left on :8790 beside the packaged app reads
+    the checkout vault; Studio's engine choice lands in the desk's vault and
+    the console opened on Grok with the Flow pills dimmed. The desk must not
+    adopt it (2026-09-10)."""
+    desk_vault = tmp_path / "Application Support" / "vault"
+    desk_vault.mkdir(parents=True)
+    monkeypatch.setenv("DIONY_VAULT", str(desk_vault))
+    other = tmp_path / "checkout" / "apps" / "producer" / "data"
+    other.mkdir(parents=True)
+    _director_conn(monkeypatch, b'{"engine":"cloud","vault":"%s"}' % str(other).encode())
+    assert director_state_ok() is True
+    assert director_vault_ok(tmp_path) is False
+    assert director_is_current(tmp_path) is False
+
+
+def test_director_on_the_desk_vault_is_current(monkeypatch, tmp_path: Path) -> None:
+    desk_vault = tmp_path / "vault"
+    desk_vault.mkdir()
+    monkeypatch.setenv("DIONY_VAULT", str(desk_vault))
+    _director_conn(monkeypatch, b'{"engine":"cloud","vault":"%s"}' % str(desk_vault).encode())
+    assert director_vault_ok(tmp_path) is True
+    assert director_is_current(tmp_path) is True  # no index.html under tmp_path: stamp check passes
+
+
+def test_director_without_a_vault_in_its_status_is_stale(monkeypatch, tmp_path: Path) -> None:
+    """An older build's status has no vault field; the desk restarts it
+    rather than trusting a Director it cannot place."""
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path))
+    _director_conn(monkeypatch, b'{"engine":"cloud"}')
+    assert director_vault_ok(tmp_path) is False
+
+
+def test_expected_vault_follows_the_cluster_rule(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("DIONY_VAULT", raising=False)
+    monkeypatch.delenv("DIONY_PRODUCER_VAULT", raising=False)
+    monkeypatch.setattr("diony_desk.boot.Path.is_dir", lambda self: False)
+    assert expected_vault(tmp_path) == tmp_path / "apps" / "producer" / "data"
+    monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path / "p"))
+    assert expected_vault(tmp_path) == tmp_path / "p"
+    monkeypatch.setenv("DIONY_VAULT", str(tmp_path / "v"))
+    assert expected_vault(tmp_path) == tmp_path / "v"
+
+
 def test_producer_state_ok_accepts_a_large_payload(monkeypatch) -> None:
     payload = ('{"cloud":true,"note":"' + ("x" * 20000) + '"}').encode()
 
@@ -764,6 +837,8 @@ def test_ensure_running_restarts_unhealthy_wizard(monkeypatch, tmp_path) -> None
     monkeypatch.setattr("diony_desk.boot.finish_open", lambda names_ok=False: None)
     monkeypatch.setattr("diony_desk.boot.listener_is_diony", lambda port: True)
     monkeypatch.setattr("diony_desk.boot.producer_is_current", lambda root=None: True)
+    # the Director probe must not reach a live :8790 on the developer's desk
+    monkeypatch.setattr("diony_desk.boot.director_is_current", lambda root=None: True)
 
     def fake_stop(port: int) -> None:
         stopped.append(port)
@@ -815,6 +890,8 @@ def test_ensure_running_restarts_stale_ui(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("diony_desk.boot.finish_open", lambda names_ok=False: None)
     monkeypatch.setattr("diony_desk.boot.listener_is_diony", lambda port: True)
     monkeypatch.setattr("diony_desk.boot.producer_is_current", lambda root=None: True)
+    # the Director probe must not reach a live :8790 on the developer's desk
+    monkeypatch.setattr("diony_desk.boot.director_is_current", lambda root=None: True)
 
     def fake_stop(port: int) -> None:
         stopped.append(port)

@@ -143,13 +143,18 @@ async def _engine_not_chosen(_request, err: session.EngineNotChosen):
 
 @app.get("/api/director/status")
 def status() -> dict:
-    from diony_contracts.cluster import read_engine_choice
+    from diony_contracts.cluster import cluster_root, read_engine_choice
 
     plane, ctx = _boot()
     boot_info = _STATE.get(str(control_plane_path()), {}).get("boot_info", {})
     return {
         "engine": engine.engine_mode().value,
         "engine_choice": read_engine_choice(),
+        # The vault this Director reads its Studio choice from. The desk
+        # compares it with its own before adopting a Director already on
+        # :8790 — a checkout Director on the packaged desk's port would
+        # otherwise never see the engine Studio wrote.
+        "vault": str(cluster_root().resolve()),
         "in_flight_jobs": session.in_flight_jobs(),
         "boot": boot_info,
         "providers": {"grok": grok.configured(), "google-flow": flow.configured()},
