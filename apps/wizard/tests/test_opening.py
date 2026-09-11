@@ -19,7 +19,7 @@ def test_root_always_serves_the_opening() -> None:
 def test_choosing_a_cloud_engine_points_at_the_director() -> None:
     client = _client()
     body = client.post("/api/opening/engine", json={"engine": "grok"}).json()
-    assert body["next"] == "http://director.diony.local"
+    assert body["next"] == "http://127.0.0.1:8790"
     assert read_engine_choice() == "grok"
     # The opening stays the front door for cloud engines (one-click through).
     assert 'data-diony="studio-opening"' in client.get("/").text
@@ -54,8 +54,8 @@ def test_opening_state_reports_provider_readiness(monkeypatch, tmp_path) -> None
     assert state["providers"]["grok"] is True
     assert state["providers"]["google-flow"] is False
     assert state["providers"]["gemini"] is False
-    assert state["director_url"] == "http://director.diony.local"
-    assert state["producer_url"] == "http://producer.diony.local"
+    assert state["director_url"] == "http://127.0.0.1:8790"
+    assert state["producer_url"] == "http://127.0.0.1:8788"
 
 
 def test_the_opening_offers_exactly_the_two_cameras() -> None:
@@ -86,9 +86,15 @@ def test_the_opening_explains_the_keys_and_names_useapi() -> None:
     assert 'href="https://console.x.ai/"' in html
     assert 'href="https://useapi.net/"' in html
     assert 'href="https://useapi.net/docs/api-google-flow-v1"' in html
+    assert (
+        'href="https://useapi.net/docs/api-google-flow-v1/'
+        'post-google-flow-accounts-captcha-providers"' in html
+    )
     for line in ("XAI_API_KEY=", "USEAPI_TOKEN=", "DIONY_FLOW_EMAIL=", "DIONY_FLOW_PLAN="):
         assert line in html, line
     assert "Google AI plan" in html and "monthly credits" in html
+    assert "300 included captcha solves" in html
+    assert "captcha solver" in html
     # the keys read by camera: each house explains its own keys and carries its own lines
     grok = html.index('data-house="grok"')
     flow = html.index('data-house="google-flow"')
@@ -113,37 +119,21 @@ def test_the_opening_names_the_google_house(monkeypatch, tmp_path) -> None:
     assert "GEMINI_API_KEY=" in html
 
 
-def test_the_opening_carries_the_mac_windows_toggle_and_follows_it(monkeypatch) -> None:
-    from diony_contracts.cluster import read_platform_choice
-
-    client = _client()
-    state = client.get("/api/opening").json()["platform"]
-    assert state["detected"] in {"mac", "windows", "linux"}
-    assert state["chosen"] in {"mac", "windows"}
-    assert state["hints"]["keys_path"] and state["hints"]["ffmpeg_install"]
-    html = client.get("/").text
-    assert 'id="platform-seg"' in html
-    assert 'data-platform="mac"' in html and 'data-platform="windows"' in html
-    # ffmpeg comes with Diony: no install line on either desk, one status line
-    assert "winget install Gyan.FFmpeg" not in html and "brew install ffmpeg" not in html
-    assert "comes with Diony" in html and 'id="ffmpeg-line"' in html
-    assert "it installs ffmpeg on open" in html and "ffmpeg = state.ffmpeg || null" in html
-    tools = client.get("/api/opening").json()["ffmpeg"]
-    assert set(tools) == {"ready", "path", "bundled"} and isinstance(tools["ready"], bool)
-    assert "Open Diony AI.bat" in html and "Open Diony AI.command" in html
-    assert "User Account Control" in html
-    assert 'fetch("/api/opening/platform"' in html
-    chosen = client.post("/api/opening/platform", json={"platform": "windows"}).json()
-    assert chosen["platform"] == "windows"
-    assert (
-        chosen["hints"]["keys_path"].startswith("C:\\Users")
-        and "winget" in chosen["hints"]["ffmpeg_install"]
-    )
-    assert read_platform_choice() == "windows"
-    assert client.get("/api/opening").json()["platform"]["chosen"] == "windows"
-    assert client.post("/api/opening/platform", json={"platform": "amiga"}).status_code == 422
-    back = client.post("/api/opening/platform", json={"platform": "mac"}).json()
-    assert (
-        back["hints"]["keys_path"] == "~/.diony/keys.env"
-        and "brew" in back["hints"]["ffmpeg_install"]
-    )
+def test_the_opening_is_browser_first_and_has_no_desktop_setup_copy() -> None:
+    html = _client().get("/").text
+    assert 'href="http://127.0.0.1:8790" id="director-link"' in html
+    assert 'href="http://127.0.0.1:8788" id="producer-link"' in html
+    assert "start Diony and open Studio in your browser" in html
+    for retired in (
+        'id="platform-seg"',
+        'data-platform="mac"',
+        'data-platform="windows"',
+        'id="ffmpeg-line"',
+        "Diony.app",
+        "Open Diony AI.command",
+        "Open Diony AI.bat",
+        ".diony.local",
+        "User Account Control",
+        'fetch("/api/opening/platform"',
+    ):
+        assert retired not in html, retired

@@ -1,174 +1,93 @@
-Diony AI — first open
+DIONY AI — START HERE
+=====================
 
-Diony makes a film from one line. It writes the script, prices every
-shot, shoots on cloud video models, reviews each clip, cuts the film,
-narrates it, and hands you the master with its receipt.
+Diony runs locally in your web browser and shoots through cloud APIs. It does
+not install a Mac or Windows application and it does not run a local video or
+language model.
 
-You need no GPU. You need one thing: a provider account. ffmpeg comes
-with Diony.
+YOU NEED
+--------
 
+1. Python 3.11 or newer.
+2. ffmpeg and ffprobe on PATH.
+3. At least one camera house:
+   - Grok Imagine: XAI_API_KEY
+   - Google Flow: USEAPI_TOKEN, a linked Google account, and captcha capacity;
+     plus GEMINI_API_KEY for the Google screenwriter and narrator
 
-------------------------------------------------------------------------
-1. Get a provider account (one is enough, two is better)
-------------------------------------------------------------------------
+KEYS
+----
 
-  A. Grok Imagine (xAI)
-       https://console.x.ai/
-       Create an API key. Billing is metered: about $0.14 per second
-       of 720p video on grok-imagine-video-1.5, a few cents per still.
-       The same key powers the narrator voice and the screenwriter.
+Create ~/.diony/keys.env and add only the lines you use:
 
-  B. Google Flow (through useapi.net)
-       1. A Google account on a Google AI plan
-          https://one.google.com/ai  (Plus, Pro, or Ultra)
-          Flow is charged in that plan's monthly credits:
-          Plus 200 · Pro 1,000 · Ultra $99.99 10,000 · Ultra $199.99 25,000
-       2. A useapi.net subscription and token
-          https://useapi.net/  →  Google Flow  →  link your Google account
-       3. Note the email of the linked Google account.
-       4. A Gemini API key from Google AI Studio
-          https://aistudio.google.com/apikey
-          It writes the script and narrates the film, so the Google
-          camera is Google end to end. Billed on its own by Google.
+    XAI_API_KEY=xai-...
+    USEAPI_TOKEN=user:...
+    DIONY_FLOW_EMAIL=you@example.com
+    DIONY_FLOW_PLAN=pro
+    GEMINI_API_KEY=AIza...
 
-  Pick A if you want exact per-second pricing and 15-second takes.
-  Pick B if you want native voices, locked characters, and a free 1080p
-  finish. With both, the Director chooses per shot.
+Keep that file private. Diony reads it but never writes keys.
 
+Google Flow starts with 300 captcha solves included by useapi.net. After they
+are used, configure a solver such as CapSolver on the useapi.net account:
 
-------------------------------------------------------------------------
-2. ffmpeg comes with Diony
-------------------------------------------------------------------------
+    https://useapi.net/docs/api-google-flow-v1/post-google-flow-accounts-captcha-providers
 
-  Nothing to install. The app carries ffmpeg and ffprobe and checks them
-  every time it opens; if a build ever lacks them, the desk installs the
-  pinned release into its data folder on open (one download, verified).
+The CapSolver API key is sent to useapi.net on that page. Do not put it in
+~/.diony/keys.env; Diony only needs USEAPI_TOKEN after the account is linked.
 
-  Only a source checkout brings its own:
-  Mac        brew install ffmpeg
-  Windows    winget install Gyan.FFmpeg
-  Linux      sudo apt install ffmpeg
+RUN
+---
 
-  Diony cuts, mixes, and reviews every film with it.
+Mac or Linux:
 
+    ./open-diony.sh
 
-------------------------------------------------------------------------
-3. Put the keys in one private file
-------------------------------------------------------------------------
+Mac Finder:
 
-Create the folder ~/.diony and inside it a file named keys.env.
-Windows: C:\Users\YOUR_USER\.diony\keys.env
+    Open Diony AI.command
 
-  XAI_API_KEY=xai-...
-  USEAPI_TOKEN=user:...
-  DIONY_FLOW_EMAIL=you@gmail.com
-  DIONY_FLOW_PLAN=pro
-  GEMINI_API_KEY=AIza...
+Windows Explorer:
 
-Only the lines for the accounts you have. DIONY_FLOW_PLAN is one of
-plus, pro, ultra-99, ultra-199 and prices Flow credits in dollars.
+    Open Diony AI.bat
 
-Mac / Linux: chmod 600 ~/.diony/keys.env
+The launcher creates .venv when necessary, starts Studio, Director, and
+Producer, then opens Studio in your browser. Leave its terminal open and press
+Ctrl-C when you want to stop Diony.
 
-Diony reads this file and never writes it. There is no key form in
-the app. Keys never leave this computer except to the provider they
-belong to.
+LOCAL URLS
+----------
 
+    Studio     http://127.0.0.1:8787
+    Director   http://127.0.0.1:8790
+    Producer   http://127.0.0.1:8788
 
-------------------------------------------------------------------------
-4. Open the software (this folder)
-------------------------------------------------------------------------
+No administrator password, hosts-file edit, .diony.local name, installer, or
+desktop bundle is needed.
 
-When the Diony webpage is live, choose Download for Mac or Download
-for Windows, install Diony AI normally, and open the app. The installed
-app includes its own runtime: no Python, pip, Terminal, or source
-folder is required. The steps below are the source-folder path for
-engineers and pre-release systems; they need Python 3.11 or newer
-from https://www.python.org/downloads/
+BEFORE SPENDING
+---------------
 
-  1. Double-click the Open Diony AI file:
-       Mac          Open Diony AI.command
-       Windows      Open Diony AI.bat
-       Linux        open-diony.sh
+After the first launch:
 
-     Open runs the built app when this folder holds one (its runtime
-     and ffmpeg are inside; close the window right away). With no
-     built app yet it runs from source with Python 3.11+ and says so.
+    .venv/bin/diony-director-check
+    .venv/bin/diony-director-check --live
 
-     To build the app once, double-click the Build file for your desk:
-       Mac          Build Diony AI.command   ->  dist/Diony.app
-       Windows      Build Diony AI.bat       ->  dist\Diony AI\Diony AI.exe
-     It builds from this folder and opens the app; later opens need
-     no Python. Rebuild after a change; an unchanged folder is skipped.
+The first command is offline. The second checks provider authentication
+without rolling a clip. Diony still requires camera selection, script lock,
+cast approval when applicable, a visible estimate, and the two-step Run
+confirmation before generation.
 
-  2. If a Mac warning says the file cannot be opened: right-click
-     it, choose Open, then Open.
+At the Cast/BIBLES gate, use "Use your image as anchor" beside a character to
+provide that character's face as a PNG, JPEG, or WebP (up to 10 MB). Diony
+keeps it in the local vault and draws the rest of that character's sheet from
+your image before asking you to approve the face.
 
-  3. A browser page opens. Wait until Continue. Click Continue.
-     That is Studio (http://studio.diony.local). The first open may
-     ask for this computer’s password once — that lays the names
-     studio, director, and producer .diony.local. Approve it. If you
-     cancelled, Continue on the lobby retries.
+If the character already exists in Google Flow, choose "Use existing Flow
+character" on the same BIBLES card and select it from Diony's Flow library;
+you can also paste its Flow character page URL or API reference. Diony verifies
+it against DIONY_FLOW_EMAIL and references that reusable character in compatible
+Flow clips instead of creating a duplicate.
 
-  4. Leave the small Terminal window open until it says you can
-     close it. Closing it during the first setup stops the install.
-
-
-------------------------------------------------------------------------
-5. Make a film
-------------------------------------------------------------------------
-
-  1. Studio shows two cards: Grok Imagine and Google Flow. A green
-     chip means the key was found. Pick the camera and press
-     Continue to the Director. One camera shoots the whole film.
-
-  2. In the Director, describe the film. One line is enough. Set the
-     Duration. Drop reference stills if you have them.
-
-  3. Press Draft script. The script appears in a minute or two.
-     Edit any line. Press Lock script & price the clips. The reply
-     names the exact price. Nothing has rolled.
-
-  4. Approve the faces in the cast dock.
-
-  5. Press Run & Assemble All. Watch the run strip. When it says
-     That’s a wrap, the film is in the Producer Gallery with its
-     receipt, subtitles, edit list, and QC packet.
-
-Your films live in the vault:
-  Mac / Linux    /diony/vault if it exists, else apps/producer/data in this folder
-  Set DIONY_VAULT to choose.
-
-
-------------------------------------------------------------------------
-6. Check the keys before spending
-------------------------------------------------------------------------
-
-From a Terminal in this folder, after the first open:
-
-  .venv/bin/diony-director-check            what was found, no network
-  .venv/bin/diony-director-check --live     free auth probes, both providers
-  .venv/bin/diony-director-check --roll-one grok --yes
-                                            one 1-second clip, about $0.08
-
-Optional, both free:
-  --stage-face-models   downloads the face models Cast Lock measures with
-  --reconnect           re-links a signed-out Google Flow account
-
-
-------------------------------------------------------------------------
-7. If something is wrong
-------------------------------------------------------------------------
-
-  NO KEY / NO TOKEN on a Studio card   the keys.env line is missing or
-                                        the file is in the wrong place
-  Run paused                            the provider’s quota window; it
-                                        resumes itself, nothing was spent
-  A clip was refused                    press Retake — the opening frame
-                                        is redrawn; Skip shot leaves it out
-  “ffmpeg is not on this desk”          reopen the app — it installs
-                                        ffmpeg on open (step 2)
-  The page will not open                the lobby’s Continue retries the
-                                        name setup; the services also
-                                        answer on http://127.0.0.1:8787,
-                                        :8790, and :8788
+Everything generated is downloaded into .diony-vault by default. The receipt,
+subtitles, edit data, assembly map, and QC packet stay with the finished film.

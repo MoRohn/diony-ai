@@ -1,10 +1,10 @@
 """Socket-level offline guard for every Diony test session (Blueprint 24).
 
-Diony is never cloud-by-default and its test suite must prove it. The wall
+Diony's tests are offline by default. The wall
 sits at the socket layer because every client — httpx, requests, urllib,
 vendor SDKs — bottoms out in ``socket.connect``. Loopback and AF_UNIX stay
-open: the service test clients and the Desk port probes
-need them. ``DIONY_ALLOW_NETWORK=1`` lifts the guard for an explicitly live run.
+open for service test clients. ``DIONY_ALLOW_NETWORK=1`` lifts the guard for
+an explicitly live run.
 
 Each package's ``tests/conftest.py`` registers ``network_guard_fixture`` so the
 guard is active whether one package or the whole repository is collected.
@@ -31,9 +31,7 @@ def address_allowed(address) -> bool:
         host = str(address[0])
     except (TypeError, IndexError):
         return False
-    # Diony's product hostnames (studio.diony.local, producer.diony.local) are
-    # loopback names by design (Blueprint 11); they never resolve on the internet.
-    return host in _LOOPBACK or host.startswith("127.") or host.endswith(".diony.local")
+    return host in _LOOPBACK or host.startswith("127.")
 
 
 def _refuse(address) -> None:

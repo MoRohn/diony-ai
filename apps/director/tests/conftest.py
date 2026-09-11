@@ -30,6 +30,10 @@ def director_isolated_vault(tmp_path, monkeypatch):
     monkeypatch.setenv("DIONY_DRY_RUN", "1")
     monkeypatch.setenv("XAI_API_KEY", "test-xai-key")
     monkeypatch.setenv("USEAPI_TOKEN", "test-useapi-token")
+    # A developer's real key may be loaded by the local launcher before
+    # pytest starts. Tests that exercise Gemini opt in explicitly; the rest
+    # must not inherit a paid narrator/brain backend from the host.
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setenv("DIONY_FLOW_PLAN", "pro")
     monkeypatch.delenv("DIONY_RATECARD_DIR", raising=False)
     monkeypatch.delenv("DIONY_ENGINE", raising=False)

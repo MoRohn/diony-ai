@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="/static/app.css?v=p57">
+<link rel="stylesheet" href="/static/app.css?v=p67">
 </head>
 <body>
 
@@ -50,8 +50,8 @@
     <span class="brandsub">DIRECTOR</span>
   </div>
   <nav class="navlinks">
-    <a href="http://studio.diony.local" id="studio-link" title="Configuration and engine selection"><svg class="icon"><use href="#i-gear"/></svg><span>Studio</span></a>
-    <a href="http://producer.diony.local" id="producer-link" title="Production monitoring and the Gallery"><svg class="icon"><use href="#i-play"/></svg><span>Producer</span></a>
+    <a href="http://127.0.0.1:8787" id="studio-link" title="Configuration and engine selection"><svg class="icon"><use href="#i-gear"/></svg><span>Studio</span></a>
+    <a href="http://127.0.0.1:8788" id="producer-link" title="Production monitoring and the Gallery"><svg class="icon"><use href="#i-play"/></svg><span>Producer</span></a>
     <button id="reset" type="button" class="resetbtn" title="Clear the room and start a fresh session — the ledger keeps everything"><svg class="icon"><use href="#i-plus"/></svg><span>New session</span></button>
   </nav>
   <div class="meter" id="meter">
@@ -71,8 +71,23 @@
       <ol class="thread" id="thread" aria-live="polite"></ol>
     </main>
 
-    <footer class="composer">
-      <div class="console">
+    <footer class="composer" id="composer">
+      <div id="composer-resizer" class="composer-resizer" role="separator" aria-label="Resize Director controls" aria-orientation="horizontal" aria-controls="composer-panel" aria-valuemin="20" aria-valuemax="85" aria-valuenow="78" tabindex="0" title="Drag to resize the panes · double-click to reset">
+        <span class="composer-resizer-grip" aria-hidden="true"></span>
+      </div>
+      <div class="composer-divider">
+        <button id="composer-toggle" class="composer-toggle" type="button" aria-expanded="true" aria-controls="composer-panel" title="Collapse the Director controls">
+          <span class="composer-toggle-copy">
+            <span class="composer-toggle-context">Director controls</span>
+            <span class="composer-toggle-detail">Cast, prompt, camera &amp; delivery</span>
+          </span>
+          <span class="composer-toggle-action">
+            <span id="composer-toggle-label">Collapse</span>
+            <svg class="icon" aria-hidden="true"><use href="#i-chev"/></svg>
+          </span>
+        </button>
+      </div>
+      <div class="console" id="composer-panel">
         <div class="castdock" id="castdock" hidden aria-live="polite"></div>
         <div class="runbar" id="runbar" hidden aria-live="polite"></div>
         <div class="entry">
@@ -180,6 +195,6 @@
     </footer>
   </div>
 </div>
-<script src="/static/app.js?v=p57"></script>
+<script src="/static/app.js?v=p67"></script>
 </body>
 </html>

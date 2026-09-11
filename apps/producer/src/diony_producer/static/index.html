@@ -13,7 +13,7 @@
       href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,850&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/app.css?v=p9" />
+    <link rel="stylesheet" href="/static/app.css?v=p15" />
   </head>
   <body data-product-surface="producer" data-active-bay="gallery">
     <header class="mast">
@@ -42,8 +42,8 @@
         <span class="sr">AI</span>
       </p>
       <nav class="surface-links" aria-label="Diony surfaces">
-        <a href="http://director.diony.local" id="director-link" title="Back to the Director">◂ DIRECTOR</a>
-        <a href="http://studio.diony.local" id="studio-surface-link" title="Configuration and engine selection">STUDIO ⚙</a>
+        <a href="http://127.0.0.1:8790" id="director-link" title="Back to the Director">◂ DIRECTOR</a>
+        <a href="http://127.0.0.1:8787" id="studio-surface-link" title="Configuration and engine selection">STUDIO ⚙</a>
       </nav>
     </header>
 
@@ -66,9 +66,10 @@
           <p id="gallery-note" class="hint">Watch, review details, select, download, stitch, or remove a finished clip.</p>
           <div id="gallery-selection" class="gallery-selection" aria-label="Clip selection">
             <button type="button" id="gallery-select-mode" class="word" aria-pressed="false">Select clips</button>
+            <button type="button" id="gallery-select-all" class="word" aria-pressed="false" disabled>Select all</button>
             <p id="gallery-selection-count" aria-live="polite">No clips selected</p>
             <button type="button" id="join-selected" class="word join-selected" disabled>Stitch selected</button>
-            <button type="button" id="download-selected" class="word" disabled>Download selected</button>
+            <button type="button" id="download-selected" class="word" disabled>Download ZIP</button>
             <button type="button" id="delete-selected" class="word film-delete" disabled>Delete selected</button>
             <span id="gallery-actions-note" aria-live="polite"></span>
           </div>
@@ -118,6 +119,6 @@
       </div>
     </dialog>
 
-    <script src="/static/app.js?v=p9"></script>
+    <script src="/static/app.js?v=p15"></script>
   </body>
 </html>

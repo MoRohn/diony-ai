@@ -15,7 +15,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlparse
 
 import httpx
 
@@ -27,6 +27,20 @@ from diony_director.providers import base
 PROVIDER_ID = "google-flow"
 CALL_TIMEOUT_S = 120.0
 UPLOAD_TIMEOUT_S = 300.0
+CAPTCHA_PROVIDER_DOCS = (
+    "https://useapi.net/docs/api-google-flow-v1/"
+    "post-google-flow-accounts-captcha-providers"
+)
+CAPTCHA_PROVIDER_NAMES = (
+    "CapSolver",
+    "AntiCaptcha",
+    "YesCaptcha",
+    "CapMonster",
+    "SolveCaptcha",
+    "2Captcha",
+    "EzCaptcha",
+)
+_MISSING_CAPTCHA_PROVIDER = "no captcha provider api keys configured"
 
 _ASSET_CONTENT_TYPES = {
     ".png": "image/png",
@@ -35,6 +49,35 @@ _ASSET_CONTENT_TYPES = {
     ".webp": "image/webp",
     ".mp4": "video/mp4",
 }
+
+
+def _response_error_text(response: httpx.Response) -> str:
+    """Text used only to classify a provider failure.
+
+    Some test doubles and a few useapi responses expose JSON without a useful
+    ``text`` property, so inspect the small public error fields as well.
+    """
+    parts = [str(getattr(response, "text", "") or "")]
+    try:
+        body = response.json()
+    except (ValueError, TypeError):
+        body = None
+    if isinstance(body, dict):
+        for key in ("error", "message", "detail"):
+            value = body.get(key)
+            if isinstance(value, str):
+                parts.append(value)
+            elif isinstance(value, dict):
+                parts.append(str(value.get("message") or value.get("error") or ""))
+    return " ".join(part for part in parts if part)
+
+
+def captcha_configuration_message() -> str:
+    return (
+        "Google Flow needs a captcha solver: useapi.net has no captcha provider API key "
+        "and its included solves are exhausted. Configure at least one solver at "
+        f"{CAPTCHA_PROVIDER_DOCS}, then press Run again. Nothing was spent."
+    )
 
 
 def _guard(response: httpx.Response, what: str = "request") -> None:
@@ -50,6 +93,14 @@ def _guard(response: httpx.Response, what: str = "request") -> None:
             reason_code=code,
         )
     if response.status_code >= 400:
+        if (
+            response.status_code == 400
+            and _MISSING_CAPTCHA_PROVIDER in _response_error_text(response).casefold()
+        ):
+            # This is an account-wide prerequisite, not a malformed clip. A
+            # distinct error lets the Director stop the wave after one call
+            # and leave every unsent op runnable for the post-setup retry.
+            raise base.CloudAdapterConfigurationError(captcha_configuration_message())
         raise base.CloudAdapterError(
             f"Flow {what} rejected ({response.status_code}): {response.text[:300]}"
         )
@@ -131,6 +182,40 @@ def _post(url: str, *, what: str = "request", **kwargs) -> httpx.Response:
 
 def _get(url: str, *, what: str = "request", **kwargs) -> httpx.Response:
     return paced(lambda: base.get_with_retries(url, what=f"Flow {what}", **kwargs), what=what)
+
+
+def captcha_status() -> dict:
+    """Return masked, account-level captcha capacity without spending.
+
+    useapi supplies 300 included solves to a newly linked Flow account. Once
+    those are gone, at least one third-party provider key must be present.
+    The GET response contains masked keys only; Diony never reads or stores a
+    raw solver secret.
+    """
+    response = _get(
+        f"{api_base()}/accounts/captcha-providers",
+        what="captcha provider probe",
+        headers=_headers(),
+        timeout=CALL_TIMEOUT_S,
+    )
+    _guard(response, "captcha provider probe")
+    body = response.json()
+    if not isinstance(body, dict):
+        raise base.CloudAdapterError(
+            f"Flow captcha provider probe returned an invalid response: {body}"
+        )
+    providers = [name for name in CAPTCHA_PROVIDER_NAMES if body.get(name)]
+    raw_free = body.get("freeCaptchaCredits")
+    free_credits = (
+        max(0, int(raw_free))
+        if isinstance(raw_free, (int, float)) and not isinstance(raw_free, bool)
+        else 0
+    )
+    return {
+        "ready": bool(providers or free_credits),
+        "providers": providers,
+        "free_credits": free_credits,
+    }
 
 
 def submit_handle(
@@ -381,15 +466,89 @@ def _with_markers(op: DirectorOp) -> str:
 MAX_CHARACTER_IMAGES = 2  # POST /characters: imageReference_1..2 ("max two per character")
 
 
+def list_characters() -> list[dict]:
+    """Return the reusable characters owned by the configured Flow account.
+
+    The video endpoint needs the provider's full ``character`` reference;
+    Google Flow's browser URL exposes only ``entityId``.  Listing is therefore
+    the safe bridge between a character the user already made in Flow and the
+    opaque reference the generation API accepts.
+    """
+
+    email = account_email()
+    if not email:
+        raise base.CloudAdapterError(
+            "DIONY_FLOW_EMAIL is not set — Diony cannot look up an existing Flow character"
+        )
+    response = _get(
+        f"{api_base()}/characters",
+        what="character list",
+        params={"email": email},
+        headers=_headers(),
+        timeout=CALL_TIMEOUT_S,
+    )
+    _guard(response, "character list")
+    body = response.json()
+    characters = body.get("characters") or []
+    if not isinstance(characters, list):
+        raise base.CloudAdapterError(f"Flow returned an invalid character list: {body}")
+    return [entry for entry in characters if isinstance(entry, dict)]
+
+
+def _character_lookup_key(value: str) -> str:
+    """Accept a Flow character URL, entity id, or full API character ref."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        raise base.CloudAdapterError("paste a Google Flow character URL or character reference")
+    parsed = urlparse(raw)
+    if parsed.scheme or parsed.netloc:
+        if parsed.scheme not in {"http", "https"} or parsed.netloc.lower() != "flow.google.com":
+            raise base.CloudAdapterError("that is not a Google Flow character URL")
+        parts = [unquote(part) for part in parsed.path.split("/") if part]
+        try:
+            index = parts.index("character")
+            raw = parts[index + 1]
+        except (ValueError, IndexError) as err:
+            raise base.CloudAdapterError(
+                "that Google Flow URL does not identify a character"
+            ) from err
+    return raw.strip()
+
+
+def resolve_character(value: str) -> dict:
+    """Resolve a browser URL/entity id to the full ref required by videos.
+
+    The lookup also proves the character belongs to ``DIONY_FLOW_EMAIL``;
+    arbitrary opaque ids are never accepted on trust and allowed to fail only
+    after a paid clip submission.
+    """
+
+    key = _character_lookup_key(value)
+    for entry in list_characters():
+        entity_id = str(entry.get("entityId") or "").strip()
+        character_ref = str(entry.get("character") or "").strip()
+        if key not in {entity_id, character_ref}:
+            continue
+        if not character_ref:
+            raise base.CloudAdapterError(
+                f"Flow found character {entity_id or key}, but returned no reusable character reference"
+            )
+        return entry
+    raise base.CloudAdapterError(
+        "that character was not found on the Google Flow account configured in Diony"
+    )
+
+
 def register_character(
     name: str, image_media_ids: list[str], *, voice: str = "", notes: str = ""
 ) -> str:
     # /characters dialect (docs, aligned with the /images correction):
     # displayName + imageReference_N (max two), optional personalityNotes and a
-    # system voice preset; synchronous, returns entityId.
+    # system voice preset; synchronous, returns the reusable character ref.
+    # Unlike uploads and generations, this endpoint rejects an ``email`` body
+    # field and infers the account from the scoped image references.
     payload: dict = {"displayName": name}
-    if account_email():
-        payload["email"] = account_email()
     if notes:
         payload["personalityNotes"] = notes[:2000]
     if voice:
@@ -405,11 +564,12 @@ def register_character(
     )
     _guard(response)
     body = response.json()
-    ref = str(
-        body.get("entityId") or body.get("character") or body.get("ref") or body.get("id") or ""
-    )
+    # ``entityId`` is the UUID shown in flow.google.com URLs.  POST /videos
+    # does not accept it: the required value is the full, account-scoped
+    # ``character`` reference returned beside it.
+    ref = str(body.get("character") or body.get("ref") or "")
     if not ref:
-        raise base.CloudAdapterError(f"Flow returned no character ref: {body}")
+        raise base.CloudAdapterError(f"Flow returned no reusable character reference: {body}")
     return ref
 
 

@@ -146,9 +146,12 @@ def references_for(package: ProductionPackage, op: DirectorOp) -> list[str]:
             if still:
                 refs.append(still)
         else:
-            media_id = char.flow_media_ids.get(earlier)
-            if media_id:
-                refs.append(media_id)
+            # A user-supplied anchor starts as a local vault path.  Flow's
+            # adapter uploads local media by content hash at submit time, so
+            # it is just as valid a reference as a generated media id.
+            media = char.flow_media_ids.get(earlier) or char.hero_stills.get(earlier)
+            if media:
+                refs.append(media)
     return refs[:7]
 
 
@@ -267,6 +270,10 @@ def register_still(
     char = package.character(str(bible.get("char_id", "")))
     slot = str(bible.get("slot", ""))
     char.hero_stills[slot] = str(path)
+    if slot == "front":
+        char.anchor_source = "generated"
+        char.anchor_name = ""
+        char.anchor_sha256 = ""
     if str(path) not in char.grok_ref_pack:
         char.grok_ref_pack.append(str(path))
     if media_generation_id:

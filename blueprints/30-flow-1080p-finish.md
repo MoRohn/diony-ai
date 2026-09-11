@@ -13,8 +13,7 @@ Depends on: Blueprints 25/26 (Director pivot), 28 (post-assembly narration), 29 
 Every Director-lane clip is generated at the provider's native raster (720p on
 Omni 1.1 Flash and Veo; 720p on Grok). The quality mandate (Blueprint 10) is
 1080p finish-intent for every deliverable, and the Director has no local
-super-resolution lane — `diony_sr_v1` lives on the signed GPU cluster. Google
-Flow exposes the finish the Director can use: a server-side upscale of a
+super-resolution lane. Google Flow exposes a server-side upscale of a
 Flow-generated video to 720p, 1080p or 4K, by `mediaGenerationId`.
 
 **The finish is one batch option, not a per-clip chore.** The batch bar gained

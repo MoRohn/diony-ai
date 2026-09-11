@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "diony-wizard"
 version = "0.20.0"
-description = "Diony AI Studio — the opening page (engine choice) and the product-name router; the legacy crate-to-system rail at /classic"
+description = "Diony AI Studio — browser-local cloud camera choice and key readiness"
 requires-python = ">=3.11"
 authors = [{ name = "Diony AI" }]
 license = { text = "Proprietary" }

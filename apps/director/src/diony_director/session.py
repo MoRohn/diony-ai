@@ -21,6 +21,7 @@ from diony_contracts.director import (
     DirectorOpType,
 )
 from diony_contracts.production import (
+    CharacterProfile,
     ClipReview,
     ClipUnit,
     LookBible,
@@ -352,6 +353,104 @@ def add_upload(sid: str, *, name: str, data: bytes, role: str = "reference") -> 
     records.append(record)
     persist(sid)
     return record
+
+
+class CharacterAnchorLocked(ValueError):
+    """The cast has already started spending against another face."""
+
+
+def set_character_anchor(
+    sid: str, *, char_id: str, name: str, data: bytes
+) -> tuple[CharacterProfile, list[DirectorOp]]:
+    """Make a user's still the authoritative face at the cast gate.
+
+    The old sheet remains in the vault as spend history, but leaves the live
+    character contract.  Every unspent or completed sheet op for this
+    character is retired, then the derived slots are planned again from the
+    supplied front still.  Work already in flight, or character footage that
+    has started, makes the replacement unsafe and is refused.
+    """
+    package = _PACKAGES.get(sid)
+    if package is None:
+        raise KeyError(f"session {sid} has no locked package")
+    char = package.character(char_id)
+    ext = _sniff_image(data)
+    if not ext:
+        raise ValueError("only PNG, JPEG, or WebP stills can anchor a character")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise ValueError(
+            f"that still is {len(data) / 1e6:.1f}MB — keep character anchors under "
+            f"{MAX_UPLOAD_BYTES // (1024 * 1024)}MB (export a JPEG)"
+        )
+
+    sheet_ops = [
+        op for op in ops_for(sid) if (op.artifact_refs.get("bible") or {}).get("char_id") == char_id
+    ]
+    if any(op.status in {"submitting", "submitted"} for op in sheet_ops):
+        raise CharacterAnchorLocked(
+            f"{char.name}'s sheet is drawing right now — wait for it to land before replacing the anchor"
+        )
+    character_clip_ids = {
+        clip.clip_id
+        for clip in package.clips
+        if any(
+            str(pack.get("char_id") or "") == char_id for pack in clip.continuity.character_packs
+        )
+    }
+    started = [
+        op
+        for op in ops_for(sid)
+        if op.clip_id in character_clip_ids
+        and op.status in {"submitting", "submitted", "completed"}
+    ]
+    if started:
+        raise CharacterAnchorLocked(
+            f"{char.name} is already in filmed footage — start a new session to cast a different face"
+        )
+
+    import hashlib
+    from pathlib import Path
+
+    from diony_contracts.cluster import cluster_root
+    from diony_director import artifacts
+
+    anchor_id = f"anchor-{uuid.uuid4().hex[:10]}"
+    dest = cluster_root() / "director" / sid / "cast" / char_id / f"{anchor_id}{ext}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(data)
+
+    for op in sheet_ops:
+        if op.status in {"proposed", "completed", "failed", "approved"}:
+            op.status = "discarded"
+        batch_targets(sid).discard(op.id)
+
+    char.hero_stills.clear()
+    char.grok_ref_pack.clear()
+    char.flow_media_ids.clear()
+    char.flow_character_ref = ""
+    char.sheet_receipt.clear()
+    char.sheet_retries.clear()
+    char.face_approved = False
+    char.sheet_version += 1
+    for clip in package.clips:
+        for pack in clip.continuity.character_packs:
+            if str(pack.get("char_id") or "") == char_id:
+                pack["sheet_version"] = char.sheet_version
+    char.hero_stills["front"] = str(dest)
+    char.grok_ref_pack.append(str(dest))
+    char.anchor_source = "uploaded"
+    char.anchor_name = Path(name or "character anchor").name[:120] or "character anchor"
+    char.anchor_sha256 = hashlib.sha256(data).hexdigest()
+
+    planned = [
+        op
+        for op in artifacts.plan_sheet_ops(sid, package)
+        if (op.artifact_refs.get("bible") or {}).get("char_id") == char_id
+    ]
+    for op in planned:
+        add_bible_op(sid, op, chain_key=char_id)
+    persist(sid)
+    return char, planned
 
 
 def set_upload_role(sid: str, upload_id: str, role: str) -> dict[str, Any] | None:

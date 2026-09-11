@@ -42,7 +42,6 @@ known-first-party = [
     "diony_director",
     "diony_finish",
     "diony_producer",
-    "diony_wan",
     "diony_wizard",
 ]
 
@@ -56,11 +55,9 @@ docstring-code-format = false
 testpaths = [
     "packages/contracts",
     "apps/wizard",
-    "apps/wan",
-    "apps/finish",
     "apps/producer",
     "apps/director",
-    "apps/desk",
+    "scripts/tests",
 ]
 addopts = "-p no:cacheprovider"
 filterwarnings = [

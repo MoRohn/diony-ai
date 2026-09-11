@@ -283,7 +283,11 @@
     // a reset time); a plain string is any other reason. Either way one
     // bubble per distinct reason — a repeat bumps its counter.
     const h = typeof entry === "string" ? { reason: entry } : (entry || {});
-    const key = h.kind === "quota" ? `quota:${h.provider || ""}:${h.detail || h.reason}` : String(h.reason || "");
+    const key = h.kind === "quota"
+      ? `quota:${h.provider || ""}:${h.detail || h.reason}`
+      : h.kind === "configuration"
+        ? `configuration:${h.provider || ""}:${h.detail || h.reason}`
+        : String(h.reason || "");
     if (lastHeld.el && lastHeld.text === key && lastHeld.el.isConnected) {
       lastHeld.n += 1;
       const count = lastHeld.el.querySelector(".holdcount");
@@ -322,6 +326,27 @@
       const timer = setInterval(paint, 15000);
       holdTimers.add(timer);
       paint();
+    } else if (h.kind === "configuration") {
+      const provider = { "google-flow": "Google Flow", grok: "Grok Imagine" }[h.provider] || "Provider";
+      const affected = Number(h.count || 1);
+      body.innerHTML =
+        `<div class="holdhead"><span class="holdtag">Setup needed</span><span class="holdprovider"></span><span class="holdcount"></span></div>` +
+        `<div class="holdwhy"></div>` +
+        `<div class="holdnote"></div>`;
+      body.querySelector(".holdprovider").textContent = provider;
+      body.querySelector(".holdwhy").textContent = h.detail || h.reason || "";
+      body.querySelector(".holdnote").textContent =
+        `Nothing was spent on the rejected request. ${plural(affected, "unsent operation")} remain ready. ` +
+        "Press Run again after setup.";
+      if (h.help_url) {
+        const help = document.createElement("a");
+        help.className = "linkbtn";
+        help.href = h.help_url;
+        help.target = "_blank";
+        help.rel = "noopener";
+        help.textContent = "CONFIGURE CAPTCHA SOLVER ↗";
+        body.appendChild(help);
+      }
     } else {
       body.innerHTML =
         `<div class="holdhead"><span class="holdtag">Held</span><span class="holdcount"></span></div>` +
@@ -330,6 +355,10 @@
     }
     lastHeld = { text: key, el: li, n: 1 };
     return li;
+  }
+
+  function configurationHold(entries) {
+    return (entries || []).find((h) => h && h.kind === "configuration") || null;
   }
 
   function failedText(body) {
@@ -732,6 +761,7 @@
     deriving: { tag: "Deriving", title: "Deriving the master prompt" },
     priced: { tag: "Priced", title: "Priced and ready to roll" },
     drafting: { tag: "Drafting", title: "Writing the screenplay" },
+    preparing: { tag: "Preparing", title: "Preparing cast and locations" },
     rolling: { tag: "Rolling", title: "Rolling the clips" },
     retaking: { tag: "Retaking", title: "Rolling the retakes" },
     finishing: { tag: "Finishing", title: "Finishing at 1080p" },
@@ -853,18 +883,107 @@
   // A run loop's handle on the strip: begin once, feed every advance tick,
   // end when the loop settles. `ids` fixes the track's order and labels.
   function runTracker(source, ids, labels, base) {
-    let last = countSegments(ids.map((id, i) => ({ status: "proposed", label: labels[i] || `clip ${i + 1}` })));
+    const opts = Object.assign({}, base || {});
+    const preflightCount = Math.min(Number(opts.preflightCount) || 0, ids.length);
+    const initialStatuses = opts.initialStatuses || [];
+    const preflightTitle = opts.preflightTitle || RUN_PHASES.preparing.title;
+    delete opts.preflightCount;
+    delete opts.initialStatuses;
+    delete opts.preflightTitle;
+    let segments = ids.map((id, i) => ({
+      status: initialStatuses[i] || "proposed",
+      label: labels[i] || `clip ${i + 1}`,
+    }));
+    let last = countSegments(segments);
+
+    // Bible stills are prerequisites of the takes in the same paid batch.
+    // While any of them is unsettled, give that leading slice the whole
+    // strip; otherwise 0/N clips looks idle while Flow is actively drawing.
+    const visibleModel = (extra) => {
+      const preflight = segments.slice(0, preflightCount);
+      const preflightOpen = preflight.some((s) => !["completed", "discarded"].includes(s.status));
+      const scope = preflightCount && preflightOpen ? preflight : segments.slice(preflightCount);
+      last = countSegments(scope);
+      if (preflightCount && preflightOpen && last.detail) {
+        last.detail = last.detail.replace(/^rolling /, "drawing ");
+      }
+      return Object.assign(
+        {},
+        opts,
+        last,
+        { phase: "rolling" },
+        preflightCount && preflightOpen
+          ? {
+              phase: "preparing",
+              kind: "bibles",
+              title: preflightTitle,
+              queuedLabel: "Waiting",
+            }
+          : {},
+        extra || {}
+      );
+    };
     return {
-      begin(extra) { runBegin(source, Object.assign({}, base, last, extra || {})); },
+      begin(extra) {
+        const model = visibleModel(extra);
+        runBegin(source, model);
+        return model;
+      },
       tick(counts, extra) {
-        last = countSegments(segmentsFor(ids, labels, counts.ops));
+        segments = segmentsFor(ids, labels, counts.ops);
         const stalled = counts.stalled || [];
-        runUpdate(source, Object.assign(
-          { phase: "rolling", note: stalled.length ? `stalled — ${stalled[0].reason}` : "" },
-          last, extra || {}
+        const model = visibleModel(Object.assign(
+          { note: stalled.length ? `stalled — ${stalled[0].reason}` : "" },
+          extra || {}
         ));
+        runUpdate(source, model);
+        return model;
       },
       end() { runEnd(source); },
+    };
+  }
+
+  function bibleWorkLabel(op, index) {
+    const bible = (op.artifact_refs || {}).bible || {};
+    const slotLabels = {
+      front: "anchor",
+      board: "turnaround board",
+      q34l: "¾ left",
+      q34r: "¾ right",
+      profile: "profile",
+      full: "full body",
+      plate: "location plate",
+    };
+    const rawName = bible.char_id || bible.setting_id || "";
+    const name = String(rawName)
+      .toLowerCase()
+      .split(/[_-]+/)
+      .filter(Boolean)
+      .map((part) => part[0].toUpperCase() + part.slice(1))
+      .join(" ");
+    const slot = slotLabels[bible.slot] || bible.slot || (bible.setting_id ? "location plate" : "still");
+    return name ? `${name} · ${slot}` : `BIBLE asset ${index + 1}`;
+  }
+
+  // Build one ordered status track for a paid batch: live BIBLE work first,
+  // followed by the requested clips. Discarded still ops are stale versions
+  // replaced by an upload/redraw and must never inflate visible progress.
+  function batchTrackerSpec(clipIds, clipLabels, prepOps) {
+    const bibleOps = (prepOps || []).filter((op) => {
+      const bible = (op.artifact_refs || {}).bible || {};
+      return op.status !== "discarded" && (bible.char_id || bible.setting_id);
+    });
+    return {
+      ids: [...bibleOps.map((op) => op.id), ...clipIds],
+      labels: [
+        ...bibleOps.map(bibleWorkLabel),
+        ...clipLabels,
+      ],
+      statuses: [
+        ...bibleOps.map((op) => op.status),
+        ...clipIds.map(() => "proposed"),
+      ],
+      preflightCount: bibleOps.length,
     };
   }
   function modelFromSingle() {
@@ -996,12 +1115,16 @@
     }
 
     if (total) {
+      const isBibles = m.kind === "bibles";
+      const doneLabel = isBibles ? "Ready" : "Printed";
+      const rollingLabel = isBibles ? "Drawing" : "Rolling";
+      const setLabel = isBibles ? "BIBLES" : "the set";
       const track = mk("div", "runtrack" + (total > 60 ? " dense" : ""));
       track.setAttribute("role", "progressbar");
       track.setAttribute("aria-valuemin", "0");
       track.setAttribute("aria-valuemax", String(total));
       track.setAttribute("aria-valuenow", String(printed));
-      track.setAttribute("aria-label", `${printed} of ${total} printed`);
+      track.setAttribute("aria-label", `${printed} of ${total} ${isBibles ? "bible assets ready" : "clips printed"}`);
       m.segments.forEach((s) => {
         const seg = mk("span", `seg ${segClass(s.status)}`);
         seg.title = `${s.label} — ${s.status}`;
@@ -1011,8 +1134,8 @@
 
       const facts = mk("div", "runfacts");
       const pct = Math.round((printed / total) * 100);
-      runFact(facts, "Printed", `${printed} / ${total}`, `${pct}% of the set`, "ok");
-      runFact(facts, "Rolling", m.rolling || 0, m.rolling ? "at the provider now" : "none in flight", m.rolling ? "hot" : "quiet");
+      runFact(facts, doneLabel, `${printed} / ${total}`, `${pct}% of ${setLabel}`, "ok");
+      runFact(facts, rollingLabel, m.rolling || 0, m.rolling ? "at the provider now" : "none in flight", m.rolling ? "hot" : "quiet");
       runFact(facts, m.queuedLabel || "Queued", m.queued || 0, m.queued ? "roll in order" : "", "quiet");
       if (m.failed) runFact(facts, "Failed", m.failed, priced ? "" : "Retry all below, or Skip on the card", "bad");
       if (m.skipped) runFact(facts, "Skipped", m.skipped, "left out of the cut", "quiet");
@@ -1021,8 +1144,8 @@
       runbar.appendChild(facts);
 
       const legend = mk("div", "runlegend");
-      legend.appendChild(mk("span", "done", "printed"));
-      legend.appendChild(mk("span", "rolling", "rolling"));
+      legend.appendChild(mk("span", "done", isBibles ? "ready" : "printed"));
+      legend.appendChild(mk("span", "rolling", isBibles ? "drawing" : "rolling"));
       legend.appendChild(mk("span", "queued", (m.queuedLabel || "queued").toLowerCase()));
       if (m.failed) legend.appendChild(mk("span", "failed", "failed"));
       if (m.skipped) legend.appendChild(mk("span", "skipped", "skipped"));
@@ -1164,11 +1287,11 @@
   }
   function paceText(m) {
     const p = paceInfo(m);
-    return p ? `~${durText(p.per)} / clip` : "measuring…";
+    return p ? `~${durText(p.per)} / ${m.kind === "bibles" ? "asset" : "clip"}` : "measuring…";
   }
   function etaText(m) {
     const p = paceInfo(m);
-    if (!p) return "ETA after the first print";
+    if (!p) return `ETA after the first ${m.kind === "bibles" ? "asset" : "print"}`;
     if (!p.left) return "last one landing";
     return `~${durText(p.remaining)} left`;
   }
@@ -1322,7 +1445,7 @@
     const available = brain.available || {};
     const entries = [];
     if (available.grok) entries.push({ key: "grok", label: "Grok", hint: "grok-4.6 on the xAI key" });
-    if (available.gemini) entries.push({ key: "gemini", label: "Gemini", hint: "gemini-2.5-pro on the Gemini key" });
+    if (available.gemini) entries.push({ key: "gemini", label: "Gemini", hint: "gemini-3.1-pro-preview on the Gemini key" });
     pill.replaceChildren();
     const auto = document.createElement("option");
     auto.value = "auto";
@@ -1459,16 +1582,31 @@
         sessionId = resume.session_id;
         refreshMeter();
         await syncSessionSettings();
-        const bits = [`${resume.completed} printed`];
+        const bits = [`${resume.completed} production steps complete`];
         if (resume.failed) bits.push(`${resume.failed} failed — each has a Retry on the SHOTS tab`);
         if (resume.in_flight) bits.push(`${resume.in_flight} still rolling`);
         addMsg(
           "director",
           `Resuming session ${resume.session_id}: ${bits.join(", ")}. ` +
-            "Retries re-roll at their locked price; assemble from the Production card below when the set is complete. " +
+            "The saved Run & Assemble plan is reconnecting and will continue through the cut. " +
+            "Retries re-roll at their locked price. " +
             "＋ NEW SESSION starts fresh — the ledger keeps everything."
         );
         showProductionCard();
+        // Reconnect the saved Run & Assemble watcher after a browser reload.
+        // The first advance snapshot carries the durable run plan; from
+        // there resumeFromPlan keeps BIBLES, clips, finish and cut moving.
+        try {
+          const counts = await api(`/api/director/sessions/${sessionId}/advance`, { method: "POST" });
+          if (counts.run_plan && counts.run_plan.assemble) {
+            resumeFromPlan(counts.run_plan, counts);
+          }
+        } catch (err) {
+          addMsg(
+            "director",
+            `The saved run is still on the server, but its live status could not reconnect: ${err.message || err}`
+          );
+        }
       } else {
         const created = await api("/api/director/sessions", { method: "POST" });
         sessionId = created.session_id;
@@ -2043,7 +2181,7 @@
     if (plan && plan.assemble && !planResumeActive) resumeFromPlan(plan);
   }
 
-  async function resumeFromPlan(plan) {
+  async function resumeFromPlan(plan, initialCounts = null) {
     planResumeActive = true;
     const withFinish = plan.finish === FINISH_RESOLUTION || !!plan.upscale;
     const li = addMsg(
@@ -2054,10 +2192,28 @@
     progress.className = "progress";
     li.appendChild(progress);
     const planIds = new Set(plan.op_ids || []);
-    const strip = runTracker("plan", plan.op_ids || [], [], {
+    let prepOps = [];
+    try {
+      const locked = await api(`/api/director/sessions/${sessionId}/lock`);
+      prepOps = locked.bible_ops || [];
+    } catch (err) {
+      // The clip watch still resumes if the courtesy BIBLE labels cannot load.
+    }
+    const clipIds = plan.op_ids || [];
+    const tracker = batchTrackerSpec(
+      clipIds,
+      clipIds.map((id, i) => `clip ${i + 1} / ${clipIds.length}`),
+      prepOps
+    );
+    const strip = runTracker("plan", tracker.ids, tracker.labels, {
       title: `Resuming the run${withFinish ? " — finish, then cut" : " — then cut"}`,
+      preflightTitle: "Preparing cast and locations before the clips roll",
+      preflightCount: tracker.preflightCount,
+      initialStatuses: tracker.statuses,
     });
     strip.begin();
+    let blockingConfiguration = configurationHold(initialCounts && initialCounts.held);
+    if (initialCounts) strip.tick(initialCounts);
     const tick = async () => {
       let counts;
       try {
@@ -2068,22 +2224,36 @@
         strip.end();
         return;
       }
-      (counts.held || []).forEach((h) => addHeldMsg(h));
-      strip.tick(counts);
+      const tickHolds = counts.held || [];
+      tickHolds.forEach((h) => addHeldMsg(h));
+      blockingConfiguration = blockingConfiguration || configurationHold(tickHolds);
+      const visible = strip.tick(counts);
       const mine = (counts.ops || []).filter((o) => planIds.has(o.op_id));
       const done = mine.filter((o) => o.status === "completed").length;
       const failed = mine.filter((o) => o.status === "failed").length;
       const pending = mine.filter((o) => o.status === "submitted" || o.status === "submitting").length;
-      progress.textContent =
-        `${done}/${planIds.size} printed · ${failed} failed · ${pending} generating` +
-        ((counts.queued || 0) ? ` · ${counts.queued} queued (chained)` : "");
+      progress.textContent = visible.kind === "bibles"
+        ? `${visible.printed}/${visible.total} BIBLE assets ready` +
+          (visible.rolling ? ` · ${visible.rolling} drawing` : "") +
+          (visible.queued ? ` · ${visible.queued} waiting` : "") +
+          (visible.failed ? ` · ${visible.failed} failed` : "")
+        : `${done}/${planIds.size} clips printed · ${failed} failed · ${pending} generating` +
+          ((counts.queued || 0) ? ` · ${counts.queued} queued (chained)` : "");
       refreshMeter();
+      refreshProduction(); // BIBLE thumbnails and their ready count land live during a resumed run
       if (counts.pending > 0 || (counts.queued || 0) > 0 || counts.submitting) {
         setTimeout(tick, 3000);
         return;
       }
       planResumeActive = false;
       refreshProduction();
+      if (blockingConfiguration) {
+        progress.textContent =
+          `${plural(Number(blockingConfiguration.count || 1), "clip")} held — provider setup needed; ` +
+          "press Run again after setup";
+        strip.end();
+        return;
+      }
       if (failed) {
         progress.textContent += " — the cut waits for the failed clips; each has a Retry on the SHOTS tab";
         strip.end();
@@ -2363,6 +2533,7 @@
               method: "POST",
             });
             (res.held || []).forEach((h) => addHeldMsg(h));
+            let blockingConfiguration = configurationHold(res.held);
             if (!res.targeted.length) {
               addMsg(
                 "director",
@@ -2401,7 +2572,9 @@
                 strip.end();
                 return;
               }
-              (counts.held || []).forEach((h) => addHeldMsg(h));
+              const tickHolds = counts.held || [];
+              tickHolds.forEach((h) => addHeldMsg(h));
+              blockingConfiguration = blockingConfiguration || configurationHold(tickHolds);
               strip.tick(counts, { phase: "retaking" });
               const mine = (counts.ops || []).filter((o) => targeted.has(o.op_id));
               const printed = mine.filter((o) => o.status === "completed").length;
@@ -2421,6 +2594,18 @@
               }
               if (counts.pending > 0 || (counts.queued || 0) > 0 || counts.submitting) {
                 setTimeout(tick, 3000);
+                return;
+              }
+              if (blockingConfiguration) {
+                progress.textContent =
+                  `${plural(Number(blockingConfiguration.count || 1), "retake")} held — provider setup needed; ` +
+                  "press Run again after setup";
+                progress.className = "draft-status failed";
+                retry.disabled = false;
+                anyway.disabled = false;
+                refreshMeter();
+                refreshProduction();
+                strip.end();
                 return;
               }
               if (failed) {
@@ -2501,6 +2686,7 @@
       return false;
     }
     (up.held || []).forEach((h) => addHeldMsg(h));
+    let blockingConfiguration = configurationHold(up.held);
     if (up.skipped && up.skipped.length) {
       addMsg(
         "director",
@@ -2544,7 +2730,9 @@
           resolve(false);
           return;
         }
-        (counts.held || []).forEach((h) => addHeldMsg(h));
+        const tickHolds = counts.held || [];
+        tickHolds.forEach((h) => addHeldMsg(h));
+        blockingConfiguration = blockingConfiguration || configurationHold(tickHolds);
         if (finishIds.length) {
           const byId = new Map((counts.ops || []).map((o) => [o.op_id, o]));
           const labels = finishIds.map((id, i) => {
@@ -2571,6 +2759,12 @@
           return;
         }
         refreshProduction(); // the Production card shows each take's finish chip
+        if (blockingConfiguration) {
+          progress.textContent =
+            `${FINISH_RESOLUTION} finish held — provider setup needed; press Run again after setup`;
+          resolve(false);
+          return;
+        }
         if (failed) {
           addMsg(
             "director",
@@ -2660,12 +2854,17 @@
       allBtn.disabled = true; selBtn.disabled = true; upBtn.disabled = true;
       progress.textContent = "submitting…";
       const labelOf = new Map(ops.map((op, i) => [op.id, op.clip_id || `clip ${i + 1}`]));
-      const strip = runTracker("batch", ids, ids.map((id) => labelOf.get(id)), {
+      const tracker = batchTrackerSpec(ids, ids.map((id) => labelOf.get(id)), bibleOps);
+      const strip = runTracker("batch", tracker.ids, tracker.labels, {
         title: withFinish ? "Rolling the clips, then finish and cut" : "Rolling the clips, then the cut",
+        preflightTitle: "Preparing cast and locations before the clips roll",
+        preflightCount: tracker.preflightCount,
+        initialStatuses: tracker.statuses,
         estMicros: sumFor(ids) + bibleCost + (withFinish ? finishCost(ops) : 0),
       });
       strip.begin();
       let batch;
+      let blockingConfiguration = null;
       try {
         batch = await api(`/api/director/sessions/${sessionId}/run_batch`, {
           method: "POST",
@@ -2683,6 +2882,7 @@
         strip.end();
         return;
       }
+      blockingConfiguration = configurationHold(batch.held);
       ids.forEach((id) => {
         const c = cards.get(id);
         if (c) { c.state.textContent = "queued…"; c.btn.disabled = true; }
@@ -2714,7 +2914,7 @@
       if (batch.held.length) {
         addMsg("director", `${plural(batch.held.length, "clip")} held: ${batch.held[0].reason}`);
       }
-      if (!(batch.queued || 0) && !batch.submitting && !batch.submitted.length) {
+      if (!blockingConfiguration && !(batch.queued || 0) && !batch.submitting && !batch.submitted.length) {
         if (withFinish && batch.skipped) {
           // nothing left to roll (every clip already printed): still finish and cut
           progress.textContent = "every clip already printed";
@@ -2741,14 +2941,24 @@
         const stalled = (counts.stalled || []).length;
         // Hold reasons are drained exactly once — a budget hold or a held
         // scene must reach the room, not vanish into an unread field.
-        (counts.held || []).forEach((h) => addHeldMsg(h));
-        strip.tick(counts);
-        progress.textContent =
-          `${counts.completed} done · ${counts.failed} failed · ${counts.pending} generating` +
-          (queued ? ` · ${queued} queued (chained)` : "") +
+        const tickHolds = counts.held || [];
+        tickHolds.forEach((h) => addHeldMsg(h));
+        blockingConfiguration = blockingConfiguration || configurationHold(tickHolds);
+        const visible = strip.tick(counts);
+        progress.textContent = visible.kind === "bibles"
+          ? `${visible.printed}/${visible.total} BIBLE assets ready` +
+            (visible.rolling ? ` · ${visible.rolling} drawing` : "") +
+            (visible.queued ? ` · ${visible.queued} waiting` : "") +
+            (visible.failed ? ` · ${visible.failed} failed` : "")
+          : `${visible.printed}/${visible.total} clips printed` +
+            (visible.failed ? ` · ${visible.failed} failed` : "") +
+            (visible.rolling ? ` · ${visible.rolling} rolling` : "") +
+            (visible.queued ? ` · ${visible.queued} queued` : "");
+        progress.textContent +=
           ((counts.held || []).length ? ` · ${counts.held.length} held` : "") +
           (stalled ? ` · ${stalled} stalled: ${counts.stalled[0].reason}` : "");
         refreshMeter();
+        refreshProduction(); // uploaded anchors and newly drawn views repaint without a manual refresh
         if (counts.pending > 0 || queued > 0 || counts.submitting) {
           setTimeout(tick, 3000);
           return;
@@ -2777,9 +2987,21 @@
             } else if (body.op.status === "discarded") {
               c.state.textContent = "skipped — the cut leaves this shot out";
               c.state.className = "state skipped";
+            } else if (body.op.status === "proposed" && blockingConfiguration) {
+              c.state.textContent = "held — provider setup needed";
+              c.state.className = "state";
+              if (c.btn) c.btn.disabled = false;
             }
             attachVerdict(c.card, c.state, body.review, id);
           } catch (err) { /* card stays coarse; the film still cuts */ }
+        }
+        if (blockingConfiguration) {
+          progress.textContent =
+            `${plural(Number(blockingConfiguration.count || 1), "clip")} held — provider setup needed`;
+          allBtn.disabled = false;
+          refreshBatchLabels();
+          strip.end();
+          return;
         }
         await cutFilm();
       };
@@ -2963,6 +3185,7 @@
       });
       strip.begin();
       let batch;
+      let blockingConfiguration = null;
       try {
         batch = await api(`/api/director/sessions/${sessionId}/run_batch`, {
           method: "POST",
@@ -2981,6 +3204,7 @@
         strip.end();
         return;
       }
+      blockingConfiguration = configurationHold(batch.held);
       ops.forEach((op) => {
         const c = parts(op.id);
         if (c && !c.card.querySelector("video")) {
@@ -3000,7 +3224,9 @@
           strip.end();
           return;
         }
-        (counts.held || []).forEach((h) => addHeldMsg(h));
+        const tickHolds = counts.held || [];
+        tickHolds.forEach((h) => addHeldMsg(h));
+        blockingConfiguration = blockingConfiguration || configurationHold(tickHolds);
         strip.tick(counts);
         const queued = counts.queued || 0;
         progress.textContent =
@@ -3037,9 +3263,21 @@
             } else if (body.op.status === "discarded") {
               c.state.textContent = "skipped — the cut leaves this shot out";
               c.state.className = "state skipped";
+            } else if (body.op.status === "proposed" && blockingConfiguration) {
+              c.state.textContent = "held — provider setup needed";
+              c.state.className = "state";
+              if (c.btn) c.btn.disabled = false;
             }
             attachVerdict(c.card, c.state, body.review, op.id, { retake: true });
           } catch (err) { /* card stays coarse; the film still cuts */ }
+        }
+        if (blockingConfiguration) {
+          progress.textContent =
+            `${plural(Number(blockingConfiguration.count || 1), "clip")} held — provider setup needed`;
+          allBtn.disabled = false;
+          refreshUpLabel();
+          strip.end();
+          return;
         }
         if (lookHeld.length) {
           // a link that printed but failed its look review holds the chain:
@@ -3305,6 +3543,22 @@
 
   // in flight = money is moving; "proposed" is drafted and waits for a Run
   const IN_FLIGHT = new Set(["submitting", "submitted", "deriving"]);
+  function castViewProgress(b) {
+    const expected = b.cast_lock === "locked"
+      ? ["front", "board"]
+      : ["front", "q34l", "q34r", "profile", "full"];
+    const chars = b.characters || [];
+    const ready = chars.reduce((total, c) => {
+      const have = new Set(c.stills || []);
+      return total + expected.filter((slot) => have.has(slot)).length;
+    }, 0);
+    return {
+      ready,
+      total: chars.length * expected.length,
+      drawing: chars.filter((c) => c.sheet_state === "drawing").length,
+      failed: chars.filter((c) => c.sheet_state === "failed").length,
+    };
+  }
   function productionLive(b) {
     return (b.clips || []).some(
       (c) => IN_FLIGHT.has(c.status) || (c.finish && IN_FLIGHT.has(c.finish.status))
@@ -3357,19 +3611,25 @@
     const note = document.createElement("span");
     note.className = "prodnote";
     const clips = b.clips || [];
+    const castProgress = castViewProgress(b);
+    const castText = castProgress.total && castProgress.ready < castProgress.total
+      ? `BIBLES ${castProgress.ready}/${castProgress.total} character views ready` +
+        (castProgress.drawing ? ` · ${castProgress.drawing} sheets in progress` : "") +
+        (castProgress.failed ? ` · ${castProgress.failed} failed` : "")
+      : "";
     if (clips.length) {
       const printed = clips.filter((c) => c.status === "completed").length;
       const failed = clips.filter((c) => c.status === "failed").length;
       const rolling = clips.filter((c) => IN_FLIGHT.has(c.status)).length;
       const drafted = clips.filter((c) => c.status === "proposed").length;
-      note.textContent =
-        `${printed}/${clips.length} printed` +
+      const clipText = `${printed}/${clips.length} clips printed` +
         (failed ? ` · ${failed} failed` : "") +
         (rolling ? ` · ${rolling} rolling` : "") +
         (drafted ? ` · ${drafted} drafted` : "") +
         (b.film_ready ? " · film cut" : "");
+      note.textContent = castText ? `${castText} · ${clipText}` : clipText;
     } else {
-      note.textContent = b.locked ? "locked" : "not locked yet";
+      note.textContent = castText || (b.locked ? "locked" : "not locked yet");
     }
     head.appendChild(note);
     const refresh = document.createElement("button");
@@ -3415,15 +3675,25 @@
   function castThumbSlot(c) {
     const stills = c.stills || [];
     if (stills.includes("front")) return "front";
-    return stills[0] || "";
+    return stills[0] || (c.flow_registered ? "flow" : "");
+  }
+  function bibleMediaUrl(c, slot) {
+    if (slot === "flow") {
+      const base = `/api/director/sessions/${sessionId}/bible/flow-preview/${encodeURIComponent(c.char_id)}`;
+      return c.flow_preview_token ? `${base}?v=${encodeURIComponent(c.flow_preview_token)}` : base;
+    }
+    const base = `/api/director/sessions/${sessionId}/bible/media/${encodeURIComponent(c.char_id)}/${encodeURIComponent(slot)}`;
+    const token = (c.still_tokens || {})[slot] || (slot === "front" ? c.anchor_sha256 : "");
+    return token ? `${base}?v=${encodeURIComponent(token)}` : base;
   }
   function castStateOf(c) {
     const receipt = c.sheet_receipt || {};
     if (c.face_approved) return { cls: "ok", text: c.sheet || "approved" };
     if (!(c.stills || []).length) {
-      if (c.sheet_state === "failed") return { cls: "bad", text: "sheet failed — Retry it on the Production card" };
-      if (c.sheet_state === "waiting") return { cls: "", text: "sheet waits for Run — the anchor portrait draws first" };
-      return { cls: "drawing", text: "sheet drawing — the anchor portrait first" };
+      const linked = c.flow_registered ? "Flow linked · local review " : "";
+      if (c.sheet_state === "failed") return { cls: "bad", text: `${linked}sheet failed — Retry it on the Production card` };
+      if (c.sheet_state === "waiting") return { cls: c.flow_registered ? "flow" : "", text: `${linked}sheet waits for Run — the anchor portrait draws first` };
+      return { cls: "drawing", text: `${linked}sheet drawing — the anchor portrait first` };
     }
     if (receipt.measured) {
       return { cls: receipt.verified ? "ok" : "bad", text: c.sheet || (receipt.verified ? "sheet coheres" : "sheet does not cohere") };
@@ -3454,6 +3724,159 @@
       btn.disabled = false;
     }
   }
+  function characterAnchorPicker(c, compact = false) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/png,image/jpeg,image/webp";
+    input.hidden = true;
+    const button = mk(
+      "button",
+      compact ? "anchorbtn compact" : "anchorbtn",
+      c.anchor_source === "uploaded" ? (compact ? "Replace image" : "Replace anchor image") : (compact ? "Use image" : "Use your image as anchor")
+    );
+    button.type = "button";
+    button.title = c.anchor_source === "uploaded"
+      ? `Replace ${c.name}'s uploaded anchor; the derived sheet will redraw from the new face`
+      : `Choose a PNG, JPEG, or WebP to define ${c.name}'s exact face`;
+    button.addEventListener("click", () => input.click());
+    input.addEventListener("change", () => {
+      const file = input.files && input.files[0];
+      input.value = "";
+      if (!file) return;
+      if (!/^image\/(png|jpe?g|webp)$/.test(file.type)) {
+        addMsg("director", `${file.name} isn't a PNG, JPEG, or WebP still.`);
+        return;
+      }
+      const reader = new FileReader();
+      button.disabled = true;
+      button.textContent = "uploading…";
+      reader.onerror = () => {
+        addMsg("director", `I couldn't read ${file.name}.`);
+        button.disabled = false;
+        button.textContent = c.anchor_source === "uploaded" ? "Replace anchor image" : "Use your image as anchor";
+      };
+      reader.onload = async () => {
+        const b64 = String(reader.result).split(",", 2)[1] || "";
+        try {
+          const res = await api(
+            `/api/director/sessions/${sessionId}/bible/anchor/${encodeURIComponent(c.char_id)}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name: file.name, data_base64: b64 }),
+            }
+          );
+          addMsg("director", res.reply);
+          refreshProduction();
+        } catch (err) {
+          addMsg("director", `I couldn't anchor ${c.name} to ${file.name}: ${err.message || err}`);
+          button.disabled = false;
+          button.textContent = c.anchor_source === "uploaded" ? "Replace anchor image" : "Use your image as anchor";
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+    const wrap = mk("span", "anchorpicker");
+    wrap.append(button, input);
+    return wrap;
+  }
+  function existingFlowCharacterPicker(c) {
+    const wrap = mk("div", "flowcharpicker");
+    const toggle = mk(
+      "button",
+      "acceptbtn alt",
+      c.flow_registered ? "Change Flow character" : "Use existing Flow character"
+    );
+    toggle.type = "button";
+    toggle.title = "Choose from Diony's Flow library or paste a character URL; Diony verifies the reusable reference against your configured account";
+    const form = mk("div", "flowcharform");
+    form.hidden = true;
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", `Reusable Google Flow character for ${c.name}`);
+    select.appendChild(new Option("Choose from Diony's Flow library…", ""));
+    const input = document.createElement("input");
+    input.type = "text";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.placeholder = "Or paste a Flow character URL, entity ID, or API reference";
+    input.setAttribute("aria-label", `Google Flow character for ${c.name}`);
+    const hint = mk("span", "flowcharhint", "");
+    const link = mk("button", "acceptbtn", "Link character");
+    link.type = "button";
+    const cancel = mk("button", "acceptbtn quiet", "Cancel");
+    cancel.type = "button";
+    toggle.addEventListener("click", async () => {
+      form.hidden = !form.hidden;
+      if (form.hidden) return;
+      if (!select.dataset.loaded) {
+        select.disabled = true;
+        hint.textContent = "checking the Flow library…";
+        try {
+          const library = await api("/api/director/flow/characters");
+          const characters = library.characters || [];
+          characters.forEach((character) => {
+            const details = [
+              `${character.image_count || 0} ref${character.image_count === 1 ? "" : "s"}`,
+              character.voice || "no voice",
+            ].join(" · ");
+            select.appendChild(
+              new Option(`${character.display_name} — ${details}`, character.reference)
+            );
+          });
+          hint.textContent = characters.length
+            ? "Choose the provider character for this scripted role."
+            : "No relay-visible Flow characters yet; paste a full API reference or use Register on Flow.";
+          select.dataset.loaded = "true";
+        } catch (err) {
+          hint.textContent = `Flow library unavailable: ${err.message || err}`;
+        } finally {
+          select.disabled = false;
+        }
+      }
+      (select.options.length > 1 ? select : input).focus();
+    });
+    select.addEventListener("change", () => {
+      if (select.value) input.value = select.value;
+    });
+    cancel.addEventListener("click", () => {
+      form.hidden = true;
+      select.value = "";
+      input.value = "";
+    });
+    link.addEventListener("click", async () => {
+      const reference = input.value.trim();
+      if (!reference) {
+        input.focus();
+        return;
+      }
+      link.disabled = true;
+      link.textContent = "checking…";
+      try {
+        const res = await api(
+          `/api/director/sessions/${sessionId}/bible/flow_character/${encodeURIComponent(c.char_id)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reference }),
+          }
+        );
+        addMsg("director", res.reply);
+        refreshProduction();
+      } catch (err) {
+        addMsg("director", `I couldn't link ${c.name} to that Flow character: ${err.message || err}`);
+        link.disabled = false;
+        link.textContent = "Link character";
+        input.focus();
+      }
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") link.click();
+      if (event.key === "Escape") cancel.click();
+    });
+    form.append(select, input, link, cancel, hint);
+    wrap.append(toggle, form);
+    return wrap;
+  }
   function paintCastDock(b) {
     if (!castdock) return;
     const chars = (b && b.characters) || [];
@@ -3466,24 +3889,28 @@
     }
     const ready = pending.filter((c) => (c.stills || []).length);
     const drawing = pending.filter((c) => !(c.stills || []).length && c.sheet_state !== "waiting");
+    const linked = chars.filter((c) => c.flow_registered);
     // nothing to act on and nothing moving: one quiet line, no rows — the
     // console keeps its room until the sheets start landing
-    const quiet = !ready.length && !drawing.length;
+    const quiet = !ready.length && !drawing.length && !linked.length;
     castdock.replaceChildren();
     castdock.classList.toggle("settled", !ready.length);
     castdock.classList.toggle("quiet", quiet);
     const head = mk("div", "casthead");
     head.appendChild(mk("span", "bhead", "CAST"));
     const n = pending.length;
+    const castStatus = ready.length
+      ? `${ready.length} face${ready.length === 1 ? "" : "s"} to approve`
+      : quiet
+        ? `${n} sheet${n === 1 ? "" : "s"} wait for Run — faces come here to be approved`
+        : drawing.length
+          ? `${drawing.length} sheet${drawing.length === 1 ? "" : "s"} drawing`
+          : `${n} local review sheet${n === 1 ? "" : "s"} wait for Run`;
     head.appendChild(
       mk(
         "span",
         "castcount",
-        ready.length
-          ? `${ready.length} face${ready.length === 1 ? "" : "s"} to approve`
-          : quiet
-            ? `${n} sheet${n === 1 ? "" : "s"} wait for Run — faces come here to be approved`
-            : `${drawing.length} sheet${drawing.length === 1 ? "" : "s"} drawing`
+        castStatus + (linked.length ? ` · ${linked.length} Flow linked` : "")
       )
     );
     if (ready.length > 1) {
@@ -3524,17 +3951,24 @@
       const slot = castThumbSlot(c);
       if (slot) {
         const img = document.createElement("img");
-        img.className = "castthumb";
-        img.alt = `${c.name} ${slot}`;
-        img.src = `/api/director/sessions/${sessionId}/bible/media/${encodeURIComponent(c.char_id)}/${encodeURIComponent(slot)}`;
+        img.className = "castthumb" + (slot === "flow" ? " flow" : "");
+        img.alt = slot === "flow" ? `${c.name} linked Flow character preview` : `${c.name} ${slot}`;
+        img.src = bibleMediaUrl(c, slot);
         // a still that cannot be read never shows a broken-image glyph
-        img.addEventListener("error", () => img.replaceWith(mk("span", "castthumb empty", "…")), { once: true });
+        img.addEventListener(
+          "error",
+          () => img.replaceWith(mk("span", `castthumb empty${c.flow_registered ? " flow" : ""}`, c.flow_registered ? "FLOW" : "…")),
+          { once: true }
+        );
         row.appendChild(img);
       } else {
-        row.appendChild(mk("span", "castthumb empty", "…"));
+        row.appendChild(mk("span", `castthumb empty${c.flow_registered ? " flow" : ""}`, c.flow_registered ? "FLOW" : "…"));
       }
       const name = mk("div", "castname");
-      name.appendChild(mk("b", "", c.name));
+      const nameLine = mk("span", "castnameline");
+      nameLine.appendChild(mk("b", "", c.name));
+      if (c.flow_registered) nameLine.appendChild(mk("span", "flowbadge", "FLOW ✓"));
+      name.appendChild(nameLine);
       if (c.role) name.appendChild(mk("span", "bt", c.role));
       row.appendChild(name);
       const state = castStateOf(c);
@@ -3542,6 +3976,7 @@
       st.title = state.text;
       row.appendChild(st);
       const acts = mk("div", "castacts");
+      acts.appendChild(characterAnchorPicker(c, true));
       if (c.face_approved) {
         acts.appendChild(mk("span", "bok", "FACE ✓"));
       } else {
@@ -3549,7 +3984,9 @@
         btn.type = "button";
         if (!(c.stills || []).length) {
           btn.disabled = true;
-          btn.title = "Waits for the anchor still to land";
+          btn.title = c.flow_registered
+            ? "Flow is linked; Run still prepares Diony's local review sheet before face approval"
+            : "Waits for the anchor still to land";
         } else {
           btn.title = `Approve ${c.name}'s face — frozen at this sheet for every clip`;
           btn.addEventListener("click", () => approveFace(c, btn));
@@ -3835,8 +4272,8 @@
         `<div class="bstills">${orderedSlots(c.stills)
           .map((s) => {
             const failed = (receipt.failed || []).includes(s);
-            const label = SLOT_LABELS[s] || s;
-            return `<span class="bstill${failed ? " bad" : ""}${s === "board" ? " board" : ""}" data-slot="${esc(s)}"><img src="/api/director/sessions/${sessionId}/bible/media/${encodeURIComponent(c.char_id)}/${encodeURIComponent(s)}" alt="${esc(c.name)} ${esc(label)}" title="${esc(label)}${failed ? " — reads as another person" : ""}"><span class="bslot">${esc(label)}${failed ? " ✕" : ""}</span></span>`;
+            const label = s === "front" && c.anchor_source === "uploaded" ? "anchor · yours" : (SLOT_LABELS[s] || s);
+            return `<span class="bstill${failed ? " bad" : ""}${s === "board" ? " board" : ""}" data-slot="${esc(s)}"><img src="${esc(bibleMediaUrl(c, s))}" alt="${esc(c.name)} ${esc(label)}" title="${esc(label)}${failed ? " — reads as another person" : ""}"><span class="bslot">${esc(label)}${failed ? " ✕" : ""}</span></span>`;
           })
           .join("")}</div>`;
       if (b.locked && c.stills.length) {
@@ -3865,6 +4302,17 @@
           });
           box.appendChild(redraw);
         });
+      }
+      if (b.locked) {
+        card.appendChild(characterAnchorPicker(c));
+        if (c.anchor_source === "uploaded" && c.anchor_name) {
+          const source = mk("span", "anchorname", c.anchor_name);
+          source.title = c.anchor_sha256 ? `Saved locally · SHA-256 ${c.anchor_sha256}` : "Saved locally";
+          card.appendChild(source);
+        }
+        if ($("provider").value === "google-flow") {
+          card.appendChild(existingFlowCharacterPicker(c));
+        }
       }
       if (b.locked && !c.flow_registered && c.stills.length && b.cast_lock === "locked") {
         const reg = document.createElement("button");
@@ -4152,7 +4600,117 @@
   });
   // Dropping anywhere outside a drop zone must never navigate away to the file.
   ["dragover", "drop"].forEach((t) => window.addEventListener(t, (ev) => ev.preventDefault()));
-  const composerEl = document.querySelector(".composer");
+  const composerEl = $("composer");
+  const composerToggle = $("composer-toggle");
+  const composerToggleLabel = $("composer-toggle-label");
+  const composerResizer = $("composer-resizer");
+  const roomEl = composerEl.closest(".room");
+  const COMPOSER_COLLAPSE_KEY = "diony:director-controls-collapsed";
+  const COMPOSER_HEIGHT_KEY = "diony:director-controls-height-ratio";
+  const COMPOSER_MIN_PX = 190;
+  const STAGE_MIN_PX = 160;
+  let composerHeightRatio = null;
+  let composerResizeDrag = null;
+  function setComposerCollapsed(collapsed, remember = true) {
+    composerEl.classList.toggle("collapsed", collapsed);
+    composerToggle.setAttribute("aria-expanded", String(!collapsed));
+    composerToggleLabel.textContent = collapsed ? "Expand" : "Collapse";
+    composerToggle.title = collapsed ? "Expand the Director controls" : "Collapse the Director controls";
+    if (remember) {
+      try { localStorage.setItem(COMPOSER_COLLAPSE_KEY, collapsed ? "1" : "0"); } catch (err) { /* storage is optional */ }
+    }
+  }
+  function composerHeightBounds() {
+    const roomHeight = Math.max(1, roomEl.getBoundingClientRect().height);
+    const min = Math.min(COMPOSER_MIN_PX, Math.max(96, roomHeight - STAGE_MIN_PX));
+    const max = Math.max(min, roomHeight - STAGE_MIN_PX);
+    return { roomHeight, min, max };
+  }
+  function syncComposerResizerAria(height, bounds = composerHeightBounds()) {
+    const representedHeight = Math.min(bounds.max, Math.max(bounds.min, height));
+    const percent = Math.round((representedHeight / bounds.roomHeight) * 100);
+    composerResizer.setAttribute("aria-valuemin", String(Math.round((bounds.min / bounds.roomHeight) * 100)));
+    composerResizer.setAttribute("aria-valuemax", String(Math.round((bounds.max / bounds.roomHeight) * 100)));
+    composerResizer.setAttribute("aria-valuenow", String(percent));
+    composerResizer.setAttribute("aria-valuetext", `Director controls use ${percent}% of the workspace`);
+  }
+  function setComposerHeight(height, remember = false) {
+    const bounds = composerHeightBounds();
+    const clamped = Math.round(Math.min(bounds.max, Math.max(bounds.min, height)));
+    composerHeightRatio = clamped / bounds.roomHeight;
+    composerEl.style.setProperty("--composer-height", `${clamped}px`);
+    composerEl.classList.add("user-sized");
+    syncComposerResizerAria(clamped, bounds);
+    if (remember) {
+      try { localStorage.setItem(COMPOSER_HEIGHT_KEY, String(composerHeightRatio)); } catch (err) { /* storage is optional */ }
+    }
+    return clamped;
+  }
+  function resetComposerHeight() {
+    composerHeightRatio = null;
+    composerEl.classList.remove("user-sized");
+    composerEl.style.removeProperty("--composer-height");
+    try { localStorage.removeItem(COMPOSER_HEIGHT_KEY); } catch (err) { /* storage is optional */ }
+    requestAnimationFrame(() => syncComposerResizerAria(composerEl.getBoundingClientRect().height));
+  }
+  try { setComposerCollapsed(localStorage.getItem(COMPOSER_COLLAPSE_KEY) === "1", false); } catch (err) { setComposerCollapsed(false, false); }
+  try {
+    const storedRatio = Number.parseFloat(localStorage.getItem(COMPOSER_HEIGHT_KEY) || "");
+    if (Number.isFinite(storedRatio) && storedRatio > 0 && storedRatio < 1) composerHeightRatio = storedRatio;
+  } catch (err) { /* storage is optional */ }
+  requestAnimationFrame(() => {
+    if (composerHeightRatio !== null) setComposerHeight(composerHeightBounds().roomHeight * composerHeightRatio);
+    else syncComposerResizerAria(composerEl.getBoundingClientRect().height);
+  });
+  composerToggle.addEventListener("click", () => setComposerCollapsed(!composerEl.classList.contains("collapsed")));
+  composerResizer.addEventListener("pointerdown", (event) => {
+    if (!event.isPrimary || event.button !== 0) return;
+    if (composerEl.classList.contains("collapsed")) setComposerCollapsed(false);
+    composerResizeDrag = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startHeight: composerEl.getBoundingClientRect().height,
+    };
+    composerEl.classList.add("resizing");
+    document.body.classList.add("resizing-composer");
+    composerResizer.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  composerResizer.addEventListener("pointermove", (event) => {
+    if (!composerResizeDrag || event.pointerId !== composerResizeDrag.pointerId) return;
+    setComposerHeight(composerResizeDrag.startHeight + composerResizeDrag.startY - event.clientY);
+  });
+  function finishComposerResize(event, remember) {
+    if (!composerResizeDrag || event.pointerId !== composerResizeDrag.pointerId) return;
+    composerResizeDrag = null;
+    composerEl.classList.remove("resizing");
+    document.body.classList.remove("resizing-composer");
+    if (composerResizer.hasPointerCapture(event.pointerId)) composerResizer.releasePointerCapture(event.pointerId);
+    if (remember && composerHeightRatio !== null) {
+      try { localStorage.setItem(COMPOSER_HEIGHT_KEY, String(composerHeightRatio)); } catch (err) { /* storage is optional */ }
+    }
+  }
+  composerResizer.addEventListener("pointerup", (event) => finishComposerResize(event, true));
+  composerResizer.addEventListener("pointercancel", (event) => finishComposerResize(event, false));
+  composerResizer.addEventListener("lostpointercapture", (event) => finishComposerResize(event, true));
+  composerResizer.addEventListener("dblclick", resetComposerHeight);
+  composerResizer.addEventListener("keydown", (event) => {
+    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    if (composerEl.classList.contains("collapsed")) setComposerCollapsed(false);
+    const bounds = composerHeightBounds();
+    const current = composerEl.getBoundingClientRect().height;
+    const next = event.key === "Home"
+      ? bounds.min
+      : event.key === "End"
+        ? bounds.max
+        : current + (event.key === "ArrowUp" ? 32 : -32);
+    setComposerHeight(next, true);
+    event.preventDefault();
+  });
+  window.addEventListener("resize", () => {
+    if (composerHeightRatio !== null) setComposerHeight(composerHeightBounds().roomHeight * composerHeightRatio);
+    else syncComposerResizerAria(composerEl.getBoundingClientRect().height);
+  });
   ["dragenter", "dragover"].forEach((t) =>
     composerEl.addEventListener(t, (ev) => {
       ev.preventDefault();

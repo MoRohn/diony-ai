@@ -26,5 +26,5 @@ Numbered operational constitution for Diony AI. Coding agents: implement these; 
 | 10 | [10-quality-mandate.md](10-quality-mandate.md) | The quality constitution: reject-and-retake, no previz as master |
 | 15 | [15-creative-design-system.md](15-creative-design-system.md) | The bar-mark brand, type, motion, accessibility, surface density |
 | 16 | [16-launch-control-plane.md](16-launch-control-plane.md) | Durable workflows, the cost ledger, providers, BYOK secrets — the plumbing under the Director's receipts (the Studio governance UI it once fronted is gone) |
-| 17 | [17-desktop-distribution.md](17-desktop-distribution.md) | Self-contained Mac/Windows install, startup, signing, downloads |
+| 17 | [17-desktop-distribution.md](17-desktop-distribution.md) | Lightweight browser-local runtime, launch supervision, loopback URLs, host dependencies |
 | 24 | [24-montage-intelligence.md](24-montage-intelligence.md) | Rundown variety review, prompt lint, sampled-frame QC, decision log, look and chain colour match, final review, subtitle sidecars, the offline test guard |

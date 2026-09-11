@@ -12,17 +12,7 @@ venv/
 .mypy_cache/
 .ruff_cache/
 build/
-
-# Desktop builds: the current local app is committed as dist/Diony.app (a link
-# into dist/builds/<build-id>/) with dist/build.json and dist/current-build.txt,
-# so a clone holds a runnable Diony.app. Older builds and the signed release
-# artifacts (dist/desktop/<version>/) stay local. dist/builds/.gitignore, written
-# by the local build scripts, names the one build directory that is kept.
-dist/*
-!dist/Diony.app
-!dist/build.json
-!dist/current-build.txt
-!dist/builds/
+dist/
 
 # Node (if frontends grow a bundler later)
 node_modules/
@@ -40,8 +30,6 @@ Thumbs.db
 # Local cluster / secrets / weights
 infra/local/
 *.pem
-# the public CA bundle inside the packaged app is not a secret
-!**/certifi/cacert.pem
 *.key
 secrets/
 models/

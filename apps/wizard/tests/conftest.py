@@ -6,6 +6,9 @@ def isolated_vault(tmp_path, monkeypatch):
     monkeypatch.setenv("DIONY_VAULT", str(tmp_path))
     monkeypatch.setenv("DIONY_PRODUCER_VAULT", str(tmp_path))
     monkeypatch.setenv("DIONY_DRY_RUN", "1")
+    # Provider-readiness tests set their own keys. Never let a key loaded by
+    # the developer's launcher make an offline test report Gemini as ready.
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     yield
 
 

@@ -235,11 +235,13 @@ def identity_refs(char: CharacterProfile) -> list[str]:
 
 
 def flow_character_media(char: CharacterProfile) -> list[str]:
-    """The two Flow-hosted stills a character object is built from (the
-    endpoint's documented maximum is two): the anchor face, then the board."""
+    """The two stills a Flow character object is built from (the endpoint's
+    documented maximum is two): the anchor face, then the board.  Generated
+    stills use their hosted ids; a user anchor remains a local path until the
+    adapter uploads it by content hash."""
     ordered: list[str] = []
     for slot in ("front", BOARD_SLOT):
-        media = char.flow_media_ids.get(slot)
+        media = char.flow_media_ids.get(slot) or char.hero_stills.get(slot)
         if media and media not in ordered:
             ordered.append(media)
     for media in char.flow_media_ids.values():

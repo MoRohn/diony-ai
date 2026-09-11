@@ -518,10 +518,19 @@ def test_the_header_meter_reads_in_the_routes_currency() -> None:
 def test_the_console_and_its_api_are_never_browser_cached() -> None:
     """A console index cached across a desktop rebuild showed the previous UI."""
     client = _client()
-    for path in ("/", "/api/director/status", "/static/app.js?v=p54"):
+    for path in ("/", "/api/director/status", "/static/app.js?v=p67"):
         res = client.get(path)
         assert res.status_code == 200, path
         assert res.headers["cache-control"] == "no-store, max-age=0", path
+
+
+def test_the_console_stops_a_run_on_provider_configuration_holds() -> None:
+    static = Path(app_module.__file__).resolve().parent / "static"
+    js = (static / "app.js").read_text()
+    assert 'h.kind === "configuration"' in js
+    assert "configurationHold" in js
+    assert "provider setup needed" in js
+    assert "Press Run again after setup" in js
 
 
 def test_the_console_starts_at_zero_duration_and_refuses_a_run_without_one() -> None:

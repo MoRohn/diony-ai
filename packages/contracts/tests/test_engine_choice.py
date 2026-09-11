@@ -96,3 +96,27 @@ def test_a_windows_desk_is_detected_from_the_interpreter(monkeypatch) -> None:
     assert cluster.detected_platform() == "mac"
     monkeypatch.setattr(cluster.sys, "platform", "linux")
     assert cluster.detected_platform() == "linux"
+
+
+def test_browser_surfaces_default_to_loopback_and_follow_port_overrides(monkeypatch) -> None:
+    from diony_contracts import cluster
+
+    for name in ("STUDIO", "DIRECTOR", "PRODUCER"):
+        monkeypatch.delenv(f"DIONY_{name}_URL", raising=False)
+        monkeypatch.delenv(f"DIONY_{name}_PORT", raising=False)
+    assert cluster.surface_urls() == {
+        "studio": "http://127.0.0.1:8787",
+        "director": "http://127.0.0.1:8790",
+        "producer": "http://127.0.0.1:8788",
+    }
+    monkeypatch.setenv("DIONY_DIRECTOR_PORT", "9790")
+    assert cluster.surface_url("director") == "http://127.0.0.1:9790"
+
+
+def test_browser_surface_url_can_be_published_explicitly(monkeypatch) -> None:
+    from diony_contracts import cluster
+
+    monkeypatch.setenv("DIONY_STUDIO_URL", "https://studio.example.test/base/")
+    assert cluster.surface_url("studio") == "https://studio.example.test/base"
+    with pytest.raises(ValueError):
+        cluster.surface_url("unknown")

@@ -107,6 +107,13 @@ class CharacterProfile(BaseModel):
     role: str = ""
     sheet_version: int = Field(default=1, ge=1)
     hero_stills: dict[str, str] = Field(default_factory=dict)
+    # The front still is the face every derived board, keyframe, and video
+    # reference follows.  It may be drawn by the selected image lane or
+    # supplied directly by the user at the cast gate.  Name + digest make a
+    # user anchor auditable without turning it into a film-wide upload.
+    anchor_source: Literal["generated", "uploaded"] = "generated"
+    anchor_name: str = ""
+    anchor_sha256: str = ""
     # Blueprint 32: the locked identity contract (None = the pre-32 prose
     # block), the measured self-consistency of the sheet (slot → cosine vs
     # the front still; empty = unmeasured), and how many times each slot

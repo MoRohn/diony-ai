@@ -15,7 +15,7 @@ def _client() -> TestClient:
 def test_engine_state_reports_cloud_by_default() -> None:
     body = _client().get("/api/engine").json()
     assert body["cloud"] is True
-    assert body["director_url"] == "http://director.diony.local"
+    assert body["director_url"] == "http://127.0.0.1:8790"
 
 
 def test_engine_state_reports_legacy_when_flagged(monkeypatch) -> None:
@@ -50,9 +50,8 @@ def test_empty_vault_lists_no_films() -> None:
 
 def test_producer_masthead_links_back_to_the_director() -> None:
     html = _client().get("/").text
-    assert 'id="director-link"' in html
-    assert "director.diony.local" in html
-    assert 'id="studio-surface-link"' in html
+    assert 'href="http://127.0.0.1:8790" id="director-link"' in html
+    assert 'href="http://127.0.0.1:8787" id="studio-surface-link"' in html
 
 
 def test_cloud_production_reports_director_runs() -> None:

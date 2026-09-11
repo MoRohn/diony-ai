@@ -6,11 +6,11 @@ Copy for the storefront's **Product info** form (call to action, summary, additi
 
 `I want this!`
 
-(Keep the store's default. It matches a one-time purchase of a desktop app; "Buy this" reads colder and "Pay" reads like an invoice.)
+(Keep the store's default. It matches access to the local web application; "Buy this" reads colder and "Pay" reads like an invoice.)
 
 ## Summary
 
-Diony AI is a desktop film studio for Mac and Windows that shoots on cloud video models. Type one line; the Director writes the script, prices every shot before anything rolls, films the clips on Grok Imagine or Google Flow, reviews each print, cuts and narrates the film, and hands you the master with subtitles, an edit list, a QC packet, and the receipt. No GPU. Your own provider keys, never uploaded anywhere but the provider you chose. Every clip and film lands in a vault on your machine the moment it exists.
+Diony AI is a browser-local film studio that shoots on cloud video models. Type one line; the Director writes the script, prices every shot before anything rolls, films the clips on Grok Imagine or Google Flow, reviews each print, cuts and narrates the film, and hands you the master with subtitles, an edit list, a QC packet, and the receipt. No GPU or local model. Your own provider keys, sent only to the provider you chose. Every clip and film lands in a vault on your machine the moment it exists.
 
 ## Additional details
 
@@ -32,5 +32,5 @@ Reviewed, assembled with fades and a room-tone floor, loudness-locked, and narra
 **Your keys, your vault, your machine**
 Bring an xAI key, or a useapi.net token with a Gemini key. Keys stay in one file on your desk. Media is downloaded and content-hashed the moment it completes; provider links are never stored.
 
-**Ready on Mac and Windows**
-ffmpeg and the runtime come inside the app. Open it, put your keys in one file, choose a camera, and press Continue. No Python, no terminal, no package manager.
+**Lightweight on Mac, Windows, and Linux**
+Install Python 3.11+ and ffmpeg once, run the source launcher, and use Diony in your normal browser. There is no application bundle, installer, administrator prompt, GPU service, or local model runtime.

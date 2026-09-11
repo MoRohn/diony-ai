@@ -3,8 +3,7 @@
 Studio does one job on the cloud product (Blueprint 25): it lets the user
 choose the production engine (Director's choice, Grok Imagine, Google Flow),
 shows whether each provider key is loaded, and hands the user on to the
-Director. The `:80` product-name router that lays `studio`, `director`, and
-`producer` `.diony.local` lives beside it in `gateway.py`.
+Director. All three surfaces are ordinary loopback web services.
 """
 
 from __future__ import annotations
@@ -24,13 +23,12 @@ from diony_contracts.cluster import (
     platform_hints,
     read_engine_choice,
     read_platform_choice,
+    surface_url,
     write_engine_choice,
     write_platform_choice,
 )
 
 STATIC = Path(__file__).resolve().parent / "static"
-DIRECTOR_URL = "http://director.diony.local"
-PRODUCER_URL = "http://producer.diony.local"
 NO_STORE = {"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"}
 
 app = FastAPI(title="Diony Studio", version="0.20.0")
@@ -93,8 +91,8 @@ def opening_state() -> dict:
             "gemini": bool(os.environ.get("GEMINI_API_KEY", "").strip()),
         },
         "flow_plan": os.environ.get("DIONY_FLOW_PLAN", "pro").strip() or "pro",
-        "director_url": DIRECTOR_URL,
-        "producer_url": PRODUCER_URL,
+        "director_url": surface_url("director"),
+        "producer_url": surface_url("producer"),
         "platform": {
             "detected": detected_platform(),
             "chosen": read_platform_choice(),
@@ -125,7 +123,7 @@ def choose_engine(body: EngineChoiceBody) -> dict:
         write_engine_choice(body.engine)
     except ValueError as err:
         raise HTTPException(status_code=422, detail=str(err)) from err
-    return {"engine": body.engine, "next": DIRECTOR_URL}
+    return {"engine": body.engine, "next": surface_url("director")}
 
 
 @app.get("/api/health")
@@ -135,16 +133,8 @@ def health() -> dict:
 
 
 def main() -> None:
-    import sys
-
     import uvicorn
 
-    from diony_wizard.gateway import ensure_product_urls, gateway_healthy, start_product_gateway
-
-    start_product_gateway()
-    skip = os.environ.get("DIONY_NAMES_SKIP", "").strip().lower() in {"1", "true", "yes"}
-    if not skip and sys.stdin.isatty() and not gateway_healthy():
-        ensure_product_urls()
     reload_flag = os.environ.get("DIONY_WIZARD_RELOAD", "").strip().lower()
     reload = reload_flag in {"1", "true", "yes"}
     extra: dict = {"reload": reload, "log_level": "info"}

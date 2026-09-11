@@ -29,12 +29,15 @@ def test_the_grok_camera_thinks_on_grok_and_the_flow_camera_on_gemini(monkeypatc
 
     write_engine_choice("google-flow")
     target = brain.resolve()
-    assert target.provider == "gemini" and target.model == "gemini-2.5-pro"
+    assert target.provider == "gemini" and target.model == "gemini-3.1-pro-preview"
     assert target.url == "https://generativelanguage.googleapis.com/v1beta/openai"
     assert target.endpoint.endswith("/v1beta/openai/chat/completions"), "no /v1 on Gemini's shape"
     assert screenwriter.chat_completions_url() == target.endpoint
     assert screenwriter._brain_headers() == {"Authorization": "Bearer test-gemini-key"}
-    assert screenwriter.brain_url() == target.url and screenwriter.brain_model() == "gemini-2.5-pro"
+    assert (
+        screenwriter.brain_url() == target.url
+        and screenwriter.brain_model() == "gemini-3.1-pro-preview"
+    )
 
 
 def test_a_missing_house_key_borrows_the_other_and_says_so(monkeypatch) -> None:
@@ -71,7 +74,7 @@ def test_a_named_brain_needs_its_key_and_the_explicit_url_still_wins(monkeypatch
     )
     monkeypatch.setenv("GEMINI_API_KEY", "g")
     target = brain.resolve()
-    assert target.provider == "custom" and target.model == "gemini-2.5-pro"
+    assert target.provider == "custom" and target.model == "gemini-3.1-pro-preview"
     assert target.endpoint.endswith("/openai/chat/completions") and target.key == "g"
     monkeypatch.setenv("DIONY_DIRECTOR_BRAIN_URL", "https://api.x.ai")
     assert brain.resolve().endpoint == "https://api.x.ai/v1/chat/completions"
@@ -95,6 +98,14 @@ def test_the_brain_endpoint_reports_and_sets_the_choice(monkeypatch) -> None:
     refused = client.post("/api/director/brain", json={"brain": "gemini"})
     assert refused.status_code == 409 and "GEMINI_API_KEY" in refused.text
     assert client.post("/api/director/brain", json={"brain": "auto"}).json()["provider"] == "grok"
+
+
+def test_the_retired_gemini_default_is_migrated_but_other_overrides_survive(monkeypatch) -> None:
+    for retired in ("gemini-2.5-pro", "models/gemini-2.5-pro"):
+        monkeypatch.setenv("DIONY_GEMINI_BRAIN_MODEL", retired)
+        assert brain.gemini_model() == "gemini-3.1-pro-preview"
+    monkeypatch.setenv("DIONY_GEMINI_BRAIN_MODEL", "gemini-3.6-flash")
+    assert brain.gemini_model() == "gemini-3.6-flash"
 
 
 def test_the_console_carries_the_brain_pill_and_the_houses() -> None:

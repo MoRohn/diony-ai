@@ -21,6 +21,8 @@ let watchGalleryId = null;
 let gallerySelection = [];
 let gallerySelectMode = false;
 let gallerySelectionAnchor = null;
+let galleryArchiveBusy = false;
+let galleryExpandedPrompts = new Set();
 
 function costLabel(micros) {
   return `$${((micros || 0) / 1e6).toFixed(2)}`;
@@ -39,7 +41,10 @@ function galleryFileSize(bytes) {
   const value = Number(bytes || 0);
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10240 ? 1 : 0)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  if (value < 1024 * 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  }
+  return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
 function galleryDetailsIcon() {
@@ -120,7 +125,7 @@ async function copyGalleryPrompt(prompt, button, promptField) {
     promptField.setSelectionRange(0, promptField.value.length);
     if (feedback) {
       feedback.classList.add("is-error");
-      feedback.textContent = "Copy was blocked. The prompt is selected—press Command-C on Mac or Ctrl-C on Windows.";
+      feedback.textContent = "Copy was blocked. The prompt is selected—use your browser's copy shortcut.";
     }
     return;
   }
@@ -188,7 +193,8 @@ function galleryThumbnail(item) {
     setTextNode(frame, "span", "Preview unavailable");
   }, { once: true });
   frame.appendChild(image);
-  setTextNode(frame, "span", item.kind === "film" ? "FILM" : (item.resolution || "clip").toUpperCase(), "gallery-resolution");
+  const resolution = String(item.resolution || "clip").trim().replace(/p$/i, "p");
+  setTextNode(frame, "span", item.kind === "film" ? "FILM" : resolution, "gallery-resolution");
   return frame;
 }
 
@@ -197,39 +203,68 @@ function selectedGalleryItems() {
   return gallerySelection.map((id) => byId.get(id)).filter(Boolean);
 }
 
+function disarmGalleryDelete() {
+  const remove = document.getElementById("delete-selected");
+  if (!remove || remove.dataset.armed !== "1") return;
+  remove.dataset.armed = "";
+  remove.classList.remove("armed");
+  remove.textContent = remove.dataset.restLabel || "Delete selected";
+}
+
 function renderGallerySelection() {
   const mode = document.getElementById("gallery-select-mode");
+  const selectAll = document.getElementById("gallery-select-all");
   const count = document.getElementById("gallery-selection-count");
   const join = document.getElementById("join-selected");
   const download = document.getElementById("download-selected");
   const remove = document.getElementById("delete-selected");
+  const playable = (gallery?.items || []).filter((item) => item.playable);
+  const everyItemSelected = playable.length > 0 && playable.every((item) => gallerySelection.includes(item.id));
   if (mode) {
+    mode.disabled = galleryArchiveBusy;
     mode.setAttribute("aria-pressed", String(gallerySelectMode));
     mode.textContent = gallerySelectMode ? "Done selecting" : "Select clips";
   }
+  if (selectAll) {
+    selectAll.disabled = playable.length === 0 || galleryArchiveBusy;
+    selectAll.setAttribute("aria-pressed", String(everyItemSelected));
+    selectAll.textContent = everyItemSelected ? "Clear all" : "Select all";
+  }
   if (count) {
-    count.textContent = gallerySelection.length
-      ? `${gallerySelection.length} selected · order ${gallerySelection.map((_, index) => index + 1).join(" → ")}`
-      : "No clips selected";
+    if (!gallerySelection.length) {
+      count.textContent = "No clips selected";
+    } else if (everyItemSelected) {
+      count.textContent = `${gallerySelection.length} selected · all finished items`;
+    } else if (gallerySelection.length > 12) {
+      count.textContent = `${gallerySelection.length} selected · gallery order`;
+    } else {
+      count.textContent = `${gallerySelection.length} selected · order ${gallerySelection.map((_, index) => index + 1).join(" → ")}`;
+    }
   }
   if (join) {
-    join.disabled = gallerySelection.length < 2;
+    join.disabled = gallerySelection.length < 2 || galleryArchiveBusy;
     join.textContent = gallerySelection.length >= 2 ? `Stitch selected (${gallerySelection.length})` : "Stitch selected";
   }
   if (download) {
-    download.disabled = gallerySelection.length === 0;
-    download.textContent = gallerySelection.length ? `Download selected (${gallerySelection.length})` : "Download selected";
+    download.disabled = gallerySelection.length === 0 || galleryArchiveBusy;
+    download.textContent = galleryArchiveBusy
+      ? "Building ZIP…"
+      : gallerySelection.length
+        ? `Download ZIP (${gallerySelection.length})`
+        : "Download ZIP";
   }
   if (remove && remove.dataset.armed !== "1") {
-    remove.disabled = gallerySelection.length === 0;
+    remove.disabled = gallerySelection.length === 0 || galleryArchiveBusy;
     remove.textContent = gallerySelection.length ? `Delete selected (${gallerySelection.length})` : "Delete selected";
   }
 }
 
 function toggleGallerySelection(clipId, options = {}) {
+  if (galleryArchiveBusy) return;
   const items = (gallery?.items || []).filter((item) => item.playable);
   const currentIndex = items.findIndex((item) => item.id === clipId);
   if (currentIndex < 0) return;
+  disarmGalleryDelete();
   if (options.shift && gallerySelectionAnchor) {
     const anchorIndex = items.findIndex((item) => item.id === gallerySelectionAnchor);
     if (anchorIndex >= 0) {
@@ -268,13 +303,17 @@ function closeGalleryViewer() {
   renderGallery();
 }
 
-function itemMeta(item) {
-  const parts = [item.plate];
+function itemFacts(item) {
+  const parts = [];
   if (item.duration_s) parts.push(durationLabel(item.duration_s));
   if (item.bytes) parts.push(galleryFileSize(item.bytes));
   if (item.kind === "film") parts.push(`${costLabel(item.spent_usd_micros)} spent`);
   else if (item.estimate_usd_micros) parts.push(`${costLabel(item.estimate_usd_micros)} est.`);
-  return parts.filter(Boolean).join(" · ");
+  return parts.filter(Boolean);
+}
+
+function itemMeta(item) {
+  return [item.plate, ...itemFacts(item)].filter(Boolean).join(" · ");
 }
 
 function openGalleryViewer(item) {
@@ -427,19 +466,84 @@ function closeGalleryDetails() {
 
 async function removeGalleryItems(items) {
   const note = document.getElementById("gallery-actions-note");
-  let removed = 0;
-  for (const item of items) {
-    try {
-      await responseJson(await fetch(item.remove_url, { method: "DELETE" }));
-      removed += 1;
-      if (watchGalleryId === item.id) closeGalleryViewer();
-    } catch (error) {
-      if (note) note.textContent = `Delete failed: ${error.message}`;
-    }
+  if (galleryArchiveBusy) {
+    if (note) note.textContent = "Wait for the ZIP to finish before deleting its source clips.";
+    return;
   }
-  gallerySelection = gallerySelection.filter((id) => !items.some((item) => item.id === id));
+  const ids = items.map((item) => item.id);
+  if (!ids.length) return;
+  if (note) note.textContent = `Deleting ${ids.length} item${ids.length === 1 ? "" : "s"}…`;
+  let body;
+  try {
+    body = await responseJson(await fetch("/api/gallery/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: ids }),
+    }));
+  } catch (error) {
+    if (note) note.textContent = `Delete failed: ${error.message}`;
+    renderGallerySelection();
+    return;
+  }
+  if (watchGalleryId && ids.includes(watchGalleryId)) closeGalleryViewer();
+  gallerySelection = gallerySelection.filter((id) => !ids.includes(id));
   await loadGallery();
-  if (note && removed) note.textContent = `${removed} removed — the ledger keeps every receipt`;
+  const removed = body.removed?.length || 0;
+  const missing = body.missing?.length || 0;
+  if (note) {
+    note.textContent = removed
+      ? `${removed} removed${missing ? ` · ${missing} already gone` : ""} — the ledger keeps every receipt`
+      : `${missing} selected item${missing === 1 ? " was" : "s were"} already gone`;
+  }
+}
+
+function galleryPause(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function startGalleryArchiveDownload(status) {
+  const anchor = document.createElement("a");
+  anchor.href = status.download_url;
+  anchor.download = status.filename || "diony-finished-clips.zip";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+}
+
+async function downloadGalleryArchive() {
+  const ids = [...gallerySelection];
+  if (!ids.length || galleryArchiveBusy) return;
+  const note = document.getElementById("gallery-actions-note");
+  disarmGalleryDelete();
+  galleryArchiveBusy = true;
+  renderGallerySelection();
+  if (note) note.textContent = `Preparing one ZIP for ${ids.length} item${ids.length === 1 ? "" : "s"}…`;
+  try {
+    let status = await responseJson(await fetch("/api/gallery/archive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: ids }),
+    }));
+    const deadline = Date.now() + 10 * 60 * 1000;
+    while (status.state === "queued" || status.state === "building") {
+      if (Date.now() >= deadline) throw new Error("The ZIP is still building. Try Download ZIP again in a moment.");
+      if (note) note.textContent = `Packing ${status.completed || 0} of ${status.count} into one ZIP…`;
+      await galleryPause(650);
+      status = await responseJson(await fetch(status.status_url, { cache: "no-store" }));
+    }
+    if (status.state !== "ready" || !status.download_url) {
+      throw new Error(status.failure || "The ZIP could not be built.");
+    }
+    startGalleryArchiveDownload(status);
+    if (note) {
+      note.textContent = `${status.count} file${status.count === 1 ? "" : "s"} packed · ${galleryFileSize(status.archive_bytes)} ZIP download started`;
+    }
+  } catch (error) {
+    if (note) note.textContent = `ZIP download failed: ${error.message}`;
+  } finally {
+    galleryArchiveBusy = false;
+    renderGallerySelection();
+  }
 }
 
 function renderGallery() {
@@ -465,10 +569,14 @@ function renderGallery() {
     return;
   }
   gallerySelection = gallerySelection.filter((id) => items.some((item) => item.id === id));
-  items.forEach((item) => {
+  galleryExpandedPrompts = new Set(
+    [...galleryExpandedPrompts].filter((id) => items.some((item) => item.id === id)),
+  );
+  items.forEach((item, cardIndex) => {
     const selectedIndex = gallerySelection.indexOf(item.id);
+    const promptExpanded = galleryExpandedPrompts.has(item.id);
     const card = document.createElement("article");
-    card.className = `gallery-card${item.id === watchGalleryId ? " on" : ""}${selectedIndex >= 0 ? " selected" : ""}`;
+    card.className = `gallery-card${item.id === watchGalleryId ? " on" : ""}${selectedIndex >= 0 ? " selected" : ""}${promptExpanded ? " prompt-open" : ""}`;
     card.dataset.gallery = item.id;
     card.setAttribute("role", "listitem");
     const watch = document.createElement("button");
@@ -476,18 +584,6 @@ function renderGallery() {
     watch.className = "gallery-watch";
     watch.setAttribute("aria-label", `Watch ${item.title}`);
     watch.appendChild(galleryThumbnail(item));
-    const copy = document.createElement("div");
-    copy.className = "gallery-card-copy";
-    setTextNode(copy, "em", item.kind === "film" ? `Film · ${item.session}` : item.plate);
-    setTextNode(copy, "span", item.kind === "film" ? "Idea" : "Prompt", "gallery-prompt-label");
-    setTextNode(
-      copy,
-      "strong",
-      String(item.prompt || item.title).trim() || "No prompt recorded.",
-      "gallery-prompt-description",
-    );
-    setTextNode(copy, "small", itemMeta(item));
-    watch.appendChild(copy);
     watch.addEventListener("click", (event) => {
       if (gallerySelectMode || event.metaKey || event.ctrlKey || event.shiftKey) {
         toggleGallerySelection(item.id, { shift: event.shiftKey });
@@ -500,16 +596,69 @@ function renderGallery() {
     select.type = "button";
     select.className = "gallery-select-cue";
     select.setAttribute("aria-pressed", String(selectedIndex >= 0));
-    select.setAttribute("aria-label", selectedIndex >= 0 ? `Remove ${item.title} from the selection` : `Select ${item.title}`);
-    select.textContent = selectedIndex >= 0 ? String(selectedIndex + 1) : "+";
+    select.setAttribute(
+      "aria-label",
+      selectedIndex >= 0
+        ? `Selected ${selectedIndex + 1}. Remove ${item.title} from the selection`
+        : `Select ${item.title}`,
+    );
+    select.textContent = "";
     select.addEventListener("click", (event) => toggleGallerySelection(item.id, { shift: event.shiftKey }));
     card.appendChild(select);
+
+    const copy = document.createElement("div");
+    copy.className = "gallery-card-copy";
+    setTextNode(
+      copy,
+      "p",
+      item.kind === "film" ? `Film · ${item.session}` : item.plate,
+      "gallery-card-source",
+    );
+    setTextNode(copy, "p", itemFacts(item).join(" · "), "gallery-card-facts");
+
+    const promptId = `gallery-card-prompt-${cardIndex}`;
+    const promptToggle = document.createElement("button");
+    promptToggle.type = "button";
+    promptToggle.className = "gallery-prompt-toggle";
+    promptToggle.setAttribute("aria-controls", promptId);
+    promptToggle.setAttribute("aria-expanded", String(promptExpanded));
+    promptToggle.setAttribute(
+      "aria-label",
+      `${promptExpanded ? "Collapse" : "Expand"} ${item.kind === "film" ? "idea" : "prompt"} for ${item.title}`,
+    );
+    setTextNode(promptToggle, "span", item.kind === "film" ? "Idea" : "Prompt", "gallery-prompt-label");
+    setTextNode(promptToggle, "span", promptExpanded ? "−" : "+", "gallery-prompt-toggle-symbol");
+    copy.appendChild(promptToggle);
+
+    const promptDescription = document.createElement("p");
+    promptDescription.id = promptId;
+    promptDescription.className = "gallery-prompt-description";
+    promptDescription.textContent = String(item.prompt || item.title).trim() || "No prompt recorded.";
+    promptDescription.hidden = !promptExpanded;
+    copy.appendChild(promptDescription);
+
+    promptToggle.addEventListener("click", () => {
+      const expanded = promptToggle.getAttribute("aria-expanded") !== "true";
+      if (expanded) galleryExpandedPrompts.add(item.id);
+      else galleryExpandedPrompts.delete(item.id);
+      card.classList.toggle("prompt-open", expanded);
+      promptToggle.setAttribute("aria-expanded", String(expanded));
+      promptToggle.setAttribute(
+        "aria-label",
+        `${expanded ? "Collapse" : "Expand"} ${item.kind === "film" ? "idea" : "prompt"} for ${item.title}`,
+      );
+      promptToggle.querySelector(".gallery-prompt-toggle-symbol").textContent = expanded ? "−" : "+";
+      promptDescription.hidden = !expanded;
+    });
+    card.appendChild(copy);
 
     const actions = document.createElement("div");
     actions.className = "gallery-card-actions";
     const watchAction = document.createElement("button");
     watchAction.type = "button";
-    watchAction.textContent = "Watch";
+    watchAction.textContent = "▶";
+    watchAction.setAttribute("aria-label", `Watch ${item.title}`);
+    watchAction.setAttribute("title", "Watch");
     watchAction.addEventListener("click", () => openGalleryViewer(item));
     actions.appendChild(watchAction);
 
@@ -517,13 +666,16 @@ function renderGallery() {
     details.type = "button";
     details.className = "gallery-details-action";
     details.setAttribute("aria-label", `View the prompt and references for ${item.title}`);
-    details.append(galleryDetailsIcon(), document.createTextNode("Details"));
+    details.setAttribute("title", "Details");
+    details.appendChild(galleryDetailsIcon());
     details.addEventListener("click", () => openGalleryDetails(item));
     actions.appendChild(details);
 
     const fullscreen = document.createElement("button");
     fullscreen.type = "button";
-    fullscreen.textContent = "Full screen";
+    fullscreen.textContent = "⛶";
+    fullscreen.setAttribute("aria-label", `Watch ${item.title} full screen`);
+    fullscreen.setAttribute("title", "Full screen");
     fullscreen.addEventListener("click", () => {
       openGalleryViewer(item);
       requestGalleryFullscreen();
@@ -533,15 +685,18 @@ function renderGallery() {
     const download = document.createElement("a");
     download.href = item.download_url;
     download.download = "";
-    download.textContent = "Download";
+    download.textContent = "↓";
     download.setAttribute("aria-label", `Download ${item.title}`);
+    download.setAttribute("title", "Download");
     actions.appendChild(download);
 
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "gallery-delete";
-    remove.textContent = "Delete";
-    remove.addEventListener("click", () => armConfirm(remove, "Confirm delete", () => removeGalleryItems([item])));
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `Delete media for ${item.title}`);
+    remove.setAttribute("title", "Delete media");
+    remove.addEventListener("click", () => armConfirm(remove, "Sure?", () => removeGalleryItems([item])));
     actions.appendChild(remove);
     card.appendChild(actions);
     grid.appendChild(card);
@@ -576,7 +731,16 @@ function watchGallery() {
 function bootGalleryActions() {
   document.getElementById("gallery-select-mode")?.addEventListener("click", () => {
     gallerySelectMode = !gallerySelectMode;
-    if (!gallerySelectMode) gallerySelection = [];
+    renderGallery();
+  });
+  document.getElementById("gallery-select-all")?.addEventListener("click", () => {
+    const ids = (gallery?.items || []).filter((item) => item.playable).map((item) => item.id);
+    if (!ids.length) return;
+    disarmGalleryDelete();
+    const everyItemSelected = ids.every((id) => gallerySelection.includes(id));
+    gallerySelection = everyItemSelected ? [] : ids;
+    gallerySelectionAnchor = gallerySelection.at(-1) || null;
+    gallerySelectMode = gallerySelection.length > 0;
     renderGallery();
   });
   document.getElementById("gallery-viewer-close")?.addEventListener("click", closeGalleryViewer);
@@ -584,21 +748,7 @@ function bootGalleryActions() {
   document.getElementById("gallery-viewer-fullscreen")?.addEventListener("click", requestGalleryFullscreen);
   document.getElementById("gallery-details-close")?.addEventListener("click", closeGalleryDetails);
   const note = document.getElementById("gallery-actions-note");
-  document.getElementById("download-selected")?.addEventListener("click", () => {
-    let delay = 0;
-    selectedGalleryItems().forEach((item) => {
-      setTimeout(() => {
-        const anchor = document.createElement("a");
-        anchor.href = item.download_url;
-        anchor.download = "";
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-      }, delay);
-      delay += 400; // stagger so the browser accepts every download
-    });
-    if (note) note.textContent = `${gallerySelection.length} download(s) started`;
-  });
+  document.getElementById("download-selected")?.addEventListener("click", downloadGalleryArchive);
   const remove = document.getElementById("delete-selected");
   remove?.addEventListener("click", () => {
     const items = selectedGalleryItems();

@@ -313,6 +313,15 @@ def test_identity_refs_lead_with_the_board_and_flow_media_is_capped_at_two() -> 
     assert cast.identity_refs(char) == ["/b.png", "/f.png", "/p.png"]
     assert cast.flow_character_media(char) == ["user:f", "user:b"]
 
+    uploaded = CharacterProfile(
+        char_id="u",
+        name="U",
+        hero_stills={"front": "/local/upload.png", "board": "/local/board.png"},
+        flow_media_ids={"board": "user:board"},
+        anchor_source="uploaded",
+    )
+    assert cast.flow_character_media(uploaded) == ["/local/upload.png", "user:board"]
+
 
 def _picture_scene(*, cast_lock: str, policy: str):
     """Two picture-only takes with people in both (Blueprint 33 packs a
@@ -693,12 +702,13 @@ def test_grok_image_edit_sends_one_image_or_a_list_never_both(monkeypatch, tmp_p
 
 def test_flow_character_registration_sends_two_images_a_voice_and_notes(monkeypatch) -> None:
     sent: list[dict] = []
+    character_ref = "user:7-email:abc-character:char-9-imgs:2-voice:leda"
 
     class _Resp:
         status_code = 200
 
         def json(self):
-            return {"entityId": "char-9"}
+            return {"entityId": "char-9", "character": character_ref}
 
         text = "{}"
 
@@ -707,9 +717,10 @@ def test_flow_character_registration_sends_two_images_a_voice_and_notes(monkeypa
     ref = flow.register_character(
         "MARA", ["user:f", "user:b", "user:p"], voice="Leda", notes="34, lean"
     )
-    assert ref == "char-9"
+    assert ref == character_ref
     assert sent[-1]["imageReference_1"] == "user:f" and sent[-1]["imageReference_2"] == "user:b"
     assert "imageReference_3" not in sent[-1]
+    assert "email" not in sent[-1]
     assert sent[-1]["voice"] == "Leda" and sent[-1]["personalityNotes"] == "34, lean"
 
 

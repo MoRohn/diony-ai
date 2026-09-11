@@ -74,17 +74,6 @@
   .keys .house p{max-width:none}
   .keys .house pre{margin-top:.2rem}
   .go .hint.warn{color:var(--bad)}
-  .platform{display:flex;align-items:center;gap:.8rem;margin:0 0 1.4rem;flex-wrap:wrap}
-  .platform .plabel{font:700 .7rem/1 "IBM Plex Mono",monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--mut)}
-  .seg{display:inline-flex;border:1px solid var(--line2);border-radius:99px;padding:.2rem;background:var(--bg2)}
-  .seg button{font:600 .82rem/1 Inter,sans-serif;color:var(--ink2);background:transparent;border:0;border-radius:99px;padding:.5em 1em;cursor:pointer;display:inline-flex;align-items:center;gap:.4em}
-  .seg button[aria-pressed="true"]{background:var(--grad);color:#0D0D0D}
-  .seg button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-  .platform .detected{font:500 .7rem/1 "IBM Plex Mono",monospace;color:var(--mut)}
-  .keys .toolline{font:500 .72rem/1.5 "IBM Plex Mono",monospace;color:var(--mut);letter-spacing:.02em;margin:-.2rem 0 .9rem}
-  .keys .toolline.warn{color:var(--accent-ink)}
-  .keys [data-platform]{display:none}
-  .keys[data-platform="mac"] [data-platform="mac"],.keys[data-platform="windows"] [data-platform="windows"]{display:block}
 </style>
 </head>
 <body>
@@ -111,8 +100,8 @@
   <span class="diony-word">Diony</span>
   <span class="sub">STUDIO</span>
   <nav class="surface-links" aria-label="Diony surfaces">
-    <a href="http://director.diony.local" id="director-link">DIRECTOR ▸</a>
-    <a href="http://producer.diony.local" id="producer-link">PRODUCER ▸</a>
+    <a href="http://127.0.0.1:8790" id="director-link">DIRECTOR ▸</a>
+    <a href="http://127.0.0.1:8788" id="producer-link">PRODUCER ▸</a>
   </nav>
 </header>
 
@@ -120,14 +109,6 @@
   <div class="panel">
     <h1>Choose your <span class="grad">camera</span>.</h1>
     <p class="dek">Studio configures the shoot; the Director runs it; Producer monitors the production and holds the Gallery. Every shot of a film rolls on the camera you pick here — you can change it any time.</p>
-    <div class="platform" role="group" aria-label="This computer">
-      <span class="plabel">This computer</span>
-      <div class="seg" id="platform-seg">
-        <button type="button" data-platform="mac" aria-pressed="false" title="Paths, commands, and launcher names read as a Mac"><span aria-hidden="true"></span>Mac</button>
-        <button type="button" data-platform="windows" aria-pressed="false" title="Paths, commands, and launcher names read as Windows"><span aria-hidden="true">⊞</span>Windows</button>
-      </div>
-      <span class="detected" id="platform-detected"></span>
-    </div>
     <div class="cards" role="radiogroup" aria-label="Production engine">
       <button class="card" type="button" data-engine="grok" aria-pressed="false">
         <span class="chip" id="grok-chip">checking…</span>
@@ -161,18 +142,12 @@
     </div>
     <details class="keys" id="keys">
       <summary id="keys-title"><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>A key is required</summary>
-      <p>Every shot rolls on a cloud camera you pay for directly, so the Studio needs at least one key before the Director can shoot. Diony never asks for a key in the app: put the lines you have in <code id="keys-path">~/.diony/keys.env</code> and reopen this page. Everything else — ffmpeg included — comes with Diony and is set up when the app opens.</p>
-      <p class="toolline" id="ffmpeg-line">ffmpeg ready — ships with Diony</p>
-      <div data-platform="mac">
-        <p><strong>On a Mac</strong> — open Terminal, paste these three lines, and put your keys in the file that opens. First open: double-click <code>Open Diony AI.command</code> (or <code>Diony.app</code>); macOS asks for your password once to lay the <code>.diony.local</code> names.</p>
+      <p>Every shot rolls on a cloud camera you pay for directly, so Studio needs at least one provider key before the Director can shoot. Add the lines you have to <code id="keys-path">~/.diony/keys.env</code>, restart the local server, and refresh this page. Diony reads the keys locally and sends them only to the provider you choose.</p>
+      <div>
+        <p><strong>Local setup</strong> — create the private key file from a terminal, add your provider keys, then start Diony and open Studio in your browser.</p>
 <pre>mkdir -p ~/.diony &amp;&amp; chmod 700 ~/.diony
 nano ~/.diony/keys.env
 chmod 600 ~/.diony/keys.env</pre>
-      </div>
-      <div data-platform="windows">
-        <p><strong>On Windows</strong> — open PowerShell, paste these two lines, and put your keys in the Notepad file that opens, then save. First open: double-click <code>Open Diony AI.bat</code>; Windows asks once (User Account Control) to lay the <code>.diony.local</code> names.</p>
-<pre>New-Item -ItemType Directory -Force $env:USERPROFILE\.diony | Out-Null
-notepad $env:USERPROFILE\.diony\keys.env</pre>
       </div>
       <div class="cols houses">
         <section class="house" data-house="grok">
@@ -183,7 +158,8 @@ notepad $env:USERPROFILE\.diony\keys.env</pre>
         <section class="house" data-house="google-flow">
           <h4>Google Flow</h4>
           <p>Two keys. A <a href="https://useapi.net/" target="_blank" rel="noopener">useapi.net</a> token runs the camera: useapi.net is a relay that gives API access to Google Flow. You link a Google account that has a Google AI plan (Plus, Pro, or Ultra); Flow spends that plan's monthly credits per generation while useapi.net bills a flat subscription. See the <a href="https://useapi.net/docs/api-google-flow-v1" target="_blank" rel="noopener">Google Flow API docs</a>.</p>
-          <p>A Gemini API key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> writes the script (Gemini 2.5 Pro) and narrates the film (Gemini speech), so the whole path is Google. It is separate from the useapi.net token and bills on its own. Without it, an xAI key writes and narrates for this camera.</p>
+          <p>Flow also needs captcha capacity. useapi.net supplies 300 included captcha solves; after those are used, <a href="https://useapi.net/docs/api-google-flow-v1/post-google-flow-accounts-captcha-providers" target="_blank" rel="noopener">configure a captcha solver</a> such as CapSolver on your useapi.net account. The solver key goes to useapi.net, not in Diony's key file.</p>
+          <p>A Gemini API key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> writes the script (Gemini 3.1 Pro Preview) and narrates the film (Gemini speech), so the whole path is Google. It is separate from the useapi.net token and bills on its own. Without it, an xAI key writes and narrates for this camera.</p>
 <pre>USEAPI_TOKEN=user:...
 # the Google account linked on useapi.net
 DIONY_FLOW_EMAIL=you@gmail.com
@@ -205,49 +181,7 @@ GEMINI_API_KEY=AIza...</pre>
   let chosen = "";
 
   let ready = { grok: false, "google-flow": false };
-  let platform = { chosen: "mac", detected: "mac", hints: null };
-  const keysPath = () => (platform.hints && platform.hints.keys_path) || "~/.diony/keys.env";
-  let ffmpeg = null; // null until the opening answers; the line stays quiet until then
-  function paintFfmpeg() {
-    const line = document.getElementById("ffmpeg-line");
-    if (!ffmpeg) { line.hidden = true; return; }
-    line.hidden = false;
-    const app = platform.chosen === "windows" ? "Diony AI" : "Diony.app";
-    line.textContent = ffmpeg.ready
-      ? "ffmpeg ready — ships with Diony"
-      : `ffmpeg is not on this desk yet — reopen ${app}; it installs ffmpeg on open`;
-    line.className = ffmpeg.ready ? "toolline" : "toolline warn";
-  }
-  function paintPlatform() {
-    document.querySelectorAll("#platform-seg button").forEach((b) => {
-      b.setAttribute("aria-pressed", String(b.dataset.platform === platform.chosen));
-    });
-    document.getElementById("keys").dataset.platform = platform.chosen;
-    document.getElementById("keys-path").textContent = keysPath();
-    paintFfmpeg();
-    const detected = document.getElementById("platform-detected");
-    detected.textContent =
-      platform.detected === platform.chosen
-        ? `detected: ${platform.chosen === "windows" ? "Windows" : platform.detected === "linux" ? "Linux (Unix paths)" : "Mac"}`
-        : `this desk was detected as ${platform.detected === "windows" ? "Windows" : platform.detected === "linux" ? "Linux" : "Mac"} — showing ${platform.chosen === "windows" ? "Windows" : "Mac"} instructions`;
-    if (chosen || !go.disabled) select(chosen);
-    else hint.textContent = `Keys load from ${keysPath()}`;
-  }
-  document.querySelectorAll("#platform-seg button").forEach((b) => {
-    b.addEventListener("click", async () => {
-      platform.chosen = b.dataset.platform;
-      paintPlatform();
-      try {
-        const res = await fetch("/api/opening/platform", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ platform: platform.chosen }),
-        });
-        const body = await res.json();
-        if (res.ok) { platform.hints = body.hints; paintPlatform(); }
-      } catch (err) { /* the toggle still paints; the choice persists next time */ }
-    });
-  });
+  const keysPath = () => "~/.diony/keys.env";
   function select(engine) {
     chosen = engine;
     cards.forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.engine === engine)));
@@ -290,11 +224,6 @@ GEMINI_API_KEY=AIza...</pre>
       } else {
         house.textContent = "No GEMINI_API_KEY — add one so Gemini writes and narrates.";
         house.className = "house warn";
-      }
-      ffmpeg = state.ffmpeg || null;
-      if (state.platform) {
-        platform = { chosen: state.platform.chosen, detected: state.platform.detected, hints: state.platform.hints };
-        paintPlatform();
       }
       if (state.director_url) document.getElementById("director-link").href = state.director_url;
       if (state.producer_url) document.getElementById("producer-link").href = state.producer_url;

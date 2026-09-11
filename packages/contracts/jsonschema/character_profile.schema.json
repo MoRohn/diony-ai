@@ -133,6 +133,25 @@
       "title": "Hero Stills",
       "type": "object"
     },
+    "anchor_source": {
+      "default": "generated",
+      "enum": [
+        "generated",
+        "uploaded"
+      ],
+      "title": "Anchor Source",
+      "type": "string"
+    },
+    "anchor_name": {
+      "default": "",
+      "title": "Anchor Name",
+      "type": "string"
+    },
+    "anchor_sha256": {
+      "default": "",
+      "title": "Anchor Sha256",
+      "type": "string"
+    },
     "identity": {
       "anyOf": [
         {

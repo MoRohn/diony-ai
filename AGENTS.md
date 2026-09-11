@@ -4,7 +4,7 @@ This file is the operating system for humans and coding agents working in this r
 
 ## Project overview
 
-Diony AI is a proprietary desktop film studio that shoots on cloud video models. The **Director** (chat-first, `apps/director`) turns one line into a priced, reviewed, narrated 1080p film on **Grok Imagine** (xAI) and **Google Flow** (Veo 3.1 and Omni Flash through useapi.net). Studio chooses the engine, Producer holds the Gallery. Cost is visible at every step: estimate before anything rolls, live while it rolls, receipt after. Everything generated is downloaded into a local vault the moment it exists.
+Diony AI is a proprietary browser-local film studio that shoots on cloud video models. The **Director** (chat-first, `apps/director`) turns one line into a priced, reviewed, narrated 1080p film on **Grok Imagine** (xAI) and **Google Flow** (Veo 3.1 and Omni Flash through useapi.net). Studio chooses the engine, Producer holds the Gallery. Cost is visible at every step: estimate before anything rolls, live while it rolls, receipt after. Everything generated is downloaded into a local vault the moment it exists.
 
 The product pivoted to this on 2026-08-31 (Blueprint 25). The earlier local lane (Wan2.2 on DGX Spark and leased B200/B300 GPUs, a DeepSeek brain, the `diony_sr_v1` finish) was deleted from the tree on 2026-09-10; the changelog records what left. There is no automatic route: Studio requires the user to pick one camera, and that camera shoots the whole film.
 
@@ -14,21 +14,20 @@ North Star deliverable: a finished program, 1920×1080 (1080×1920 portrait), Re
 
 | Path | Role |
 |---|---|
-| `apps/director` | The Director service (`diony-director`, `:8790`, `director.diony.local`) and its console. Sessions, screenwriter, master prompt, splitter, compiler (three dialects), `providers/{grok,flow}`, capabilities matrix, review, revisions, assembly, narration, deliverables, ledger, rate cards, cast lock, likeness guard. `diony-director-check` is the readiness CLI. |
-| `apps/wizard` | Studio (`diony-wizard`, `:8787`, `studio.diony.local`): the opening page (camera choice, key chips) and `gateway.py`, the `:80` name router that lays all three product names. |
-| `apps/producer` | Producer (`diony-producer`, `:8788`, `producer.diony.local`): the Finished Clips gallery, the launch control plane API (Blueprint 16: the ledger's plumbing, no governance UI), and the services the Director imports: `control_plane`, `costs` (the ledger), `face_identity`, `quality`, `speech_transcript`, `semantic_qc`, `media_tools`. |
-| `apps/desk` | First open: the lobby, service supervision, stale-build detection by UI stamp, the packaged-app payload (`release.py`). |
+| `apps/director` | The Director service (`diony-director`, `:8790`) and its console. Sessions, screenwriter, master prompt, splitter, compiler (three dialects), `providers/{grok,flow}`, capabilities matrix, review, revisions, assembly, narration, deliverables, ledger, rate cards, cast lock, likeness guard. `diony-director-check` is the readiness CLI. |
+| `apps/wizard` | Studio (`diony-wizard`, `:8787`): the opening page, explicit camera choice, and key-readiness chips. |
+| `apps/producer` | Producer (`diony-producer`, `:8788`): the Finished Clips gallery, launch control plane, ledger, face identity, quality, speech transcript, semantic QC, and media tools used by Director. |
+| `scripts/run_local.py` | Lightweight process supervisor: starts the three loopback services, health-gates them, opens Studio, and stops the group. |
 | `packages/contracts` | Pydantic v2 contracts and JSON Schema. Cloud core: `director.py` (DirectorOp, CostEstimate, EngineMode), `production.py` (Script, ClipUnit, AudioPacket, ContinuityLock, ClipReview, ProductionPackage), `launch.py` (control plane, cost ledger), `cluster.py` (engine choice, vault root). |
 | `blueprints/` | The constitution. 25–33 are the cloud era; 00, 10, 15–17, and 24 are the foundations that still apply. Retired numbers (01–09, 11–14, 18–23) are not reused. |
-| `packaging/`, `scripts/release/` | PyInstaller payload, Mac/Windows installers, signed release builders. |
 | `pyproject.toml` (root) | Repo-wide ruff and pytest configuration only. Each app and package has its own manifest. |
 
 ## Tech stack
 
 - Python 3.11+, FastAPI, uvicorn, httpx, Pydantic v2. Static HTML/CSS/JS consoles, no SPA framework.
 - Providers over REST: xAI (`https://api.x.ai`), useapi.net Google Flow (`https://api.useapi.net/v1/google-flow`). Module-level `httpx` in each adapter is the seam tests monkeypatch.
-- The brain is any OpenAI-compatible chat endpoint, resolved by `diony_director.brain`: Gemini 2.5 Pro on the Google Flow camera (`GEMINI_API_KEY`), Grok 4.6 on Grok Imagine (`XAI_API_KEY`), the desk's Brain pill or `DIONY_DIRECTOR_BRAIN_URL` overriding. The narrator follows the same house (Gemini speech or the Grok voice API) unless a voice id names the other.
-- Host tools: ffmpeg/ffprobe (required; the desktop build bundles the release pinned in `apps/desk/src/diony_desk/ffmpeg_lock.json` and `diony_desk.media` installs it on open when a bundle lacks it — source checkouts bring their own); OpenCV Zoo YuNet + SFace (optional, staged by `diony-director-check --stage-face-models`); faster-whisper (optional, `DIONY_WHISPER_MODEL`).
+- The brain is any OpenAI-compatible chat endpoint, resolved by `diony_director.brain`: Gemini 3.1 Pro Preview on the Google Flow camera (`GEMINI_API_KEY`), Grok 4.6 on Grok Imagine (`XAI_API_KEY`), the Brain pill or `DIONY_DIRECTOR_BRAIN_URL` overriding. The narrator follows the same house (Gemini speech or the Grok voice API) unless a voice id names the other.
+- Host tools: ffmpeg/ffprobe (required and installed by the operator); OpenCV Zoo YuNet + SFace (optional, staged by `diony-director-check --stage-face-models`); faster-whisper (optional, `DIONY_WHISPER_MODEL`).
 - Ledger and control plane: SQLite under `{vault}/.control/`.
 
 ## Build and run
@@ -37,15 +36,15 @@ Customer first open: `START HERE.txt`. Keys live in `~/.diony/keys.env` (`XAI_AP
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
-pip install -e packages/contracts -e apps/wizard -e apps/producer -e apps/director -e apps/desk
+pip install -e packages/contracts -e apps/wizard -e apps/producer -e apps/director
 pip install ruff pytest
 
-diony-desk               # lobby → Studio → Director → Producer; lays the names
+python scripts/run_local.py  # Studio → Director → Producer on localhost
 diony-director           # :8790 alone
 diony-director-check     # readiness; --live probes; --roll-one grok|flow --yes spends once
 ```
 
-Packaged process: double-click **Build Diony AI.command** (`scripts/release/build-local-macos.sh`) on a Mac or **Build Diony AI.bat** (`scripts/release/build-local-windows.ps1`) on Windows; both stage the pinned ffmpeg (`apps/desk/src/diony_desk/ffmpeg_lock.json`) into the runtime folder. **Open Diony AI.command** / **.bat** open the built app when it exists and fall back to the source desk. Repo edits reach the app only after a rebuild; the desk replaces an older local build automatically. The current build is committed as `dist/Diony.app` → `dist/builds/<build-id>/` with `dist/build.json` and `dist/current-build.txt` (the root `.gitignore` opens exactly those; the builder writes `dist/builds/.gitignore` naming the one build to keep), so commit after a rebuild you want in the repository and expect ~190 MB per committed build. Ad-hoc, local-only, never publishable; signed releases come from `scripts/release/build-macos.sh` and `build-windows.ps1`. The release scripts pip-install a hard-coded package list; a package missing there is silently absent from the app even when `diony.spec` lists it (a regression test pins the list).
+The product is browser-local. `./open-diony.sh`, **Open Diony AI.command**, and **Open Diony AI.bat** create or reuse `.venv`, install the editable cloud packages when needed, start the three services, and open Studio at `http://127.0.0.1:8787`. They do not create an application bundle, install OS packages, modify the hosts file, or request administrator privileges.
 
 ## Tests and lint
 
@@ -56,10 +55,10 @@ ruff check . && ruff format --check .    # the pinned rule set in pyproject.toml
 ```
 
 - The root `conftest.py` blocks every non-loopback socket for the session; every package conftest registers the same idempotent guard. `DIONY_ALLOW_NETWORK=1` only for a deliberate live run.
-- Never run two pytest invocations at once: the desk's instance-lock tests deadlock across processes.
+- Never run two pytest invocations at once; shared control-plane fixtures are intentionally process-local.
 - Tests that cut real media skip without ffmpeg.
 - Package conftests' autouse fixtures bleed across packages in a multi-directory run; never set a shared-scope `DIONY_CONTROL_PLANE_DB`, and keep test basenames unique across packages.
-- UI stamps are pinned: Producer `?v=p9` by tests, the Director `?v=p55` by presence only. Bump the Director stamp on every UI change; update the pins when you bump the others. The desk reads the stamp at runtime to detect a stale build.
+- UI stamps are pinned by tests. Bump the Director stamp on every UI change and update the relevant pins.
 - A test that pins a literal (a stamp, a boot copy line, a rate) is documentation; update it in the same change and say why.
 
 ## Human gates (do not automate away)

@@ -67,19 +67,23 @@ class _Response:
 
 
 def test_live_probes_report_provider_health(monkeypatch) -> None:
+    def healthy(url, **kw):
+        if "x.ai" in url:
+            return _Response({"data": [{"id": "grok-imagine-video"}]})
+        if url.endswith("/accounts/captcha-providers"):
+            return _Response({"CapSolver": "abc...***...xyz"})
+        return _Response([{"email": "studio@example.com", "credits": 940}])
+
     monkeypatch.setattr(
         live_check.httpx,
         "get",
-        lambda url, **kw: _Response(
-            {"data": [{"id": "grok-imagine-video"}]}
-            if "x.ai" in url
-            else [{"email": "studio@example.com", "credits": 940}]
-        ),
+        healthy,
     )
     report = live_check.live_probe()
     assert report["grok"]["ok"] is True
     assert "grok-imagine-video" in report["grok"]["detail"]
     assert report["google-flow"]["ok"] is True
+    assert report["google-flow"]["captcha"]["providers"] == ["CapSolver"]
 
 
 def test_live_probe_reports_auth_failures_honestly(monkeypatch) -> None:
@@ -96,21 +100,40 @@ def test_live_probe_parses_the_dict_keyed_account_shape(monkeypatch) -> None:
     """Verified live 2026-09-02: /accounts returns a dict keyed by email, and
     a signed-out account carries an "error" field — the probe must call that
     unhealthy, never "0 accounts connected" with ok=true."""
-    monkeypatch.setattr(
-        live_check.httpx,
-        "get",
-        lambda url, **kw: _Response(
-            {"data": [{"id": "grok-imagine-video"}]}
-            if "x.ai" in url
-            else {
+    def signed_out(url, **kw):
+        if "x.ai" in url:
+            return _Response({"data": [{"id": "grok-imagine-video"}]})
+        if url.endswith("/accounts/captcha-providers"):
+            return _Response({"freeCaptchaCredits": 12})
+        return _Response(
+            {
                 "studio@example.com": {
                     "created": "2026-09-01T17:37:19Z",
                     "error": "Google has signed your account out. Reconnect at https://useapi.net/docs",
                 }
             }
-        ),
-    )
+        )
+
+    monkeypatch.setattr(live_check.httpx, "get", signed_out)
     report = live_check.live_probe()
     assert report["google-flow"]["ok"] is False
     assert report["google-flow"]["accounts"] == 1
     assert "signed your account out" in report["google-flow"]["detail"]
+
+
+def test_live_probe_reports_exhausted_captcha_capacity(monkeypatch) -> None:
+    def no_captcha_capacity(url, **kw):
+        if "x.ai" in url:
+            return _Response({"data": [{"id": "grok-imagine-video"}]})
+        if url.endswith("/accounts/captcha-providers"):
+            # No provider keys and no remaining freeCaptchaCredits is the
+            # documented exhausted shape.
+            return _Response({})
+        return _Response([{"email": "studio@example.com", "credits": 940}])
+
+    monkeypatch.setattr(live_check.httpx, "get", no_captcha_capacity)
+    report = live_check.live_probe()["google-flow"]
+    assert report["ok"] is False
+    assert report["captcha"] == {"ready": False, "providers": [], "free_credits": 0}
+    assert "captcha solver" in report["detail"]
+    assert "captcha-providers" in report["detail"]

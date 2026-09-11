@@ -4,7 +4,7 @@ Status: in force since 2026-08-31; amends Blueprint 00 (locked truth 5, "never c
 
 Owner: Diony AI
 
-Applies to: the Studio opening page, `apps/director`, the Producer Gallery, the Desk landing, `packages/contracts` (`director.py`), the rate cards, every Blueprint numbered 26 and above
+Applies to: the Studio opening page, `apps/director`, the Producer Gallery, the browser-local launcher, `packages/contracts` (`director.py`), the rate cards, every Blueprint numbered 26 and above
 
 Depends on: Blueprint 00 (gates and quality bar), Blueprint 10 (quality mandate), Blueprint 16 (launch control plane and cost ledger), Blueprint 24 (montage intelligence: review families, decision log)
 
@@ -26,12 +26,13 @@ surfaces keep their names and their brand, but their jobs change:
 | Surface | Before | After |
 |---|---|---|
 | Studio | Crate-to-cluster rail: Site, Connect, App, Ready, Sign | The opening page: choose the camera (Grok Imagine or Google Flow), see which keys are loaded, continue to the Director. |
-| Producer | Idea, Production, Gallery over a signed GPU | The Gallery: Director films with their spend, download, stitch, delete; the launch control plane and Studio governance beside it. |
+| Producer | Idea, Production, Gallery over a signed GPU | The Gallery: a compact ten-across contact sheet of Director films and clips with prompts closed until `+` expands them; Select all / Clear all, one-ZIP download, stitch, and two-step media deletion; the launch control plane and Studio governance beside it. |
 | **Director** | did not exist | The primary UI. A chat-first filmmaker that writes, prices, shoots, reviews, cuts, and narrates. |
 
-The Desk lands on Studio, which hands the user to the Director, which hands the film
-to Producer. `http://director.diony.local` (`:8790`) is a full product name laid
-beside the other two by the same router.
+The browser-local launcher opens Studio, which hands the user to the Director,
+which hands the film to Producer. Studio, Director, and Producer are loopback
+services on ports 8787, 8790, and 8788 respectively; public URLs may be
+overridden without changing the service bind address.
 
 ## 1. What does not change
 
@@ -49,11 +50,11 @@ beside the other two by the same router.
 
 | | Grok Imagine (xAI) | Google Flow (useapi.net) |
 |---|---|---|
-| Access | `XAI_API_KEY`, REST at `https://api.x.ai` | `USEAPI_TOKEN`, REST at `https://api.useapi.net/v1/google-flow`, a linked Google account on a Google AI plan |
+| Access | `XAI_API_KEY`, REST at `https://api.x.ai` | `USEAPI_TOKEN`, REST at `https://api.useapi.net/v1/google-flow`, a linked Google account on a Google AI plan, and captcha capacity (300 included solves, then a solver key configured on the useapi.net account) |
 | Pricing basis | metered, USD per second and per still | credits per generation from Google's published table, converted to USD from the declared plan (`DIONY_FLOW_PLAN`); never presented as Google's meter |
 | Video models | `grok-imagine-video-1.5` (shoots; t2v, i2v, up to 3 refs, native audio, 1–15 s, 480p/720p/1080p), `grok-imagine-video` (extension and edit lanes) | `omni-flash` (default; audio-native, voices, characters, first+last frame, v2v edit, 4/6/8/10 s at 360p/720p), `veo-3.1-lite` / `-fast` / `-quality` (8 s; 4 and 6 s on Ultra; extension lane) |
 | Stills | `grok-imagine-image-2.0` | `nano-banana-2` (included in the plan) |
-| Brain | Grok 4.6 on the xAI key (`diony_director.brain`) | Gemini 2.5 Pro on `GEMINI_API_KEY` through Gemini's OpenAI-compatible endpoint; borrows Grok when the Gemini key is missing and says so |
+| Brain | Grok 4.6 on the xAI key (`diony_director.brain`) | Gemini 3.1 Pro Preview on `GEMINI_API_KEY` through Gemini's OpenAI-compatible endpoint; borrows Grok when the Gemini key is missing and says so |
 | Voice | the Grok voice API (`/v1/tts`) | Gemini speech (`generateContent` with `responseModalities: AUDIO`, prebuilt voices `gemini:Kore` and company) on the same Gemini key; Omni's native voices under the Dialogue and Mix styles |
 | Finish | conformed up at the cut | `POST /videos/upscale`, free at 1080p, 50 credits at 4K (Ultra) |
 | Prompt limit | 4096 characters (live 400 otherwise) | 4096 characters, conservative |
@@ -114,10 +115,14 @@ Rules the Director keeps, learned on real productions:
 - Every per-op error is named on the op (`failure`, `held`, `stalled`); nothing is
   swallowed. A refused clip redraws its opening frame on Retake; Skip shot leaves it
   out; Retry all re-queues every failed clip.
+- An account-wide prerequisite is not multiplied into per-op failures. In particular,
+  Flow's missing-captcha-provider 400 stops the submit wave after one request, leaves
+  every unsent op proposed, removes those ops from automatic retries, and names the
+  provider setup URL. A new Run press re-targets the locked work after setup.
 - A room holds one film. A new script retires the earlier chain.
 - Never a native `confirm()` or `prompt()` in the UI; the two-step armed confirm is the
   only confirm.
-- The UI stamp (`app.js?v=`) is functional: the Desk uses it to detect a stale build.
+- The UI stamp (`app.js?v=`) is functional: tests pin it so browser cache changes are explicit.
 
 ## 5. Engine selection
 
@@ -132,11 +137,15 @@ The local GPU lane that preceded the pivot was removed from the tree on 2026-09-
 ## 6. Pass criteria
 
 - `diony-director-check --live` reports both providers with `ok: true` on a configured
-  desk; `--roll-one grok --yes` lands a real clip in `{vault}/director/live-check/`.
+  desk, including a connected Flow account and either remaining included captcha
+  solves or at least one masked captcha provider; `--roll-one grok --yes` lands a real
+  clip in `{vault}/director/live-check/`.
 - A lock reply's total equals clips + bible + allowance exactly, and the receipt's
   estimate equals the actual on an unremarkable run (zero variance was measured on
   2026-08-31).
 - No Flow request overlaps another; no provider URL is ever persisted.
+- A Gallery-wide selection downloads through one background-built ZIP (stored MP4s plus a manifest), and bulk deletion still requires the UI's two-step armed confirmation; media may leave while its record and receipt remain.
+- At desktop width, Finished Clips presents ten cards per row; a card's prompt is closed by default and its dedicated `+` disclosure expands the full text without changing clip selection. The card names its provider/model once, above a facts-only row for duration, size, and estimate. Each thumbnail carries a half-scale, thumbnail-scoped lower-right resolution pill using the conventional lowercase suffix (`720p`, `1080p`). Its visible selection control is one 1rem square aligned with equal top/right inset—never a box nested inside a circle—with a larger invisible pointer target and its selected order retained for assistive technology.
 - The whole test suite runs offline (the root `conftest.py` blocks every non-loopback
   socket).
 
@@ -146,6 +155,7 @@ The local GPU lane that preceded the pivot was removed from the tree on 2026-09-
 |---|---|---|
 | Run & Assemble All returns 502 | a slow call rode a request through the router | move it to a worker; poll |
 | "All operations failed" from Flow | nested `failureReasons`, usually the prominent-person filter | the likeness guard (Blueprint 27 §3a); Retake redraws the frame |
+| Flow 400 "No captcha provider API keys configured" | useapi.net's included captcha solves are exhausted and no solver is attached to the account | configure CapSolver or another supported solver at useapi.net's `/accounts/captcha-providers`, then press Run again; no clip is failed or spent |
 | Stills "generating" forever | an estimate could not reconcile (rate card unit missing) | the advance loop reports `stalled` with the reason; fix the card |
 | Every clip looks different | no Look Bible or style frame on the prompts | Blueprint 29 |
 | The film ends mid-word | narration timed off the picture length | Blueprint 28's tail hold |

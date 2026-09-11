@@ -37,7 +37,8 @@ GEMINI_KEY_ENV = "GEMINI_API_KEY"
 GEMINI_BASE_ENV = "DIONY_GEMINI_BASE"
 GEMINI_BASE_DEFAULT = "https://generativelanguage.googleapis.com"
 GEMINI_BRAIN_MODEL_ENV = "DIONY_GEMINI_BRAIN_MODEL"
-DEFAULT_GEMINI_BRAIN_MODEL = "gemini-2.5-pro"
+DEFAULT_GEMINI_BRAIN_MODEL = "gemini-3.1-pro-preview"
+RETIRED_GEMINI_BRAIN_MODELS = frozenset({"gemini-2.5-pro", "models/gemini-2.5-pro"})
 GEMINI_OPENAI_PATH = "/v1beta/openai"
 
 
@@ -68,6 +69,19 @@ def gemini_key() -> str:
 
 def gemini_configured() -> bool:
     return bool(gemini_key())
+
+
+def gemini_model() -> str:
+    """Resolve the Gemini writer model and migrate the retired 2.5 default.
+
+    Existing keys files may pin Diony's former default. Google now returns a
+    hard 404 for that model to new users, so retaining the obsolete value is
+    never useful and would make an otherwise valid configuration fail forever.
+    """
+    configured = os.environ.get(GEMINI_BRAIN_MODEL_ENV, "").strip()
+    if not configured or configured in RETIRED_GEMINI_BRAIN_MODELS:
+        return DEFAULT_GEMINI_BRAIN_MODEL
+    return configured
 
 
 def grok_key() -> str:
@@ -124,7 +138,7 @@ def _gemini_target(reason: str) -> BrainTarget:
         provider="gemini",
         url=base,
         endpoint=f"{base}/chat/completions",
-        model=os.environ.get(GEMINI_BRAIN_MODEL_ENV, "").strip() or DEFAULT_GEMINI_BRAIN_MODEL,
+        model=gemini_model(),
         key=gemini_key(),
         reason=reason,
     )
@@ -138,7 +152,7 @@ def _custom_target(base: str) -> BrainTarget:
         key = gemini_key()
     model = os.environ.get(GROK_BRAIN_MODEL_ENV, "").strip()
     if not model:
-        model = DEFAULT_GEMINI_BRAIN_MODEL if "googleapis.com" in base else DEFAULT_GROK_BRAIN_MODEL
+        model = gemini_model() if "googleapis.com" in base else DEFAULT_GROK_BRAIN_MODEL
     # an OpenAI-compatible base that already ends in /openai (Gemini's shape)
     # speaks at /chat/completions; every other base keeps the /v1 contract
     endpoint = (

@@ -40,21 +40,48 @@ def test_the_legacy_bays_are_not_shipped() -> None:
 def test_the_gallery_is_the_finished_clips_inventory() -> None:
     html = (STATIC / "index.html").read_text()
     js = (STATIC / "app.js").read_text()
+    css = (STATIC / "app.css").read_text()
 
     assert 'id="bay-gallery"' in html
     assert ">Finished clips<" in html
     assert 'id="gallery-grid"' in html and 'id="gallery-empty"' in html
     assert 'id="gallery-select-mode"' in html and 'id="gallery-selection-count"' in html
+    assert 'id="gallery-select-all"' in html and ">Select all<" in html
     for action in ("join-selected", "download-selected", "delete-selected"):
         assert f'id="{action}"' in html, action
+    assert ">Download ZIP<" in html
     assert 'id="gallery-viewer"' in html and 'id="gallery-viewer-video"' in html
     assert 'id="gallery-details"' in html and 'id="gallery-copy-feedback"' in html
     assert "No clips yet." in html
     assert 'fetch("/api/gallery"' in js
     assert '"/api/gallery/stitch"' in js
-    assert "item.remove_url" in js and "item.details_url" in js and "item.thumbnail_url" in js
+    assert '"/api/gallery/archive"' in js and '"/api/gallery/delete"' in js
+    assert "item.details_url" in js and "item.thumbnail_url" in js
     assert "function renderGallery" in js and "function openGalleryViewer" in js
     assert "function renderGalleryDetails" in js and "function copyGalleryPrompt" in js
+    assert "function itemFacts(item)" in js
+    assert 'setTextNode(copy, "p", itemFacts(item).join(" · "), "gallery-card-facts");' in js
+    assert 'setTextNode(copy, "small", itemMeta(item));' not in js
+    assert "galleryExpandedPrompts" in js
+    assert 'promptToggle.className = "gallery-prompt-toggle"' in js
+    assert 'promptDescription.hidden = !promptExpanded' in js
+    assert 'select.textContent = "";' in js
+    assert "`Selected ${selectedIndex + 1}. Remove ${item.title} from the selection`" in js
+    assert '.replace(/p$/i, "p")' in js
+    assert "grid-template-columns: repeat(10, minmax(0, 1fr));" in css
+    assert ".gallery-card-copy .gallery-card-source" in css
+    assert ".gallery-card-copy .gallery-card-facts" in css
+    assert ".gallery-prompt-description[hidden]" in css
+    resolution_rule_start = css.index(".gallery-thumb .gallery-resolution {")
+    resolution_rule = css[resolution_rule_start : css.index(".gallery-card-copy", resolution_rule_start)]
+    assert "padding: 0.3rem 0.4rem;" in resolution_rule
+    assert "font: 500 0.44rem/1 var(--type);" in resolution_rule
+    assert "border-radius: 999px;" in resolution_rule
+    select_rule_start = css.index(".gallery-select-cue {")
+    select_rule = css[select_rule_start : css.index(".gallery-select-cue:hover", select_rule_start)]
+    assert "top: 0.12rem;" in select_rule and "right: 0.12rem;" in select_rule
+    assert "width: 1rem;" in select_rule and "height: 1rem;" in select_rule
+    assert "border-radius: 50%;" not in select_rule
     assert "function armConfirm" in js
     assert "window.confirm" not in js and "window.prompt" not in js
     assert 'fetch("/api/engine")' in js
@@ -63,8 +90,8 @@ def test_the_gallery_is_the_finished_clips_inventory() -> None:
 
 def test_the_static_stamp_is_pinned() -> None:
     html = (STATIC / "index.html").read_text()
-    assert 'href="/static/app.css?v=p9"' in html
-    assert 'src="/static/app.js?v=p9"' in html
+    assert 'href="/static/app.css?v=p15"' in html
+    assert 'src="/static/app.js?v=p15"' in html
 
 
 def test_producer_uses_the_diony_chorus_design_system() -> None:
@@ -80,8 +107,8 @@ def test_producer_uses_the_diony_chorus_design_system() -> None:
     assert 'fill="currentColor"' in html
     assert "diony-ai-optical-mark" not in html
     assert 'src="/static/dionysus-sketch.png?v=run31"' in html
-    assert 'href="http://director.diony.local" id="director-link"' in html
-    assert 'id="studio-surface-link"' in html
+    assert 'href="http://127.0.0.1:8790" id="director-link"' in html
+    assert 'href="http://127.0.0.1:8787" id="studio-surface-link"' in html
     sketch = (STATIC / "dionysus-sketch.png").read_bytes()
     assert sketch.startswith(b"\x89PNG\r\n\x1a\n")
     assert "--charcoal: #0d0d0d" in css.lower()

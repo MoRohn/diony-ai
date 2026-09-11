@@ -1,6 +1,6 @@
-"""The production-engine choice, the platform choice, and the vault root (Blueprint 25).
+"""The production-engine choice, browser surfaces, and the vault root (Blueprint 25).
 
-Studio's opening page writes the choice; the Director and the desk read it.
+Studio's opening page writes the choice; the Director reads it.
 The vault is where every clip, frame, film, and the control plane live.
 """
 
@@ -51,6 +51,27 @@ def bind_host() -> str:
     return os.environ.get("DIONY_BIND", "127.0.0.1").strip() or "127.0.0.1"
 
 
+def surface_url(surface: str) -> str:
+    """Public URL for one localhost surface, with an explicit override.
+
+    A service may bind to ``0.0.0.0``, but a browser cannot navigate to that
+    address, so the advertised default stays on loopback.
+    """
+    ports = {"studio": "8787", "producer": "8788", "director": "8790"}
+    if surface not in ports:
+        raise ValueError(f"unknown Diony surface {surface!r}; known: {tuple(ports)}")
+    override = os.environ.get(f"DIONY_{surface.upper()}_URL", "").strip()
+    if override:
+        return override.rstrip("/")
+    port = os.environ.get(f"DIONY_{surface.upper()}_PORT", ports[surface]).strip()
+    return f"http://127.0.0.1:{port}"
+
+
+def surface_urls() -> dict[str, str]:
+    """The three browser surfaces advertised to the local consoles."""
+    return {name: surface_url(name) for name in ("studio", "director", "producer")}
+
+
 def cluster_root() -> Path:
     """The vault: ``DIONY_VAULT``, then ``DIONY_PRODUCER_VAULT``, then
     ``/diony/vault`` when it exists, else ``apps/producer/data`` in a checkout."""
@@ -69,7 +90,7 @@ def cluster_root() -> Path:
     return Path.cwd() / "apps" / "producer" / "data"
 
 
-# --- the computer this desk runs on ------------------------------------------
+# --- the computer this browser session runs on -------------------------------
 # The runtime already branches on the real OS (hosts file, privilege prompt,
 # Python discovery, data directory). The CHOICE is what the product shows the
 # user: paths, commands, launcher names. It defaults to the detected OS and
@@ -131,11 +152,11 @@ def platform_hints(platform: str | None = None) -> dict:
             "keys_setup_note": "PowerShell: make the folder, then paste the lines into keys.env and save.",
             "ffmpeg_install": "winget install Gyan.FFmpeg",
             "ffmpeg_check": "ffmpeg -version",
-            "ffmpeg_hint": "ffmpeg ships with Diony — reopen Diony AI and it installs on open; otherwise winget install Gyan.FFmpeg or set DIONY_FFMPEG to ffmpeg.exe",
+            "ffmpeg_hint": "Run winget install Gyan.FFmpeg or set DIONY_FFMPEG to ffmpeg.exe.",
             "launcher": "Open Diony AI.bat",
-            "app": "the Windows installer (DionyAI-Setup-…-windows-x64.exe)",
-            "names_prompt": "Windows asks once (User Account Control) so Diony can add studio, director, and producer .diony.local to the hosts file.",
-            "data_dir": r"%LOCALAPPDATA%\Diony AI",
+            "app": "the local browser launcher",
+            "names_prompt": "Diony opens Studio on localhost; no administrator prompt or hosts-file change is needed.",
+            "data_dir": r"<checkout>\.diony-vault",
             "terminal": "PowerShell",
         }
     return {
@@ -150,11 +171,11 @@ def platform_hints(platform: str | None = None) -> dict:
         "keys_setup_note": "Terminal: make the folder, paste the lines into keys.env, and keep it private.",
         "ffmpeg_install": "brew install ffmpeg",
         "ffmpeg_check": "ffmpeg -version",
-        "ffmpeg_hint": "ffmpeg ships with Diony — reopen Diony.app and it installs on open; otherwise brew install ffmpeg or set DIONY_FFMPEG to its path",
+        "ffmpeg_hint": "Run brew install ffmpeg or set DIONY_FFMPEG to its path.",
         "launcher": "Open Diony AI.command",
-        "app": "Diony.app (Build Diony AI.command builds it from a checkout)",
-        "names_prompt": "macOS asks for your password once so Diony can add studio, director, and producer .diony.local to /etc/hosts.",
-        "data_dir": "~/Library/Application Support/Diony AI",
+        "app": "the local browser launcher",
+        "names_prompt": "Diony opens Studio on localhost; no password or hosts-file change is needed.",
+        "data_dir": "<checkout>/.diony-vault",
         "terminal": "Terminal",
     }
 

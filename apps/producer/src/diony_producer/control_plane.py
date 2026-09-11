@@ -222,7 +222,7 @@ class ControlPlane:
             slug="local-studio",
             owner_user_id=user.id,
             controller_origin=os.environ.get(
-                "DIONY_PRODUCER_PUBLIC_URL", "http://producer.diony.local"
+                "DIONY_PRODUCER_PUBLIC_URL", "http://127.0.0.1:8788"
             ).rstrip("/"),
             controller_fingerprint="DIONY LOCAL CONTROLLER",
         )

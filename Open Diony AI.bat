@@ -1,58 +1,22 @@
 @echo off
-setlocal EnableExtensions EnableDelayedExpansion
-rem Diony AI - Windows launcher. Double-click.
-rem
-rem Opens the built app when this folder holds one (Build Diony AI.bat makes
-rem it); otherwise runs the desk from source with this PC's Python 3.11+.
-rem Either way a browser opens Studio at http://studio.diony.local.
+setlocal
 cd /d "%~dp0"
-echo Diony AI
-echo A browser will open Studio at http://studio.diony.local
-echo.
-set BOOT=apps\desk\src\diony_desk\boot.py
-if not exist "%BOOT%" (
-  echo This file must stay in the Diony AI folder.
-  pause
-  exit /b 1
+
+if not exist ".venv\Scripts\python.exe" (
+  py -3.11 -m venv .venv 2>nul || py -3 -m venv .venv
+  if errorlevel 1 goto :error
 )
 
-set VERSION=
-for /f "usebackq delims=" %%v in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-Content 'packaging\desktop\version.json' -Raw | ConvertFrom-Json).version"`) do set VERSION=%%v
-set BUILD_ID=
-if exist "dist\current-build.txt" set /p BUILD_ID=<"dist\current-build.txt"
-set APP=dist\builds\%BUILD_ID%\Diony AI\Diony AI.exe
-if not "%BUILD_ID%"=="" if exist "%APP%" (
-  echo Opening the built Diony AI %VERSION%. ffmpeg and the runtime are inside it.
-  echo You can close this window.
-  start "" "%APP%"
-  exit /b 0
+".venv\Scripts\python.exe" -c "import diony_contracts, diony_wizard, diony_producer, diony_director, uvicorn" >nul 2>nul
+if errorlevel 1 (
+  ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -e packages\contracts -e apps\wizard -e apps\producer -e apps\director
+  if errorlevel 1 goto :error
 )
 
-echo No built app in this folder yet - running from source.
-echo ^(Double-click Build Diony AI.bat once to build the app.^)
-echo Leave this window open until it says you can close it.
-echo.
-where py >nul 2>&1
-if %ERRORLEVEL%==0 (
-  for %%V in (3.14 3.13 3.12 3.11) do (
-    py -%%V -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>&1
-    if not errorlevel 1 (
-      py -%%V "%BOOT%"
-      exit /b !ERRORLEVEL!
-    )
-  )
-)
-where python >nul 2>&1
-if %ERRORLEVEL%==0 (
-  python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>&1
-  if not errorlevel 1 (
-    python "%BOOT%"
-    exit /b !ERRORLEVEL!
-  )
-)
-echo Diony AI needs Python 3.11 or newer to run from source.
-echo Install it from https://www.python.org/downloads/windows/ then double-click this again,
-echo or double-click Build Diony AI.bat to build the app, which needs no Python later.
-start https://www.python.org/downloads/windows/
+".venv\Scripts\python.exe" scripts\run_local.py
+exit /b %errorlevel%
+
+:error
+echo Diony needs Python 3.11 or newer and could not prepare its local environment.
 pause
 exit /b 1
