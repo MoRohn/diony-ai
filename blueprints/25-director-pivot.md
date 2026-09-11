@@ -26,7 +26,7 @@ surfaces keep their names and their brand, but their jobs change:
 | Surface | Before | After |
 |---|---|---|
 | Studio | Crate-to-cluster rail: Site, Connect, App, Ready, Sign | The opening page: choose the camera (Grok Imagine or Google Flow), see which keys are loaded, continue to the Director. |
-| Producer | Idea, Production, Gallery over a signed GPU | The Gallery: Director films with their spend, download, stitch, delete; the launch control plane and Studio governance beside it. |
+| Producer | Idea, Production, Gallery over a signed GPU | The Gallery: one card per finished production — the cut film as its face, its clips as piece buttons that open from the card — with spend, Select all / Clear all, one-ZIP download, stitch, and two-step deletion; the launch control plane beside it. |
 | **Director** | did not exist | The primary UI. A chat-first filmmaker that writes, prices, shoots, reviews, cuts, and narrates. |
 
 The Desk lands on Studio, which hands the user to the Director, which hands the film

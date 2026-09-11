@@ -275,3 +275,21 @@ def test_the_missing_ffmpeg_hint_follows_the_platform_choice(monkeypatch) -> Non
     write_platform_choice("mac")
     with pytest.raises(RuntimeError, match="brew install ffmpeg"):
         gallery.stitch_items(["s-a:job-1", "s-a:job-2"])
+
+
+def test_the_gallery_groups_each_session_into_one_production() -> None:
+    _session("s-prod22222", clips=2, film=True)
+    _session("s-prod33333", clips=1, film=False)
+    payload = TestClient(app).get("/api/gallery").json()
+    by_session = {row["session"]: row for row in payload["productions"]}
+    with_film = by_session["s-prod22222"]
+    assert with_film["film_id"] == "s-prod22222:film" and with_film["count"] == 3
+    assert with_film["clip_ids"] == ["s-prod22222:job-222201", "s-prod22222:job-222202"]
+    assert with_film["hero_id"] == with_film["film_id"]
+    assert with_film["title"] == "Film · s-prod22222"
+    clips_only = by_session["s-prod33333"]
+    assert clips_only["film_id"] == "" and clips_only["hero_id"] == "s-prod33333:job-333301"
+    assert clips_only["title"] == "Production · s-prod33333"
+    # the flat items stay the unit of selection, stitching, ZIP and deletion
+    assert payload["count"] == 4 and payload["films"] == 1 and payload["clips"] == 3
+    assert {item["id"] for item in payload["items"]} >= set(with_film["clip_ids"])

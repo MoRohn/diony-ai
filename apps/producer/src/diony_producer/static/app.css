@@ -3435,6 +3435,58 @@ body.join-open > #studio-drawer {
   letter-spacing: 0.02em;
 }
 
+.gallery-pieces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.18rem;
+  padding: 0.28rem 0.36rem 0.1rem;
+  border-top: 1px solid rgba(246, 246, 246, 0.1);
+}
+
+.gallery-piece {
+  display: grid;
+  min-width: 1.15rem;
+  height: 1.05rem;
+  margin: 0;
+  padding: 0 0.32rem;
+  place-items: center;
+  border: 1px solid rgba(246, 246, 246, 0.28);
+  border-radius: 999px;
+  background: rgba(13, 13, 13, 0.6);
+  color: rgba(246, 246, 246, 0.72);
+  font: 600 0.43rem/1 var(--mono);
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+
+.gallery-piece.film {
+  letter-spacing: 0.1em;
+}
+
+.gallery-piece:hover,
+.gallery-piece:focus-visible {
+  border-color: var(--flare);
+  color: var(--light);
+  outline: none;
+}
+
+.gallery-piece[aria-pressed="true"] {
+  border-color: var(--ember);
+  background: rgba(255, 162, 58, 0.16);
+  color: var(--light);
+}
+
+.gallery-piece.selected {
+  border-color: var(--signal);
+  background: var(--signal);
+  color: #fff;
+}
+
+.gallery-card.part-selected {
+  border-color: rgba(228, 59, 75, 0.62);
+}
+
 .gallery-card.selected {
   border-color: var(--signal);
   box-shadow: 0 0 0 2px var(--signal), 0 14px 30px rgba(13, 13, 13, 0.14);

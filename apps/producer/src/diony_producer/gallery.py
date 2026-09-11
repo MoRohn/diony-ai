@@ -217,10 +217,45 @@ def gallery_items() -> list[dict]:
     return items
 
 
+def gallery_productions(items: list[dict]) -> list[dict]:
+    """One production per session, in the items' order: the cut film (when
+    the session cut one) and every printed clip, by id. The Gallery draws
+    one card per production and opens its pieces from that card; the flat
+    `items` stay the unit of selection, stitching, ZIP, and deletion."""
+    by_session: dict[str, dict] = {}
+    for item in items:
+        session = str(item["session"])
+        row = by_session.get(session)
+        if row is None:
+            row = by_session[session] = {
+                "session": session,
+                "title": "",
+                "idea": "",
+                "film_id": "",
+                "clip_ids": [],
+                "hero_id": "",
+                "count": 0,
+            }
+        if item["kind"] == "film":
+            row["film_id"] = item["id"]
+            row["idea"] = str(item.get("prompt") or "")
+        else:
+            row["clip_ids"].append(item["id"])
+        row["count"] += 1
+    for row in by_session.values():
+        row["hero_id"] = row["film_id"] or (row["clip_ids"][0] if row["clip_ids"] else "")
+        row["title"] = (
+            f"Film · {row['session']}" if row["film_id"] else f"Production · {row['session']}"
+        )
+    return list(by_session.values())
+
+
 def gallery_payload() -> dict:
     items = gallery_items()
+    productions = gallery_productions(items)
     return {
         "items": items,
+        "productions": productions,
         "count": len(items),
         "films": sum(1 for item in items if item["kind"] == "film"),
         "clips": sum(1 for item in items if item["kind"] == "clip"),

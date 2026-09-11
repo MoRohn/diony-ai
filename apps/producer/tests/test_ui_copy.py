@@ -60,6 +60,14 @@ def test_the_gallery_is_the_finished_clips_inventory() -> None:
     assert "function renderGallery" in js and "function openGalleryViewer" in js
     assert "function renderGalleryDetails" in js and "function copyGalleryPrompt" in js
     assert "function itemFacts(item)" in js
+    # one card per production; its film and clips are piece buttons on the card
+    assert "function galleryProductions(items)" in js and "gallery.productions" in js
+    assert "productions.forEach((production, cardIndex)" in js
+    assert 'pieces.className = "gallery-pieces"' in js and "gallery-piece" in js
+    assert "function toggleGalleryProductionSelection(production)" in js
+    assert "removeGalleryItems(production.pieces)" in js
+    assert ".gallery-pieces" in css and '.gallery-piece[aria-pressed="true"]' in css
+    assert "One card per finished production" in html
     assert 'setTextNode(copy, "p", itemFacts(item).join(" · "), "gallery-card-facts");' in js
     assert 'setTextNode(copy, "small", itemMeta(item));' not in js
     assert "galleryExpandedPrompts" in js
@@ -92,8 +100,8 @@ def test_the_gallery_is_the_finished_clips_inventory() -> None:
 
 def test_the_static_stamp_is_pinned() -> None:
     html = (STATIC / "index.html").read_text()
-    assert 'href="/static/app.css?v=p15"' in html
-    assert 'src="/static/app.js?v=p15"' in html
+    assert 'href="/static/app.css?v=p16"' in html
+    assert 'src="/static/app.js?v=p16"' in html
 
 
 def test_producer_uses_the_diony_chorus_design_system() -> None:

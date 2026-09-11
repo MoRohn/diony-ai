@@ -285,6 +285,55 @@ function galleryItemById(clipId) {
   return (gallery?.items || []).find((item) => item.id === clipId) || null;
 }
 
+// One card per production (a session's cut film plus its printed clips).
+// The card shows one ACTIVE piece — the film when the session cut one — and
+// a row of piece buttons opens the others; every action on the card follows
+// the active piece. The flat items stay the unit of selection.
+let galleryActivePiece = new Map();
+
+function galleryProductions(items) {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const rows = (gallery?.productions || []).length
+    ? gallery.productions
+    : [...new Set(items.map((item) => item.session))].map((session) => ({
+        session,
+        film_id: items.find((item) => item.session === session && item.kind === "film")?.id || "",
+        clip_ids: items.filter((item) => item.session === session && item.kind !== "film").map((item) => item.id),
+      }));
+  return rows
+    .map((row) => {
+      const pieces = [row.film_id, ...(row.clip_ids || [])].map((id) => byId.get(id)).filter(Boolean);
+      if (!pieces.length) return null;
+      const film = pieces.find((item) => item.kind === "film") || null;
+      const clips = pieces.filter((item) => item.kind !== "film");
+      return { session: row.session, film, clips, pieces };
+    })
+    .filter(Boolean);
+}
+
+function galleryActivePieceOf(production) {
+  const wanted = galleryActivePiece.get(production.session);
+  return production.pieces.find((item) => item.id === wanted) || production.film || production.pieces[0];
+}
+
+function galleryPieceLabel(item, production) {
+  if (item.kind === "film") return "FILM";
+  const index = production.clips.indexOf(item);
+  return String(index >= 0 ? index + 1 : "•");
+}
+
+function toggleGalleryProductionSelection(production) {
+  if (galleryArchiveBusy) return;
+  disarmGalleryDelete();
+  const ids = production.pieces.map((item) => item.id);
+  const everySelected = ids.every((id) => gallerySelection.includes(id));
+  gallerySelection = everySelected
+    ? gallerySelection.filter((id) => !ids.includes(id))
+    : [...gallerySelection, ...ids.filter((id) => !gallerySelection.includes(id))];
+  gallerySelectionAnchor = gallerySelection.at(-1) || null;
+  renderGallery();
+}
+
 function clearGalleryViewer() {
   const video = document.getElementById("gallery-viewer-video");
   if (video) {
@@ -552,13 +601,7 @@ function renderGallery() {
   const meta = document.getElementById("gallery-meta");
   if (!grid || !gallery) return;
   const items = (gallery.items || []).filter((item) => item.playable);
-  if (meta) {
-    const films = items.filter((item) => item.kind === "film").length;
-    const clips = items.length - films;
-    meta.textContent = items.length
-      ? [films ? `${films} film${films === 1 ? "" : "s"}` : "", clips ? `${clips} clip${clips === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ")
-      : "No clips yet";
-  }
+  if (meta && !items.length) meta.textContent = "No clips yet";
   empty.classList.toggle("hidden", items.length > 0);
   grid.replaceChildren();
   if (!items.length) {
@@ -572,12 +615,32 @@ function renderGallery() {
   galleryExpandedPrompts = new Set(
     [...galleryExpandedPrompts].filter((id) => items.some((item) => item.id === id)),
   );
-  items.forEach((item, cardIndex) => {
+  const productions = galleryProductions(items);
+  galleryActivePiece = new Map(
+    [...galleryActivePiece].filter(([session, id]) =>
+      productions.some((production) => production.session === session && production.pieces.some((item) => item.id === id)),
+    ),
+  );
+  if (meta && items.length) {
+    const films = items.filter((item) => item.kind === "film").length;
+    const clips = items.length - films;
+    meta.textContent = [
+      `${productions.length} production${productions.length === 1 ? "" : "s"}`,
+      films ? `${films} film${films === 1 ? "" : "s"}` : "",
+      clips ? `${clips} clip${clips === 1 ? "" : "s"}` : "",
+    ].filter(Boolean).join(" · ");
+  }
+  productions.forEach((production, cardIndex) => {
+    const item = galleryActivePieceOf(production);
+    const pieceIds = production.pieces.map((piece) => piece.id);
+    const selectedPieces = pieceIds.filter((id) => gallerySelection.includes(id));
     const selectedIndex = gallerySelection.indexOf(item.id);
+    const productionSelected = selectedPieces.length === pieceIds.length;
     const promptExpanded = galleryExpandedPrompts.has(item.id);
     const card = document.createElement("article");
-    card.className = `gallery-card${item.id === watchGalleryId ? " on" : ""}${selectedIndex >= 0 ? " selected" : ""}${promptExpanded ? " prompt-open" : ""}`;
+    card.className = `gallery-card${pieceIds.includes(watchGalleryId) ? " on" : ""}${productionSelected ? " selected" : selectedPieces.length ? " part-selected" : ""}${promptExpanded ? " prompt-open" : ""}`;
     card.dataset.gallery = item.id;
+    card.dataset.session = production.session;
     card.setAttribute("role", "listitem");
     const watch = document.createElement("button");
     watch.type = "button";
@@ -592,19 +655,55 @@ function renderGallery() {
       openGalleryViewer(item);
     });
     card.appendChild(watch);
+    // the corner box selects the whole production — film and every clip —
+    // so one ZIP, stitch, or delete covers the finished piece of work
     const select = document.createElement("button");
     select.type = "button";
     select.className = "gallery-select-cue";
-    select.setAttribute("aria-pressed", String(selectedIndex >= 0));
+    select.setAttribute("aria-pressed", String(productionSelected));
     select.setAttribute(
       "aria-label",
-      selectedIndex >= 0
+      productionSelected
         ? `Selected ${selectedIndex + 1}. Remove ${item.title} from the selection`
-        : `Select ${item.title}`,
+        : selectedPieces.length
+          ? `${selectedPieces.length} of ${pieceIds.length} pieces selected. Select all of ${production.session}`
+          : `Select ${production.session} — its film and every clip`,
     );
     select.textContent = "";
-    select.addEventListener("click", (event) => toggleGallerySelection(item.id, { shift: event.shiftKey }));
+    select.addEventListener("click", () => toggleGalleryProductionSelection(production));
     card.appendChild(select);
+
+    // the pieces: the film and each clip, one button each — open a piece
+    // (or, while selecting, pick it on its own for a stitch or a ZIP)
+    if (production.pieces.length > 1) {
+      const pieces = document.createElement("div");
+      pieces.className = "gallery-pieces";
+      pieces.setAttribute("role", "group");
+      pieces.setAttribute("aria-label", `Pieces of ${production.session}`);
+      production.pieces.forEach((piece) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        const pieceSelected = gallerySelection.includes(piece.id);
+        button.className = `gallery-piece${piece.kind === "film" ? " film" : ""}${pieceSelected ? " selected" : ""}`;
+        button.textContent = galleryPieceLabel(piece, production);
+        button.setAttribute("aria-pressed", String(piece.id === item.id));
+        button.setAttribute(
+          "title",
+          piece.kind === "film" ? "The cut film" : `Clip ${galleryPieceLabel(piece, production)} · ${piece.plate}`,
+        );
+        button.setAttribute("aria-label", `${gallerySelectMode ? "Select" : "Open"} ${piece.title}`);
+        button.addEventListener("click", (event) => {
+          galleryActivePiece.set(production.session, piece.id);
+          if (gallerySelectMode || event.metaKey || event.ctrlKey || event.shiftKey) {
+            toggleGallerySelection(piece.id, { shift: event.shiftKey });
+            return;
+          }
+          openGalleryViewer(piece);
+        });
+        pieces.appendChild(button);
+      });
+      card.appendChild(pieces);
+    }
 
     const copy = document.createElement("div");
     copy.className = "gallery-card-copy";
@@ -694,9 +793,16 @@ function renderGallery() {
     remove.type = "button";
     remove.className = "gallery-delete";
     remove.textContent = "×";
-    remove.setAttribute("aria-label", `Delete media for ${item.title}`);
-    remove.setAttribute("title", "Delete media");
-    remove.addEventListener("click", () => armConfirm(remove, "Sure?", () => removeGalleryItems([item])));
+    remove.setAttribute(
+      "aria-label",
+      production.pieces.length > 1
+        ? `Delete media for ${production.session} — its film and every clip`
+        : `Delete media for ${item.title}`,
+    );
+    remove.setAttribute("title", production.pieces.length > 1 ? "Delete the production's media" : "Delete media");
+    remove.addEventListener("click", () =>
+      armConfirm(remove, "Sure?", () => removeGalleryItems(production.pieces)),
+    );
     actions.appendChild(remove);
     card.appendChild(actions);
     grid.appendChild(card);
