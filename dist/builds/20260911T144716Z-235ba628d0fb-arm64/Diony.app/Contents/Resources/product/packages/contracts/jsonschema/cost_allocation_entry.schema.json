@@ -1,0 +1,70 @@
+{
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "workspace_id": {
+      "title": "Workspace Id",
+      "type": "string"
+    },
+    "usage_event_id": {
+      "title": "Usage Event Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "job_id": {
+      "title": "Job Id",
+      "type": "string"
+    },
+    "department_id": {
+      "title": "Department Id",
+      "type": "string"
+    },
+    "team_id": {
+      "title": "Team Id",
+      "type": "string"
+    },
+    "cost_center_id": {
+      "title": "Cost Center Id",
+      "type": "string"
+    },
+    "internal_credits": {
+      "minimum": 0,
+      "title": "Internal Credits",
+      "type": "integer"
+    },
+    "cost_usd_micros": {
+      "minimum": 0,
+      "title": "Cost Usd Micros",
+      "type": "integer"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "workspace_id",
+    "usage_event_id",
+    "project_id",
+    "job_id",
+    "department_id",
+    "team_id",
+    "cost_center_id",
+    "internal_credits",
+    "cost_usd_micros"
+  ],
+  "title": "CostAllocationEntry",
+  "type": "object"
+}

@@ -1,0 +1,224 @@
+{
+  "$defs": {
+    "JobStatus": {
+      "enum": [
+        "queued",
+        "running",
+        "waiting_provider",
+        "retry_wait",
+        "paused",
+        "succeeded",
+        "failed",
+        "canceled",
+        "skipped"
+      ],
+      "title": "JobStatus",
+      "type": "string"
+    },
+    "ProviderCapability": {
+      "enum": [
+        "llm",
+        "image",
+        "video",
+        "tts",
+        "audio",
+        "assembly",
+        "finish",
+        "safety",
+        "package"
+      ],
+      "title": "ProviderCapability",
+      "type": "string"
+    },
+    "WorkflowStage": {
+      "enum": [
+        "intake",
+        "script",
+        "breakdown",
+        "consistency",
+        "safety_input",
+        "image",
+        "video",
+        "voice",
+        "sound",
+        "assembly",
+        "finish",
+        "safety_output",
+        "package"
+      ],
+      "title": "WorkflowStage",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "workspace_id": {
+      "title": "Workspace Id",
+      "type": "string"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "stage": {
+      "$ref": "#/$defs/WorkflowStage"
+    },
+    "capability": {
+      "$ref": "#/$defs/ProviderCapability"
+    },
+    "provider_id": {
+      "title": "Provider Id",
+      "type": "string"
+    },
+    "model": {
+      "title": "Model",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/JobStatus",
+      "default": "queued"
+    },
+    "idempotency_key": {
+      "title": "Idempotency Key",
+      "type": "string"
+    },
+    "attempt": {
+      "default": 0,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "max_attempts": {
+      "default": 3,
+      "title": "Max Attempts",
+      "type": "integer"
+    },
+    "progress_percent": {
+      "default": 0,
+      "title": "Progress Percent",
+      "type": "number"
+    },
+    "forecast_internal_credits": {
+      "default": 0,
+      "title": "Forecast Internal Credits",
+      "type": "integer"
+    },
+    "actual_internal_credits": {
+      "default": 0,
+      "title": "Actual Internal Credits",
+      "type": "integer"
+    },
+    "actual_cost_usd_micros": {
+      "default": 0,
+      "title": "Actual Cost Usd Micros",
+      "type": "integer"
+    },
+    "external_job_id": {
+      "default": "",
+      "title": "External Job Id",
+      "type": "string"
+    },
+    "input_lineage": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Input Lineage",
+      "type": "array"
+    },
+    "output_asset_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Output Asset Ids",
+      "type": "array"
+    },
+    "error_code": {
+      "default": "",
+      "title": "Error Code",
+      "type": "string"
+    },
+    "error_message": {
+      "default": "",
+      "title": "Error Message",
+      "type": "string"
+    },
+    "next_attempt_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Next Attempt At"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    },
+    "started_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Started At"
+    },
+    "completed_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Completed At"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    }
+  },
+  "required": [
+    "id",
+    "run_id",
+    "workspace_id",
+    "project_id",
+    "stage",
+    "capability",
+    "provider_id",
+    "model",
+    "idempotency_key"
+  ],
+  "title": "GenerationJob",
+  "type": "object"
+}

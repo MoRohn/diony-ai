@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "diony-director"
+version = "0.1.0"
+description = "Diony AI Director — the chat-first filmmaker on Grok Imagine and Google Flow (Blueprints 25–33)"
+requires-python = ">=3.11"
+authors = [{ name = "Diony AI" }]
+license = { text = "Proprietary" }
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "diony-contracts",
+    "diony-producer",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff"]
+
+[project.scripts]
+diony-director = "diony_director.app:main"
+diony-director-check = "diony_director.live_check:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+diony_director = ["static/*", "ratecards/*.json"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
