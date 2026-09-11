@@ -1,0 +1,48 @@
+{
+  "properties": {
+    "compute_usd_micros": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Compute Usd Micros",
+      "type": "integer"
+    },
+    "energy_usd_micros": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Energy Usd Micros",
+      "type": "integer"
+    },
+    "storage_usd_micros": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Storage Usd Micros",
+      "type": "integer"
+    },
+    "network_usd_micros": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Network Usd Micros",
+      "type": "integer"
+    },
+    "license_usd_micros": {
+      "default": 0,
+      "minimum": 0,
+      "title": "License Usd Micros",
+      "type": "integer"
+    },
+    "other_usd_micros": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Other Usd Micros",
+      "type": "integer"
+    },
+    "total_usd_micros": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Total Usd Micros",
+      "type": "integer"
+    }
+  },
+  "title": "CostBreakdown",
+  "type": "object"
+}

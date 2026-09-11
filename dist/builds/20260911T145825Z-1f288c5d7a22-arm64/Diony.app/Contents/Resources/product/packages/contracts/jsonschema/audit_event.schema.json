@@ -1,0 +1,68 @@
+{
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "workspace_id": {
+      "title": "Workspace Id",
+      "type": "string"
+    },
+    "actor_user_id": {
+      "title": "Actor User Id",
+      "type": "string"
+    },
+    "action": {
+      "title": "Action",
+      "type": "string"
+    },
+    "object_type": {
+      "title": "Object Type",
+      "type": "string"
+    },
+    "object_id": {
+      "title": "Object Id",
+      "type": "string"
+    },
+    "correlation_id": {
+      "title": "Correlation Id",
+      "type": "string"
+    },
+    "before_hash": {
+      "default": "",
+      "title": "Before Hash",
+      "type": "string"
+    },
+    "after_hash": {
+      "default": "",
+      "title": "After Hash",
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "workspace_id",
+    "actor_user_id",
+    "action",
+    "object_type",
+    "object_id",
+    "correlation_id"
+  ],
+  "title": "AuditEvent",
+  "type": "object"
+}
