@@ -4,6 +4,7 @@ a sheet still drawing is named and left for the next press."""
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -100,3 +101,53 @@ def test_the_board_reads_each_sheets_state_from_its_ops() -> None:
         "the template packs a line with its reaction"
     )
     session.reset()
+
+
+def test_cast_and_bibles_offer_a_character_anchor_upload() -> None:
+    static = Path(app_module.__file__).resolve().parent / "static"
+    js = (static / "app.js").read_text()
+    css = (static / "app.css").read_text()
+    assert "function characterAnchorPicker" in js
+    assert "function bibleMediaUrl" in js
+    assert "img.src = bibleMediaUrl(c, slot)" in js
+    assert "Use your image as anchor" in js
+    assert "/bible/anchor/${encodeURIComponent(c.char_id)}" in js
+    assert "anchor · yours" in js
+    assert ".anchorbtn" in css
+
+
+def test_bibles_can_link_an_existing_google_flow_character_without_a_prompt_dialog() -> None:
+    static = Path(app_module.__file__).resolve().parent / "static"
+    js = (static / "app.js").read_text()
+    css = (static / "app.css").read_text()
+    assert "function existingFlowCharacterPicker" in js
+    assert "Use existing Flow character" in js
+    assert "/api/director/flow/characters" in js
+    assert "Choose from Diony's Flow library" in js
+    assert "/bible/flow_character/${encodeURIComponent(c.char_id)}" in js
+    assert "Or paste a Flow character URL, entity ID, or API reference" in js
+    assert "window.prompt" not in js
+    assert ".flowcharform" in css
+    assert ".flowcharhint" in css
+
+
+def test_linked_flow_characters_are_visible_in_the_cast_dock() -> None:
+    static = Path(app_module.__file__).resolve().parent / "static"
+    js = (static / "app.js").read_text()
+    css = (static / "app.css").read_text()
+    assert 'c.flow_registered ? "flow"' in js
+    assert "/bible/flow-preview/${encodeURIComponent(c.char_id)}" in js
+    assert 'mk("span", "flowbadge", "FLOW ✓")' in js
+    assert "Flow linked · local review" in js
+    assert ".flowbadge" in css and ".castthumb.flow" in css
+
+
+def test_run_status_tracks_bibles_before_clips_and_reconnects_after_refresh() -> None:
+    static = Path(app_module.__file__).resolve().parent / "static"
+    js = (static / "app.js").read_text()
+    assert 'preparing: { tag: "Preparing", title: "Preparing cast and locations" }' in js
+    assert "function batchTrackerSpec" in js
+    assert 'kind: "bibles"' in js
+    assert "`${visible.printed}/${visible.total} BIBLE assets ready`" in js
+    assert "refreshProduction(); // uploaded anchors" in js
+    assert "resumeFromPlan(counts.run_plan, counts)" in js

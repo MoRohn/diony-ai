@@ -344,6 +344,41 @@ def test_run_batch_records_the_run_plan_and_retry_hands_it_back(monkeypatch) -> 
     assert body["run_plan"]["assemble"] is True
 
 
+def test_missing_flow_captcha_holds_the_account_once_and_stops_the_batch(monkeypatch) -> None:
+    """A deterministic account setup error is not 3 independent clip
+    failures and must not be retried by every automatic advance tick."""
+    sid = _sid()
+    proposal = session.propose(sid, ANIMATED, provider="google-flow", duration_s=24)
+    targets = {op.id for op in proposal.ops}
+    session.set_batch_targets(sid, targets)
+    calls = {"n": 0}
+
+    def missing_solver(_op):
+        calls["n"] += 1
+        raise base.CloudAdapterConfigurationError(
+            "Google Flow needs a captcha solver configured at "
+            f"{flow.CAPTCHA_PROVIDER_DOCS}; then press Run again. Nothing was spent."
+        )
+
+    monkeypatch.setattr(flow, "submit", missing_solver)
+    submitted, held = app_module._submit_ready(sid)
+
+    assert submitted == []
+    assert calls["n"] == 1
+    assert len(held) == 1
+    assert held[0]["kind"] == "configuration"
+    assert held[0]["provider"] == "google-flow"
+    assert held[0]["count"] == len(targets)
+    assert held[0]["help_url"] == flow.CAPTCHA_PROVIDER_DOCS
+    assert all(op.status == "proposed" for op in proposal.ops)
+    assert session.batch_targets(sid) == set()
+
+    # The next automatic tick is quiet. A human can configure useapi.net and
+    # press Run again, which creates a fresh target set without redrafting.
+    assert app_module._submit_ready(sid) == ([], [])
+    assert calls["n"] == 1
+
+
 def test_a_refused_link_rolls_again_from_a_fresh_frame_and_the_run_finishes(
     monkeypatch, tmp_path
 ) -> None:

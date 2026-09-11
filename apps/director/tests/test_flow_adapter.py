@@ -108,6 +108,31 @@ def test_quota_429_raises_the_quota_error_with_the_providers_reset_time(monkeypa
         assert "overall quota is used up" in str(err)
 
 
+def test_missing_captcha_provider_is_an_account_configuration_error() -> None:
+    """Once useapi's included solves run out, its 400 applies to the whole
+    account. It is not a bad clip and must not be repeated for every op."""
+    response = flow.httpx.Response(
+        400,
+        json={
+            "error": (
+                "No captcha provider API keys configured. Add at least one at "
+                f"{flow.CAPTCHA_PROVIDER_DOCS}"
+            ),
+            "code": 400,
+        },
+        request=flow.httpx.Request("POST", f"{flow.api_base()}/videos"),
+    )
+
+    with pytest.raises(base.CloudAdapterConfigurationError) as raised:
+        flow._guard(response)
+
+    detail = str(raised.value)
+    assert "captcha solver" in detail
+    assert "press Run again" in detail
+    assert "Nothing was spent" in detail
+    assert flow.CAPTCHA_PROVIDER_DOCS in detail
+
+
 def test_quota_reason_reads_the_live_envelope_never_dumps_it() -> None:
     """The 2026-09-03 room showed the whole JSON envelope (jobId, email,
     nested response…) as the hold reason. The reason is the documented

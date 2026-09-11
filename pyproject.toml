@@ -42,7 +42,6 @@ known-first-party = [
     "diony_director",
     "diony_finish",
     "diony_producer",
-    "diony_wan",
     "diony_wizard",
 ]
 

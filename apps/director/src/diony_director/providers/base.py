@@ -49,6 +49,15 @@ class CloudAdapterError(RuntimeError):
     pass
 
 
+class CloudAdapterConfigurationError(CloudAdapterError):
+    """An account-wide provider dependency is missing.
+
+    Nothing was submitted and retrying another op cannot help. The batch
+    should stop once, leave every unsent op runnable, and wait for a human to
+    repair the provider account.
+    """
+
+
 class ModerationRefused(CloudAdapterError):
     pass
 

@@ -103,21 +103,63 @@ changes under it.
    line to the narrator's measured take); `edl.json` events carry `voicing`;
    the QC packet's narration section lists exactly the cues the narrator
    spoke.
+10. **One castable voice per character — the voice card.** A spoken prompt
+    that said only "a natural, clear voice" left the provider to invent one:
+    a different voice per clip, the same voice for everyone, a woman read by
+    a man. Every character now carries a VOICE CARD on `CharacterProfile.voice`
+    (`VoiceProfile.gender / age_band / timbre / accent`, with `source`):
+    the screenwriter brain writes it per character (`voice: {gender, age,
+    timbre, accent}`), `voices.derive_voice` reads it deterministically from
+    the role, the casting notes and the identity anchor otherwise (gender
+    only when the writing says it plainly — both tells present is no read;
+    an age from "34", "in her fifties", "elderly"; a timbre from what the
+    writing says about how the person sounds, else the palette), and
+    `voices.cast_voices` makes the cast DISTINCT — no two characters share a
+    gender-and-timbre pair, later ones walking the palette or taking a pitch
+    spread. `packagebuilder.build_package` casts a draft that has no cards
+    (`voices.ensure_cast`), never rewriting one it has. The card rides every
+    generated clip's spoken clause verbatim (`compiler.speaker_voice_card`,
+    on-camera, voice-over and off-screen alike, in the priority-0 piece with
+    the quoted line: *VOICE — MARA: a female voice, thirties, warm and
+    bright, quick and friendly; MARA has this same voice in every clip, and
+    no other character in this film shares it*), and only the speaker's card
+    — never another character's. A one-shot voiced in the clip names ONE
+    described voice for the whole chain (`session.spoken_voice_read`: the
+    Voice pill's roster voice, or the one the Director casts for the session,
+    described from its roster tags). Narrated prompts carry no card: they
+    are byte-identical to Blueprint 28. The BIBLES card shows each
+    character's read (`voice`, `voice_source` on the board).
+11. **A character's line on the narrator rail is read in the character's
+    voice.** Under Dialogue and Mix the cue sheet stamps each cue with its
+    clip's `voicing`, and `cast_cues(character_voices=)` casts a cue whose
+    speaker is a cast member — a voice-over Mix keeps in post, or a mute take
+    the speech guard rescued — to a ROSTER voice scored from that
+    character's card (`voices.roster_notes`: its gender tells and timbre
+    words are the rosters' own tags), one voice per character, distinct
+    across the cast (`cast_voice(avoid=)` keeps two characters off one
+    roster voice while another of the right gender is free), and neither the
+    Voice pill nor the site pin overrides it: the pill is the narrator's own
+    voice. The receipt reads `character voice (MARA): female read; warm,
+    bright — rescued in the character's voice`, and `narration.voice` on the
+    assemble response names the narrator's cue, never a character's. Under
+    Narrated no character voices are handed in and the single-speaker
+    doctrine stands untouched.
 
 ## Trade-offs, stated
 
 - **Dialogue trades voice consistency for lip sync.** Each clip's voice is
-  the provider's; the prompt asks for one natural, consistent voice per line
-  but nothing binds timbre across clips (provider voice registration stayed
-  gone with Blueprint 28). Mix exists for films that want a consistent
-  narrator *and* characters speaking in frame.
+  the provider's; the voice card (§10) binds it to one described read per
+  character on every clip, which is as far as a prompt can bind timbre
+  (provider voice registration stayed gone with Blueprint 28). Mix exists
+  for films that want a consistent narrator *and* characters speaking in
+  frame.
 - **Run length under Dialogue follows the provider's delivery.** The clip is
   booked from the word-count arithmetic as before, but the take plays at its
   full length; a line the model rushes or drags is a `line`/`duration` review
   matter, never a trim.
-- **Rescue is a fallback, not a plan.** A rescued line has the narrator's
-  voice, not the character's; the receipt names it so the human can retake
-  instead.
+- **Rescue is a fallback, not a plan.** A rescued line is a roster voice cast
+  from the character's card (§11), not the provider's take of the character;
+  the receipt names it so the human can retake instead.
 
 ## API
 
@@ -136,4 +178,10 @@ chain link), the cue sheet, the mix balance, the speech guard, persistence and
 rehydration, the API lock, one-shots under each style, the brain contract, and
 two end-to-end films: a Dialogue cut with no narrator on the host, and a Mix
 cut that narrates the voice-over, balances the dialogue, and rescues a mute
-take.
+take. `test_voice_cast.py`: the reads (gender, age, timbre; no guess on an
+ambiguous or technical note), the distinct cast and the brain's card, the
+card's clause, every drafted character cast and a pre-card draft cast at
+lock, the card on Dialogue and Mix prompts (verbatim, the speaker's only,
+off-screen, under length pressure) and never on Narrated, the one-shot voice
+read, the narrator rail (a character's cue to a matching roster voice, two
+same-gender characters on two voices, Narrated's one narrator), the board.

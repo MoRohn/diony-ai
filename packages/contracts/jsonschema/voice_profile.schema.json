@@ -1,4 +1,5 @@
 {
+  "description": "A character's voice card (Blueprint 31 \u00a710). ``gender``, ``age_band``\nand ``timbre`` are the castable read every spoken prompt carries so the\nprovider voices the character as written \u2014 and voices two characters as\ntwo people. ``source`` says who wrote the card: the screenwriter brain,\nthe deterministic derivation from the casting notes, or the user.",
   "properties": {
     "voice_id": {
       "title": "Voice Id",
@@ -49,6 +50,36 @@
       "default": false,
       "title": "Approved",
       "type": "boolean"
+    },
+    "gender": {
+      "default": "",
+      "enum": [
+        "",
+        "female",
+        "male"
+      ],
+      "title": "Gender",
+      "type": "string"
+    },
+    "age_band": {
+      "default": "",
+      "title": "Age Band",
+      "type": "string"
+    },
+    "timbre": {
+      "default": "",
+      "title": "Timbre",
+      "type": "string"
+    },
+    "source": {
+      "default": "derived",
+      "enum": [
+        "brain",
+        "derived",
+        "user"
+      ],
+      "title": "Source",
+      "type": "string"
     }
   },
   "required": [

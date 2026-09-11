@@ -364,7 +364,8 @@ _BRAIN_INSTRUCTIONS = (
     "logline (str), beats (list of {beat, story_time}), settings (list of "
     "{setting_id, name, kind: INT|EXT, room_tone, time_weather, grade_language, "
     "camera_kit}), characters (list of {char_id, name, role?, age_body_notes, "
-    "wardrobe, identity: {anchor, features, negatives}}), scenes (list of "
+    "wardrobe, identity: {anchor, features, negatives}, voice: {gender, age, "
+    "timbre, accent}}), scenes (list of "
     "{heading, setting_ref, story_time, cast, emotional_job, lines: list of "
     "{kind: action|dialogue|vo|parenthetical|sound, text, speaker?, shot?, "
     "off_screen?}}).\n\n"
@@ -395,7 +396,14 @@ _BRAIN_INSTRUCTIONS = (
     "build, and face geometry ('34, lean, oval face, strong brow'); features "
     "= 3 to 5 non-negotiables a viewer would notice missing (hair colour and "
     "length, eye colour, skin tone, one mark — scar, freckles, grey streak); "
-    "negatives = what must never change. Concrete nouns, no mood words.\n\n"
+    "negatives = what must never change. Concrete nouns, no mood words. "
+    "voice is the character's VOICE CARD — how they sound, cast once for the "
+    "whole film: gender = female|male (the voice's read, as the character is "
+    "written), age = the age band ('thirties'), timbre = three or four plain "
+    "words on pitch, texture and pace ('low, warm, unhurried'), accent = one "
+    "phrase or empty. Every character in a scene together sounds like a "
+    "different person: never give two characters the same gender AND the "
+    "same timbre.\n\n"
     "OFF-SCREEN LINES: a character who is in the scene but out of frame "
     "may speak — set off_screen: true on that dialogue line (screenplay "
     "'(O.S.)'). Use it when the shot should hold on the listener's reaction, "
@@ -863,6 +871,15 @@ def _from_brain(
         card = _cast.parse_brain_identity(raw_char.get("identity"), char)
         if card is not None:
             char.identity = card
+    # Blueprint 31 §10: the brain's voice card when it wrote one, the
+    # derivation from the notes otherwise — and no two voices alike
+    from diony_director import voices as _voices
+
+    for char, raw_char in zip(characters, body["characters"]):
+        spoken = _voices.parse_brain_voice(raw_char.get("voice"), char)
+        if spoken is not None:
+            char.voice = spoken
+    _voices.cast_voices(characters)
 
     lines: list[ScriptLine] = []
     scenes: list[Scene] = []
@@ -1016,6 +1033,9 @@ def _template(
                 voice=_voice("chr-second", 1),
             )
         )
+    from diony_director import voices as _voices
+
+    _voices.cast_voices(characters)
 
     lines: list[ScriptLine] = []
     scenes: list[Scene] = []
@@ -1281,6 +1301,9 @@ def _template_authored(
         wardrobe={"default": "n/a (voice only)"},
         voice=_voice("chr-narrator", 0),
     )
+    from diony_director import voices as _voices
+
+    _voices.cast_voices([narrator])
     # blocks with no narration of their own get the global lines spread over
     # them in order, so a paste whose labels didn't parse per-scene still ships
     per_block = [list(b["narration"]) for b in blocks]

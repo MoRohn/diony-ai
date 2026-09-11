@@ -230,13 +230,30 @@ def speaks_in_clip(clip: ClipUnit) -> bool:
     )
 
 
-def _spoken_clause(clip: ClipUnit) -> str:
+def speaker_voice_card(clip: ClipUnit, package: ProductionPackage | None) -> str:
+    """Blueprint 31 §10: the VOICE card of the character who speaks this
+    clip's line — the same bytes on every clip they speak in — or '' when
+    the speaker is not a cast member (a package with no cast, an unnamed
+    speaker) or the character has no card yet."""
+    from diony_director import voices
+
+    excerpt = clip.audio_packet.script_excerpt
+    if package is None or not excerpt:
+        return ""
+    char = voices.character_for(str(excerpt[0].get("speaker", "")), package.characters)
+    return voices.voice_card(char) if char is not None else ""
+
+
+def _spoken_clause(clip: ClipUnit, package: ProductionPackage | None = None) -> str:
     """The line itself, quoted verbatim, with the instruction that the
     character voices it (Blueprint 31, Dialogue and Mix styles). An on-camera
     line is spoken in frame, lips in sync; a voice-over line is heard in the
     speaker's voice over the picture. The direction (parenthetical and the
-    packet's delivery notes) shapes the read. The words are never
-    paraphrased — _fit_prompt shrinks a quoted piece last of all."""
+    packet's delivery notes) shapes the read; the character's VOICE card
+    (§10) says whose voice it is — gender, age, timbre — so the provider
+    voices the person the script wrote and voices no two characters alike.
+    The words are never paraphrased — _fit_prompt shrinks a quoted piece
+    last of all."""
     excerpt = clip.audio_packet.script_excerpt
     if not excerpt:
         return ""
@@ -249,46 +266,61 @@ def _spoken_clause(clip: ClipUnit) -> str:
     delivery = ", ".join(f"{k}: {v}" for k, v in clip.audio_packet.delivery.items())
     direction = "; ".join(x for x in (parenthetical, delivery) if x)
     read = f" — delivered {direction}" if direction else ""
+    card = speaker_voice_card(clip, package)
     if entry.get("off_screen"):
         # Blueprint 32: the character's own voice, from beyond the frame edge
         from diony_director import cast as cast_mod
 
-        return cast_mod.offscreen_spoken_clause(who, line, read, list(entry.get("listeners") or []))
+        return cast_mod.offscreen_spoken_clause(
+            who, line, read, list(entry.get("listeners") or []), voice_card=card
+        )
     if clip.audio_packet.on_camera:
-        return (
+        clause = (
             f"{who} speaks aloud, on camera, lips in sync with the words, exactly "
             f'these words and nothing else: "{line}"{read}. A natural, clear, '
             "close-miked voice that stays the same voice for the whole line."
         )
-    return (
-        f"A voice-over is heard on the track in {who}'s voice, exactly these "
-        f'words and nothing else: "{line}"{read}. No one on screen mouths the '
-        "words; the voice is clear and close-miked."
-    )
+    else:
+        clause = (
+            f"A voice-over is heard on the track in {who}'s voice, exactly these "
+            f'words and nothing else: "{line}"{read}. No one on screen mouths the '
+            "words; the voice is clear and close-miked."
+        )
+    return f"{clause} {card}" if card else clause
 
 
-def spoken_narration_clause(narration: str) -> str:
+def spoken_narration_clause(narration: str, *, voice_read: str = "") -> str:
     """A one-shot's (or chain link's) narration voiced INSIDE the clip
     (Blueprint 31, Dialogue style): the words quoted verbatim, spoken by the
-    on-screen speaker when one is present and otherwise as a voice-over."""
+    on-screen speaker when one is present and otherwise as a voice-over.
+    `voice_read` (§10) is the film's one described voice — the narrator
+    cast for this session — so every link of a chain speaks in the same
+    voice instead of a new one per clip."""
     words = " ".join(str(narration or "").split())
     if not words:
         return ""
-    return (
+    clause = (
         "Spoken aloud on this clip's track, exactly these words and nothing "
         f'else: "{words}" — by the on-screen speaker, lips in sync, when one is '
         "present; otherwise as a clear voice-over. One natural, close-miked "
         "voice for the whole line."
     )
+    read = " ".join(str(voice_read or "").split()).rstrip(".")
+    if read:
+        clause += f" VOICE: {read}; the same voice in every clip of this film."
+    return clause
 
 
-def _voice_pieces(clip: ClipUnit) -> list[tuple[str, int]]:
+def _voice_pieces(
+    clip: ClipUnit, package: ProductionPackage | None = None
+) -> list[tuple[str, int]]:
     """The two untouchable voice pieces every dialect carries, by voicing:
     post (Blueprint 28) — the delivery performance without the words, plus
     the speechless-track law; generated (Blueprint 31) — the quoted line with
-    the instruction to voice it, plus the one-voice law."""
+    the instruction to voice it (and the speaker's voice card), plus the
+    one-voice law."""
     if speaks_in_clip(clip):
-        return [(_spoken_clause(clip), 0), (ONLY_THE_LINE, 0)]
+        return [(_spoken_clause(clip, package), 0), (ONLY_THE_LINE, 0)]
     return [(_delivery_clause(clip), 0), (NO_SPEECH, 0)]
 
 
@@ -473,7 +505,7 @@ def _base_prompt(
     look_block = _look_block(package)
     # Blueprint 28 or 31, by the clip's own voicing: the mute-track delivery
     # performance, or the quoted line the character voices in the clip.
-    voice = _voice_pieces(clip)
+    voice = _voice_pieces(clip, package)
 
     if limit is None:
         limit = prompt_limit(clip.provider)

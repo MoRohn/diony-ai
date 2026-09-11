@@ -38,6 +38,12 @@ DEFAULT_FORBIDDEN_DRIFT = [
 
 
 class VoiceProfile(BaseModel):
+    """A character's voice card (Blueprint 31 §10). ``gender``, ``age_band``
+    and ``timbre`` are the castable read every spoken prompt carries so the
+    provider voices the character as written — and voices two characters as
+    two people. ``source`` says who wrote the card: the screenwriter brain,
+    the deterministic derivation from the casting notes, or the user."""
+
     voice_id: str
     engine: Literal["omni_preset", "flow_user_voice", "none"] = "omni_preset"
     engine_ref: str = ""
@@ -47,6 +53,37 @@ class VoiceProfile(BaseModel):
     pitch_band: str = ""
     mic_distance: str = "close, dry"
     approved: bool = False
+    gender: Literal["", "female", "male"] = ""
+    age_band: str = ""
+    timbre: str = ""
+    source: Literal["brain", "derived", "user"] = "derived"
+
+    @property
+    def cast(self) -> bool:
+        """True once the card carries a read a prompt can use."""
+        return bool(self.gender or self.age_band or self.timbre)
+
+    def read(self) -> str:
+        """The one-line casting read: ``a female voice, thirties, warm and
+        bright, light New York accent``. Deterministic from the fields."""
+        head = f"a {self.gender} voice" if self.gender else "a voice"
+        bits = [head]
+        if self.age_band:
+            bits.append(self.age_band.strip().rstrip("."))
+        if self.timbre:
+            bits.append(self.timbre.strip().rstrip("."))
+        if self.accent:
+            bits.append(f"{self.accent.strip().rstrip('.')} accent")
+        return ", ".join(b for b in bits if b)
+
+    def card(self, name: str) -> str:
+        """The verbatim VOICE clause a spoken prompt carries beside the line:
+        the read, the one-voice-per-character law, and the exclusion that
+        keeps two characters from sharing a voice."""
+        return (
+            f"VOICE — {name}: {self.read()}; {name} has this same voice in every "
+            f"clip, and no other character in this film shares it."
+        )
 
 
 def _as_noun(negative: str) -> str:
@@ -107,6 +144,13 @@ class CharacterProfile(BaseModel):
     role: str = ""
     sheet_version: int = Field(default=1, ge=1)
     hero_stills: dict[str, str] = Field(default_factory=dict)
+    # The front still is the face every derived board, keyframe, and video
+    # reference follows.  It may be drawn by the selected image lane or
+    # supplied directly by the user at the cast gate.  Name + digest make a
+    # user anchor auditable without turning it into a film-wide upload.
+    anchor_source: Literal["generated", "uploaded"] = "generated"
+    anchor_name: str = ""
+    anchor_sha256: str = ""
     # Blueprint 32: the locked identity contract (None = the pre-32 prose
     # block), the measured self-consistency of the sheet (slot → cosine vs
     # the front still; empty = unmeasured), and how many times each slot

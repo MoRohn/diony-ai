@@ -106,10 +106,20 @@ def live_probe() -> dict:
                 for a in accounts
                 if isinstance(a, dict) and a.get("error")
             ]
+            captcha = flow.captcha_status()
+            if not captcha["ready"]:
+                problems.append(
+                    "captcha solver missing — the included solves are exhausted; add a "
+                    f"provider at {flow.CAPTCHA_PROVIDER_DOCS}"
+                )
             detail = f"auth OK; {len(accounts)} Flow account(s) connected"
             credits = [a.get("credits") for a in accounts if isinstance(a, dict) and "credits" in a]
             if credits:
                 detail += f"; credits: {credits}"
+            if captcha["providers"]:
+                detail += f"; captcha: {', '.join(captcha['providers'])} configured"
+            elif captcha["free_credits"]:
+                detail += f"; captcha: {captcha['free_credits']} included solve(s) remain"
             if problems:
                 # the token works but the account can't roll — that is NOT ok
                 detail += "; UNHEALTHY — " + "; ".join(problems)
@@ -117,6 +127,7 @@ def live_probe() -> dict:
                 "ok": not problems,
                 "detail": detail,
                 "accounts": len(accounts),
+                "captcha": captcha,
             }
         except Exception as err:
             out["google-flow"] = {"ok": False, "detail": f"auth failed: {err}"}

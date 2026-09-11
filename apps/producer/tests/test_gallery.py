@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import json
 import shutil
 import subprocess
+import time
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -128,6 +131,82 @@ def test_media_details_and_delete_stay_inside_the_vault() -> None:
     assert not (cluster_root() / "director" / "s-cccc3333" / "job-333301.mp4").exists()
     assert (cluster_root() / "director" / "s-cccc3333" / "state.json").exists(), "the record stays"
     assert client.get("/api/gallery").json()["count"] == 0
+
+
+def test_selected_gallery_items_download_as_one_stored_zip_with_a_manifest() -> None:
+    _session("s-archive7777", clips=2, film=True)
+    client = TestClient(app)
+    selected = [
+        "s-archive7777:job-777702",
+        "s-archive7777:film",
+        "s-archive7777:job-777701",
+        "s-archive7777:job-777702",
+    ]
+    queued = client.post("/api/gallery/archive", json={"items": selected})
+    assert queued.status_code == 202, queued.text
+    status = queued.json()
+    assert status["count"] == 3
+    assert status["filename"].startswith("diony-finished-clips-3-")
+    for _ in range(200):
+        status = client.get(status["status_url"]).json()
+        if status["state"] not in {"queued", "building"}:
+            break
+        time.sleep(0.01)
+    assert status["state"] == "ready", status
+    assert status["completed"] == 3 and status["download_url"]
+
+    download = client.get(status["download_url"])
+    assert download.status_code == 200
+    assert download.headers["content-type"] == "application/zip"
+    assert "attachment" in download.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(download.content)) as archive:
+        assert archive.namelist() == [
+            "001-s-archive7777-job-777702.mp4",
+            "002-s-archive7777-film.mp4",
+            "003-s-archive7777-job-777701.mp4",
+            "manifest.json",
+        ]
+        manifest = json.loads(archive.read("manifest.json"))
+        assert manifest["count"] == 3
+        assert [item["id"] for item in manifest["items"]] == selected[:3]
+        assert all(
+            archive.getinfo(name).compress_type == zipfile.ZIP_STORED for name in archive.namelist()
+        )
+    assert client.get(status["status_url"]).status_code == 404, "a downloaded ZIP is retired"
+
+
+def test_gallery_archive_refuses_an_empty_or_missing_selection() -> None:
+    client = TestClient(app)
+    assert client.post("/api/gallery/archive", json={"items": []}).status_code == 422
+    assert (
+        client.post("/api/gallery/archive", json={"items": ["s-nope:job-nope"]}).status_code == 404
+    )
+
+
+def test_bulk_delete_deduplicates_items_and_keeps_the_session_record() -> None:
+    root = _session("s-delete8888", clips=2, film=False)
+    client = TestClient(app)
+    body = client.post(
+        "/api/gallery/delete",
+        json={
+            "items": [
+                "s-delete8888:job-888801",
+                "s-delete8888:job-888802",
+                "s-delete8888:job-888801",
+                "s-delete8888:job-gone",
+            ]
+        },
+    )
+    assert body.status_code == 200, body.text
+    payload = body.json()
+    assert payload["removed"] == [
+        "s-delete8888:job-888801",
+        "s-delete8888:job-888802",
+    ]
+    assert payload["missing"] == ["s-delete8888:job-gone"]
+    assert (root / "state.json").is_file(), "the record and receipt survive bulk deletion"
+    assert client.get("/api/gallery").json()["count"] == 0
+    assert client.post("/api/gallery/delete", json={"items": []}).status_code == 422
 
 
 @pytest.mark.skipif(not HAVE_FFMPEG, reason="ffmpeg not installed")

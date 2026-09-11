@@ -29,6 +29,12 @@ def build_package(
 
     style = styles.normalize_style(production_style)
     lock_mode = cast_mod.normalize_mode(cast_lock)
+    # Blueprint 31 §10: every character carries a voice card before any
+    # spoken prompt is compiled — a draft written before cards existed is
+    # cast here, a cast already written is kept
+    from diony_director import voices
+
+    voices.ensure_cast(draft.characters)
     if lock_mode == "locked":
         # Blueprint 32: every character carries a card before any prompt is
         # compiled — the brain's when it wrote one, derived otherwise

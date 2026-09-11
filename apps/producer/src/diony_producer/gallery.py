@@ -16,6 +16,8 @@ import re
 import shutil
 import subprocess
 import uuid
+import zipfile
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -245,6 +247,91 @@ def gallery_media_path(item_id: str) -> Path:
     return _resolve(item_id)[1]
 
 
+def gallery_archive_sources(item_ids: list[str]) -> list[dict[str, Any]]:
+    """Resolve a stable, de-duplicated selection before an archive worker starts."""
+    if not item_ids:
+        raise ValueError("select at least one clip to download")
+    sources: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_item_id in item_ids:
+        item_id = str(raw_item_id)
+        if item_id in seen:
+            continue
+        session_dir, media = _resolve(item_id)
+        seen.add(item_id)
+        sources.append(
+            {
+                "id": item_id,
+                "session": session_dir.name,
+                "kind": "film" if media.name == "film.mp4" else "clip",
+                "path": media,
+                "bytes": media.stat().st_size,
+            }
+        )
+    return sources
+
+
+def build_gallery_archive(
+    sources: list[dict[str, Any]],
+    destination: Path,
+    *,
+    progress: Callable[[int, int], None] | None = None,
+) -> dict[str, int]:
+    """Store selected MP4s without recompressing them and add a small manifest."""
+    if not sources:
+        raise ValueError("select at least one clip to download")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    pending = destination.with_name(f".{destination.name}.part")
+    pending.unlink(missing_ok=True)
+    destination.unlink(missing_ok=True)
+    manifest_items: list[dict[str, Any]] = []
+    total = len(sources)
+    width = max(3, len(str(total)))
+    try:
+        with zipfile.ZipFile(
+            pending,
+            mode="w",
+            compression=zipfile.ZIP_STORED,
+            allowZip64=True,
+            strict_timestamps=False,
+        ) as archive:
+            for index, source in enumerate(sources, start=1):
+                path = Path(source["path"])
+                archive_name = (
+                    f"{index:0{width}d}-{_safe(source['session'])}-{_safe(path.stem)}.mp4"
+                )
+                archive.write(path, archive_name)
+                manifest_items.append(
+                    {
+                        "id": source["id"],
+                        "session": source["session"],
+                        "kind": source["kind"],
+                        "file": archive_name,
+                        "bytes": int(source["bytes"]),
+                    }
+                )
+                if progress:
+                    progress(index, total)
+            manifest = {
+                "schema_version": 1,
+                "created_at": datetime.now(UTC).isoformat(),
+                "count": total,
+                "source_bytes": sum(int(source["bytes"]) for source in sources),
+                "items": manifest_items,
+            }
+            archive.writestr("manifest.json", json.dumps(manifest, indent=2) + "\n")
+        pending.replace(destination)
+    except Exception:
+        pending.unlink(missing_ok=True)
+        destination.unlink(missing_ok=True)
+        raise
+    return {
+        "count": total,
+        "source_bytes": sum(int(source["bytes"]) for source in sources),
+        "archive_bytes": destination.stat().st_size,
+    }
+
+
 def gallery_thumbnail_path(item_id: str) -> Path:
     session_dir, media = _resolve(item_id)
     destination = session_dir / "thumbs" / f"{media.stem}-{_cache_key(media)}.jpg"
@@ -351,6 +438,33 @@ def remove_gallery_item(item_id: str) -> dict[str, str]:
     return {
         "removed": item_id,
         "detail": f"{media.name} was removed; its receipt stays on the ledger.",
+    }
+
+
+def remove_gallery_items(item_ids: list[str]) -> dict[str, Any]:
+    """Remove a de-duplicated selection while reporting stale cards honestly."""
+    if not item_ids:
+        raise ValueError("select at least one clip to delete")
+    removed: list[str] = []
+    missing: list[str] = []
+    seen: set[str] = set()
+    for raw_item_id in item_ids:
+        item_id = str(raw_item_id)
+        if item_id in seen:
+            continue
+        seen.add(item_id)
+        try:
+            remove_gallery_item(item_id)
+        except GalleryError:
+            missing.append(item_id)
+        else:
+            removed.append(item_id)
+    return {
+        "removed": removed,
+        "missing": missing,
+        "detail": (
+            f"{len(removed)} item(s) were removed; their records and receipts stay on the ledger."
+        ),
     }
 
 

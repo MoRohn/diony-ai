@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import threading
 import time
 import uuid
 from datetime import UTC, datetime
@@ -21,6 +23,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 from starlette.requests import Request
 
 from diony_contracts.cluster import (
@@ -34,11 +37,14 @@ from diony_contracts.launch import MembershipRole
 from diony_producer.control_plane import ControlPlane, WorkspaceAccessDenied
 from diony_producer.gallery import (
     GalleryError,
+    build_gallery_archive,
+    gallery_archive_sources,
     gallery_item_details,
     gallery_media_path,
     gallery_payload,
     gallery_thumbnail_path,
     remove_gallery_item,
+    remove_gallery_items,
     stitch_items,
 )
 from diony_producer.launch_api import prometheus_metrics
@@ -49,7 +55,11 @@ from diony_producer.security import verify_token
 
 STATIC = Path(__file__).resolve().parent / "static"
 DIRECTOR_URL = "http://director.diony.local"
+STUDIO_URL = "http://studio.diony.local"
 _SESSION_ACTIVE = {"queued", "running", "waiting_provider", "retry_wait"}
+_GALLERY_ARCHIVE_RETENTION_S = 24 * 60 * 60
+_GALLERY_ARCHIVES: dict[str, dict] = {}
+_GALLERY_ARCHIVES_LOCK = threading.Lock()
 
 app = FastAPI(title="Diony Producer", version="0.9.0")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -139,6 +149,7 @@ def engine_state() -> dict:
         "cloud": engine_is_cloud(),
         "engine_choice": read_engine_choice(),
         "director_url": DIRECTOR_URL,
+        "studio_url": STUDIO_URL,
     }
 
 
@@ -248,6 +259,225 @@ def delete_gallery_item(item_id: str) -> dict:
         return remove_gallery_item(item_id)
     except GalleryError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+class GalleryItemsBody(BaseModel):
+    items: list[str]
+
+
+def _gallery_archive_root() -> Path:
+    return cluster_root() / ".control" / "gallery-archives"
+
+
+def _gallery_archive_public(job: dict) -> dict:
+    payload = {
+        key: job[key]
+        for key in (
+            "archive_id",
+            "state",
+            "count",
+            "completed",
+            "source_bytes",
+            "archive_bytes",
+            "filename",
+            "failure",
+            "created_at",
+        )
+    }
+    payload["status_url"] = f"/api/gallery/archive/{job['archive_id']}"
+    payload["download_url"] = (
+        f"/api/gallery/archive/{job['archive_id']}/file" if job["state"] == "ready" else ""
+    )
+    return payload
+
+
+def _update_gallery_archive(archive_id: str, **changes) -> None:
+    with _GALLERY_ARCHIVES_LOCK:
+        job = _GALLERY_ARCHIVES.get(archive_id)
+        if job is not None:
+            job.update(changes)
+
+
+def _build_gallery_archive(archive_id: str, sources: list[dict], destination: Path) -> None:
+    _update_gallery_archive(archive_id, state="building")
+
+    def progress(completed: int, _total: int) -> None:
+        _update_gallery_archive(archive_id, completed=completed)
+
+    try:
+        result = build_gallery_archive(sources, destination, progress=progress)
+    except Exception as exc:
+        destination.unlink(missing_ok=True)
+        _update_gallery_archive(
+            archive_id,
+            state="failed",
+            failure=f"The ZIP could not be built: {exc}",
+        )
+        log_event("gallery.archive.failed", level="error", archive_id=archive_id, failure=str(exc))
+        return
+    _update_gallery_archive(
+        archive_id,
+        state="ready",
+        completed=result["count"],
+        source_bytes=result["source_bytes"],
+        archive_bytes=result["archive_bytes"],
+    )
+    log_event(
+        "gallery.archive.ready",
+        archive_id=archive_id,
+        items=result["count"],
+        archive_bytes=result["archive_bytes"],
+    )
+
+
+def _discard_gallery_archive(archive_id: str) -> None:
+    with _GALLERY_ARCHIVES_LOCK:
+        job = _GALLERY_ARCHIVES.pop(archive_id, None)
+    if not job:
+        return
+    root = Path(job["root"]).resolve()
+    directory = Path(job["directory"]).resolve()
+    if directory.parent == root:
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+def _purge_stale_gallery_archives(root: Path) -> None:
+    cutoff = time.time() - _GALLERY_ARCHIVE_RETENTION_S
+    resolved_root = root.resolve()
+    expired_directories: list[Path] = []
+    with _GALLERY_ARCHIVES_LOCK:
+        for archive_id, job in list(_GALLERY_ARCHIVES.items()):
+            if (
+                Path(job["root"]).resolve() == resolved_root
+                and float(job.get("created_timestamp", 0)) < cutoff
+            ):
+                expired_directories.append(Path(job["directory"]))
+                _GALLERY_ARCHIVES.pop(archive_id, None)
+        active_ids = {
+            archive_id
+            for archive_id, job in _GALLERY_ARCHIVES.items()
+            if Path(job["root"]).resolve() == resolved_root
+        }
+    for directory in expired_directories:
+        resolved = directory.resolve()
+        if resolved.parent == resolved_root:
+            shutil.rmtree(resolved, ignore_errors=True)
+    try:
+        children = list(root.iterdir())
+    except OSError:
+        return
+    for child in children:
+        if (
+            child.name in active_ids
+            or not child.is_dir()
+            or not re.fullmatch(r"[0-9a-f]{32}", child.name)
+        ):
+            continue
+        try:
+            stale = child.stat().st_mtime < cutoff
+        except OSError:
+            continue
+        if stale:
+            shutil.rmtree(child, ignore_errors=True)
+
+
+@app.post("/api/gallery/archive", status_code=202)
+def create_gallery_archive(body: GalleryItemsBody) -> dict:
+    """Queue one local ZIP for the selection; MP4s are stored, never recompressed."""
+    try:
+        sources = gallery_archive_sources(body.items)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GalleryError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    root = _gallery_archive_root()
+    root.mkdir(parents=True, exist_ok=True)
+    _purge_stale_gallery_archives(root)
+    source_bytes = sum(int(source["bytes"]) for source in sources)
+    reserve = 16 * 1024 * 1024
+    if shutil.disk_usage(root).free < source_bytes + reserve:
+        raise HTTPException(
+            status_code=507,
+            detail="There is not enough free disk space to build this ZIP.",
+        )
+
+    archive_id = uuid.uuid4().hex
+    directory = root / archive_id
+    directory.mkdir()
+    filename = (
+        f"diony-finished-clips-{len(sources)}-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}.zip"
+    )
+    destination = directory / filename
+    job = {
+        "archive_id": archive_id,
+        "state": "queued",
+        "count": len(sources),
+        "completed": 0,
+        "source_bytes": source_bytes,
+        "archive_bytes": 0,
+        "filename": filename,
+        "failure": "",
+        "created_at": datetime.now(UTC).isoformat(),
+        "created_timestamp": time.time(),
+        "root": str(root.resolve()),
+        "directory": str(directory.resolve()),
+        "path": str(destination.resolve()),
+    }
+    with _GALLERY_ARCHIVES_LOCK:
+        _GALLERY_ARCHIVES[archive_id] = job
+    threading.Thread(
+        target=_build_gallery_archive,
+        args=(archive_id, sources, destination),
+        name=f"gallery-archive-{archive_id[:8]}",
+        daemon=True,
+    ).start()
+    with _GALLERY_ARCHIVES_LOCK:
+        return _gallery_archive_public(_GALLERY_ARCHIVES[archive_id])
+
+
+@app.get("/api/gallery/archive/{archive_id}")
+def gallery_archive_status(archive_id: str) -> dict:
+    _purge_stale_gallery_archives(_gallery_archive_root())
+    with _GALLERY_ARCHIVES_LOCK:
+        job = _GALLERY_ARCHIVES.get(archive_id)
+        payload = _gallery_archive_public(job) if job else None
+    if payload is None:
+        raise HTTPException(status_code=404, detail="That ZIP is no longer available.")
+    return payload
+
+
+@app.get("/api/gallery/archive/{archive_id}/file")
+def download_gallery_archive(archive_id: str) -> FileResponse:
+    _purge_stale_gallery_archives(_gallery_archive_root())
+    with _GALLERY_ARCHIVES_LOCK:
+        job = dict(_GALLERY_ARCHIVES.get(archive_id) or {})
+    if not job:
+        raise HTTPException(status_code=404, detail="That ZIP is no longer available.")
+    if job["state"] == "failed":
+        raise HTTPException(status_code=409, detail=job["failure"])
+    if job["state"] != "ready":
+        raise HTTPException(status_code=409, detail="That ZIP is still being built.")
+    path = Path(job["path"])
+    if not path.is_file():
+        _discard_gallery_archive(archive_id)
+        raise HTTPException(status_code=404, detail="That ZIP is no longer available.")
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=job["filename"],
+        content_disposition_type="attachment",
+        background=BackgroundTask(_discard_gallery_archive, archive_id),
+    )
+
+
+@app.post("/api/gallery/delete")
+def delete_gallery_items(body: GalleryItemsBody) -> dict:
+    """Delete selected media in one request while keeping records and receipts."""
+    try:
+        return remove_gallery_items(body.items)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 class StitchItemsBody(BaseModel):

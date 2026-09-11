@@ -64,6 +64,59 @@ def test_flow_character_and_voice_registration(monkeypatch) -> None:
     assert calls[1][0].endswith("/voices")
 
 
+def test_existing_flow_character_url_resolves_to_the_video_reference(monkeypatch) -> None:
+    full_ref = "user:7-email:abc-character:8b927a1f-e309-4512-bbb3-ee62ef69cca5-imgs:2"
+    seen = {}
+
+    def fake_get(url, **kwargs):
+        seen["url"] = url
+        seen["params"] = kwargs.get("params")
+        return _Response(
+            {
+                "characters": [
+                    {
+                        "entityId": "8b927a1f-e309-4512-bbb3-ee62ef69cca5",
+                        "character": full_ref,
+                        "displayName": "Ghost",
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setenv("DIONY_FLOW_EMAIL", "studio@example.com")
+    monkeypatch.setattr(flow, "_get", fake_get)
+    found = flow.resolve_character(
+        "https://flow.google.com/u/1/project/project-id/character/"
+        "8b927a1f-e309-4512-bbb3-ee62ef69cca5"
+    )
+    assert found["character"] == full_ref
+    assert seen["url"].endswith("/characters")
+    assert seen["params"] == {"email": "studio@example.com"}
+
+
+def test_character_registration_returns_the_reference_videos_accept(monkeypatch) -> None:
+    full_ref = "user:7-email:abc-character:char-9-imgs:2"
+    seen = {}
+
+    class _CharacterResponse:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"entityId": "char-9", "character": full_ref}
+
+    monkeypatch.setenv("DIONY_FLOW_EMAIL", "studio@example.com")
+    monkeypatch.setattr(
+        flow,
+        "_post",
+        lambda url, **kw: seen.update(url=url, payload=kw["json"]) or _CharacterResponse(),
+    )
+    monkeypatch.setattr(flow, "_media_ref", lambda value, what="": value)
+    assert flow.register_character("Mara", ["user:f"]) == full_ref
+    assert seen["url"].endswith("/characters")
+    assert seen["payload"] == {"displayName": "Mara", "imageReference_1": "user:f"}
+
+
 def test_flow_extend_and_upscale_endpoints(monkeypatch) -> None:
     seen = []
 

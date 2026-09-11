@@ -104,6 +104,19 @@ def test_character_profile_carries_forbidden_drift_defaults() -> None:
     char = CharacterProfile(char_id="chr-mara", name="Mara")
     assert "no hair restyle" in char.forbidden_drift
     assert char.sheet_version == 1
+    assert char.anchor_source == "generated"
+
+
+def test_character_profile_records_an_uploaded_anchor() -> None:
+    char = CharacterProfile(
+        char_id="chr-mara",
+        name="Mara",
+        anchor_source="uploaded",
+        anchor_name="mara.png",
+        anchor_sha256="a" * 64,
+    )
+    assert char.anchor_source == "uploaded"
+    assert char.anchor_name == "mara.png"
 
 
 def test_voice_profile_defaults_to_an_unapproved_omni_voice() -> None:

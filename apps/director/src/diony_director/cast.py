@@ -235,11 +235,13 @@ def identity_refs(char: CharacterProfile) -> list[str]:
 
 
 def flow_character_media(char: CharacterProfile) -> list[str]:
-    """The two Flow-hosted stills a character object is built from (the
-    endpoint's documented maximum is two): the anchor face, then the board."""
+    """The two stills a Flow character object is built from (the endpoint's
+    documented maximum is two): the anchor face, then the board.  Generated
+    stills use their hosted ids; a user anchor remains a local path until the
+    adapter uploads it by content hash."""
     ordered: list[str] = []
     for slot in ("front", BOARD_SLOT):
-        media = char.flow_media_ids.get(slot)
+        media = char.flow_media_ids.get(slot) or char.hero_stills.get(slot)
         if media and media not in ordered:
             ordered.append(media)
     for media in char.flow_media_ids.values():
@@ -567,16 +569,20 @@ def offscreen_delivery_clause(speaker: str, listeners: list[str]) -> str:
     )
 
 
-def offscreen_spoken_clause(speaker: str, line: str, read: str, listeners: list[str]) -> str:
+def offscreen_spoken_clause(
+    speaker: str, line: str, read: str, listeners: list[str], *, voice_card: str = ""
+) -> str:
     """Generated (Blueprint 31) off-screen line: the words verbatim, arriving
-    from beyond the frame edge, with no on-screen mouth forming them."""
+    from beyond the frame edge, with no on-screen mouth forming them — in the
+    speaker's own cast voice (`voice_card`, §10) when the character has one."""
     who = " and ".join(listeners[:2]) if listeners else "the people on screen"
-    return (
+    clause = (
         f"{speaker} speaks from OFF-SCREEN — out of frame for the whole shot — exactly these "
         f'words and nothing else: "{line}"{read}. The voice arrives from beyond the frame '
         f"edge, clear and close-miked; {who} listen and react, and no one on screen "
         "mouths the words."
     )
+    return f"{clause} {voice_card}" if voice_card else clause
 
 
 __all__ = [

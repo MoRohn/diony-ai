@@ -240,6 +240,9 @@ class NarrationCue:
     direction: str = ""
     voice_ref: str = ""
     cast_note: str = ""
+    # Blueprint 31: the clip's own voicing — "generated" here means the
+    # provider was booked to voice the line and the speech guard rescued it
+    voicing: str = "post"
     # the line as actually performed — the verbatim words plus any speech
     # tags the direction mapped to; set at synthesis, audited in the report
     performed: str = ""
@@ -342,6 +345,22 @@ def roster_catalog() -> list[dict]:
     return rows
 
 
+def describe_voice(voice_ref: str) -> str:
+    """A roster voice as a casting read for a spoken prompt (Blueprint 31
+    §10): `a female voice — soothing, calm, intimate`. '' for a voice the
+    rosters do not know (a CLI narrator, an authored lock)."""
+    ref = str(voice_ref or "").strip()
+    if not ref:
+        return ""
+    tags = next((t for name, t in _all_rosters().items() if name.lower() == ref.lower()), None)
+    if not tags:
+        return ""
+    gender = next((t for t in tags if t in {"male", "female"}), "")
+    rest = [t for t in tags if t not in {"male", "female"}][:4]
+    head = f"a {gender} voice" if gender else "a voice"
+    return f"{head} — {', '.join(rest)}" if rest else head
+
+
 def normalize_voice(value: str | None) -> str:
     """A console/API voice value as the rosters know it: '' for Auto (the
     Director casts), else the roster key. Unknown names raise ValueError."""
@@ -358,13 +377,21 @@ def normalize_voice(value: str | None) -> str:
 
 
 def cast_voice(
-    *, speaker: str = "", tone_text: str = "", character_notes: str = "", seed: str = ""
+    *,
+    speaker: str = "",
+    tone_text: str = "",
+    character_notes: str = "",
+    seed: str = "",
+    avoid: set[str] | None = None,
 ) -> tuple[str, str]:
     """Pick the roster voice that reads like this production.
 
     Tone text (the master prompt's mood, visual style, and performance, plus
     the cue's own direction) scores against each voice's tags; a character
-    whose notes read a gender strongly prefers a matching voice. Ties break
+    whose notes read a gender strongly prefers a matching voice. `avoid` is
+    the voices already cast to OTHER characters of this film (Blueprint 31
+    §10): they lose to any other voice of the right gender so two characters
+    never share a roster voice while one is free. Ties break
     on a stable hash of the speaker AND the film (`seed`, the session), so
     one production casts the same voice on every assemble — while different
     films spread across the roster instead of every tone-neutral film
@@ -389,6 +416,11 @@ def cast_voice(
                 score -= 3
         scores[name] = score
         hits[name] = matched
+    taken = {str(v).lower() for v in (avoid or set())}
+    if taken and any(name.lower() not in taken for name in scores):
+        for name in list(scores):
+            if name.lower() in taken:
+                scores[name] -= 10
     best = max(scores.values())
     top = sorted(name for name, score in scores.items() if score == best)
     spread = int(hashlib.md5(f"{seed}|{speaker or 'narrator'}".encode()).hexdigest(), 16)
@@ -406,24 +438,42 @@ def cast_cues(
     character_notes: dict[str, str] | None = None,
     voice: str = "",
     seed: str = "",
+    character_voices: dict[str, str] | None = None,
 ) -> None:
     """Resolve every cue's voice, in authored order of authority: a clip's
     voice lock; the voice chosen for this film in the Director console
     (`voice`); the site-pinned DIONY_GROK_VOICE; else ONE voice cast from
     the roster for the whole production (spread per film by `seed`).
 
-    Single-speaker doctrine: per-speaker casting handed a two-character scene
-    two narrator voices — the multiple-voices defect wearing the casting
-    sheet. The film speaks with one narrator throughout; only an authored
-    voice lock (or the site pin) may say otherwise. A production whose cues
-    all belong to one scripted speaker still casts to that character's read
-    (gender tells and all); mixed speakers cast from the film's tone alone."""
+    Single-speaker doctrine (Narrated): per-speaker casting handed a
+    two-character scene two narrator voices — the multiple-voices defect
+    wearing the casting sheet. The film speaks with one narrator throughout;
+    only an authored voice lock (or the site pin) may say otherwise. A
+    production whose cues all belong to one scripted speaker still casts to
+    that character's read (gender tells and all); mixed speakers cast from
+    the film's tone alone.
+
+    Character voices (Blueprint 31 §10, Dialogue and Mix): `character_voices`
+    maps a speaker name to that character's voice-card read (gender, age,
+    timbre — `voices.roster_notes`). A cue whose speaker is in the map is
+    the CHARACTER's line on the narrator rail — a voice-over the style keeps
+    in post, or a mute take the speech guard rescued — and is cast to a
+    roster voice that matches the character's read, one voice per character
+    and distinct across the cast; neither the console's narrator choice nor
+    the site pin overrides it (a woman's line is never read by the film's
+    male narrator because a pill said so). Cues outside the map — the
+    narrator's own — keep the doctrine above."""
     chosen = str(voice or "").strip()
     if chosen.lower() == "auto":
         chosen = ""  # the console's Auto: the Director casts
     pin_env = GEMINI_VOICE_ENV if backend() == "gemini" else GROK_VOICE_ENV
     pinned = os.environ.get(pin_env, "").strip()
     notes = {str(k).strip().lower(): str(v) for k, v in (character_notes or {}).items()}
+    cast_reads = {
+        str(k).strip().lower(): str(v)
+        for k, v in (character_voices or {}).items()
+        if str(k).strip() and str(v).strip()
+    }
     # A `vox-<char>@vN` ref is the splitter's CHARACTER IDENTITY lock (the
     # Flow lane's "this character keeps one voice"), not a narrator voice
     # id: sent to Grok TTS verbatim it is an unknown voice, and read as an
@@ -434,6 +484,25 @@ def cast_cues(
         if is_identity_ref(cue.voice_ref):
             cue.voice_ref = ""
             cue.cast_note = "character voice lock → the film's narrator"
+    # the characters' own cues, cast first so the narrator never takes them
+    by_character: dict[str, tuple[str, str]] = {}
+    for cue in cues:
+        key = cue.speaker.strip().lower()
+        if cue.voice_ref or key not in cast_reads:
+            continue
+        if key not in by_character:
+            picked, why = cast_voice(
+                speaker=cue.speaker,
+                tone_text=cast_reads[key],
+                character_notes=cast_reads[key],
+                seed=seed,
+                avoid={v for v, _ in by_character.values()},
+            )
+            by_character[key] = (picked, why)
+        picked, why = by_character[key]
+        cue.voice_ref = picked
+        rescued = " — rescued in the character's voice" if cue.voicing == "generated" else ""
+        cue.cast_note = f"character voice ({cue.speaker.strip()}): {why}{rescued}"
     open_cues = [cue for cue in cues if not cue.voice_ref]
     speakers = {c.speaker.strip().lower() for c in open_cues if c.speaker.strip()}
     solo = next(iter(speakers)) if len(speakers) == 1 else ""
@@ -450,7 +519,8 @@ def cast_cues(
         note += " — one voice for the whole film"
     for cue in cues:
         if cue.voice_ref:
-            cue.cast_note = "authored voice lock"
+            if not cue.cast_note.startswith("character voice ("):
+                cue.cast_note = "authored voice lock"
             continue
         identity = cue.cast_note if cue.cast_note.startswith("character voice lock") else ""
         prefix = f"{identity}; " if identity else ""
@@ -633,6 +703,7 @@ def cue_sheet(entries: list[dict]) -> list[NarrationCue]:
                 line=line,
                 direction=direction,
                 voice_ref=voice_ref,
+                voicing=voicing,
                 start_s=round(timeline_s + line_at_s + CUE_LEAD_IN_S, 3),
                 window_s=round(duration - line_at_s, 3),
             )

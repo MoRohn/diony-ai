@@ -9,6 +9,7 @@ speaks from.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
 import time
@@ -42,6 +43,9 @@ from diony_producer.control_plane import ControlPlane, control_plane_path
 # One gate over the status check-and-set: two concurrent runs of the same op
 # must never both cross into a provider submit (double-spend).
 _RUN_GUARD = threading.Lock()
+# A browser repaint can request the same provider portrait more than once.
+# Resolve and cache it once; signed Flow preview URLs never reach the browser.
+_FLOW_PREVIEW_GUARD = threading.Lock()
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -150,10 +154,7 @@ def status() -> dict:
     return {
         "engine": engine.engine_mode().value,
         "engine_choice": read_engine_choice(),
-        # The vault this Director reads its Studio choice from. The desk
-        # compares it with its own before adopting a Director already on
-        # :8790 — a checkout Director on the packaged desk's port would
-        # otherwise never see the engine Studio wrote.
+        # The vault this Director reads its Studio choice from.
         "vault": str(cluster_root().resolve()),
         "in_flight_jobs": session.in_flight_jobs(),
         "boot": boot_info,
@@ -164,6 +165,48 @@ def status() -> dict:
         "studio_url": "http://studio.diony.local",
         "producer_url": "http://producer.diony.local",
     }
+
+
+@app.get("/api/director/flow/characters")
+def reusable_flow_characters() -> dict:
+    """Small, safe cast list for the locked Character Bible picker.
+
+    The browser needs neither signed preview URLs nor the opaque account-scoped
+    reference.  It selects by entity id; the linking endpoint resolves that id
+    again against the live account before anything is persisted.
+    """
+
+    _boot()
+    if not flow.configured():
+        raise HTTPException(status_code=503, detail="Google Flow is not configured")
+    try:
+        rows = flow.list_characters()
+    except provider_base.CloudAdapterError as err:
+        raise HTTPException(status_code=502, detail=str(err)) from err
+
+    characters = []
+    for row in rows:
+        entity_id = str(row.get("entityId") or "").strip()
+        full_ref = str(row.get("character") or "").strip()
+        reference = entity_id or full_ref
+        if not reference:
+            continue
+        voice_info = row.get("voice") or {}
+        if isinstance(voice_info, dict):
+            voice = str(voice_info.get("displayName") or voice_info.get("voice") or "").strip()
+        else:
+            voice = str(voice_info).strip()
+        characters.append(
+            {
+                "reference": reference,
+                "entity_id": entity_id,
+                "display_name": str(row.get("displayName") or "Untitled character").strip(),
+                "image_count": len(row.get("imageReferences") or []),
+                "voice": voice,
+            }
+        )
+    characters.sort(key=lambda item: (item["display_name"].casefold(), item["entity_id"]))
+    return {"characters": characters}
 
 
 @app.post("/api/director/sessions")
@@ -1058,7 +1101,7 @@ def _kick_submitter(sid: str) -> None:
             while True:
                 submitted, held = _submit_ready(sid)
                 session.log_held(sid, held)
-                if not submitted:
+                if not submitted or any(h.get("kind") == "configuration" for h in held):
                     break
         finally:
             session.set_submitter_active(sid, False)
@@ -1120,6 +1163,42 @@ def _hold_for_quota(op: DirectorOp, detail: str, wait_s: int, held: list[dict]) 
     )
 
 
+def _hold_for_configuration(op: DirectorOp, detail: str, held: list[dict]) -> None:
+    """Stop one provider's unsent batch after an account-wide prerequisite fails.
+
+    Retrying the next clip cannot repair an external account, so remove every
+    still-runnable target for that provider. The ops remain proposed: after
+    setup, the user's next Run press re-targets the same locked work without a
+    redraft or a false failed-take record.
+    """
+    provider = op.provider.value if op.provider else ""
+    targets = session.batch_targets(op.session_id)
+    affected = {
+        candidate.id
+        for candidate in session.ops_for(op.session_id)
+        if candidate.id in targets
+        and candidate.provider is not None
+        and candidate.provider.value == provider
+        and candidate.status in {"proposed", "approved"}
+    }
+    targets.difference_update(affected)
+    label = {"google-flow": "Google Flow", "grok": "Grok Imagine"}.get(
+        provider, provider or "Provider"
+    )
+    held.append(
+        {
+            "op_id": op.id,
+            "kind": "configuration",
+            "provider": provider,
+            "clip_id": op.clip_id or "",
+            "count": max(1, len(affected)),
+            "detail": detail,
+            "help_url": flow.CAPTCHA_PROVIDER_DOCS if provider == "google-flow" else "",
+            "reason": f"{label} provider setup needed — {detail}",
+        }
+    )
+
+
 def _submit_ready(sid: str) -> tuple[list[str], list[dict]]:
     """Submit every op the sequence says is safe now; hold the rest with reasons."""
     submitted: list[str] = []
@@ -1155,6 +1234,13 @@ def _submit_ready(sid: str) -> tuple[list[str], list[dict]]:
             session.runtime(op.id).pop("quota_hold_until", None)
         except HTTPException as err:
             retry_after = str((err.headers or {}).get("Retry-After") or "")
+            if err.status_code == 424:
+                # An account-wide missing dependency (currently Flow captcha
+                # capacity) cannot improve on the next clip or next tick.
+                # Hold once, keep the ops runnable, and wait for another Run
+                # press after the external account is repaired.
+                _hold_for_configuration(op, str(err.detail), held)
+                break
             if err.status_code == 503 and retry_after.isdigit():
                 # provider quota (429 upstream): time-gated, never counted
                 # against the network-hold limit and never failed
@@ -1471,6 +1557,11 @@ def _run_approved(op: DirectorOp) -> dict:
         plane, ctx = _boot()
         try:
             handle = _dispatch_submit(op)
+        except provider_base.CloudAdapterConfigurationError as err:
+            # 424 = an external account prerequisite is missing. Nothing was
+            # submitted, and a batch must stop after this one answer rather
+            # than repeat the same deterministic 400 for every clip.
+            raise HTTPException(status_code=424, detail=str(err)) from err
         except provider_base.CloudAdapterQuotaError as err:
             # 429 = the provider's quota, not the op or the network: nothing
             # was spent, the op stays proposed, and the wave resumes on its
@@ -2752,6 +2843,7 @@ def board(sid: str) -> dict:
         source_chars = [CharacterProfile.model_validate(c) for c in draft.get("characters") or []]
         source_settings = [SettingProfile.model_validate(s) for s in draft.get("settings") or []]
     from diony_director import cast as cast_mod
+    from diony_director import voices as voices_mod
 
     # Blueprint 33 §3: what the cast dock says about a sheet that has not
     # landed — waiting for Run, drawing at the provider, or failed — read
@@ -2785,7 +2877,22 @@ def board(sid: str) -> dict:
                 "face_approved": char.face_approved,
                 "sheet_state": _sheet_state(char),
                 "stills": sorted(char.hero_stills.keys()),
+                # The endpoint URL is stable by character + slot, but the
+                # file behind it changes when an anchor is replaced or a
+                # sheet slot is redrawn.  A token derived from the unique
+                # vault filename gives each image a fresh browser-cache URL.
+                "still_tokens": {
+                    slot: Path(path).name for slot, path in char.hero_stills.items() if path
+                },
+                "anchor_source": char.anchor_source,
+                "anchor_name": char.anchor_name,
+                "anchor_sha256": char.anchor_sha256,
                 "flow_registered": bool(char.flow_character_ref),
+                "flow_preview_token": hashlib.sha256(char.flow_character_ref.encode()).hexdigest()[
+                    :12
+                ]
+                if char.flow_character_ref
+                else "",
                 # Blueprint 32: the identity card as it will ride the prompts,
                 # and the sheet's measured coherence (honest when unmeasured)
                 "identity": char.identity.model_dump(mode="json")
@@ -2796,6 +2903,9 @@ def board(sid: str) -> dict:
                 else "",
                 "sheet": cast_mod.sheet_summary(char) if char.hero_stills else "",
                 "sheet_receipt": dict(char.sheet_receipt or {}),
+                # Blueprint 31 §10: the voice card every spoken prompt carries
+                "voice": voices_mod.voice_line(char),
+                "voice_source": (char.voice.source if char.voice is not None else ""),
             }
         )
     for setting in source_settings:
@@ -2860,6 +2970,99 @@ def bible_media(sid: str, char_id: str, slot: str) -> FileResponse:
     if not still:
         raise HTTPException(status_code=404, detail=f"{char.name} has no {slot} still yet")
     return _vault_media(still)
+
+
+def _cached_flow_preview(character_ref: str) -> Path | None:
+    digest = hashlib.sha256(character_ref.encode()).hexdigest()
+    root = cluster_root() / "director" / ".flow-character-previews"
+    for suffix in (".png", ".jpg", ".webp"):
+        candidate = root / f"{digest}{suffix}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+@app.get("/api/director/sessions/{sid}/bible/flow-preview/{char_id}")
+def flow_character_preview(sid: str, char_id: str) -> FileResponse:
+    """Serve a linked Flow character's portrait without leaking its signed URL.
+
+    The reusable ``character`` reference used for generation carries no pixels.
+    Flow's library supplies an ephemeral thumbnail URL, so the first Cast-dock
+    request verifies it against the configured account, downloads it into the
+    local vault, and serves only that durable copy thereafter.  This is a visual
+    preview, not a Diony sheet still and not face approval.
+    """
+
+    _boot()
+    package = session.package_for(sid)
+    if package is None:
+        raise HTTPException(status_code=404, detail=f"session {sid} has no locked package")
+    try:
+        char = package.character(char_id)
+    except KeyError as err:
+        raise HTTPException(status_code=404, detail=f"unknown character {char_id}") from err
+    character_ref = str(char.flow_character_ref or "").strip()
+    if not character_ref:
+        raise HTTPException(status_code=404, detail=f"{char.name} has no linked Flow character")
+
+    cached = _cached_flow_preview(character_ref)
+    if cached is not None:
+        return _vault_media(str(cached))
+
+    with _FLOW_PREVIEW_GUARD:
+        cached = _cached_flow_preview(character_ref)
+        if cached is not None:
+            return _vault_media(str(cached))
+        try:
+            external = flow.resolve_character(character_ref)
+        except provider_base.CloudAdapterError as err:
+            raise HTTPException(status_code=502, detail=str(err)) from err
+        preview_url = str(external.get("thumbnailUrl") or "").strip()
+        if not preview_url:
+            for image_ref in external.get("imageReferences") or []:
+                if not isinstance(image_ref, dict):
+                    continue
+                preview_url = str(
+                    image_ref.get("thumbnailUrl")
+                    or image_ref.get("fifeUrl")
+                    or image_ref.get("url")
+                    or ""
+                ).strip()
+                if preview_url:
+                    break
+        if not preview_url or not preview_url.startswith("https://"):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Flow did not provide a portrait preview for {char.name}",
+            )
+        try:
+            response = provider_base.get_with_retries(
+                preview_url,
+                what="Flow character preview",
+                timeout=flow.CALL_TIMEOUT_S,
+                follow_redirects=True,
+            )
+        except provider_base.CloudAdapterError as err:
+            raise HTTPException(status_code=502, detail=str(err)) from err
+        if response.status_code >= 400:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Flow's portrait preview for {char.name} is temporarily unavailable",
+            )
+        payload = response.content
+        suffix = session._sniff_image(payload)
+        if not suffix or len(payload) > session.MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Flow returned an unusable portrait preview for {char.name}",
+            )
+        root = cluster_root() / "director" / ".flow-character-previews"
+        root.mkdir(parents=True, exist_ok=True)
+        dest = root / f"{hashlib.sha256(character_ref.encode()).hexdigest()}{suffix}"
+        temporary = dest.with_suffix(dest.suffix + ".tmp")
+        temporary.write_bytes(payload)
+        temporary.replace(dest)
+        return _vault_media(str(dest))
 
 
 @app.get("/api/director/ops/{op_id}/style_frame")
@@ -3218,9 +3421,12 @@ def _film_voice(report, chosen: str) -> dict | None:
     is not an authored per-clip voice lock), or the lock when every cue is."""
     if not report.cues:
         return None
-    narrator = next(
-        (c for c in report.cues if c.get("cast") != "authored voice lock"), report.cues[0]
-    )
+
+    def _is_narrator(cue) -> bool:
+        cast = str(cue.get("cast") or "")
+        return cast != "authored voice lock" and not cast.startswith("character voice (")
+
+    narrator = next((c for c in report.cues if _is_narrator(c)), report.cues[0])
     return {"voice_id": narrator["voice"], "cast": narrator["cast"], "chosen": chosen}
 
 
@@ -3440,6 +3646,18 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
         notes = (
             {c.name: c.age_body_notes for c in package.characters} if package is not None else {}
         )
+        # Blueprint 31 §10: under Dialogue and Mix a character's line on the
+        # narrator rail (a kept voice-over, a rescued mute take) is read in
+        # a roster voice cast from THAT character's voice card; Narrated
+        # keeps its one narrator for the whole film
+        from diony_director import voices as voices_mod
+
+        character_voices = (
+            {c.name: voices_mod.roster_notes(c) for c in package.characters if c.voice}
+            if package is not None
+            and str(getattr(package, "production_style", "narrated")) != "narrated"
+            else {}
+        )
         commit_voice = _plan_voice(sid, body.voice)
         if commit_voice is not None:
             commit_voice()
@@ -3449,6 +3667,7 @@ def assemble_session(sid: str, body: AssembleIn) -> dict:
             character_notes=notes,
             voice=session.voice_for(sid),
             seed=sid,
+            character_voices=character_voices,
         )
         picture_lock = dest.with_name("picture-lock.mp4")
         narrated = dest.with_name("film-narrated.tmp.mp4")
@@ -3599,6 +3818,56 @@ def propose_sheet_stills(sid: str) -> dict:
     }
 
 
+class CharacterAnchorIn(BaseModel):
+    name: str = "character-anchor"
+    data_base64: str
+
+
+@app.post("/api/director/sessions/{sid}/bible/anchor/{char_id}")
+def upload_character_anchor(sid: str, char_id: str, body: CharacterAnchorIn) -> dict:
+    """Cast one character from a user-supplied still.
+
+    The file becomes the sheet's front/anchor image.  Any board derived from
+    an earlier face is retired and replanned from this anchor; no film-wide
+    upload is created, so the image affects only this character.
+    """
+    import base64
+
+    _boot()
+    try:
+        data = base64.b64decode(body.data_base64, validate=True)
+    except Exception as err:
+        raise HTTPException(
+            status_code=422, detail="the image payload is not valid base64"
+        ) from err
+    try:
+        char, ops = session.set_character_anchor(sid, char_id=char_id, name=body.name, data=data)
+    except KeyError as err:
+        detail = str(err).strip("'")
+        status = 404
+        raise HTTPException(status_code=status, detail=detail) from err
+    except session.CharacterAnchorLocked as err:
+        raise HTTPException(status_code=409, detail=str(err)) from err
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail=str(err)) from err
+    return {
+        "character": {
+            "char_id": char.char_id,
+            "name": char.name,
+            "anchor_source": char.anchor_source,
+            "anchor_name": char.anchor_name,
+            "anchor_sha256": char.anchor_sha256,
+            "sheet_version": char.sheet_version,
+        },
+        "ops": [op.model_dump(mode="json") for op in ops],
+        "reply": (
+            f"{char.name} is anchored to {char.anchor_name}. "
+            f"The derived sheet was reset; {len(ops)} view(s) will draw from your image, "
+            "then the face returns to you for approval."
+        ),
+    }
+
+
 @app.post("/api/director/sessions/{sid}/bible/approve/{char_id}")
 def approve_face(sid: str, char_id: str) -> dict:
     _boot()
@@ -3680,6 +3949,79 @@ def register_flow_character(sid: str, char_id: str) -> dict:
     return {
         "reply": f"{char.name} is registered as a reusable Flow character ({ref}).",
         "flow_character_ref": ref,
+    }
+
+
+class ExistingFlowCharacterIn(BaseModel):
+    reference: str = Field(min_length=1, max_length=2048)
+
+
+@app.post("/api/director/sessions/{sid}/bible/flow_character/{char_id}")
+def use_existing_flow_character(sid: str, char_id: str, body: ExistingFlowCharacterIn) -> dict:
+    """Bind a character already created in Google Flow to this film's role.
+
+    A Flow browser URL exposes only an entity UUID, while video generation
+    requires the account-scoped ``character`` reference.  Resolve and verify
+    that reference against the configured Flow account before persisting it.
+    Recasting after footage starts is refused for the same reason replacing a
+    local anchor is refused: one finished film cannot contain two identities
+    for the same role.
+    """
+
+    _boot()
+    package = session.package_for(sid)
+    if package is None:
+        raise HTTPException(status_code=404, detail=f"session {sid} has no locked package")
+    try:
+        char = package.character(char_id)
+    except KeyError as err:
+        raise HTTPException(status_code=404, detail=f"unknown character {char_id}") from err
+    try:
+        external = flow.resolve_character(body.reference)
+    except provider_base.CloudAdapterError as err:
+        raise HTTPException(status_code=502, detail=str(err)) from err
+    ref = str(external.get("character") or "")
+    if char.flow_character_ref == ref:
+        return {
+            "reply": f"{char.name} already uses that Google Flow character.",
+            "flow_character_ref": ref,
+            "entity_id": str(external.get("entityId") or ""),
+            "display_name": str(external.get("displayName") or ""),
+        }
+
+    character_clip_ids = {
+        clip.clip_id
+        for clip in package.clips
+        if any(
+            str(pack.get("char_id") or "") == char_id for pack in clip.continuity.character_packs
+        )
+    }
+    started = [
+        op
+        for op in session.ops_for(sid)
+        if op.clip_id in character_clip_ids
+        and op.status in {"submitting", "submitted", "completed"}
+    ]
+    if started:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{char.name} is already in filmed footage — start a new session to use "
+                "a different Google Flow character"
+            ),
+        )
+
+    char.flow_character_ref = ref
+    session.persist(sid)
+    display_name = str(external.get("displayName") or "").strip() or "the selected character"
+    return {
+        "reply": (
+            f"{char.name} now uses the existing Google Flow character {display_name}. "
+            "Every compatible Flow clip that shows this role carries it as @character."
+        ),
+        "flow_character_ref": ref,
+        "entity_id": str(external.get("entityId") or ""),
+        "display_name": display_name,
     }
 
 
