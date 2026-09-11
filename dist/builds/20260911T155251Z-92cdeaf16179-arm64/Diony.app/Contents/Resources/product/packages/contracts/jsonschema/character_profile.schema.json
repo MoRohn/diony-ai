@@ -1,0 +1,275 @@
+{
+  "$defs": {
+    "IdentityCard": {
+      "description": "Blueprint 32 \u2014 the character's identity contract, written once and\ncarried byte-identical on every prompt, plate, sheet, and keyframe that\nshows the character. Prose re-derived per clip is how a face drifts; a\nlocked card is how it holds. ``anchor`` is the one-line casting read\n(age, build, face geometry), ``features`` the non-negotiables a viewer\nwould notice missing (hair, eyes, skin, one distinguishing mark),\n``wardrobe_lock`` the outfit worn for the whole film, ``negatives`` what\nmust never change. ``source`` says who wrote it: the brain, the\ndeterministic derivation from the character's notes, or the user.",
+      "properties": {
+        "anchor": {
+          "default": "",
+          "title": "Anchor",
+          "type": "string"
+        },
+        "features": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Features",
+          "type": "array"
+        },
+        "wardrobe_lock": {
+          "default": "",
+          "title": "Wardrobe Lock",
+          "type": "string"
+        },
+        "negatives": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Negatives",
+          "type": "array"
+        },
+        "source": {
+          "default": "derived",
+          "enum": [
+            "brain",
+            "derived",
+            "user"
+          ],
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "title": "IdentityCard",
+      "type": "object"
+    },
+    "VoiceProfile": {
+      "description": "A character's voice card (Blueprint 31 \u00a710). ``gender``, ``age_band``\nand ``timbre`` are the castable read every spoken prompt carries so the\nprovider voices the character as written \u2014 and voices two characters as\ntwo people. ``source`` says who wrote the card: the screenwriter brain,\nthe deterministic derivation from the casting notes, or the user.",
+      "properties": {
+        "voice_id": {
+          "title": "Voice Id",
+          "type": "string"
+        },
+        "engine": {
+          "default": "omni_preset",
+          "enum": [
+            "omni_preset",
+            "flow_user_voice",
+            "none"
+          ],
+          "title": "Engine",
+          "type": "string"
+        },
+        "engine_ref": {
+          "default": "",
+          "title": "Engine Ref",
+          "type": "string"
+        },
+        "sample_asset_id": {
+          "default": "",
+          "title": "Sample Asset Id",
+          "type": "string"
+        },
+        "accent": {
+          "default": "",
+          "title": "Accent",
+          "type": "string"
+        },
+        "pace_wpm": {
+          "default": 150,
+          "exclusiveMinimum": 0,
+          "title": "Pace Wpm",
+          "type": "integer"
+        },
+        "pitch_band": {
+          "default": "",
+          "title": "Pitch Band",
+          "type": "string"
+        },
+        "mic_distance": {
+          "default": "close, dry",
+          "title": "Mic Distance",
+          "type": "string"
+        },
+        "approved": {
+          "default": false,
+          "title": "Approved",
+          "type": "boolean"
+        },
+        "gender": {
+          "default": "",
+          "enum": [
+            "",
+            "female",
+            "male"
+          ],
+          "title": "Gender",
+          "type": "string"
+        },
+        "age_band": {
+          "default": "",
+          "title": "Age Band",
+          "type": "string"
+        },
+        "timbre": {
+          "default": "",
+          "title": "Timbre",
+          "type": "string"
+        },
+        "source": {
+          "default": "derived",
+          "enum": [
+            "brain",
+            "derived",
+            "user"
+          ],
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "voice_id"
+      ],
+      "title": "VoiceProfile",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "char_id": {
+      "title": "Char Id",
+      "type": "string"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "role": {
+      "default": "",
+      "title": "Role",
+      "type": "string"
+    },
+    "sheet_version": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Sheet Version",
+      "type": "integer"
+    },
+    "hero_stills": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Hero Stills",
+      "type": "object"
+    },
+    "anchor_source": {
+      "default": "generated",
+      "enum": [
+        "generated",
+        "uploaded"
+      ],
+      "title": "Anchor Source",
+      "type": "string"
+    },
+    "anchor_name": {
+      "default": "",
+      "title": "Anchor Name",
+      "type": "string"
+    },
+    "anchor_sha256": {
+      "default": "",
+      "title": "Anchor Sha256",
+      "type": "string"
+    },
+    "identity": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/IdentityCard"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "sheet_receipt": {
+      "additionalProperties": true,
+      "title": "Sheet Receipt",
+      "type": "object"
+    },
+    "sheet_retries": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Sheet Retries",
+      "type": "object"
+    },
+    "wardrobe": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Wardrobe",
+      "type": "object"
+    },
+    "age_body_notes": {
+      "default": "",
+      "title": "Age Body Notes",
+      "type": "string"
+    },
+    "forbidden_drift": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Forbidden Drift",
+      "type": "array"
+    },
+    "grok_ref_pack": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Grok Ref Pack",
+      "type": "array"
+    },
+    "flow_media_ids": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Flow Media Ids",
+      "type": "object"
+    },
+    "flow_character_ref": {
+      "default": "",
+      "title": "Flow Character Ref",
+      "type": "string"
+    },
+    "voice": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VoiceProfile"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "casting_card": {
+      "default": "",
+      "title": "Casting Card",
+      "type": "string"
+    },
+    "face_approved": {
+      "default": false,
+      "title": "Face Approved",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "char_id",
+    "name"
+  ],
+  "title": "CharacterProfile",
+  "type": "object"
+}

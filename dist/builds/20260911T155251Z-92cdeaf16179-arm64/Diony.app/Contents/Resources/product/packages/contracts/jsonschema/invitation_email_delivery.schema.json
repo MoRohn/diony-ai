@@ -1,0 +1,106 @@
+{
+  "$defs": {
+    "EmailDeliveryStatus": {
+      "enum": [
+        "queued",
+        "sent",
+        "delivered",
+        "delivery_unconfirmed",
+        "bounced",
+        "complained",
+        "failed"
+      ],
+      "title": "EmailDeliveryStatus",
+      "type": "string"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "workspace_id": {
+      "title": "Workspace Id",
+      "type": "string"
+    },
+    "invitation_id": {
+      "title": "Invitation Id",
+      "type": "string"
+    },
+    "kind": {
+      "default": "studio_invitation",
+      "title": "Kind",
+      "type": "string"
+    },
+    "recipient_mask": {
+      "title": "Recipient Mask",
+      "type": "string"
+    },
+    "subject": {
+      "title": "Subject",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/EmailDeliveryStatus",
+      "default": "queued"
+    },
+    "transport": {
+      "default": "",
+      "title": "Transport",
+      "type": "string"
+    },
+    "provider_message_id": {
+      "default": "",
+      "title": "Provider Message Id",
+      "type": "string"
+    },
+    "attempts": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Attempts",
+      "type": "integer"
+    },
+    "error": {
+      "default": "",
+      "title": "Error",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    },
+    "sent_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sent At"
+    }
+  },
+  "required": [
+    "id",
+    "workspace_id",
+    "invitation_id",
+    "recipient_mask",
+    "subject"
+  ],
+  "title": "InvitationEmailDelivery",
+  "type": "object"
+}

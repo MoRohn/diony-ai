@@ -1,1 +1,1 @@
-builds/20260911T145825Z-1f288c5d7a22-arm64/Diony.app
+builds/20260911T155251Z-92cdeaf16179-arm64/Diony.app

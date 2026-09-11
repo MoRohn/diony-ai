@@ -1,0 +1,136 @@
+Diony AI
+Copyright (c) 2026 Diony AI. All rights reserved.
+See LICENSE for the proprietary terms covering Diony AI software, Blueprints,
+Studio, Director, and Producer.
+
+This product includes or invokes third-party open-source components. Those
+components remain under their original licenses. Diony AI claims no ownership
+of those upstream works. Generated audiovisual content is the licensee's
+responsibility and must comply with applicable law and the upstream model
+licenses.
+
+==============================================================================
+Launch control-plane runtime libraries
+==============================================================================
+
+`cryptography` (Python Cryptographic Authority) is used for AES-256-GCM BYOK
+envelopes and is distributed under the Apache License 2.0 or BSD 3-Clause
+License. Source: https://github.com/pyca/cryptography
+
+These libraries do not change Diony's proprietary software license. Their own
+license and notice files remain controlling for the upstream components.
+
+==============================================================================
+FFmpeg (GNU General Public License v3 or later) — bundled media tools
+==============================================================================
+
+Project: FFmpeg — https://ffmpeg.org/
+License: the bundled builds include GPL components (x264 and others) and are
+distributed under the GNU General Public License, version 3 or later.
+Builds:  macOS (arm64, x86_64): static builds by Martin Riedl,
+         https://ffmpeg.martin-riedl.de/ — release 9.0.1
+         Windows (x64): "essentials" builds by Gyan Doshi,
+         https://www.gyan.dev/ffmpeg/builds/ — release 8.1.2
+Pinned:  apps/desk/src/diony_desk/ffmpeg_lock.json (URL and SHA-256 per file)
+
+Diony ships `ffmpeg` and `ffprobe` as separate, unmodified executables beside
+the application and invokes them as external programs; when a build lacks
+them the desk downloads the same pinned files on first open. The FFmpeg
+source corresponding to each build is available from the build sites above
+and from https://ffmpeg.org/download.html. The GPL covers those executables
+only and does not change Diony's proprietary software license.
+
+==============================================================================
+faster-whisper / CTranslate2 (MIT License) — optional Blueprint 24 lane
+==============================================================================
+
+Project: faster-whisper (SYSTRAN) and CTranslate2 (OpenNMT)
+Source: https://github.com/SYSTRAN/faster-whisper
+        https://github.com/OpenNMT/CTranslate2
+Weights: https://huggingface.co/Systran/faster-whisper-large-v3
+License: MIT License (code); the converted Whisper large-v3 weights follow
+OpenAI Whisper's MIT License (https://github.com/openai/whisper).
+
+Used only when the weights are staged on the site (`DIONY_WHISPER_MODEL`) to
+transcribe, locally, the speech a provider delivered so the authored line can be
+measured against it. Never contacted over the network by Production.
+
+==============================================================================
+CLIP ViT-B/32 (MIT License) and Hugging Face Transformers (Apache License 2.0)
+— optional Blueprint 24 lane
+==============================================================================
+
+Project: CLIP — Contrastive Language-Image Pre-training (OpenAI)
+Source: https://github.com/openai/CLIP
+Weights: https://huggingface.co/openai/clip-vit-base-patch32
+License: MIT License (code and released weights)
+
+Project: Transformers (Hugging Face)
+Source: https://github.com/huggingface/transformers
+License: Apache License 2.0
+
+Project: Pillow
+Source: https://github.com/python-pillow/Pillow
+License: MIT-CMU (HPND) License
+
+Used only when the CLIP checkpoint is staged on the site (`DIONY_CLIP_MODEL`)
+to measure, locally, how well sampled frames of a negative match its subject
+layer (`QCReport.prompt_adherence`). Loaded with `local_files_only`; never
+contacted over the network by Production.
+
+==============================================================================
+OpenMontage — studied reference, no code included
+==============================================================================
+
+Project: OpenMontage (https://github.com/calesthio/OpenMontage), AGPL-3.0.
+Diony's Blueprint 24 production-craft gates were designed after studying that
+project's published strategies. No OpenMontage source code, prompts, or assets
+are included in or linked by Diony AI; every implementation is original.
+
+==============================================================================
+OpenCV Zoo — YuNet face detector and SFace face recogniser (Apache License 2.0)
+— optional Blueprint 24 lane
+==============================================================================
+
+Project: OpenCV Zoo (https://github.com/opencv/opencv_zoo)
+Models: face_detection_yunet_2023mar.onnx (YuNet, Shiqi Yu et al.)
+        face_recognition_sface_2021dec.onnx (SFace, Yaoyao Zhong et al.)
+License: Apache License 2.0 (models and demo code), run through OpenCV's
+cv2.FaceDetectorYN / cv2.FaceRecognizerSF (OpenCV, Apache License 2.0).
+
+Used only when both models are staged on the site (`DIONY_FACE_ID_DETECTOR_MODEL`,
+`DIONY_FACE_ID_RECOGNIZER_MODEL`) to measure, locally, whether the face a
+negative animates is the face in its conditioning still. Never contacted
+over the network by Production.
+
+==============================================================================
+Third-party generation services (Director lane, Blueprint 25)
+==============================================================================
+
+Diony AI does not bundle these services; it calls them with credentials the
+licensee supplies, and each call is governed by that provider's own terms.
+
+xAI — Grok Imagine video and image models, the Grok voice API, and the Grok
+language models used as the screenwriter brain.
+  Service: https://x.ai/  ·  API docs: https://docs.x.ai/
+  Terms: xAI's API terms of service and usage policies. Metered billing on the
+  licensee's xAI account.
+
+Google Flow (Veo 3.1, Omni Flash, Nano Banana) reached through useapi.net.
+  Service: https://labs.google/flow/  ·  Relay: https://useapi.net/docs/api-google-flow-v1
+  Terms: Google's Terms of Service, the Google AI plan subscribed to by the
+  licensee's Google account (Flow credits are consumed on that account), and
+  useapi.net's terms for its relay subscription. Captcha solving may involve a
+  third-party solver configured by the licensee.
+
+Google Gemini API (Google AI Studio) — the Gemini brain (script, master prompt,
+likeness audit) and Gemini speech generation (the narrator) on the Google Flow
+camera.
+  Service: https://ai.google.dev/  ·  Keys: https://aistudio.google.com/apikey
+  Terms: the Gemini API Terms of Service and Google's Generative AI Prohibited
+  Use Policy. Billed by Google on the licensee's Google AI Studio project,
+  separately from the Google AI plan Flow credits come from.
+
+Generated content remains the licensee's responsibility under each provider's
+content and likeness policies. Diony's likeness guard (Blueprint 27 §3a) is a
+best-effort control, not a licence.
