@@ -139,6 +139,15 @@ try {
     @("# Written by the local build script: only the current build is committed.", "*", "!.gitignore", "!$BuildId/", "!$BuildId/**") |
         Set-Content (Join-Path $Builds ".gitignore") -Encoding ascii
     Set-Content (Join-Path $Output "current-build.txt") -Value $BuildId -Encoding ascii
+    # A superseded build leaves the index too: `git add -A` never untracks a file
+    # a later .gitignore excludes, and every tracked build is ~70 MB compressed.
+    if ((Get-Command git -ErrorAction SilentlyContinue) -and ((git -C $Root rev-parse --is-inside-work-tree 2>$null) -eq "true")) {
+        git -C $Root ls-files -- dist/builds 2>$null | ForEach-Object {
+            if ($_ -ne "dist/builds/.gitignore" -and -not $_.StartsWith("dist/builds/$BuildId/")) {
+                git -C $Root rm -q --cached -- $_ 2>$null | Out-Null
+            }
+        }
+    }
 
     # Prune old local builds, keeping the newest DIONY_KEEP_LOCAL_BUILDS (default 5).
     $Keep = if ($env:DIONY_KEEP_LOCAL_BUILDS) { [int]$env:DIONY_KEEP_LOCAL_BUILDS } else { 5 }

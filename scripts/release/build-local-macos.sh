@@ -147,6 +147,17 @@ fi
 !$BUILD_ID/**
 GITIGNORE
 printf '%s\n' "$BUILD_ID" > "$OUTPUT/current-build.txt"
+# A superseded build leaves the index too: `git add -A` never untracks a file
+# a later .gitignore excludes, and every tracked build is ~70 MB compressed
+# (three builds rode one push before this step existed).
+if command -v git >/dev/null 2>&1 && git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git -C "$ROOT" ls-files -z -- dist/builds | while IFS= read -r -d '' tracked; do
+    case "$tracked" in
+      dist/builds/.gitignore|dist/builds/"$BUILD_ID"/*) ;;
+      *) git -C "$ROOT" rm -q --cached -- "$tracked" >/dev/null 2>&1 || true ;;
+    esac
+  done
+fi
 for legacy in "$LEGACY_DEV/Diony.app" "$LEGACY_DEV/development-build.json"; do
   if [[ -L "$legacy" ]]; then /bin/unlink "$legacy"; fi
 done
