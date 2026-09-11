@@ -1029,3 +1029,62 @@ def test_agent_scratch_never_ships_in_a_release_payload() -> None:
     assert not _ship(_P("apps/director/.claude/confidenz-latest.json"))
     assert not _ship(_P(".claude/settings.json"))
     assert _ship(_P("apps/director/src/diony_director/app.py"))
+
+
+# --- startup visibility: the Dock, the lobby on a slow start, the desk log ---------
+
+
+def test_a_slow_start_shows_the_lobby_and_a_settled_one_never_opens_a_second_page() -> None:
+    from diony_desk import boot
+
+    # still working after the grace, no page open yet → the lobby shows progress
+    assert boot.should_open_lobby_while_slow(lobby_opened=False, phase="starting") is True
+    assert boot.should_open_lobby_while_slow(lobby_opened=False, phase="looking") is True
+    # one page is enough; a settled phase opens its own page from _after_work
+    assert boot.should_open_lobby_while_slow(lobby_opened=True, phase="starting") is False
+    for phase in ("ready", "need_names", "need_python", "error"):
+        assert boot.should_open_lobby_while_slow(lobby_opened=False, phase=phase) is False
+    assert 0 < boot.LOBBY_GRACE_S <= 5, "the grace is a few seconds, not a startup"
+    # the installed app still opens straight onto Studio when the start is quick
+    assert boot.should_open_lobby(already_installed=True, frozen=True) is False
+
+
+def test_the_dock_is_registered_only_by_the_packaged_mac_app(monkeypatch) -> None:
+    from diony_desk import boot
+
+    monkeypatch.setattr(boot, "is_frozen", lambda: False)
+    assert boot.dock_finish_launching() is None
+    monkeypatch.setattr(boot, "is_frozen", lambda: True)
+    monkeypatch.setenv("DIONY_DESK_NO_DOCK", "1")
+    assert boot.dock_finish_launching() is None
+    monkeypatch.delenv("DIONY_DESK_NO_DOCK", raising=False)
+    monkeypatch.setattr(boot.sys, "platform", "linux")
+    assert boot.dock_finish_launching() is None
+
+
+def test_main_finishes_launching_before_any_startup_probe() -> None:
+    from diony_desk import boot
+
+    source = Path(boot.__file__).read_text()
+    body = source[source.index("def main(") :]
+    assert body.index("dock_finish_launching()") < body.index("claim_desk_port()")
+    assert "worker.join(LOBBY_GRACE_S)" in body
+    assert "dock.run()" in body
+
+
+def test_startup_logs_roll_instead_of_growing_forever(tmp_path: Path, monkeypatch) -> None:
+    from diony_desk import boot
+
+    log = tmp_path / "producer.log"
+    log.write_bytes(b"x" * 100)
+    assert boot.rotate_log(log, limit=1000) is False and log.is_file()
+    assert boot.rotate_log(log, limit=10) is True
+    assert not log.exists() and (tmp_path / "producer.previous.log").read_bytes() == b"x" * 100
+    assert boot.rotate_log(tmp_path / "absent.log", limit=1) is False
+    # the desk writes its own record of every launch beside the service logs
+    monkeypatch.setenv("DIONY_DESK_DATA", str(tmp_path / "state"))
+    monkeypatch.setattr(boot, "is_frozen", lambda: True)
+    boot.say("Preparing ffmpeg.")
+    text = (tmp_path / "state" / "logs" / "desk.log").read_text()
+    assert "Preparing ffmpeg." in text and f"[{boot.os.getpid()}]" in text
+    assert boot.SERVICE_LOG_LIMIT >= 8 * 1024 * 1024 > boot.DESK_LOG_LIMIT // 2

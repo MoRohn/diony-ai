@@ -34,6 +34,8 @@ Vault state, control-plane data, logs, and diagnostics live below that root unle
 
 Opening Diony AI immediately opens the Desk lobby. The lobby remains the visible source of truth until the studio is ready or an actionable error is recorded.
 
+On the Mac the packaged app registers with the window server before its first probe (`dock_finish_launching`, the Objective-C runtime through ctypes — the desk stays stdlib-only): the Dock icon settles at once and the main thread parks in the application's event loop, so **Quit** from the Dock menu ends the desk cleanly. A bouncing icon that only Force Quit ends is the defect this rule exists to prevent. The installed app still opens straight onto Studio when the start is quick; a start still working after `LOBBY_GRACE_S` (2.5 s — a cold start of three services and the names router runs a minute or more) opens the lobby, whose progress page polls the desk and hands off to Studio itself the moment the phase is ready. Never two pages: a lobby already open is the page. Every launch writes `logs/desk.log` (the packaged app has no terminal; `diagnostics.json` is written only on an error), and each log rolls to one `.previous` generation past its limit (5 MB for the desk, 24 MB per service) instead of growing without bound.
+
 Startup performs these checks in order:
 
 1. Verify the bundled product payload and required cluster profiles.

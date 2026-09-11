@@ -27,6 +27,13 @@ WIZARD_PORT = 8787
 PRODUCER_PORT = 8788
 DIRECTOR_PORT = 8790
 DESK_PORT = 8765
+# A launch that runs past this without settling shows the lobby (its live
+# progress page) instead of leaving the user a bouncing Dock icon and no window.
+LOBBY_GRACE_S = 2.5
+# Startup logs never grow without bound: the desk's own log rolls at 5 MB,
+# each service log at 24 MB (a producer.log once reached 94 MB).
+DESK_LOG_LIMIT = 5 * 1024 * 1024
+SERVICE_LOG_LIMIT = 24 * 1024 * 1024
 STUDIO_URL = "http://studio.diony.local"
 PRODUCER_URL = "http://producer.diony.local"
 DIRECTOR_URL = "http://director.diony.local"
@@ -349,9 +356,47 @@ def set_state(**kwargs: object) -> None:
             _state["log"].append(str(kwargs["detail"])[:240])
 
 
+def desk_log_path(root: Path | None = None) -> Path:
+    """The desk's own startup log — the one record of a launch that showed
+    nothing (the packaged app has no terminal, and diagnostics.json is written
+    only on an error)."""
+    state_root = data_dir(root)
+    return (state_root / "logs" / "desk.log") if is_frozen() else (state_root / "desk.log")
+
+
+def rotate_log(path: Path, limit: int) -> bool:
+    """Roll `name.log` to `name.previous.log` once it passes `limit` bytes.
+    One previous generation is kept; never raises."""
+    try:
+        if path.stat().st_size <= limit:
+            return False
+    except OSError:
+        return False
+    previous = path.with_name(f"{path.stem}.previous{path.suffix}")
+    try:
+        previous.unlink(missing_ok=True)
+        path.replace(previous)
+    except OSError:
+        return False
+    return True
+
+
+def desk_log(line: str) -> None:
+    try:
+        path = desk_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rotate_log(path, DESK_LOG_LIMIT)
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(f"{stamp} [{os.getpid()}] {line}\n")
+    except Exception:
+        return
+
+
 def say(detail: str, **kwargs: object) -> None:
     set_state(detail=detail, **kwargs)
     print(detail, flush=True)
+    desk_log(detail)
 
 
 def port_open(port: int, host: str = "127.0.0.1") -> bool:
@@ -966,6 +1011,8 @@ def start_app(command: Path | list[str], log_name: str, root: Path) -> None:
     log_root = data_dir(root) / "logs" if is_frozen() else data_dir(root)
     log_root.mkdir(parents=True, exist_ok=True)
     log = log_root / log_name
+    if rotate_log(log, SERVICE_LOG_LIMIT):
+        desk_log(f"rotated {log.name} past {SERVICE_LOG_LIMIT // (1024 * 1024)} MB")
     env = os.environ.copy()
     env.setdefault("DIONY_DRY_RUN", "1")
     env.pop("DASH_API_KEY", None)
@@ -1431,6 +1478,83 @@ def should_open_studio_after_work(*, lobby_opened: bool, phase: str) -> bool:
     return phase == "ready" and not lobby_opened
 
 
+TERMINAL_PHASES = frozenset({"ready", "need_names", "need_python", "error"})
+
+
+def should_open_lobby_while_slow(*, lobby_opened: bool, phase: str) -> bool:
+    """A launch still working after LOBBY_GRACE_S shows the lobby: its progress
+    page is the only window this app has, and it hands off to Studio itself
+    the moment the phase is ready. Never a second page when one is open, and
+    never once the work has settled (that branch opens its own page)."""
+    return not lobby_opened and phase not in TERMINAL_PHASES
+
+
+class DockApplication:
+    """The packaged Mac app's NSApplication, driven through the Objective-C
+    runtime with ctypes (the desk stays stdlib-only). It exists for two
+    things the Dock needs from a process that owns no window: finishLaunching,
+    so the icon stops bouncing the moment the desk starts instead of bouncing
+    until the whole startup settles; and a real event loop on the main
+    thread, so Quit from the Dock menu terminates the desk cleanly instead of
+    needing Force Quit."""
+
+    def __init__(self, objc, app: int) -> None:
+        self._objc = objc
+        self._app = app
+
+    def _sel(self, name: str) -> int:
+        return self._objc.sel_registerName(name.encode())
+
+    def run(self) -> None:
+        """Park the main thread in the application's event loop. Returns only
+        if the loop is stopped; Quit terminates the process from inside."""
+        import ctypes
+
+        send = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(
+            ("objc_msgSend", self._objc)
+        )
+        send(self._app, self._sel("run"))
+
+
+def dock_finish_launching() -> DockApplication | None:
+    """macOS, packaged app only: register with the window server so the Dock
+    icon settles now. None anywhere else, on any failure, or when
+    DIONY_DESK_NO_DOCK is set — the desk then parks the old way."""
+    if sys.platform != "darwin" or not is_frozen():
+        return None
+    if os.environ.get("DIONY_DESK_NO_DOCK", "").strip() in {"1", "true", "yes"}:
+        return None
+    try:
+        import ctypes
+        import ctypes.util
+
+        objc = ctypes.CDLL(ctypes.util.find_library("objc"))
+        ctypes.CDLL("/System/Library/Frameworks/AppKit.framework/AppKit")
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        send = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(
+            ("objc_msgSend", objc)
+        )
+        send_policy = ctypes.CFUNCTYPE(
+            ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long
+        )(("objc_msgSend", objc))
+        cls = objc.objc_getClass(b"NSApplication")
+        if not cls:
+            return None
+        app = send(cls, objc.sel_registerName(b"sharedApplication"))
+        if not app:
+            return None
+        # NSApplicationActivationPolicyRegular = 0: a normal Dock icon
+        send_policy(app, objc.sel_registerName(b"setActivationPolicy:"), 0)
+        send(app, objc.sel_registerName(b"finishLaunching"))
+        return DockApplication(objc, app)
+    except Exception as exc:
+        desk_log(f"dock registration skipped: {str(exc)[:200]}")
+        return None
+
+
 def run_embedded_service(name: str, args: list[str]) -> int:
     """Dispatch child services through the same signed desktop executable."""
     configure_runtime_environment()
@@ -1466,6 +1590,13 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"Diony AI application resources are unavailable: {exc}", file=sys.stderr)
         return 1
+    # The Dock first: the icon settles before a single probe runs, so a slow
+    # startup is a running app with a progress page, never a bouncing icon.
+    dock = dock_finish_launching()
+    desk_log(
+        f"launch: {'installed' if is_frozen() else 'source'} desk, dock "
+        f"{'registered' if dock is not None else 'not registered'}, argv {argv!r}"
+    )
     if argv and argv[0] in {"-h", "--help"}:
         print("Double-click Open Diony AI in the Diony AI folder.")
         print("Studio: http://studio.diony.local")
@@ -1522,8 +1653,39 @@ def main(argv: list[str] | None = None) -> int:
     lobby_opened = should_open_lobby(already_installed=already, frozen=is_frozen())
     if lobby_opened:
         open_browser(url)
+    # A start that runs past the grace shows its progress: the lobby polls
+    # /api/status and hands off to Studio itself when the phase is ready.
+    worker.join(LOBBY_GRACE_S)
+    if worker.is_alive() and should_open_lobby_while_slow(
+        lobby_opened=lobby_opened, phase=public_state()["phase"]
+    ):
+        lobby_opened = True
+        say("Startup is taking a moment — the lobby shows its progress.")
+        open_browser(url)
+    if dock is not None:
+        # The Mac app parks its main thread in the Dock's event loop so Quit
+        # works; the rest of the launch finishes on its own thread.
+        threading.Thread(
+            target=_after_work,
+            args=(worker, url, lobby_opened),
+            name="diony-desk-finish",
+            daemon=True,
+        ).start()
+        dock.run()
+        return 0
+    _after_work(worker, url, lobby_opened)
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        server.shutdown()
+    return 0
+
+
+def _after_work(worker: threading.Thread, url: str, lobby_opened: bool) -> None:
+    """What a launch says and opens once its work settles."""
     worker.join()
     phase = public_state()["phase"]
+    desk_log(f"startup settled: phase {phase}")
     if should_open_studio_after_work(lobby_opened=lobby_opened, phase=phase):
         open_browser(landing_url())
         if engine_is_cloud():
@@ -1561,11 +1723,6 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "Leave this window open, or close it and double-click Open Diony AI again.", flush=True
         )
-    try:
-        threading.Event().wait()
-    except KeyboardInterrupt:
-        server.shutdown()
-    return 0
 
 
 if __name__ == "__main__":
