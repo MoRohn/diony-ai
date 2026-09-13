@@ -382,79 +382,162 @@ function openGalleryViewer(item) {
   renderGallery();
 }
 
-function renderGalleryDetails(details) {
+function madeLabel(iso) {
+  const when = new Date(iso || "");
+  if (Number.isNaN(when.getTime())) return "";
+  return when.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function fpsLabel(fps) {
+  const value = Number(fps || 0);
+  if (!value) return "";
+  return `${Number.isInteger(value) ? value : value.toFixed(2).replace(/\.?0+$/, "")} fps`;
+}
+
+// The facts strip reads the file first (what ffprobe measured) and the booking
+// second (what the record says was asked for), so a 720p booking finished at
+// 1080p shows both without anyone doing arithmetic.
+function galleryFactRows(details, item) {
+  const measured = details.measured || {};
+  const film = details.kind === "film";
+  const rows = [];
+  const fact = (label, value, note = "") => {
+    if (value) rows.push({ label, value: String(value), note });
+  };
+  const raster = measured.width && measured.height ? `${measured.width}×${measured.height}` : "";
+  if (measured.quality) {
+    const booked = film ? details.finish : details.resolution;
+    fact(
+      "Quality",
+      measured.quality,
+      [raster, booked && booked !== measured.quality ? `booked ${booked}` : ""].filter(Boolean).join(" · "),
+    );
+  } else {
+    fact("Quality", film ? details.finish || details.resolution : details.resolution, "as booked");
+  }
+  const runtime = measured.duration_s || details.duration_s;
+  const bookedRuntime = details.duration_s ? durationLabel(details.duration_s) : "";
+  fact(
+    "Runtime",
+    runtime ? durationLabel(runtime) : "",
+    measured.duration_s && bookedRuntime && Math.abs(measured.duration_s - details.duration_s) >= 0.5
+      ? `booked ${bookedRuntime}`
+      : "",
+  );
+  fact("Frame rate", fpsLabel(measured.fps), measured.codec ? measured.codec.toUpperCase() : "");
+  fact("Camera", [details.provider, details.model].filter(Boolean).join(" · "), details.mode);
+  if (film) {
+    fact("Cut", details.clips_in_cut ? `${details.clips_in_cut} clips` : "", details.style ? `${details.style} style` : "");
+    fact("Finish", details.finish, details.upscaled ? "upscaled" : "");
+  } else if (details.position_in_cut) {
+    fact("In the cut", `Clip ${details.position_in_cut} of ${details.clips_in_cut}`);
+  }
+  fact("Aspect", details.aspect);
+  if ("has_audio" in measured) {
+    fact("Audio", measured.has_audio ? "Sound" : "Silent", measured.audio_channels ? `${measured.audio_channels} ch` : "");
+  }
+  fact("Size", galleryFileSize(details.bytes), measured.bit_rate ? `${Math.round(measured.bit_rate / 1000)} kbps` : "");
+  if (film) fact("Spent", item.spent_usd_micros ? costLabel(item.spent_usd_micros) : "", "on the ledger");
+  else fact("Estimate", details.estimate_usd_micros ? costLabel(details.estimate_usd_micros) : "");
+  if (details.review?.verdict) fact("Review", details.review.verdict, (details.review.issues || []).slice(0, 2).join(" · "));
+  if (!film) {
+    fact("Prompt", details.prompt_version, details.voicing ? `${details.voicing} voicing` : "");
+  }
+  fact("Made", madeLabel(details.created_at));
+  return rows;
+}
+
+function renderGalleryDetails(details, item = {}) {
   const body = document.getElementById("gallery-details-body");
   if (!body) return;
   body.replaceChildren();
+  const film = details.kind === "film";
   const slate = document.createElement("section");
   slate.className = "gallery-source-slate";
 
   const header = document.createElement("header");
-  setTextNode(header, "span", details.kind === "film" ? "Assembled film" : "Printed clip");
+  setTextNode(header, "span", film ? "Assembled film" : "Printed clip");
   setTextNode(header, "strong", details.session || "");
+  if (details.measured?.quality) {
+    setTextNode(
+      header,
+      "em",
+      [details.measured.quality, durationLabel(details.measured.duration_s), fpsLabel(details.measured.fps)]
+        .filter(Boolean)
+        .join(" · "),
+    );
+  }
   slate.appendChild(header);
 
-  const facts = document.createElement("dl");
-  facts.className = "join-passport";
-  const fact = (label, value) => {
-    if (!value) return;
-    setTextNode(facts, "dt", label);
-    setTextNode(facts, "dd", String(value));
-  };
-  fact("Camera", [details.provider, details.model].filter(Boolean).join(" · "));
-  fact("Mode", details.mode);
-  fact("Booked", details.duration_s ? durationLabel(details.duration_s) : "");
-  fact("Resolution", details.resolution);
-  fact("Estimate", details.estimate_usd_micros ? costLabel(details.estimate_usd_micros) : "");
-  fact("Prompt version", details.prompt_version);
-  fact("Size", galleryFileSize(details.bytes));
-  if (facts.childElementCount) slate.appendChild(facts);
+  const rows = galleryFactRows(details, item);
+  if (rows.length) {
+    const facts = document.createElement("dl");
+    facts.className = "gallery-facts";
+    rows.forEach((row) => {
+      const cell = document.createElement("div");
+      cell.className = "gallery-fact";
+      setTextNode(cell, "dt", row.label);
+      const value = setTextNode(cell, "dd", row.value);
+      if (row.note) setTextNode(value, "small", row.note);
+      facts.appendChild(cell);
+    });
+    slate.appendChild(facts);
+  }
+
+  const columns = document.createElement("div");
+  columns.className = "gallery-slate-columns";
 
   const promptPanel = document.createElement("div");
   promptPanel.className = "gallery-prompt-panel";
   const promptHead = document.createElement("div");
-  setTextNode(promptHead, "h3", details.kind === "film" ? "Idea" : "Prompt that rolled");
-  const prompt = String((details.kind === "film" ? details.idea : details.prompt) || "").trim();
+  setTextNode(promptHead, "h3", film ? "Idea this film answers" : "Prompt that rolled");
+  const prompt = String((film ? details.idea : details.prompt) || "").trim();
   const copy = document.createElement("button");
   copy.type = "button";
   copy.className = "gallery-copy-prompt";
-  copy.setAttribute("aria-label", "Copy prompt");
-  copy.setAttribute("title", "Copy prompt");
+  copy.setAttribute("aria-label", film ? "Copy idea" : "Copy prompt");
+  copy.setAttribute("title", film ? "Copy idea" : "Copy prompt");
   copy.appendChild(galleryCopyIcon());
   copy.disabled = !prompt;
   const promptField = document.createElement("textarea");
-  const promptDisplay = prompt || "No prompt was recorded for this item.";
+  const promptDisplay =
+    prompt || (film ? "No idea was recorded for this production." : "No prompt was recorded for this clip.");
   promptField.className = "gallery-idea-prompt";
   if (!prompt) promptField.classList.add("is-empty");
   promptField.readOnly = true;
   promptField.spellcheck = false;
-  promptField.setAttribute("aria-label", "Prompt");
+  promptField.setAttribute("aria-label", film ? "Idea" : "Prompt");
   promptField.value = promptDisplay;
   promptField.rows = Math.max(
     4,
-    Math.min(12, promptDisplay.split("\n").reduce((rows, line) => rows + Math.max(1, Math.ceil(line.length / 72)), 0)),
+    Math.min(14, promptDisplay.split("\n").reduce((rows, line) => rows + Math.max(1, Math.ceil(line.length / 72)), 0)),
   );
   copy.addEventListener("click", () => copyGalleryPrompt(prompt, copy, promptField));
   promptHead.appendChild(copy);
   promptPanel.appendChild(promptHead);
   promptPanel.appendChild(promptField);
-  slate.appendChild(promptPanel);
-
   if (details.rationale) {
-    const why = document.createElement("div");
-    why.className = "gallery-prompt-panel";
-    setTextNode(why, "h3", "Why this shot");
-    setTextNode(why, "p", details.rationale);
-    slate.appendChild(why);
+    setTextNode(promptPanel, "h3", "Why this shot", "gallery-prompt-sub");
+    setTextNode(promptPanel, "p", details.rationale, "gallery-prompt-note");
   }
-  if (details.idea && details.kind !== "film") {
-    const idea = document.createElement("div");
-    idea.className = "gallery-prompt-panel";
-    setTextNode(idea, "h3", "Idea");
-    setTextNode(idea, "p", details.idea);
-    slate.appendChild(idea);
+  if (details.narration) {
+    setTextNode(promptPanel, "h3", "Narration", "gallery-prompt-sub");
+    setTextNode(promptPanel, "p", details.narration, "gallery-prompt-note");
   }
+  if (details.idea && !film) {
+    setTextNode(promptPanel, "h3", "Idea this production answers", "gallery-prompt-sub");
+    setTextNode(promptPanel, "p", details.idea, "gallery-prompt-note is-clamped");
+  }
+  columns.appendChild(promptPanel);
 
+  const aside = document.createElement("div");
+  aside.className = "gallery-slate-aside";
   const referencePanel = document.createElement("div");
   referencePanel.className = "gallery-reference-panel";
   setTextNode(referencePanel, "h3", "Reference stills");
@@ -466,20 +549,25 @@ function renderGalleryDetails(details) {
     references.forEach((reference) => {
       const row = document.createElement("li");
       setTextNode(row, "strong", reference.name || "reference");
-      setTextNode(row, "small", ` ${reference.role || "reference"} · ${galleryFileSize(reference.bytes)}`);
+      setTextNode(row, "small", `${reference.role || "reference"} · ${galleryFileSize(reference.bytes)}`);
       list.appendChild(row);
     });
     referencePanel.appendChild(list);
   }
-  slate.appendChild(referencePanel);
+  aside.appendChild(referencePanel);
   const deliverables = Array.isArray(details.deliverables) ? details.deliverables : [];
   if (deliverables.length) {
     const panel = document.createElement("div");
     panel.className = "gallery-reference-panel";
-    setTextNode(panel, "h3", "Deliverables beside the film");
-    setTextNode(panel, "p", deliverables.join(" · "));
-    slate.appendChild(panel);
+    setTextNode(panel, "h3", film ? "Deliverables beside the film" : "Session deliverables");
+    const list = document.createElement("ul");
+    list.className = "gallery-deliverables";
+    deliverables.forEach((name) => setTextNode(list, "li", name));
+    panel.appendChild(list);
+    aside.appendChild(panel);
   }
+  columns.appendChild(aside);
+  slate.appendChild(columns);
   body.appendChild(slate);
 }
 
@@ -500,7 +588,7 @@ async function openGalleryDetails(item) {
   if (!dialog.open) dialog.showModal();
   try {
     const details = await responseJson(await fetch(item.details_url));
-    if (dialog.dataset.clipId === item.id) renderGalleryDetails(details);
+    if (dialog.dataset.clipId === item.id) renderGalleryDetails(details, item);
   } catch (error) {
     if (dialog.dataset.clipId !== item.id) return;
     body.replaceChildren();

@@ -79,10 +79,7 @@ def _film_item(session: str, session_dir: Path, state: dict[str, Any] | None) ->
     if not film.is_file():
         return None
     stat = film.stat()
-    logline = ""
-    if state:
-        package = state.get("package") or {}
-        logline = str(package.get("idea") or package.get("logline") or "")
+    record = _film_record(session_dir, state or {})
     item_id = _item_id(session, "film")
     return {
         "id": item_id,
@@ -90,11 +87,12 @@ def _film_item(session: str, session_dir: Path, state: dict[str, Any] | None) ->
         "session": session,
         "title": f"Film · {session}",
         "plate": "assembled film",
-        "prompt": logline,
-        "provider": "",
-        "model": "",
-        "duration_s": None,
-        "resolution": "",
+        "prompt": record["idea"],
+        "provider": record["provider"],
+        "model": record["model"],
+        "duration_s": record["duration_s"],
+        "resolution": record["finish"],
+        "clips_in_cut": record["clips_in_cut"],
         "bytes": stat.st_size,
         "created_at": _iso(stat),
         "playable": True,
@@ -192,6 +190,164 @@ def _estimate_micros(op: dict[str, Any]) -> int:
         except (TypeError, ValueError):
             return 0
     return 0
+
+
+def _session_idea(state: dict[str, Any]) -> str:
+    """What the production was asked for: the packaged idea when the session
+    carried one, else the authored brief of its first chain derivation (a
+    one-shot never writes a package, so that is where its idea lives)."""
+    package = state.get("package") or {}
+    if isinstance(package, dict):
+        idea = str(package.get("idea") or package.get("logline") or "").strip()
+        if idea:
+            return idea
+    derivations = state.get("derivations") or {}
+    if isinstance(derivations, dict):
+        for derivation in derivations.values():
+            if isinstance(derivation, dict) and str(derivation.get("idea") or "").strip():
+                return str(derivation["idea"]).strip()
+    return ""
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _film_record(session_dir: Path, state: dict[str, Any]) -> dict[str, Any]:
+    """The cut film's facts from the records beside it — no decoding: the
+    assembly map names the clips in the cut and their booked lengths, the
+    QC packet the measured master runtime, the run plan the finish."""
+    ops = [op for op in (state.get("ops") or []) if isinstance(op, dict)]
+    by_op = {str(op.get("id") or ""): op for op in ops}
+    events = [
+        event
+        for event in (_load_json(session_dir / "assembly-map.json").get("events") or [])
+        if isinstance(event, dict)
+    ]
+    cut_ops = [by_op.get(str(event.get("op_id") or "")) for event in events]
+    cut_ops = [op for op in cut_ops if op] or [op for op in ops if op.get("status") == "completed"]
+    booked = 0.0
+    for event in events:
+        try:
+            booked += float(event.get("out_s") or 0) - float(event.get("in_s") or 0)
+        except (TypeError, ValueError):
+            continue
+    providers = _distinct(str(op.get("provider") or "") for op in cut_ops)
+    models = _distinct(str(op.get("model") or "") for op in cut_ops)
+    modes = _distinct(str(op.get("mode") or "") for op in cut_ops)
+    booked_resolutions = _distinct(str(op.get("resolution") or "") for op in cut_ops)
+    aspects = _distinct(
+        str((op.get("artifact_refs") or {}).get("aspect_ratio") or "")
+        for op in cut_ops
+        if isinstance(op.get("artifact_refs"), dict)
+    )
+    run_plan = state.get("run_plan") if isinstance(state.get("run_plan"), dict) else {}
+    master = _load_json(session_dir / "qc-packet.json").get("master") or {}
+    return {
+        "idea": _session_idea(state),
+        "provider": " + ".join(providers),
+        "model": " + ".join(models),
+        "mode": " + ".join(modes),
+        "clips_in_cut": len(cut_ops),
+        "booked_s": round(booked, 3) if booked else None,
+        "booked_resolution": " + ".join(booked_resolutions),
+        "duration_s": _float(master.get("duration_s")) if isinstance(master, dict) else None,
+        "finish": str(run_plan.get("finish") or ""),
+        "upscaled": bool(run_plan.get("upscale")),
+        "aspect": str(state.get("aspect") or " + ".join(aspects)),
+        "style": str(state.get("style") or ""),
+        "qc_verdict": str(master.get("verdict") or "") if isinstance(master, dict) else "",
+    }
+
+
+def _distinct(values) -> list[str]:
+    seen: list[str] = []
+    for value in values:
+        if value and value not in seen:
+            seen.append(value)
+    return seen
+
+
+def quality_label(width: int, height: int) -> str:
+    """The delivery quality a filmmaker says out loud: 4K, 1080p, 720p."""
+    lines = min(width, height) if width and height else max(width, height)
+    if not lines:
+        return ""
+    if lines >= 2000:
+        return "4K"
+    for standard in (1080, 720, 540, 480, 360):
+        if abs(lines - standard) <= 24:
+            return f"{standard}p"
+    return f"{lines}p"
+
+
+def probe_media(path: Path) -> dict[str, Any] | None:
+    """What the file itself says — raster, runtime, frame rate, codec, audio —
+    cached beside the media so a card opens without decoding twice. None
+    when ffprobe is missing or the file is not a movie."""
+    cache = path.parent / "thumbs" / f"{path.stem}-{_cache_key(path)}.probe.json"
+    cached = _load_json(cache)
+    if cached.get("width"):
+        return cached
+    ffprobe = resolve_media_tool("ffprobe") or shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    try:
+        raw = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        ).stdout
+        body = json.loads(raw)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    streams = [s for s in body.get("streams", []) if isinstance(s, dict)]
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    if not video:
+        return None
+    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    width = int(video.get("width") or 0)
+    height = int(video.get("height") or 0)
+    fps = 0.0
+    rate = str(video.get("avg_frame_rate") or video.get("r_frame_rate") or "")
+    if "/" in rate:
+        num, _, den = rate.partition("/")
+        try:
+            fps = float(num) / float(den) if float(den) else 0.0
+        except ValueError:
+            fps = 0.0
+    fmt = body.get("format") or {}
+    measured = {
+        "width": width,
+        "height": height,
+        "quality": quality_label(width, height),
+        "duration_s": round(float(fmt.get("duration") or video.get("duration") or 0), 3),
+        "fps": round(fps, 3),
+        "codec": str(video.get("codec_name") or ""),
+        "bit_rate": int(float(fmt.get("bit_rate") or 0)),
+        "has_audio": audio is not None,
+        "audio_channels": int(audio.get("channels") or 0) if audio else 0,
+    }
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps(measured), encoding="utf-8")
+    except OSError:
+        pass
+    return measured
 
 
 def gallery_items() -> list[dict]:
@@ -414,16 +570,14 @@ def ensure_first_frame(source: Path, destination: Path) -> Path:
 
 
 def gallery_item_details(item_id: str) -> dict[str, Any]:
-    """The record behind one card: the prompt that rolled, the model, the
-    estimate, the reference stills the session carried, the deliverables."""
+    """The record behind one card: what the file measures (quality, runtime,
+    frame rate), what was booked, the prompt that rolled or the idea the film
+    answers, the reference stills the session carried, the deliverables."""
     session_dir, media = _resolve(item_id)
     state = _load_state(session_dir) or {}
     session = session_dir.name
-    ops = state.get("ops") or []
-    op = next(
-        (o for o in ops if isinstance(o, dict) and str(o.get("job_id") or "") == media.stem), None
-    )
-    package = state.get("package") or {}
+    ops = [o for o in (state.get("ops") or []) if isinstance(o, dict)]
+    op = next((o for o in ops if str(o.get("job_id") or "") == media.stem), None)
     uploads = []
     for upload in state.get("uploads") or []:
         if not isinstance(upload, dict):
@@ -436,11 +590,13 @@ def gallery_item_details(item_id: str) -> dict[str, Any]:
                 "bytes": path.stat().st_size if path.is_file() else 0,
             }
         )
+    stat = media.stat()
+    kind = "film" if media.name == "film.mp4" else "clip"
     details: dict[str, Any] = {
         "clip_id": item_id,
         "session": session,
-        "kind": "film" if media.name == "film.mp4" else "clip",
-        "idea": str(package.get("idea") or package.get("logline") or ""),
+        "kind": kind,
+        "idea": _session_idea(state),
         "prompt": str(op.get("prompt") or "") if op else "",
         "prompt_version": str(op.get("prompt_version") or "") if op else "",
         "rationale": str(op.get("rationale") or "") if op else "",
@@ -451,14 +607,56 @@ def gallery_item_details(item_id: str) -> dict[str, Any]:
         "resolution": str(op.get("resolution") or "") if op else "",
         "estimate_usd_micros": _estimate_micros(op) if op else 0,
         "narration": str(op.get("narration") or "") if op else "",
+        "voicing": str(op.get("voicing") or "") if op else "",
+        "aspect": "",
+        "created_at": str(op.get("created_at") or "") if op else _iso(stat),
         "references": uploads,
         "deliverables": sorted(
             p.name
             for p in session_dir.iterdir()
             if p.is_file() and p.suffix in {".srt", ".vtt", ".json"} and p.name != "state.json"
         ),
-        "bytes": media.stat().st_size,
+        "bytes": stat.st_size,
+        "measured": probe_media(media),
+        "review": None,
     }
+    if op:
+        refs = op.get("artifact_refs") if isinstance(op.get("artifact_refs"), dict) else {}
+        details["aspect"] = str(refs.get("aspect_ratio") or "")
+        reviews = state.get("reviews") if isinstance(state.get("reviews"), dict) else {}
+        review = reviews.get(str(op.get("id") or ""))
+        if isinstance(review, dict):
+            details["review"] = {
+                "verdict": str(review.get("verdict") or ""),
+                "issues": [str(issue) for issue in (review.get("issues") or [])][:6],
+            }
+        # where the clip sits in the cut, when the session cut a film
+        events = _load_json(session_dir / "assembly-map.json").get("events") or []
+        for position, event in enumerate(events, start=1):
+            if isinstance(event, dict) and str(event.get("op_id") or "") == str(op.get("id") or ""):
+                details["position_in_cut"] = position
+                details["clips_in_cut"] = len(events)
+                break
+    if kind == "film":
+        record = _film_record(session_dir, state)
+        details.update(
+            {
+                "provider": record["provider"],
+                "model": record["model"],
+                "mode": record["mode"],
+                "duration_s": record["booked_s"] or record["duration_s"],
+                "resolution": record["booked_resolution"],
+                "finish": record["finish"],
+                "upscaled": record["upscaled"],
+                "clips_in_cut": record["clips_in_cut"],
+                "aspect": record["aspect"],
+                "style": record["style"],
+                "created_at": _iso(stat),
+                "review": {"verdict": record["qc_verdict"], "issues": []}
+                if record["qc_verdict"]
+                else None,
+            }
+        )
     return details
 
 

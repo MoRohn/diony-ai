@@ -293,3 +293,72 @@ def test_the_gallery_groups_each_session_into_one_production() -> None:
     # the flat items stay the unit of selection, stitching, ZIP and deletion
     assert payload["count"] == 4 and payload["films"] == 1 and payload["clips"] == 3
     assert {item["id"] for item in payload["items"]} >= set(with_film["clip_ids"])
+
+
+def test_film_details_read_the_file_and_the_records_beside_it() -> None:
+    """The Info modal shows what the film measures (quality, runtime, frame
+    rate) and what the records say: the idea of a one-shot lives in its chain
+    derivation (no package), the cut count in the assembly map, the finish in
+    the run plan."""
+    root = _session("s-dddd4444", clips=2, film=True)
+    state = json.loads((root / "state.json").read_text())
+    state["package"] = None
+    state["derivations"] = {
+        "op-1": {"kind": "chain", "idea": "OCCLUSION\nBeing hidden becomes physical."}
+    }
+    state["run_plan"] = {"finish": "1080p", "upscale": True}
+    state["reviews"] = {"op-2": {"verdict": "pass", "issues": []}}
+    (root / "state.json").write_text(json.dumps(state))
+    (root / "assembly-map.json").write_text(
+        json.dumps(
+            {
+                "events": [
+                    {"op_id": "op-1", "in_s": 0, "out_s": 10},
+                    {"op_id": "op-2", "in_s": 0, "out_s": 6},
+                ]
+            }
+        )
+    )
+    (root / "qc-packet.json").write_text(
+        json.dumps({"master": {"duration_s": 16.0, "verdict": "pass"}})
+    )
+    client = TestClient(app)
+    film = client.get("/api/gallery/items/s-dddd4444%3Afilm/details").json()
+    assert film["kind"] == "film" and film["idea"].startswith("OCCLUSION")
+    assert film["clips_in_cut"] == 2 and film["finish"] == "1080p" and film["upscaled"] is True
+    assert film["provider"] == "google-flow" and film["model"] == "omni-flash"
+    assert film["duration_s"] == 16.0 and film["resolution"] == "720p"
+    assert film["review"] == {"verdict": "pass", "issues": []}
+    if HAVE_FFMPEG:
+        measured = film["measured"]
+        assert measured["width"] == 64 and measured["height"] == 36 and measured["fps"] == 12
+        assert measured["quality"] == "36p" and measured["has_audio"] is True
+        assert 0.3 <= measured["duration_s"] <= 0.6
+        assert list((root / "thumbs").glob("film-*.probe.json")), (
+            "the probe is cached beside the media"
+        )
+    else:
+        assert film["measured"] is None
+    clip = client.get("/api/gallery/items/s-dddd4444%3Ajob-444402/details").json()
+    assert clip["position_in_cut"] == 2 and clip["clips_in_cut"] == 2
+    assert clip["review"]["verdict"] == "pass" and clip["voicing"] == ""
+    assert clip["idea"].startswith("OCCLUSION")
+    # the card itself carries the cheap facts without a probe
+    card = next(
+        item for item in client.get("/api/gallery").json()["items"] if item["kind"] == "film"
+    )
+    assert (
+        card["duration_s"] == 16.0 and card["resolution"] == "1080p" and card["clips_in_cut"] == 2
+    )
+    assert card["prompt"].startswith("OCCLUSION")
+
+
+def test_quality_labels_speak_like_a_filmmaker() -> None:
+    from diony_producer.gallery import quality_label
+
+    assert quality_label(1920, 1080) == "1080p"
+    assert quality_label(1080, 1920) == "1080p"
+    assert quality_label(1280, 720) == "720p"
+    assert quality_label(3840, 2160) == "4K"
+    assert quality_label(1280, 704) == "720p"
+    assert quality_label(0, 0) == ""
