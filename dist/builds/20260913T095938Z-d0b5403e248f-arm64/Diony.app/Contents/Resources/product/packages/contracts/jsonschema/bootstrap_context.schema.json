@@ -1,0 +1,270 @@
+{
+  "$defs": {
+    "Membership": {
+      "properties": {
+        "schema_version": {
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "user_id": {
+          "title": "User Id",
+          "type": "string"
+        },
+        "workspace_id": {
+          "title": "Workspace Id",
+          "type": "string"
+        },
+        "team_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Team Ids",
+          "type": "array"
+        },
+        "role": {
+          "$ref": "#/$defs/MembershipRole",
+          "default": "creator"
+        },
+        "profile_name": {
+          "default": "",
+          "title": "Profile Name",
+          "type": "string"
+        },
+        "profile_name_key": {
+          "default": "",
+          "title": "Profile Name Key",
+          "type": "string"
+        },
+        "personal_cost_center_id": {
+          "default": "",
+          "title": "Personal Cost Center Id",
+          "type": "string"
+        },
+        "assigned_cost_center_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Assigned Cost Center Ids",
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/MembershipStatus",
+          "default": "active"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "joined_at": {
+          "format": "date-time",
+          "title": "Joined At",
+          "type": "string"
+        },
+        "removed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Removed At"
+        },
+        "deleted_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deleted At"
+        }
+      },
+      "required": [
+        "id",
+        "user_id",
+        "workspace_id"
+      ],
+      "title": "Membership",
+      "type": "object"
+    },
+    "MembershipRole": {
+      "enum": [
+        "viewer",
+        "creator",
+        "producer",
+        "admin",
+        "owner"
+      ],
+      "title": "MembershipRole",
+      "type": "string"
+    },
+    "MembershipStatus": {
+      "enum": [
+        "active",
+        "suspended",
+        "removed"
+      ],
+      "title": "MembershipStatus",
+      "type": "string"
+    },
+    "User": {
+      "properties": {
+        "schema_version": {
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "email": {
+          "default": "",
+          "title": "Email",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "active": {
+          "default": true,
+          "title": "Active",
+          "type": "boolean"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "deleted_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deleted At"
+        }
+      },
+      "required": [
+        "id",
+        "display_name"
+      ],
+      "title": "User",
+      "type": "object"
+    },
+    "Workspace": {
+      "properties": {
+        "schema_version": {
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "slug": {
+          "title": "Slug",
+          "type": "string"
+        },
+        "owner_user_id": {
+          "default": "",
+          "title": "Owner User Id",
+          "type": "string"
+        },
+        "local_first": {
+          "default": true,
+          "title": "Local First",
+          "type": "boolean"
+        },
+        "controller_origin": {
+          "default": "",
+          "title": "Controller Origin",
+          "type": "string"
+        },
+        "controller_fingerprint": {
+          "default": "",
+          "title": "Controller Fingerprint",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "deleted_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Deleted At"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "slug"
+      ],
+      "title": "Workspace",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "user": {
+      "$ref": "#/$defs/User"
+    },
+    "workspace": {
+      "$ref": "#/$defs/Workspace"
+    },
+    "membership": {
+      "$ref": "#/$defs/Membership"
+    }
+  },
+  "required": [
+    "user",
+    "workspace",
+    "membership"
+  ],
+  "title": "BootstrapContext",
+  "type": "object"
+}

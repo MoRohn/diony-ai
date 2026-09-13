@@ -1,0 +1,320 @@
+{
+  "$defs": {
+    "AudioPacket": {
+      "properties": {
+        "clip_class": {
+          "enum": [
+            "sync-dialogue",
+            "vo-over",
+            "silent-picture",
+            "score-led",
+            "ambience-led"
+          ],
+          "title": "Clip Class",
+          "type": "string"
+        },
+        "script_excerpt": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Script Excerpt",
+          "type": "array"
+        },
+        "voice_ref": {
+          "default": "",
+          "title": "Voice Ref",
+          "type": "string"
+        },
+        "delivery": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Delivery",
+          "type": "object"
+        },
+        "on_camera": {
+          "default": true,
+          "title": "On Camera",
+          "type": "boolean"
+        },
+        "voicing": {
+          "default": "post",
+          "enum": [
+            "post",
+            "generated"
+          ],
+          "title": "Voicing",
+          "type": "string"
+        },
+        "line_at_s": {
+          "default": 0.0,
+          "minimum": 0.0,
+          "title": "Line At S",
+          "type": "number"
+        },
+        "room_tone_id": {
+          "default": "",
+          "title": "Room Tone Id",
+          "type": "string"
+        },
+        "foley": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Foley",
+          "type": "array"
+        },
+        "score": {
+          "default": "none",
+          "enum": [
+            "in",
+            "out",
+            "none"
+          ],
+          "title": "Score",
+          "type": "string"
+        },
+        "score_desc": {
+          "default": "",
+          "title": "Score Desc",
+          "type": "string"
+        },
+        "handles_s": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Handles S",
+          "type": "object"
+        },
+        "forbidden": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Forbidden",
+          "type": "array"
+        }
+      },
+      "required": [
+        "clip_class"
+      ],
+      "title": "AudioPacket",
+      "type": "object"
+    },
+    "CloudGenerationMode": {
+      "enum": [
+        "t2v",
+        "i2v",
+        "r2v",
+        "first_last",
+        "v2v_edit",
+        "extension",
+        "upscale",
+        "image"
+      ],
+      "title": "CloudGenerationMode",
+      "type": "string"
+    },
+    "CloudProvider": {
+      "enum": [
+        "grok",
+        "google-flow"
+      ],
+      "title": "CloudProvider",
+      "type": "string"
+    },
+    "ContinuityLock": {
+      "properties": {
+        "lock_recipe": {
+          "default": "none",
+          "enum": [
+            "still",
+            "character_asset",
+            "edit",
+            "ref",
+            "bridge",
+            "hybrid",
+            "none"
+          ],
+          "title": "Lock Recipe",
+          "type": "string"
+        },
+        "character_packs": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Character Packs",
+          "type": "array"
+        },
+        "setting_plate": {
+          "additionalProperties": true,
+          "title": "Setting Plate",
+          "type": "object"
+        },
+        "prev_frame_ptr": {
+          "additionalProperties": true,
+          "title": "Prev Frame Ptr",
+          "type": "object"
+        }
+      },
+      "title": "ContinuityLock",
+      "type": "object"
+    },
+    "PromptVersion": {
+      "properties": {
+        "version": {
+          "title": "Version",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "title": "Note",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "prompt"
+      ],
+      "title": "PromptVersion",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "clip_id": {
+      "title": "Clip Id",
+      "type": "string"
+    },
+    "scene_id": {
+      "title": "Scene Id",
+      "type": "string"
+    },
+    "order": {
+      "minimum": 0,
+      "title": "Order",
+      "type": "integer"
+    },
+    "script_line_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Script Line Ids",
+      "type": "array"
+    },
+    "clip_class": {
+      "enum": [
+        "sync-dialogue",
+        "vo-over",
+        "silent-picture",
+        "score-led",
+        "ambience-led"
+      ],
+      "title": "Clip Class",
+      "type": "string"
+    },
+    "duration_s": {
+      "exclusiveMinimum": 0,
+      "title": "Duration S",
+      "type": "integer"
+    },
+    "natural_s": {
+      "default": 0.0,
+      "minimum": 0.0,
+      "title": "Natural S",
+      "type": "number"
+    },
+    "camera_idea": {
+      "title": "Camera Idea",
+      "type": "string"
+    },
+    "join_next": {
+      "default": "cut",
+      "enum": [
+        "bridge",
+        "reaction_cut",
+        "extend",
+        "cut"
+      ],
+      "title": "Join Next",
+      "type": "string"
+    },
+    "provider": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CloudProvider"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "model": {
+      "default": "",
+      "title": "Model",
+      "type": "string"
+    },
+    "mode": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CloudGenerationMode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "resolution": {
+      "default": "720p",
+      "title": "Resolution",
+      "type": "string"
+    },
+    "audio_packet": {
+      "$ref": "#/$defs/AudioPacket"
+    },
+    "continuity": {
+      "$ref": "#/$defs/ContinuityLock"
+    },
+    "prompt_versions": {
+      "items": {
+        "$ref": "#/$defs/PromptVersion"
+      },
+      "title": "Prompt Versions",
+      "type": "array"
+    },
+    "estimate_usd_micros": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Estimate Usd Micros",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "clip_id",
+    "scene_id",
+    "order",
+    "clip_class",
+    "duration_s",
+    "camera_idea",
+    "audio_packet"
+  ],
+  "title": "ClipUnit",
+  "type": "object"
+}

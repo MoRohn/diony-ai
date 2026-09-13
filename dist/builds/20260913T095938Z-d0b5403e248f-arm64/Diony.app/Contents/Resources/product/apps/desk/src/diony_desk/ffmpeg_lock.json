@@ -1,0 +1,55 @@
+{
+  "note": "The ffmpeg and ffprobe releases Diony ships and installs. Static builds, pinned by URL and SHA-256; the desk refuses anything that does not match. Update all fields together.",
+  "platforms": {
+    "macos-arm64": {
+      "version": "9.0.1",
+      "source": "https://ffmpeg.martin-riedl.de/",
+      "license": "GPL-3.0-or-later",
+      "artifacts": [
+        {
+          "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1787073674_9.0.1/ffmpeg.zip",
+          "sha256": "8287a1b2229e05eb41859f073e18e6c52c60a778f2f5e6881070fe51b79407fe",
+          "members": {"ffmpeg": "ffmpeg"}
+        },
+        {
+          "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1787073674_9.0.1/ffprobe.zip",
+          "sha256": "102a26b8940a053298d9929bfaae71e4b6ef65ba5f19a99a88c433108560741a",
+          "members": {"ffprobe": "ffprobe"}
+        }
+      ]
+    },
+    "macos-amd64": {
+      "version": "9.0.1",
+      "source": "https://ffmpeg.martin-riedl.de/",
+      "license": "GPL-3.0-or-later",
+      "artifacts": [
+        {
+          "url": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1787081194_9.0.1/ffmpeg.zip",
+          "sha256": "5bdead62ff504ab9b447cc72b212c4fb481e3f7de5877d427a51bee8136dda40",
+          "members": {"ffmpeg": "ffmpeg"}
+        },
+        {
+          "url": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1787081194_9.0.1/ffprobe.zip",
+          "sha256": "34511bbcf1988ad2886023bf5ace4f44cf62e6defeb3d194d6f7619e5b061f7f",
+          "members": {"ffprobe": "ffprobe"}
+        }
+      ]
+    },
+    "windows-amd64": {
+      "version": "8.1.2",
+      "source": "https://www.gyan.dev/ffmpeg/builds/",
+      "license": "GPL-3.0-or-later",
+      "artifacts": [
+        {
+          "url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.zip",
+          "sha256": "db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec",
+          "members": {
+            "ffmpeg-8.1.2-essentials_build/bin/ffmpeg.exe": "ffmpeg.exe",
+            "ffmpeg-8.1.2-essentials_build/bin/ffprobe.exe": "ffprobe.exe",
+            "ffmpeg-8.1.2-essentials_build/LICENSE": "FFMPEG-LICENSE.txt"
+          }
+        }
+      ]
+    }
+  }
+}
