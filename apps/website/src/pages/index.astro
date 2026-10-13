@@ -4,6 +4,43 @@ import { ownLabel, ownUrl } from "../site";
 
 const description =
   "Diony AI is a desktop film studio for Mac and Windows. Own your studio. Produce at cost. One line becomes a priced film on Grok Imagine or Google Flow. No GPU.";
+
+const shots = [
+  {
+    id: "studio",
+    side: "shot-studio",
+    eyebrow: "01 — Studio",
+    heading: "Choose the camera",
+    headingId: "beat-studio",
+    body: "Grok Imagine or Google Flow. One camera shoots the whole film.",
+    host: "studio.diony.local",
+    caption: "Studio, on a Mac. Grok Imagine’s key is ready. Google Flow’s token is ready.",
+    alt: "Studio screen titled Choose your camera. Grok Imagine is selected and its key is ready. Google Flow’s token is ready, and the card notes that without a Gemini key the script borrows Grok. The computer is a Mac. Continue to the Director sits under the cards.",
+    width: 2214,
+    height: 1598,
+    widths: [640, 960, 1280, 1600, 1920, 2214],
+  },
+  {
+    id: "director",
+    side: "shot-director",
+    eyebrow: "02 — Director",
+    heading: "Lock the price",
+    headingId: "beat-price",
+    body: "One line is enough. Nothing rolls until you approve the price.",
+    host: "director.diony.local",
+    caption: "Director. Dialogue style, Google Flow, 720p. One shot or Draft script, after the price locks.",
+    alt: "Director screen. It says one shot compiles the prompt, locks the price, and rolls only when you approve. Production style is Dialogue. The provider is Google Flow at 720p, 16:9. The actions are One shot and Draft script.",
+    width: 2278,
+    height: 1744,
+    widths: [640, 960, 1280, 1600, 1920, 2278],
+  },
+];
+
+function srcset(id: string, ext: string, widths: number[]) {
+  return widths.map((w) => `/ui/${id}-${w}.${ext} ${w}w`).join(", ");
+}
+
+const sizes = "(min-width: 960px) min(720px, 58vw), calc(100vw - 2.5rem)";
 ---
 
 <Base
@@ -47,25 +84,51 @@ const description =
       <p class="cue" aria-hidden="true"><span>Scroll</span></p>
     </section>
 
-    <section class="beat" aria-labelledby="beat-desk">
-      <div class="wrap beat-inner">
-        <p class="eyebrow">01</p>
-        <h2 id="beat-desk">A desktop film studio</h2>
-        <p>
-          Type an idea. The Director writes the script and prices every shot. Grok Imagine or Google Flow. One camera shoots the whole film.
-        </p>
-      </div>
-    </section>
-
-    <section class="beat beat-alt" aria-labelledby="beat-price">
-      <div class="wrap beat-inner">
-        <p class="eyebrow">02</p>
-        <h2 id="beat-price">See the price first</h2>
-        <p>
-          Nothing rolls until the lock reply itemises the film. A failed job that burned money stays on the receipt.
-        </p>
-      </div>
-    </section>
+    {
+      shots.map((shot) => (
+        <section class:list={["shot", shot.side]} aria-labelledby={shot.headingId}>
+          <div class="wrap shot-grid">
+            <div class="shot-copy">
+              <p class="eyebrow">{shot.eyebrow}</p>
+              <h2 id={shot.headingId}>{shot.heading}</h2>
+              <p>{shot.body}</p>
+            </div>
+            <figure class="device">
+              <div class="device-glow" aria-hidden="true" />
+              <div class="device-frame">
+                <div class="device-top" aria-hidden="true">
+                  <span class="device-pip" />
+                  <span>{shot.host}</span>
+                </div>
+                <picture>
+                  <source
+                    type="image/avif"
+                    srcset={srcset(shot.id, "avif", shot.widths)}
+                    sizes={sizes}
+                  />
+                  <source
+                    type="image/webp"
+                    srcset={srcset(shot.id, "webp", shot.widths)}
+                    sizes={sizes}
+                  />
+                  <img
+                    src={`/ui/${shot.id}-1280.webp`}
+                    srcset={srcset(shot.id, "webp", shot.widths)}
+                    sizes={sizes}
+                    width={shot.width}
+                    height={shot.height}
+                    alt={shot.alt}
+                    loading="lazy"
+                    decoding="async"
+                  />
+                </picture>
+              </div>
+              <figcaption>{shot.caption}</figcaption>
+            </figure>
+          </div>
+        </section>
+      ))
+    }
 
     <section class="beat" aria-labelledby="beat-vault">
       <div class="wrap beat-inner">
