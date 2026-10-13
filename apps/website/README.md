@@ -21,9 +21,12 @@ npm run dev
 Dev server: `http://127.0.0.1:4321/`.
 
 ```bash
+npm run render:og   # og/og.svg → public/og.png (needs Chrome; commit the PNG)
 npm run build
 npm run preview
 ```
+
+`npm run render:og` inlines the pinned Archivo Black file and screenshots the SVG at 1200×630. The black bars and D of the mark are white in that file. The gradient bars stay orange to red.
 
 ## Deploy
 
@@ -51,6 +54,5 @@ In Vercel’s DNS for `diony.ai`, point the names at the server and remove any r
 ## Still needs the founder
 
 1. A license price, if one should appear on the page. The Gumroad link is the door. The repo does not name an amount.
-2. Support email, social accounts, and a counsel-reviewed privacy policy and terms. They are not on the splash.
+2. Social accounts, and a counsel-reviewed privacy policy and terms. Support mail is `support@diony.ai`.
 3. IPv6 for the server, and the Let’s Encrypt mailbox in `deploy/.env.example`.
-4. A designed Open Graph image. The ticket logo is the `og:image` until one exists.

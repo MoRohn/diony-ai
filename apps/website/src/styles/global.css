@@ -381,6 +381,15 @@ a {
   letter-spacing: 0.04em;
 }
 
+.colophon a {
+  color: var(--parchment);
+  text-underline-offset: 0.2em;
+}
+
+.colophon a:hover {
+  color: var(--amber);
+}
+
 .missing {
   min-height: 100svh;
   display: flex;
