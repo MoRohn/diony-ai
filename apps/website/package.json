@@ -8,7 +8,8 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "render:og": "node scripts/render-og.mjs"
+    "render:og": "node scripts/render-og.mjs",
+    "render:ui": "sh scripts/render-ui.sh"
   },
   "engines": {
     "node": ">=20"

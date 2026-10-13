@@ -22,11 +22,14 @@ Dev server: `http://127.0.0.1:4321/`.
 
 ```bash
 npm run render:og   # og/og.svg → public/og.png (needs Chrome; commit the PNG)
+npm run render:ui   # assets/ui/*.png → public/ui AVIF and WebP srcsets
 npm run build
 npm run preview
 ```
 
 `npm run render:og` inlines the pinned Archivo Black file and screenshots the SVG at 1200×630. The black bars and D of the mark are white in that file. The gradient bars stay orange to red.
+
+The reel shows two product screens, and only those: Studio choosing a camera, and the Director locking a price. The masters are `assets/ui/studio.png` (2214×1598) and `assets/ui/director.png` (2278×1744). Gumroad banners and logo tiles are not on the page. `npm run render:ui` rebuilds the srcsets with ffmpeg.
 
 ## Deploy
 
