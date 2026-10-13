@@ -1,0 +1,100 @@
+---
+import Base from "../layouts/Base.astro";
+import { ownLabel, ownUrl } from "../site";
+
+const description =
+  "Diony AI is a desktop film studio for Mac and Windows. Own your studio. Produce at cost. One line becomes a priced film on Grok Imagine or Google Flow. No GPU.";
+---
+
+<Base
+  title="Diony AI — Own your studio | Produce at cost"
+  description={description}
+  path="/"
+>
+  <div class="stage" aria-hidden="true">
+    <div class="glow glow-amber"></div>
+    <div class="glow glow-crimson"></div>
+    <p class="depth">Diony</p>
+    <div class="grain"></div>
+    <div class="vignette"></div>
+  </div>
+  <div class="reel" aria-hidden="true"></div>
+
+  <main id="content">
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <div class="hero-mark">
+        <img src="/Diony-AI-logo.png" width="960" height="895" alt="" />
+      </div>
+      <div class="hero-copy">
+        <p class="eyebrow">Desktop film studio · Mac and Windows</p>
+        <h1 id="hero-title">
+          <span class="visually-hidden">Own your studio | Produce at cost</span>
+          <span class="hero-stack" aria-hidden="true">
+            <span>Own your</span>
+            <span>studio</span>
+            <span class="hero-rule"></span>
+            <span>Produce</span>
+            <span>at cost</span>
+          </span>
+        </h1>
+        <p class="lede">One line in. A priced, finished film out.</p>
+        <div class="actions">
+          <a class="btn btn-primary" href={ownUrl}>
+            {ownLabel}<span class="visually-hidden"> on Gumroad</span>
+          </a>
+        </div>
+      </div>
+      <p class="cue" aria-hidden="true"><span>Scroll</span></p>
+    </section>
+
+    <section class="beat" aria-labelledby="beat-desk">
+      <div class="wrap beat-inner">
+        <p class="eyebrow">01</p>
+        <h2 id="beat-desk">A desktop film studio</h2>
+        <p>
+          Type an idea. The Director writes the script and prices every shot. Grok Imagine or Google Flow. One camera shoots the whole film.
+        </p>
+      </div>
+    </section>
+
+    <section class="beat beat-alt" aria-labelledby="beat-price">
+      <div class="wrap beat-inner">
+        <p class="eyebrow">02</p>
+        <h2 id="beat-price">See the price first</h2>
+        <p>
+          Nothing rolls until the lock reply itemises the film. A failed job that burned money stays on the receipt.
+        </p>
+      </div>
+    </section>
+
+    <section class="beat" aria-labelledby="beat-vault">
+      <div class="wrap beat-inner">
+        <p class="eyebrow">03</p>
+        <h2 id="beat-vault">The master stays here</h2>
+        <p>
+          No GPU. Your keys stay on the desk. Clips land in a local vault the moment they exist, with subtitles, an edit list, a QC packet, and the receipt.
+        </p>
+      </div>
+    </section>
+
+    <section class="end wrap" aria-labelledby="end-title">
+      <p class="eyebrow">Diony AI</p>
+      <h2 id="end-title">
+        <span class="visually-hidden">Own your studio | Produce at cost</span>
+        <span class="hero-stack" aria-hidden="true">
+          <span>Own your</span>
+          <span>studio</span>
+          <span class="hero-rule"></span>
+          <span>Produce</span>
+          <span>at cost</span>
+        </span>
+      </h2>
+      <p class="lede">One line in. A priced, finished film out.</p>
+      <div class="actions">
+        <a class="btn btn-primary" href={ownUrl}>
+          {ownLabel}<span class="visually-hidden"> on Gumroad</span>
+        </a>
+      </div>
+    </section>
+  </main>
+</Base>

@@ -1,0 +1,21 @@
+# One site on a server that hosts many. This file does not publish 80 or 443.
+# The shared Caddy process (see Caddyfile.example) is the only public listener.
+name: diony-website
+
+services:
+  diony-website:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: diony-website:local
+    container_name: diony-website
+    restart: unless-stopped
+    networks:
+      web:
+        aliases:
+          - diony-website
+
+networks:
+  web:
+    external: true
+    name: web

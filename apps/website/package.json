@@ -1,0 +1,22 @@
+{
+  "name": "diony-website",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Static marketing site for Diony AI. Self-contained; does not import the desktop apps.",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@astrojs/sitemap": "^3.6.0",
+    "@fontsource/archivo-black": "^5.2.7",
+    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@fontsource/ibm-plex-sans": "^5.2.7",
+    "astro": "^5.14.4"
+  }
+}

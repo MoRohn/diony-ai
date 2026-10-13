@@ -1,0 +1,64 @@
+---
+import "@fontsource/archivo-black/latin-400.css";
+import "@fontsource/ibm-plex-mono/latin-400.css";
+import "@fontsource/ibm-plex-sans/latin-400.css";
+import "@fontsource/ibm-plex-sans/latin-600.css";
+import "../styles/global.css";
+import Footer from "../components/Footer.astro";
+import Header from "../components/Header.astro";
+
+interface Props {
+  title: string;
+  description: string;
+  path?: string;
+  robots?: string;
+}
+
+const {
+  title,
+  description,
+  path = "/",
+  robots = "index, follow",
+} = Astro.props;
+
+const canonical = new URL(path, Astro.site);
+const image = new URL("/Diony-AI-logo.png", Astro.site);
+const fullTitle = title.includes("Diony") ? title : `${title} — Diony AI`;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <meta name="robots" content={robots} />
+    <meta name="theme-color" content="#16191F" />
+    <link rel="canonical" href={canonical.href} />
+    <link rel="icon" href="/Diony-AI-logo.png" type="image/png" />
+    <link rel="apple-touch-icon" href="/Diony-AI-logo.png" />
+    <meta property="og:site_name" content="Diony AI" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical.href} />
+    <meta property="og:image" content={image.href} />
+    <meta property="og:image:alt" content="Diony AI ticket mark" />
+    <meta property="og:image:width" content="960" />
+    <meta property="og:image:height" content="895" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content={fullTitle} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={image.href} />
+    <meta name="twitter:image:alt" content="Diony AI ticket mark" />
+    <slot name="head" />
+  </head>
+  <body>
+    <a class="skip" href="#content">Skip to content</a>
+    <Header />
+    <slot />
+    <Footer />
+  </body>
+</html>
