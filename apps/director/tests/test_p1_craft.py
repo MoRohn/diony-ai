@@ -464,6 +464,7 @@ def test_grok_sheet_stills_request_the_2k_they_pay_for(monkeypatch) -> None:
     monkeypatch.setattr(grok.httpx, "post", fake_post)
     grok.submit_image("casting photo", resolution="2k")
     assert seen["json"]["resolution"] == "2k"
+    assert seen["json"]["quality"] == "low"
 
 
 # --- W3: assembly trims, per-clip leveling, room bed ------------------------

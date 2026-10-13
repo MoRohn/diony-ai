@@ -1540,11 +1540,8 @@ def _run_approved(op: DirectorOp) -> dict:
     try:
         if op.estimate is None:
             raise HTTPException(status_code=409, detail="no locked estimate — refusing to spend")
-        if op.estimate.rate_cards_stale:
-            raise HTTPException(
-                status_code=409,
-                detail="rate cards are stale; re-verify provider pricing before spending",
-            )
+        # Blueprint 25: a stale card is reported on the estimate and never fatal.
+        # The proposal and the lock already say so; the run is not refused.
         problems = capabilities.violations(op)
         if problems:
             raise HTTPException(

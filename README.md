@@ -127,7 +127,7 @@ The header meter reads in the camera's own currency: dollars for Grok Imagine as
 
 ## Engines and pricing
 
-Prices live in versioned JSON rate cards at `apps/director/src/diony_director/ratecards/`, each naming its source and fetch date. A card older than 45 days is reported as stale on every estimate. Override the directory with `DIONY_RATECARD_DIR`.
+Prices live in versioned JSON rate cards at `apps/director/src/diony_director/ratecards/`, each naming its source and fetch date. A card older than 45 days is reported as stale on every estimate and does not refuse the run. Override the directory with `DIONY_RATECARD_DIR`.
 
 **Grok Imagine (xAI), metered per second.** Default video model `grok-imagine-video-1.5`; stills and character sheets on `grok-imagine-image-2.0`; the narrator on the Grok voice API; the screenwriter on `grok-4.6`. All on the one xAI key.
 
@@ -135,9 +135,10 @@ Prices live in versioned JSON rate cards at `apps/director/src/diony_director/ra
 |---|---|---|
 | `grok-imagine-video-1.5` | second at 480p / 720p / 1080p | 0.08 / 0.14 / 0.25 |
 | `grok-imagine-video` | second at 480p / 720p | 0.05 / 0.07 |
-| `grok-imagine-image-2.0` | still at 1K / 2K | 0.04 / 0.08 |
+| `grok-imagine-image-2.0` | still at 1K / 2K, generation (low) | 0.04 / 0.06 |
+| `grok-imagine-image-2.0` | still at 1K / 2K, edit (medium) | 0.06 / 0.08 |
 
-Clips run 1 to 15 seconds. Up to 3 reference images. Native audio. The 1.5 model shoots; the 1.0 model carries the extension and edit lanes.
+Clips run 1 to 15 seconds. Up to 3 reference images. Native audio. The 1.5 model shoots; the 1.0 model carries the extension and edit lanes. Stills pin quality on the request: a generation is low, an edit (a cast board or a cast keyframe) is medium, which is what xAI's auto quality serves today. Fetched 2026-10-13 from the [xAI pricing page](https://docs.x.ai/developers/pricing) and the image-generation docs.
 
 **Google Flow via useapi.net, priced in Google's published credits.** The script, the master prompt and the likeness audit run on Gemini 2.5 Pro and the narrator on Gemini speech, both on the Gemini API key, billed by Google AI Studio on its own meter. Default video model `omni-flash` (Omni 1.1 Flash: audio-native, voices, characters, first and last frames, 4/6/8/10 s at 360p or 720p). Veo 3.1 tiers stay reachable by explicit model choice and carry the extension lane. The credit costs below are the ones Google charges your account per generation; the Director converts them to dollars from your plan's price per credit, which is a model of your subscription, never Google's meter.
 

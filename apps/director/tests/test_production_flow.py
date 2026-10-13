@@ -556,7 +556,7 @@ def test_grok_image_ops_reconcile_on_image_rates(monkeypatch, tmp_path) -> None:
     states = [client.get(f"/api/director/ops/{i}").json()["op"]["status"] for i in bible_ids]
     assert all(s == "completed" for s in states), states
     ledger = client.get("/api/director/ledger").json()
-    assert ledger["totals"]["cost_usd_micros"] == 80_000 * len(bible_ids)  # $0.08/2K still
+    assert ledger["totals"]["cost_usd_micros"] == 60_000 * len(bible_ids)  # $0.06/2K low still
 
 
 def test_locked_estimate_covers_clips_bible_and_allowance(monkeypatch, tmp_path) -> None:

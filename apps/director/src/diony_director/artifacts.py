@@ -171,6 +171,7 @@ def plan_sheet_ops(sid: str, package: ProductionPackage) -> list[DirectorOp]:
                 mode=CloudGenerationMode.IMAGE,
                 duration_s=1,
                 resolution=resolution,
+                image_edit=slot == "board",
             )
             ops.append(
                 DirectorOp(

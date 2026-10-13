@@ -388,7 +388,10 @@ def test_grok_only_setups_build_sheets_on_the_grok_image_lane(monkeypatch) -> No
     for op in ops:
         assert op.provider.value == "grok"
         assert op.model == "grok-imagine-image-2.0"
-        assert op.estimate.total_usd_micros == 80_000  # $0.08 per 2K still
+        # Standard sheets are generations. xAI bills those at low quality:
+        # $0.06 per 2K still (docs.x.ai, fetched 2026-10-13). A locked board
+        # is an edit and prices at medium, $0.08.
+        assert op.estimate.total_usd_micros == 60_000
 
 
 def test_grok_image_submit_is_synchronous(monkeypatch, tmp_path) -> None:

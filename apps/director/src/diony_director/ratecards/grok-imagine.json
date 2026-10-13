@@ -1,10 +1,17 @@
 {
   "provider_id": "grok",
-  "label": "Grok Imagine Video (xAI)",
+  "label": "Grok Imagine (xAI)",
   "pricing_basis": "metered",
-  "source": "https://docs.x.ai/developers/model-capabilities/video/generation",
-  "fetched_at": "2026-08-31",
+  "source": "https://docs.x.ai/developers/pricing",
+  "official_source": "https://docs.x.ai/developers/model-capabilities/images/generation",
+  "fetched_at": "2026-10-13",
   "stale_after_days": 45,
+  "notes": [
+    "Fetched 2026-10-13. Dollar rates are the us-east-1 public model catalog embedded in the xAI docs (imageGenerationModels and videoGenerationModels on the grok-imagine-video-1.5 model page) and the Imagine table at https://docs.x.ai/developers/pricing. The same video and image rates are listed for us-west-2.",
+    "Video output rates are unchanged from the 2026-08-31 card: grok-imagine-video-1.5 is $0.08 / $0.14 / $0.25 per second at 480p / 720p / 1080p; grok-imagine-video is $0.05 / $0.07 at 480p / 720p. Image input is $0.01 on 1.5 and on grok-imagine-image-2.0, and $0.002 on grok-imagine-video. Input video is $0.01 per second on grok-imagine-video only; 1.5 publishes no video-input rate because editing and extension run on grok-imagine-video.",
+    "grok-imagine-image-2.0 bills by resolution and quality. The image API quality parameter defaults to auto, which the generation docs (read 2026-10-13) say currently serves generation at low and editing at medium. Diony pins those qualities on the request. 1K / 2K low are $0.04 / $0.06; 1K / 2K medium are $0.06 / $0.08. 1.5K (not requested by Diony) is $0.05 low and $0.07 medium. The headline $0.04 on the pricing page is the 1K low rate, not a flat still price.",
+    "grok-imagine-video-1.5-lite ($0.02 / $0.03 / $0.14 per second at 480p / 720p / 1080p) is on the same page and is not a Diony camera."
+  ],
   "cards": [
     {
       "capability": "video",
@@ -55,21 +62,27 @@
       "usd_micros_per_unit": 10000
     },
     {
-      "capability": "video",
-      "model": "grok-imagine-video-1.5",
-      "unit": "video_input_second",
-      "usd_micros_per_unit": 10000
-    },
-    {
       "capability": "image",
       "model": "grok-imagine-image-2.0",
-      "unit": "generation:1k",
+      "unit": "generation:1k:low",
       "usd_micros_per_unit": 40000
     },
     {
       "capability": "image",
       "model": "grok-imagine-image-2.0",
-      "unit": "generation:2k",
+      "unit": "generation:2k:low",
+      "usd_micros_per_unit": 60000
+    },
+    {
+      "capability": "image",
+      "model": "grok-imagine-image-2.0",
+      "unit": "generation:1k:medium",
+      "usd_micros_per_unit": 60000
+    },
+    {
+      "capability": "image",
+      "model": "grok-imagine-image-2.0",
+      "unit": "generation:2k:medium",
       "usd_micros_per_unit": 80000
     },
     {

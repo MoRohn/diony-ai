@@ -546,7 +546,13 @@ def _spawn_privileged_install() -> bool:
             _note_privilege_error(proc)
         return proc.returncode == 0
     for tool in ("pkexec", "sudo"):
-        proc = subprocess.run([tool, *cmd], capture_output=True, text=True, timeout=180)
+        try:
+            proc = subprocess.run([tool, *cmd], capture_output=True, text=True, timeout=180)
+        except FileNotFoundError:
+            # A desk without pkexec (common on a minimal Linux) must try sudo,
+            # and a desk with neither must return rather than crash Studio
+            # before it listens.
+            continue
         if proc.returncode == 0:
             return True
         _note_privilege_error(proc)

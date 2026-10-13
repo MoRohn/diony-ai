@@ -215,17 +215,23 @@ def submit_image(
     references: list[str] | None = None,
     aspect_ratio: str = "landscape",
     resolution: str = "",
+    quality: str = "low",
 ) -> base.CloudJobHandle:
     """xAI image generation is synchronous — the handle carries the result.
 
     ``resolution`` ("1k"|"2k") is sent when given so the request matches what
     the rate card priced — the default is 1k, and paying 2k rates for default
-    output was a silent ledger lie."""
+    output was a silent ledger lie. ``quality`` is pinned to low, the
+    generation default xAI documents for auto (read 2026-10-13), so a 2K
+    still bills the low unit and not whatever auto picks next.
+    """
 
     base.ensure_prompt_fits(prompt, PROVIDER_ID, what="image prompt")
     payload: dict = {"model": model, "prompt": prompt, "response_format": "url"}
     if resolution in {"1k", "2k"}:
         payload["resolution"] = resolution
+    if quality in {"low", "medium"}:
+        payload["quality"] = quality
     if aspect_ratio in {"16:9", "9:16", "1:1"}:
         # plates and sheets are born at the program aspect — a landscape plate
         # centre-cropped to 9:16 throws away most of the set
@@ -266,6 +272,7 @@ def submit_image_edit(
     model: str = IMAGE_MODEL,
     aspect_ratio: str = "",
     resolution: str = "",
+    quality: str = "medium",
 ) -> base.CloudJobHandle:
     """xAI image EDITING (`/v1/images/edits`), synchronous like generation.
 
@@ -289,6 +296,10 @@ def submit_image_edit(
         payload["aspect_ratio"] = aspect_ratio
     if resolution in {"1k", "2k"}:
         payload["resolution"] = resolution
+    # Edits default to medium under xAI's auto quality (read 2026-10-13).
+    # Pin it so the medium rate-card unit is what the request is billed.
+    if quality in {"low", "medium"}:
+        payload["quality"] = quality
     response = base.post_with_retries(
         f"{api_base()}/v1/images/edits",
         what="xAI image edit submit",
