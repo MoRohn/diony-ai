@@ -1,0 +1,10 @@
+node_modules
+dist
+.astro
+.git
+.DS_Store
+*.md
+deploy/Caddyfile.example
+deploy/caddy-compose.example.yml
+deploy/.env.example
+deploy/README.md

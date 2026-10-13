@@ -1,0 +1,30 @@
+# Example only. Run this once for the whole server, not once per website.
+# Create the shared network first:  docker network create web
+# Then copy Caddyfile.example to ./Caddyfile beside this file on the server.
+name: edge-caddy
+
+services:
+  caddy:
+    image: caddy:2.10
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - web
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  web:
+    external: true
+    name: web

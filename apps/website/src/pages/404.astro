@@ -1,0 +1,21 @@
+---
+import Base from "../layouts/Base.astro";
+import { ownLabel, ownUrl } from "../site";
+---
+
+<Base
+  title="Page not found"
+  description="That page is not on the Diony AI site."
+  path="/404"
+  robots="noindex, nofollow"
+>
+  <main id="content" class="missing wrap">
+    <p class="eyebrow">404</p>
+    <h1>This page is not on the reel</h1>
+    <p class="lede">The studio lives on your computer after you open the app.</p>
+    <div class="actions">
+      <a class="btn btn-primary" href="/">Back to the title</a>
+      <a class="btn btn-ghost" href={ownUrl}>{ownLabel}<span class="visually-hidden"> on Gumroad</span></a>
+    </div>
+  </main>
+</Base>

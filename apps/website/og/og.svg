@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="ogTitle ogDesc">
+  <title id="ogTitle">Diony</title>
+  <desc id="ogDesc">Own your Studio | Produce at Cost</desc>
+  <defs>
+    <linearGradient id="dg1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#EA573C"/>
+      <stop offset="1" stop-color="#E74B43"/>
+    </linearGradient>
+    <linearGradient id="dg2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#EF7921"/>
+      <stop offset="1" stop-color="#F46F24"/>
+    </linearGradient>
+    <linearGradient id="dg3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F38216"/>
+      <stop offset="0.3" stop-color="#E86C22"/>
+      <stop offset="0.55" stop-color="#BB462E"/>
+      <stop offset="0.8" stop-color="#ED453F"/>
+      <stop offset="1" stop-color="#F14B42"/>
+    </linearGradient>
+    <radialGradient id="glowAmber" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#E5AC48" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#E5AC48" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowCrimson" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#C41E3A" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#C41E3A" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#16191F"/>
+  <ellipse cx="1040" cy="-20" rx="460" ry="300" fill="url(#glowAmber)"/>
+  <ellipse cx="40" cy="680" rx="420" ry="280" fill="url(#glowCrimson)"/>
+  <rect width="1200" height="8" fill="#C41E3A"/>
+  <g transform="translate(72 148) scale(0.5)" fill="none">
+    <rect x="0" y="325" width="39" height="166" rx="19.5" fill="url(#dg1)"/>
+    <rect x="107" y="210" width="39" height="397" rx="19.5" fill="url(#dg2)"/>
+    <rect x="211" y="0" width="49" height="658" rx="24.5" fill="url(#dg3)"/>
+    <rect x="329" y="42" width="56" height="571" rx="28" fill="#FFFFFF"/>
+    <rect x="445" y="83" width="62" height="484" rx="31" fill="#FFFFFF"/>
+    <path d="M558 138 Q558 124 572 124 A135 199.5 0 0 1 572 523 Q558 523 558 509 Z" fill="#FFFFFF"/>
+  </g>
+  <text x="500" y="292" fill="#F4F0E6" font-family="Archivo Black, Arial Black, sans-serif" font-size="108" letter-spacing="-1.6">Diony</text>
+  <rect x="504" y="322" width="88" height="6" fill="#C41E3A"/>
+  <text x="504" y="386" fill="#F4F0E6" font-family="Archivo Black, Arial Black, sans-serif" font-size="28" letter-spacing="-0.4">
+    <tspan>Own your Studio</tspan>
+    <tspan fill="#C41E3A"> | </tspan>
+    <tspan>Produce at Cost</tspan>
+  </text>
+</svg>

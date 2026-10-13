@@ -1,0 +1,38 @@
+# Shared edge proxy for every site on this Hetzner server.
+# Copy to the server (for example /opt/caddy/Caddyfile) and edit the
+# example blocks. One Caddy owns ports 80 and 443. Do not run a second proxy.
+#
+# Automatic HTTPS uses the public ACME HTTP-01 challenge, so both ports
+# must reach this machine. Set ACME_EMAIL in the environment (see .env.example).
+# There is no certificate or account secret in this repository.
+
+{
+	email {$ACME_EMAIL}
+}
+
+diony.ai {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=15552000"
+		-Server
+	}
+	reverse_proxy diony-website:80
+}
+
+www.diony.ai {
+	redir https://diony.ai{uri} permanent
+}
+
+# --- Next site: duplicate the block. Do not bind another public 80/443. ---
+# example.com {
+# 	encode zstd gzip
+# 	header {
+# 		Strict-Transport-Security "max-age=15552000"
+# 		-Server
+# 	}
+# 	reverse_proxy example-website:80
+# }
+#
+# www.example.com {
+# 	redir https://example.com{uri} permanent
+# }
