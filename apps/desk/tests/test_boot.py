@@ -832,6 +832,11 @@ def test_ensure_running_restarts_unhealthy_wizard(monkeypatch, tmp_path) -> None
     monkeypatch.setattr(
         "diony_desk.boot.wizard_state_ok", lambda host="127.0.0.1", port=None: health["ok"]
     )
+    # Studio is current only when /api/opening AND the opening-page HTML both pass.
+    monkeypatch.setattr(
+        "diony_desk.boot.wizard_html_ok",
+        lambda root=None, host="127.0.0.1", port=None: health["ok"],
+    )
     monkeypatch.setattr("diony_desk.boot.wait_port", lambda port, timeout=40.0: True)
     monkeypatch.setattr("diony_desk.boot.ensure_product_names", lambda root=None: True)
     monkeypatch.setattr("diony_desk.boot.finish_open", lambda names_ok=False: None)
@@ -860,6 +865,9 @@ def test_ensure_running_restarts_unhealthy_wizard(monkeypatch, tmp_path) -> None
     assert stopped == [8787]
     assert "wizard.log" in started
     assert "producer.log" not in started
+    log = " ".join(public_state()["log"])
+    assert "/api/opening" in log
+    assert "/api/state" not in log
 
 
 def test_ensure_running_restarts_stale_ui(monkeypatch, tmp_path) -> None:

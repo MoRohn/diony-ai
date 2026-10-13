@@ -1240,14 +1240,14 @@ def ensure_running(root: Path) -> None:
             raise RuntimeError(
                 "Port 8787 is already used by another application. Close that application, then open Diony AI again."
             )
-        say("Studio is listening but stale or /api/state is not 200. Restarting Studio.")
+        say("Studio is listening but stale or /api/opening is not 200. Restarting Studio.")
         stop_listener(WIZARD_PORT)
     if port_open(PRODUCER_PORT) and not producer_is_current(root):
         if not listener_is_diony(PRODUCER_PORT):
             raise RuntimeError(
                 "Port 8788 is already used by another application. Close that application, then open Diony AI again."
             )
-        say("Producer is listening but stale or /api/project is not 200. Restarting Producer.")
+        say("Producer is listening but stale or /api/engine is not 200. Restarting Producer.")
         stop_listener(PRODUCER_PORT)
     if not port_open(WIZARD_PORT):
         start_app(wizard, "wizard.log", root)
@@ -1256,7 +1256,7 @@ def ensure_running(root: Path) -> None:
     if not wait_port(WIZARD_PORT):
         raise RuntimeError("Studio did not open on port 8787.")
     if not wizard_is_current(root):
-        say("Studio opened but is stale or /api/state failed. Restarting Studio once.")
+        say("Studio opened but is stale or /api/opening failed. Restarting Studio once.")
         stop_listener(WIZARD_PORT)
         start_app(wizard, "wizard.log", root)
         if not wait_port(WIZARD_PORT) or not wizard_is_current(root):
@@ -1264,7 +1264,7 @@ def ensure_running(root: Path) -> None:
     if not wait_port(PRODUCER_PORT, timeout=20):
         raise RuntimeError("Producer did not open on port 8788.")
     if not producer_is_current(root):
-        say("Producer opened but is stale or /api/project failed. Restarting Producer once.")
+        say("Producer opened but is stale or /api/engine failed. Restarting Producer once.")
         if not listener_is_diony(PRODUCER_PORT):
             raise RuntimeError(
                 "Port 8788 changed ownership during startup. Diony AI left it untouched."

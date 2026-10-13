@@ -42,8 +42,8 @@ Startup performs these checks in order:
 2. Resolve the user-owned state and vault directories.
 3. Probe an existing Desk semantically. An exact current Desk receives the handoff and the duplicate launcher exits without repeating setup.
 4. Acquire one per-user OS startup lock before creating the lobby or starting services. If another launch is still in progress, wait only for the bounded handoff, then exit; never bind a second Desk port or start another worker.
-5. Probe Studio semantically (`/api/state` plus the shipped UI stamp), not only port 8787.
-6. Probe Producer semantically (`/api/project` plus the shipped UI stamp), not only port 8788.
+5. Probe Studio semantically (`GET /api/opening` with an engine choice, and the opening page's `data-diony="studio-opening"` marker), not only port 8787.
+6. Probe Producer semantically (`GET /api/engine` plus the shipped Gallery UI stamp), not only port 8788.
 7. Restart a stale Diony-owned process once.
 8. Never terminate an unknown process occupying a product port. Explain the collision and leave it untouched.
 9. Lay `studio.diony.local` and `producer.diony.local`; request OS elevation only for that machine-level name boundary. Only the lock-owning Desk may run this setup.

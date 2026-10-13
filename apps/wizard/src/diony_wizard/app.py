@@ -135,6 +135,7 @@ def health() -> dict:
 
 
 def main() -> None:
+    import subprocess
     import sys
 
     import uvicorn
@@ -143,8 +144,20 @@ def main() -> None:
 
     start_product_gateway()
     skip = os.environ.get("DIONY_NAMES_SKIP", "").strip().lower() in {"1", "true", "yes"}
+    port = int(os.environ.get("DIONY_WIZARD_PORT", "8787"))
     if not skip and sys.stdin.isatty() and not gateway_healthy():
-        ensure_product_urls()
+        laid = False
+        try:
+            laid = bool(ensure_product_urls())
+        except (OSError, subprocess.SubprocessError) as exc:
+            # A missing pkexec (or a privilege helper that errors) must not
+            # kill Studio before it binds. The numeric port still works.
+            print(f"Could not lay studio.diony.local ({exc}).", file=sys.stderr)
+        if not laid:
+            print(
+                f"Studio is starting without the product names. Open http://127.0.0.1:{port}",
+                file=sys.stderr,
+            )
     reload_flag = os.environ.get("DIONY_WIZARD_RELOAD", "").strip().lower()
     reload = reload_flag in {"1", "true", "yes"}
     extra: dict = {"reload": reload, "log_level": "info"}
@@ -153,7 +166,7 @@ def main() -> None:
     uvicorn.run(
         "diony_wizard.app:app",
         host=bind_host(),
-        port=int(os.environ.get("DIONY_WIZARD_PORT", "8787")),
+        port=port,
         **extra,
     )
 

@@ -1351,6 +1351,7 @@ def _plan_cast_keyframes(
             mode=CloudGenerationMode.IMAGE,
             duration_s=1,
             resolution=resolution,
+            image_edit=True,
         )
         frame_op = DirectorOp(
             id=f"op-{uuid.uuid4().hex[:10]}",
@@ -2821,6 +2822,10 @@ def lock_script(
         )
     if lifetime_usd_micros > spent_usd_micros:
         lines.append(f"Workspace lifetime spend to date: {_usd(lifetime_usd_micros)}.")
+    if package.estimate is not None and package.estimate.rate_cards_stale:
+        lines.append(
+            "Heads up: the rate card is stale — re-verify provider pricing before running."
+        )
     reply = "\n".join(lines)
     return package, ops, bible_ops, reply
 

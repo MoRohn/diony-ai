@@ -5,6 +5,35 @@ from datetime import UTC, date, datetime
 from diony_director import ratecards
 
 
+def test_packaged_grok_card_was_fetched_on_2026_10_13() -> None:
+    """The 2026-08-31 card went stale on 2026-10-15 and would have refused every
+    Grok run. This pins the refresh so the next fetch updates the date on purpose."""
+    grok = ratecards.load_files()["grok"]
+    assert grok.fetched_at == date(2026, 10, 13)
+    assert grok.stale_after_days == 45
+    assert grok.source == "https://docs.x.ai/developers/pricing"
+    assert "images/generation" in grok.official_source
+    assert ratecards.is_stale(grok, now=datetime(2026, 10, 13, tzinfo=UTC)) is False
+
+
+def test_grok_image_rates_follow_the_published_quality_tiers() -> None:
+    files = ratecards.load_files()
+    low_1k = ratecards.resolve(files, "grok", "grok-imagine-image-2.0", "generation:1k:low")
+    low_2k = ratecards.resolve(files, "grok", "grok-imagine-image-2.0", "generation:2k:low")
+    med_2k = ratecards.resolve(files, "grok", "grok-imagine-image-2.0", "generation:2k:medium")
+    assert low_1k.usd_micros_per_unit == 40_000
+    assert low_2k.usd_micros_per_unit == 60_000
+    assert med_2k.usd_micros_per_unit == 80_000
+    video = ratecards.resolve(files, "grok", "grok-imagine-video", "video_input_second")
+    assert video.usd_micros_per_unit == 10_000
+    try:
+        ratecards.resolve(files, "grok", "grok-imagine-video-1.5", "video_input_second")
+    except ratecards.RateCardMissing as err:
+        assert "video_input_second" in str(err)
+    else:  # pragma: no cover
+        raise AssertionError("1.5 publishes no video-input rate")
+
+
 def test_packaged_grok_card_carries_the_720p_second_rate() -> None:
     files = ratecards.load_files()
     rate = ratecards.resolve(files, "grok", "grok-imagine-video", "second:720p")

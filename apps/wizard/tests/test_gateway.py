@@ -167,6 +167,52 @@ def test_install_returns_when_router_already_up(tmp_path, monkeypatch) -> None:
     assert hosts_ready()
 
 
+def test_missing_pkexec_is_skipped_and_sudo_is_tried(monkeypatch) -> None:
+    from diony_wizard import gateway
+
+    calls: list[str] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv[0])
+        if argv[0] == "pkexec":
+            raise FileNotFoundError("pkexec")
+
+        class Proc:
+            returncode = 1
+            stderr = "denied"
+            stdout = ""
+
+        return Proc()
+
+    monkeypatch.setattr(gateway.subprocess, "run", fake_run)
+    monkeypatch.setattr(gateway.sys, "platform", "linux")
+    assert gateway._spawn_privileged_install() is False
+    assert calls == ["pkexec", "sudo"]
+
+
+def test_wizard_main_listens_when_pkexec_is_missing(monkeypatch, capsys) -> None:
+    import uvicorn
+
+    from diony_wizard.app import main
+
+    ran: dict[str, bool] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: ran.setdefault("ok", True))
+    monkeypatch.setattr("diony_wizard.gateway.start_product_gateway", lambda *a, **k: False)
+    monkeypatch.setattr("diony_wizard.gateway.gateway_healthy", lambda *a, **k: False)
+
+    def boom(*_a, **_k):
+        raise FileNotFoundError("[Errno 2] No such file or directory: 'pkexec'")
+
+    monkeypatch.setattr("diony_wizard.gateway.ensure_product_urls", boom)
+    monkeypatch.setattr("sys.stdin", type("Stdin", (), {"isatty": lambda self: True})())
+    monkeypatch.delenv("DIONY_NAMES_SKIP", raising=False)
+    main()
+    assert ran.get("ok") is True
+    err = capsys.readouterr().err
+    assert "pkexec" in err
+    assert "http://127.0.0.1:8787" in err
+
+
 def test_log_handle_falls_back_when_unwritable(tmp_path, monkeypatch) -> None:
     from diony_wizard.gateway import _log_handle
 

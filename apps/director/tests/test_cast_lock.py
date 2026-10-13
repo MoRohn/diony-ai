@@ -695,6 +695,7 @@ def test_grok_image_edit_sends_one_image_or_a_list_never_both(monkeypatch, tmp_p
     assert sent[-1]["url"].endswith("/v1/images/edits")
     assert sent[-1]["image"]["type"] == "image_url" and "image_urls" not in sent[-1]
     assert sent[-1]["aspect_ratio"] == "1:1"
+    assert sent[-1]["quality"] == "medium"
     assert handle.metadata["sync_result_url"] == "https://x/img.png"
     grok.submit_image_edit("Compose the frame.", [str(a), str(b)] * 4)
     assert "image" not in sent[-1] and len(sent[-1]["image_urls"]) == grok.MAX_EDIT_IMAGES

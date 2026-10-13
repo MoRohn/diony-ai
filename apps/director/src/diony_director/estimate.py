@@ -59,6 +59,27 @@ def _flow_unit(model: str, duration: int, resolution: str, mode: CloudGeneration
     return "generation"
 
 
+def grok_image_is_edit(artifact_refs: dict | None) -> bool:
+    """A board or a cast keyframe is an image edit; every other Grok still is a generation.
+
+    xAI's image API bills the quality it serves. Generation's documented auto
+    default is low; editing's is medium (docs.x.ai image generation, read
+    2026-10-13). The adapter pins those qualities, and the estimate uses the
+    same split so the receipt matches the request.
+    """
+    refs = artifact_refs or {}
+    bible_slot = str((refs.get("bible") or {}).get("slot") or "")
+    keyframe = bool((refs.get("style_frame") or {}).get("keyframe"))
+    return keyframe or bible_slot == "board"
+
+
+def grok_image_unit(resolution: str, *, edit: bool = False) -> str:
+    """The rate-card unit for a Grok still at the quality the request will pin."""
+    res = resolution if resolution in {"1k", "2k"} else "2k"
+    quality = "medium" if edit else "low"
+    return f"generation:{res}:{quality}"
+
+
 def image_inputs_for(clip, provider: CloudProvider | None = None) -> int:
     """Planned image-input count for a Grok clip: a still-lock feeds one frame;
     a reference-locked clip with cast feeds the 3-ref pack. Flow meters credits
@@ -93,6 +114,7 @@ def estimate_op(
     resolution: str = "720p",
     image_inputs: int = 0,
     video_input_s: int = 0,
+    image_edit: bool = False,
     workspace_id: str = "local-workspace",
     project_id: str = "",
 ) -> CostEstimate:
@@ -145,14 +167,19 @@ def estimate_op(
             )
         if mode is CloudGenerationMode.IMAGE:
             if provider is CloudProvider.GROK:
-                unit = f"generation:{resolution}" if resolution in {"1k", "2k"} else "generation:2k"
+                unit = grok_image_unit(resolution, edit=image_edit)
+                quality = "medium" if image_edit else "low"
             else:
                 unit = "generation"
+                quality = ""
             rate = ratecards.resolve(files, provider.value, model, unit)
             count = max(1, int(duration_s) or 1)
+            still_label = (
+                f"{model} still · {quality} × {count}" if quality else f"{model} still × {count}"
+            )
             lines = [
                 CostEstimateLine(
-                    label=f"{model} still × {count}",
+                    label=still_label,
                     provider_id=provider.value,
                     model=model,
                     unit=rate.unit,

@@ -20,6 +20,26 @@ def _client() -> TestClient:
     return TestClient(app_module.app, raise_server_exceptions=False)
 
 
+def test_a_stale_rate_card_warns_and_the_run_still_submits(monkeypatch) -> None:
+    """Blueprint 25: staleness is reported on the estimate and is not a spend block."""
+    monkeypatch.setattr("diony_director.ratecards.is_stale", lambda _card, now=None: True)
+    client = _client()
+    sid = client.post("/api/director/sessions").json()["session_id"]
+    proposal = client.post(
+        f"/api/director/sessions/{sid}/message",
+        json={"text": "a dusty truck at dusk", "duration_s": 6},
+    ).json()
+    assert proposal["op"]["estimate"]["rate_cards_stale"] is True
+    assert "rate card is stale" in proposal["reply"]
+    handle = base.CloudJobHandle(
+        provider_id="grok", external_id="req-stale", model="grok-imagine-video-1.5", duration_s=6
+    )
+    monkeypatch.setattr(grok, "submit", lambda _op: handle)
+    run = client.post(f"/api/director/ops/{proposal['op']['id']}/run")
+    assert run.status_code == 200, run.text
+    assert "rate cards are stale" not in run.text
+
+
 def test_status_reports_cloud_engine_and_configured_providers() -> None:
     client = _client()
     body = client.get("/api/director/status").json()

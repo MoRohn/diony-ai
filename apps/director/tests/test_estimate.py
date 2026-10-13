@@ -19,6 +19,31 @@ def test_grok_six_seconds_at_720p_is_42_cents() -> None:
     assert est.lines[0].rate_card_id
 
 
+def test_grok_2k_generation_is_the_low_rate_and_an_edit_is_medium() -> None:
+    generation = estimate.estimate_op(
+        provider=CloudProvider.GROK,
+        model="grok-imagine-image-2.0",
+        mode=CloudGenerationMode.IMAGE,
+        duration_s=1,
+        resolution="2k",
+    )
+    edited = estimate.estimate_op(
+        provider=CloudProvider.GROK,
+        model="grok-imagine-image-2.0",
+        mode=CloudGenerationMode.IMAGE,
+        duration_s=1,
+        resolution="2k",
+        image_edit=True,
+    )
+    assert generation.total_usd_micros == 60_000
+    assert generation.lines[0].unit == "generation:2k:low"
+    assert edited.total_usd_micros == 80_000
+    assert edited.lines[0].unit == "generation:2k:medium"
+    assert estimate.grok_image_is_edit({"bible": {"slot": "board"}}) is True
+    assert estimate.grok_image_is_edit({"style_frame": {"keyframe": True}}) is True
+    assert estimate.grok_image_is_edit({"bible": {"slot": "front"}}) is False
+
+
 def test_grok_15_image_input_is_priced_separately() -> None:
     est = estimate.estimate_op(
         provider=CloudProvider.GROK,

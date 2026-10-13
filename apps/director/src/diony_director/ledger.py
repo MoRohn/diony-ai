@@ -140,7 +140,11 @@ def _flow_actuals(op: DirectorOp, credits_used: int) -> tuple[CostBreakdown, int
 def _image_actuals(op: DirectorOp) -> tuple[CostBreakdown, int, str]:
     files = ratecards.load_files()
     if op.provider is CloudProvider.GROK:
-        unit = f"generation:{op.resolution}" if op.resolution in {"1k", "2k"} else "generation:2k"
+        from diony_director import estimate as estimate_mod
+
+        unit = estimate_mod.grok_image_unit(
+            op.resolution, edit=estimate_mod.grok_image_is_edit(op.artifact_refs)
+        )
         rate = ratecards.resolve(files, CloudProvider.GROK.value, op.model, unit)
     else:
         rate = ratecards.resolve(files, ratecards.FLOW_PROVIDER_ID, op.model, "generation")

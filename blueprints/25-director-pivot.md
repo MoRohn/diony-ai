@@ -147,6 +147,7 @@ The local GPU lane that preceded the pivot was removed from the tree on 2026-09-
 | Run & Assemble All returns 502 | a slow call rode a request through the router | move it to a worker; poll |
 | "All operations failed" from Flow | nested `failureReasons`, usually the prominent-person filter | the likeness guard (Blueprint 27 §3a); Retake redraws the frame |
 | Stills "generating" forever | an estimate could not reconcile (rate card unit missing) | the advance loop reports `stalled` with the reason; fix the card |
+| A run is refused because the rate card is stale | `fetched_at` is older than `stale_after_days` and a gate treated that as fatal | a stale card is reported on the estimate (`rate_cards_stale`) and in the proposal and the lock; the run is not refused |
 | Every clip looks different | no Look Bible or style frame on the prompts | Blueprint 29 |
 | The film ends mid-word | narration timed off the picture length | Blueprint 28's tail hold |
 | Flow 429 `THROTTLED` after a wave | requests landed in a burst | the pacing gate; never bypass it |
